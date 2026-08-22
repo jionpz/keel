@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schemas/capability-request.schema.json",
+  "title": "A-CapabilityRequest",
+  "description": "Session 请求能力调用的通用机制。Session 不直接调用任何能力，只 emit 本产物由 Control Plane 裁决派发。",
+  "type": "object",
+  "required": ["schema_version", "request_id", "requested_by_run", "capability", "rationale", "blocking"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "request_id": { "type": "string" },
+    "requested_by_run": { "type": "string" },
+    "capability": {
+      "enum": ["critic_review", "human_input", "additional_context"],
+      "description": "v0.1 注册表。新增能力只需扩这里 + 加一条 Policy 规则，无需改 Session 实现。"
+    },
+    "params": { "type": "object" },
+    "rationale": { "type": "string" },
+    "blocking": { "type": "boolean", "description": "true = 原 Session 等待结果；false = 可继续推进" }
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schemas/policy-decision.schema.json",
+  "title": "A-PolicyDecision",
+  "description": "可重放的裁决记录。facts_snapshot 是完整快照而非引用，这是可重放的前提。",
+  "type": "object",
+  "required": ["schema_version", "decision_point", "policy_version", "evaluated_at", "facts_snapshot", "matched_rules", "decision", "reason", "default_applied"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "decision_point": { "type": "string", "description": "在哪个判定点求值，如 rfc_ready" },
+    "policy_version": { "type": "string" },
+    "evaluated_at": { "type": "string", "format": "date-time" },
+    "facts_snapshot": {
+      "type": "object",
+      "description": "求值时输入的完整快照。用引用会随时间变化，快照才能保证同输入同裁决。"
+    },
+    "matched_rules": {
+      "type": "array",
+      "description": "数组：多条规则可能同时命中，冲突裁决规则见 policy-engine.md",
+      "items": {
+        "type": "object",
+        "required": ["id", "condition", "action"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "condition": { "type": "string" },
+          "action": { "type": "string" }
+        }
+      }
+    },
+    "decision": { "type": "string" },
+    "reason": { "type": "string" },
+    "default_applied": {
+      "type": "boolean",
+      "description": "true = 无规则命中，走了默认 deny。大量 true 是规则覆盖不足的信号。"
+    }
+  }
+}

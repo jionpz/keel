@@ -1,0 +1,5 @@
+{"file": "docs/archive/AI_Engineering_Runtime_Architecture.md", "reason": "源架构初稿（已归档）：本任务的输入材料，缺口清单 G1-G17 全部指向它的具体章节"}
+{"file": "docs/README.md", "reason": "架构文档集索引与文档约定（ID 前缀、未验证标记、方法优先级标注规则）"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "三平面模型本质是跨层数据流设计，写契约与端到端流程时需要这套思考清单"}
+{"file": ".trellis/tasks/08-22-keel-architecture-framework/research/harness-interfaces.md", "reason": "Harness 能力事实：决定 L0/L1/L2 分级与降级规则。注意调研仅完成 Claude Code 一家"}
+{"file": ".trellis/tasks/08-22-keel-architecture-framework/research/workflow-engine.md", "reason": "Workflow engine 选型依据（ADR-0003）。§1 需求推导可信，§2 候选评估未验证"}

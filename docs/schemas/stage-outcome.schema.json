@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schemas/stage-outcome.schema.json",
+  "title": "A-StageOutcome",
+  "description": "某阶段的结构化结论。状态机转移守卫的唯一输入源 —— 守卫必须读枚举，不能解析自由文本。",
+  "type": "object",
+  "required": ["schema_version", "run_id", "stage", "verdict", "reason"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "run_id": { "type": "string", "description": "人工接管时指向 harness_id='human' 的 Run" },
+    "stage": { "enum": ["pm", "brainstorm", "rfc_draft", "critic", "develop", "qa", "review"] },
+    "verdict": {
+      "enum": ["actionable", "unclear", "reject", "converged", "needs_more",
+               "drafted", "reviewed", "implemented", "blocked", "pass", "fail"]
+    },
+    "reason": { "type": "string" },
+    "details": { "type": "object" }
+  },
+  "allOf": [
+    { "if": { "properties": { "stage": { "const": "pm" } }, "required": ["stage"] },
+      "then": { "properties": { "verdict": { "enum": ["actionable", "unclear", "reject"] } } } },
+    { "if": { "properties": { "stage": { "const": "brainstorm" } }, "required": ["stage"] },
+      "then": { "properties": { "verdict": { "enum": ["converged", "needs_more"] } } } },
+    { "if": { "properties": { "stage": { "const": "rfc_draft" } }, "required": ["stage"] },
+      "then": { "properties": { "verdict": { "const": "drafted" } } } },
+    { "if": { "properties": { "stage": { "const": "critic" } }, "required": ["stage"] },
+      "then": { "properties": { "verdict": { "const": "reviewed" } } } },
+    { "if": { "properties": { "stage": { "const": "develop" } }, "required": ["stage"] },
+      "then": { "properties": { "verdict": { "enum": ["implemented", "blocked"] } } } },
+    { "if": { "properties": { "stage": { "enum": ["qa", "review"] } }, "required": ["stage"] },
+      "then": { "properties": { "verdict": { "enum": ["pass", "fail"] } } } }
+  ]
+}

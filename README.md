@@ -10,9 +10,35 @@
 - **Session inside, State outside**：Agent 会话是临时计算资源，结构化 State / RFC / Checkpoint 才是事实来源
 - 人工与 AI 使用同一套工程规范，可随时 PAUSE → HUMAN_TAKEOVER → RESUME
 
-## 立项文档
+## 📐 架构文档
 
-- `AI_Engineering_Runtime_Architecture.md` — 完整架构设计（22 章，源文档，2026-08-22 立项归档）
+**[`docs/`](./docs/README.md) 是架构的事实来源。**
+
+赶时间就读这三篇：
+[总览](./docs/01-overview.md) → [术语表](./docs/02-glossary.md) → [状态机](./docs/04-state-machine.md)
+
+| | |
+|---|---|
+| [`docs/README.md`](./docs/README.md) | 索引、阅读顺序、文档约定 |
+| [`docs/05-contracts/`](./docs/05-contracts/) | 5 个核心接口契约 |
+| [`docs/schemas/`](./docs/schemas/) | 8 份机器可读 JSON Schema |
+| [`docs/adr/`](./docs/adr/) | 6 份架构决策记录 |
+| [`docs/archive/`](./docs/archive/) | 立项初稿（已归档，**请勿据其实现**） |
+
+## 中心不变量
+
+> 能在进程崩溃后存活的，只有 Artifact。其余一切都是 Session。
+
+由此推出三个平面，每个平面由它**不许做什么**定义：
+
+| 平面 | 职责 | 硬约束 |
+|---|---|---|
+| Control | 决定下一步做什么 | 绝不直接调用 LLM；必须可确定性重放 |
+| Fact | 唯一事实来源 | 只由 Control Plane 写入 |
+| Execution | 干活 | 绝不直接写 Fact Plane；只能 emit 提案 |
+
+Fact 与 Execution 之间只有两条单向通道：`Context` 下行、`Proposal` 上行。
+这条边界靠**数据库授权**强制，不靠代码自觉。
 
 ## 核心原则
 
@@ -21,21 +47,22 @@
 3. Workflow 决定流程（Agent 不自作主张）
 4. Policy 决定权限（自动 vs 人工审核）
 5. Context Builder 决定上下文（不每次从零读项目）
-6. Harness 是执行层（OMP / TRAE / OpenCode 可替换）
-7. 人工与 AI 同一套规范
+6. Harness 是执行层（能力分级 + 显式降级，L0 也能跑通闭环）
+7. 人工与 AI 同一套规范（**人工被建模为一种 Harness**）
 
-## 分层架构
+每条原则落成机制的位置见 [`docs/01-overview.md`](./docs/01-overview.md) §4。
 
-```
-Workflow → Agent Role → Runtime Adapter → Harness → Model
-```
+## v0.1 完成判据
 
-## 规划
-
-- 阶段一：核心闭环 — API/Event → 简单 Workflow 状态机 → Session Manager → PostgreSQL → Harness → GitHub
-- 阶段二：Checkpoint / Context Builder / Policy Engine / Critic / QA
-- 阶段三：Temporal / 多项目调度 / Agent Pool / Observability / Cost Tracking
+> 一条真实的用户反馈进入系统后，在无人干预的情况下走完 `S-NEW → S-DONE`，
+> 产出一个通过 CI 的 PR；且 `readEvents(task_id, 0)` 能完整重建这个 Task 的全过程。
 
 ## 状态
 
-**立项**（2026-08-22）。下一步：阶段一最小闭环设计。
+**架构框架已完成**（2026-08-22）。代码未开始。
+
+**下一步被一个决策阻塞**：[`ADR-0002` 实现语言](./docs/adr/0002-implementation-language.md)
+拍板后，即可开仓库骨架任务。
+
+已知空白：Harness 接口调研仅完成 Claude Code 一家，
+其余因推理网关持续限流未完成（见 [`ADR-0005`](./docs/adr/0005-harness-support-tiers.md)）。

@@ -1,3 +1,18 @@
+> ## ⚠️ 已归档 · Superseded
+>
+> **本文是 2026-08-22 的立项初稿，已被 [`docs/`](../README.md) 文档集取代。**
+>
+> 它把"要做什么"表达清楚了 —— 七条原则、Session / State 的分野、分层可替换的主张都来自它。
+> 但它是一份 **vision doc，不是 spec**：术语未定义、接口未定义、schema 只有零散示例、
+> 选型全是"推荐 A/B/C"而未决策。
+>
+> **请勿据本文实现。** 本文中有若干处已被明确修正（术语混用、单层状态机、
+> `AUTO_DEVELOP`/`REWORK` 被误当作状态、Model 层归属、Policy 规则冲突等），
+> 对照表见 [`docs/README.md`](../README.md#关于初稿) 末节。
+>
+> 保留本文的目的是**存档当初的想法与理由**，而不是作为参考资料。
+
+---
 # AI Engineering Runtime Architecture
 
 ## 1. 文档定位

@@ -1,0 +1,3 @@
+{"file": "docs/archive/AI_Engineering_Runtime_Architecture.md", "reason": "复核基准：逐条核对缺口 G1-G17 是否真的在产出文档中被关闭，而非换个说法绕过"}
+{"file": "docs/README.md", "reason": "文档约定（可寻址 ID、未验证标记、方法优先级）—— 复核时按这些约定检查一致性"}
+{"file": ".trellis/spec/guides/index.md", "reason": "含 AI 交叉复核的假阳性核对清单与验证规则，复核本任务产出时需要"}

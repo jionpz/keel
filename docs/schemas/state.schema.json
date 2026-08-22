@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schemas/state.schema.json",
+  "title": "A-State",
+  "description": "某个 Task 的当前事实集合。注意：这不是 task.status（状态机位置）。",
+  "type": "object",
+  "required": ["schema_version", "current_goal", "confirmed_facts", "decisions", "open_questions", "risks"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "current_goal": { "type": "string" },
+    "context_summary": { "type": "string" },
+    "confirmed_facts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "text", "source"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "text": { "type": "string" },
+          "source": { "type": "string", "description": "溯源：run:<stage>#<attempt> 或 human:<who>" },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+        }
+      }
+    },
+    "candidate_options": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "summary", "status"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "summary": { "type": "string" },
+          "pros": { "type": "array", "items": { "type": "string" } },
+          "cons": { "type": "array", "items": { "type": "string" } },
+          "status": { "enum": ["open", "recommended", "accepted", "rejected"] }
+        }
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "text", "rationale", "decided_at", "decided_by"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "text": { "type": "string" },
+          "rationale": { "type": "string" },
+          "decided_at": { "type": "string", "format": "date-time" },
+          "decided_by": { "type": "string", "description": "run:<stage>#<attempt> 或 human:<who>" }
+        }
+      }
+    },
+    "open_questions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "text", "blocking"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "text": { "type": "string" },
+          "blocking": { "type": "boolean" }
+        }
+      }
+    },
+    "risks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "text", "severity"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "text": { "type": "string" },
+          "severity": { "enum": ["low", "medium", "high"] },
+          "mitigation": { "type": "string" }
+        }
+      }
+    }
+  }
+}

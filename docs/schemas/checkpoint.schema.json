@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schemas/checkpoint.schema.json",
+  "title": "A-Checkpoint",
+  "description": "某个 Session 的可恢复摘要。owner 是 Session 而非 Task。丢失只增加 token 成本，不损失事实。",
+  "type": "object",
+  "required": ["schema_version", "run_id", "harness_id", "turn_index", "next_action", "working_summary", "resume_hint"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "run_id": { "type": "string" },
+    "harness_id": { "type": "string" },
+    "harness_tier": { "enum": ["L0", "L1", "L2"] },
+    "turn_index": { "type": "integer", "minimum": 0 },
+    "progress": { "type": "string", "description": "人类可读进度，如 6/10" },
+    "current_goal": { "type": "string" },
+    "next_action": { "type": "string" },
+    "working_summary": {
+      "type": "string",
+      "description": "rematerialize 降级路径的主要输入。无 CAP-RESUME 时靠它重建上下文。"
+    },
+    "emitted_artifacts": { "type": "array", "items": { "type": "string" } },
+    "unresolved_questions": { "type": "array", "items": { "type": "string" } },
+    "resume_hint": {
+      "type": "object",
+      "required": ["mode"],
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "enum": ["session_ref", "rematerialize"],
+          "description": "session_ref 需 Adapter 声明 CAP-RESUME；否则必须 rematerialize"
+        },
+        "session_ref": { "type": ["string", "null"] },
+        "rematerialize_from": { "type": ["array", "null"], "items": { "type": "string" } }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "mode": { "const": "session_ref" } } },
+          "then": { "required": ["session_ref"], "properties": { "session_ref": { "type": "string" } } }
+        }
+      ]
+    }
+  }
+}

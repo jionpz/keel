@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schemas/critic-review.schema.json",
+  "title": "A-CriticReview",
+  "description": "结构化评审结果。相对初稿 §8 补齐了量表、评分维度、证据与置信度。",
+  "type": "object",
+  "required": ["schema_version", "review_type", "request_id", "subject_ref", "scale", "criteria", "scores", "recommendation", "confidence"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "review_type": { "enum": ["architecture", "security", "quality", "product", "feasibility"] },
+    "request_id": { "type": "string" },
+    "subject_ref": { "type": "string", "description": "被评审对象的 artifact 引用" },
+    "scale": {
+      "type": "object",
+      "description": "没有量表的分数无法跨 Critic 比较或复现",
+      "required": ["min", "max", "higher_is_better"],
+      "additionalProperties": false,
+      "properties": {
+        "min": { "type": "number" },
+        "max": { "type": "number" },
+        "higher_is_better": { "type": "boolean" }
+      }
+    },
+    "criteria": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+    "scores": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["option_id", "total"],
+        "additionalProperties": false,
+        "properties": {
+          "option_id": { "type": "string" },
+          "total": { "type": "number" },
+          "by_criterion": { "type": "object", "additionalProperties": { "type": "number" } }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "severity", "text", "evidence"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "severity": { "enum": ["low", "medium", "high"] },
+          "text": { "type": "string" },
+          "evidence": { "type": "string", "description": "无证据的 finding 等同于意见，故为必填" }
+        }
+      }
+    },
+    "recommendation": { "type": "string" },
+    "confidence": {
+      "type": "number", "minimum": 0, "maximum": 1,
+      "description": "低置信度的推荐不应触发自动推进；它是 Policy 的输入"
+    },
+    "dissent": {
+      "type": ["string", "null"],
+      "description": "多 Critic 时的分歧记录。分歧本身是信号，不应被平均掉。"
+    }
+  }
+}
