@@ -1,0 +1,4 @@
+{"file": "docs/adr/0002-implementation-language.md", "reason": "复核基准：L1-L4 是否真的落地。特别是 L1/L4 —— 不做 CI 校验则选 TS 无意义"}
+{"file": "docs/04-state-machine.md", "reason": "复核代码转移表是否与文档一致，以及 C4 检查器解析是否正确（0 行必须报错，防假绿）"}
+{"file": "docs/03-domain-model.md", "reason": "不变量 I5（Execution 不得写 Fact）—— 复核 C2 的依赖边界规则是否真的对应它"}
+{"file": ".trellis/spec/guides/architecture-doc-conventions.md", "reason": "文档约定，复核 docs/ 改动是否合规"}

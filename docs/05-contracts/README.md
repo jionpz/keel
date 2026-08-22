@@ -73,6 +73,12 @@ Error {
 | `BUDGET_EXCEEDED` | ❌ | 触发 `C-002` |
 | `PERMISSION_DENIED` | ❌ | 越权调用被拦 |
 | `CAPABILITY_UNSUPPORTED` | ❌ | 调了 Adapter 未声明的能力 —— **这是编程错误，不是运行时故障** |
+| `CONFLICT` | ✅ | Artifact 并发写入冲突（[`artifact-store.md`](./artifact-store.md) §1.1）—— 重读最新版后可重试 |
+| `CONTEXT_BUDGET_EXCEEDED` | ❌ | `required` section 摘要后仍超预算（[`context-builder.md`](./context-builder.md) §4.3）—— 直接升人工 |
+
+判断 `retryable` 的依据是**「再试一次有没有可能不同」**：
+凭据失效、越权、预算耗尽、能力不支持 —— 重试永远是同样结果；
+进程启动失败、输出解析失败、超时、并发冲突 —— 有机会。
 
 > `retryable` 不是建议，是 `04-state-machine.md` 中 `T-030` / `T-031` 的 guard 输入。
 > 把不可重试的错误标成可重试，系统会白白重跑到 `max_attempts` 才升人工。

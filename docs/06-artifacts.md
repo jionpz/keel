@@ -168,18 +168,25 @@ Task 进入 `S-RFC_READY`（转移 `T-011`）时，当前 version 的 RFC 冻结
   "unresolved_questions": ["日期区间是否需要支持时区"],
   "resume_hint": {
     "mode": "session_ref",
-    "session_ref": "sess_01H...",
-    "rematerialize_from": null
+    "session_ref": "sess_01H..."
   }
 }
 ```
 
-### 4.1 `resume_hint.mode` —— L0/L1 降级的开关
+### 4.1 `resume_hint` —— L0/L1 降级的开关
 
-| `mode` | 适用 | 恢复方式 |
-|---|---|---|
-| `session_ref` | Adapter 声明 `CAP-RESUME` | 把 `session_ref` 交回 Harness（如 `claude --resume <id>`），会话上下文由 Harness 侧保持 |
-| `rematerialize` | **无** `CAP-RESUME` | 由 Context Builder 从 `A-State` + 本 Checkpoint 的 `working_summary` **重新构造**上下文，开一个新会话 |
+它是一个**按 `mode` 判别的联合**，而不是"一个 mode 字段 + 两个可空字段"：
+
+| `mode` | 适用 | 必需字段 | 恢复方式 |
+|---|---|---|---|
+| `session_ref` | Adapter 声明 `CAP-RESUME` | `session_ref` | 把句柄交回 Harness（如 `claude --resume <id>`），会话上下文由 Harness 侧保持 |
+| `rematerialize` | **无** `CAP-RESUME`，或句柄已失效 | `rematerialize_from` | 由 Context Builder 从 `A-State` + 本 Checkpoint 的 `working_summary` **重新构造**上下文，开新会话 |
+
+> 建模为判别联合是刻意的：两种模式**所需的数据不同**。
+> 若写成"mode + 两个可空字段"，就会出现 `mode: "session_ref"` 而 `session_ref` 为空这种
+> 无意义但类型合法的状态。判别联合让它在 schema 层面就无法表达。
+>
+> 这也让生成的 TS 类型可被收窄 —— 见 `ADR-0002` L1。
 
 这是"Harness 可替换"能否成立的技术核心：
 
@@ -355,6 +362,10 @@ Task 进入 `S-RFC_READY`（转移 `T-011`）时，当前 version 的 RFC 冻结
 
 ### 8.1 各阶段的 `verdict` 取值
 
+本产物建模为**按 `stage` 判别的联合** —— 每个阶段有自己的 `verdict` 取值集合，
+而不是一个所有阶段共用的大枚举。这样守卫在类型层面就能被收窄：
+拿到一个 `stage === 'qa'` 的结论，`verdict` 只可能是 `pass` 或 `fail`。
+
 | `stage` | 允许的 `verdict` | 被哪条转移读取 |
 |---|---|---|
 | `pm` | `actionable` \| `unclear` \| `reject` | `T-003` `T-004` `T-005` `T-006` |
@@ -362,10 +373,11 @@ Task 进入 `S-RFC_READY`（转移 `T-011`）时，当前 version 的 RFC 冻结
 | `rfc_draft` | `drafted` | `T-011` |
 | `critic` | `reviewed` | `T-009` |
 | `develop` | `implemented` \| `blocked` | `T-017` |
-| `qa` | `pass` \| `fail` | `T-018` `T-019` `T-020` |
-| `review` | `pass` \| `fail` | `T-021` `T-022` `T-023` |
+| `qa` / `review` | `pass` \| `fail` | `T-018`–`T-023` |
 
 `pm` 阶段的 `details.needs_design`（布尔）区分 `T-003`（走 brainstorm）与 `T-004`（直接起草 RFC）。
+
+`qa` 与 `review` 的结论形状相同，故在 schema 中合为一支（`VerificationOutcome`）。
 
 ### 8.2 为什么它是独立产物而不是塞进 `A-State`
 

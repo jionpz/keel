@@ -1,0 +1,9 @@
+{"file": "docs/adr/0002-implementation-language.md", "reason": "L1-L4 是本任务要落地的硬要求：生成步骤入 CI、生成物不手改、契约翻译成 interface、schema 变更后类型必须同步"}
+{"file": "docs/04-state-machine.md", "reason": "转移表的事实来源。src/control/transition/table.ts 必须与它一致（约束 C4）"}
+{"file": "docs/05-contracts/harness-adapter.md", "reason": "翻译成 TS interface；只翻译标注 [v0.1 必须] 的 6 个方法"}
+{"file": "docs/05-contracts/session-manager.md", "reason": "翻译成 TS interface；含 Proposal / ProposalVerdict 形状"}
+{"file": "docs/05-contracts/context-builder.md", "reason": "翻译成 TS interface；含 Context / ContextSection / DroppedSection"}
+{"file": "docs/05-contracts/policy-engine.md", "reason": "翻译成 TS interface；含 Rule 形状与严格性偏序"}
+{"file": "docs/05-contracts/artifact-store.md", "reason": "翻译成 TS interface；7 个 [v0.1 必须] 方法"}
+{"file": "docs/05-contracts/README.md", "reason": "ErrorKind 注册表（10 个 kind 及其 retryable 语义）与方法优先级标注规则"}
+{"file": ".trellis/spec/guides/architecture-doc-conventions.md", "reason": "文档约定：可寻址 ID、未验证标记、方法优先级。改动 docs/ 时须遵守"}

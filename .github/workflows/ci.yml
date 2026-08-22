@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # CI 只跑这一条命令 —— 与本地完全一致。
+      #
+      # 这是刻意的：若 CI 与本地跑的是不同命令，迟早会出现「本地过了 CI 红」，
+      # 而人们解决这种摩擦的方式通常是放宽 CI。
+      #
+      # check 聚合了四条架构约束的检查：
+      #   C1 check:generated   —— schema 是类型的唯一事实来源
+      #   C2 boundaries        —— Execution Plane 不得写 Fact Plane
+      #   C3 boundaries + check:purity —— 转移函数必须是纯函数
+      #   C4 check:transitions —— 代码转移表 ⟷ 文档转移表
+      #
+      # 要放宽任何一条，走 ADR。不要在这里加 continue-on-error。
+      - run: pnpm run check

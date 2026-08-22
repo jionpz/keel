@@ -22,21 +22,33 @@
     "emitted_artifacts": { "type": "array", "items": { "type": "string" } },
     "unresolved_questions": { "type": "array", "items": { "type": "string" } },
     "resume_hint": {
-      "type": "object",
-      "required": ["mode"],
-      "additionalProperties": false,
-      "properties": {
-        "mode": {
-          "enum": ["session_ref", "rematerialize"],
-          "description": "session_ref 需 Adapter 声明 CAP-RESUME；否则必须 rematerialize"
-        },
-        "session_ref": { "type": ["string", "null"] },
-        "rematerialize_from": { "type": ["array", "null"], "items": { "type": "string" } }
-      },
-      "allOf": [
+      "description": "L0/L1 降级开关。判别字段为 mode —— 两种模式所需的数据不同，故建模为判别联合而非可空字段。",
+      "oneOf": [
         {
-          "if": { "properties": { "mode": { "const": "session_ref" } } },
-          "then": { "required": ["session_ref"], "properties": { "session_ref": { "type": "string" } } }
+          "title": "ResumeBySessionRef",
+          "description": "Adapter 声明 CAP-RESUME：把句柄交回 Harness，会话上下文由其自行保持。",
+          "type": "object",
+          "required": ["mode", "session_ref"],
+          "additionalProperties": false,
+          "properties": {
+            "mode": { "const": "session_ref" },
+            "session_ref": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "title": "ResumeByRematerialize",
+          "description": "无 CAP-RESUME 或句柄已失效：由 ContextBuilder 从 A-State + working_summary 重建，开新会话。",
+          "type": "object",
+          "required": ["mode", "rematerialize_from"],
+          "additionalProperties": false,
+          "properties": {
+            "mode": { "const": "rematerialize" },
+            "rematerialize_from": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "重新物化所依据的 artifact 引用"
+            }
+          }
         }
       ]
     }
