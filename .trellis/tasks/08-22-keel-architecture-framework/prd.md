@@ -204,13 +204,13 @@
 
 本任务会为每条给出**带论证的推荐**并写入 ADR（Status: Proposed），但最终拍板权在 owner。
 
-| # | 问题 | 本任务的处理方式 |
-|---|---|---|
-| Q1 | 实现语言与运行时（TypeScript/Node vs Python vs Go） | ADR-0002 给推荐 + 理由，Proposed |
-| Q2 | Workflow engine：自研状态机 vs Temporal vs Inngest | ADR-0003，由 `research/workflow-engine.md` 支撑 |
-| Q3 | 首批支持哪些 Harness、按什么顺序 | ADR-0005，由 `research/harness-interfaces.md` 支撑 |
-| Q4 | v0.1 是否只支持单仓库单项目 | 在 R8 Non-Goals 中给出推荐边界 |
-| Q5 | Keel 是否 dogfooding（用 Keel 开发 Keel） | 在 R8 中作为阶段二触发条件讨论 |
+| # | 问题 | 本任务的处理方式 | 结果 |
+|---|---|---|---|
+| Q1 | 实现语言与运行时（TypeScript/Node vs Python vs Go） | ADR-0002 给推荐 + 理由，Proposed | ✅ **已定：TypeScript / Node**（owner 2026-08-22 拍板，ADR-0002 → Accepted） |
+| Q2 | Workflow engine：自研状态机 vs Temporal vs Inngest | ADR-0003，由 `research/workflow-engine.md` 支撑 | 🟡 Proposed，待查证 |
+| Q3 | 首批支持哪些 Harness、按什么顺序 | ADR-0005，由 `research/harness-interfaces.md` 支撑 | 🟡 Proposed，待调研补全 |
+| Q4 | v0.1 是否只支持单仓库单项目 | 在 R8 Non-Goals 中给出推荐边界 | ✅ 是 |
+| Q5 | Keel 是否 dogfooding（用 Keel 开发 Keel） | 在 R8 中作为阶段二触发条件讨论 | ✅ 阶段二 |
 
 ---
 

@@ -7,7 +7,7 @@
 | ADR | 主题 | Status |
 |---|---|---|
 | [0001](./0001-record-architecture-decisions.md) | 采用 ADR 记录架构决策 | **Accepted** |
-| [0002](./0002-implementation-language.md) | 实现语言与运行时 | **Proposed** ⚠️ |
+| [0002](./0002-implementation-language.md) | 实现语言与运行时 | **Accepted** — TypeScript / Node |
 | [0003](./0003-workflow-engine.md) | Workflow engine 选型 | **Proposed** ⚠️ |
 | [0004](./0004-persistence.md) | 持久化与 Artifact 存储 | **Proposed** |
 | [0005](./0005-harness-support-tiers.md) | Harness 支持优先级与 capability 分级 | **Proposed** ⚠️ |

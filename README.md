@@ -57,12 +57,25 @@ Fact 与 Execution 之间只有两条单向通道：`Context` 下行、`Proposal
 > 一条真实的用户反馈进入系统后，在无人干预的情况下走完 `S-NEW → S-DONE`，
 > 产出一个通过 CI 的 PR；且 `readEvents(task_id, 0)` 能完整重建这个 Task 的全过程。
 
+## 技术栈
+
+**TypeScript / Node**（[`ADR-0002`](./docs/adr/0002-implementation-language.md)）。
+
+选它的主要收益是 `docs/schemas/` 的 8 份 JSON Schema 可以**直接生成类型** ——
+让"文档里的 schema"与"代码里的类型"机械对齐，而不是靠人维护同步。
+这一步必须纳入 CI，否则选 TS 与选任何语言就没区别了。
+
+契约文档**刻意保持语言中立**，不改写成 TS 语法：它的读者不只是 Keel 的代码，
+还有 Harness 实现者与人工操作者。
+
+Workflow engine 推荐 v0.1 自研最小状态机（[`ADR-0003`](./docs/adr/0003-workflow-engine.md)，
+Proposed，待查证）。
+
 ## 状态
 
 **架构框架已完成**（2026-08-22）。代码未开始。
 
-**下一步被一个决策阻塞**：[`ADR-0002` 实现语言](./docs/adr/0002-implementation-language.md)
-拍板后，即可开仓库骨架任务。
+下一步：**仓库骨架**（已解除阻塞）。
 
 已知空白：Harness 接口调研仅完成 Claude Code 一家，
 其余因推理网关持续限流未完成（见 [`ADR-0005`](./docs/adr/0005-harness-support-tiers.md)）。

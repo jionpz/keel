@@ -21,8 +21,15 @@
 ### 语言中立
 
 所有签名以**伪代码**书写，不使用任何具体语言的语法。
-原因：实现语言尚未拍板（见 [`../adr/0002-implementation-language.md`](../adr/0002-implementation-language.md)）。
-契约先于语言确定，是为了让语言选择成为**可替换的决定**，而不是把架构焊死在某个生态上。
+
+实现语言已定为 **TypeScript / Node**（[`ADR-0002`](../adr/0002-implementation-language.md)），
+但契约**刻意保持语言中立**，原因有二：
+
+1. 契约的读者不只是 Keel 的代码 —— 还有 Harness 实现者与人工操作者
+2. 语言中立让"日后换语言"仍是一个**可换的决定**，而不是推倒重来
+
+具体的 TS `interface` 存在于代码中，由本目录的伪代码翻译而来；
+产物类型则由 [`../schemas/`](../schemas/) 的 JSON Schema **自动生成**，不手写、不手改。
 
 记法：
 

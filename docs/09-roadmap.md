@@ -113,7 +113,7 @@
 - [ ] v0.1 判据达成
 - [ ] **连续 5 个真实 Task 无人工干预完成** —— 一次成功可能是运气
 - [ ] 事件流能回答 `08-cross-cutting.md` §2.2 的全部四个问题
-- [ ] ADR-0002、0003、0005 全部转为 `Accepted`
+- [ ] ADR-0003、0005 转为 `Accepted`（ADR-0002 已 Accepted）
 
 ### 4.2 阶段二内容（按优先级）
 
@@ -153,7 +153,7 @@
 
 | PRD | 问题 | 处置 |
 |---|---|---|
-| Q1 | 实现语言 | **ADR-0002，待 owner 拍板。阻塞下一个任务（仓库骨架）** |
+| Q1 | 实现语言 | ✅ **已定：TypeScript / Node**（ADR-0002 Accepted） |
 | Q2 | Workflow engine | ADR-0003，推荐自研；待查证后转 Accepted |
 | Q3 | Harness 优先级 | ADR-0005，首批 Claude Code + Human |
 | Q4 | v0.1 是否单仓库单项目 | **是**，见 §2.1 |

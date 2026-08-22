@@ -139,7 +139,7 @@ Workflow → Agent Role → HarnessAdapter → Harness ─┬─▶ Model（Harn
 | 项 | 状态 |
 |---|---|
 | 架构框架文档集 | ✅ 本文档集 |
-| 实现语言（ADR-0002） | ⚠️ **Proposed，阻塞仓库骨架** |
+| 实现语言（ADR-0002） | ✅ **Accepted — TypeScript / Node** |
 | Workflow engine（ADR-0003） | ⚠️ Proposed，待查证 |
 | Harness 接口调研 | ⏳ 仅完成 Claude Code；其余被网关阻塞 |
 | 代码 | 未开始 |
