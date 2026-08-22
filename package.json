@@ -17,7 +17,7 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "boundaries": "depcruise src scripts",
-    "check:generated": "pnpm run generate && git diff --exit-code -- src/generated",
+    "check:generated": "pnpm run generate && git diff --exit-code HEAD -- src/generated",
     "check:transitions": "tsx scripts/check-transition-table.ts",
     "check:purity": "tsx scripts/check-purity.ts",
     "check": "pnpm run lint && pnpm run typecheck && pnpm run boundaries && pnpm run check:generated && pnpm run check:transitions && pnpm run check:purity && pnpm run test"
