@@ -68,7 +68,22 @@
 | `ADR-0002` 实现语言 | ✅ **Accepted — TypeScript / Node** |
 | `ADR-0003` Workflow engine | ⚠️ Proposed，待查证 |
 | `ADR-0005` Harness 分级 | ⚠️ Proposed，待调研补全 |
-| 代码 | 未开始 |
+| 仓库骨架 | ✅ 完成 —— 四条架构约束已机械化，见下 |
+| v0.1 实现 | 未开始 |
+
+### 文档与代码的一致性是被强制的，不是靠自觉
+
+仓库骨架把四条约束变成了 CI 会失败的东西（`pnpm run check`）：
+
+| 约束 | 强制手段 | 保护的是 |
+|---|---|---|
+| `C1` | 重新生成后与 `HEAD` 比对 | `docs/schemas/` 是产物类型的唯一事实来源 |
+| `C2` | dependency-cruiser | Execution Plane 不得写 Fact Plane（不变量 `I5`） |
+| `C3` | dependency-cruiser + 禁用全局扫描 + 确定性测试 | 转移函数必须是纯函数（`ADR-0003`） |
+| `C4` | 解析本目录 `04-state-machine.md` 的转移表并与代码比对 | **改了文档不改代码（或反之）会红** |
+
+`C4` 意味着：**修改 `04-state-machine.md` §2 的转移表后，
+必须同步 `src/control/transition/table.ts`，否则 CI 不过。**
 
 调研原始记录在 `.trellis/tasks/08-22-keel-architecture-framework/research/`。
 

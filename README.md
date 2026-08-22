@@ -71,11 +71,39 @@ Fact 与 Execution 之间只有两条单向通道：`Context` 下行、`Proposal
 Workflow engine 推荐 v0.1 自研最小状态机（[`ADR-0003`](./docs/adr/0003-workflow-engine.md)，
 Proposed，待查证）。
 
+## 开发
+
+```bash
+pnpm install
+pnpm run check     # CI 跑的就是这一条 —— 与本地完全一致
+```
+
+`check` 聚合了 lint / typecheck / 架构边界 / 类型同步 / 转移表比对 / 纯度 / 测试。
+
+### 四条被机械化的架构约束
+
+骨架的价值不在于「能 build」，而在于把架构约束变成 **CI 会失败的东西**：
+
+| 约束 | 说的是 | 违反时 |
+|---|---|---|
+| `C1` | `docs/schemas/` 是产物类型的唯一事实来源，TS 类型由其生成、不手改 | `check:generated` 红 |
+| `C2` | Execution Plane 不得写 Fact Plane | `boundaries` 红 |
+| `C3` | 状态转移必须是纯函数（`ADR-0003`） | `boundaries` + `check:purity` 红 |
+| `C4` | 代码转移表必须与 `docs/04-state-machine.md` 一致 | `check:transitions` 红 |
+
+每条都经过**反例验证** —— 逐条制造违规确认检查真的会红，
+而不是只看 CI 是绿的（一个什么都不检查的 CI 也是绿的）。
+
+> 改 `docs/04-state-machine.md` §2 的转移表后，必须同步
+> `src/control/transition/table.ts`，否则 CI 不过。这是刻意的。
+
+要放宽任何一条约束，**走 ADR**，不要在配置里临时注释掉。
+
 ## 状态
 
-**架构框架已完成**（2026-08-22）。代码未开始。
+**架构框架 + 仓库骨架已完成。** v0.1 实现未开始。
 
-下一步：**仓库骨架**（已解除阻塞）。
+下一步：v0.1 最小闭环 —— 数据库与 `ArtifactStore`、第一个 Harness Adapter。
 
 已知空白：Harness 接口调研仅完成 Claude Code 一家，
 其余因推理网关持续限流未完成（见 [`ADR-0005`](./docs/adr/0005-harness-support-tiers.md)）。

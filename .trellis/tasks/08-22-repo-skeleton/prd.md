@@ -136,26 +136,75 @@ src/
 
 ### 基础
 
-- [ ] `pnpm install && pnpm run check` 在干净克隆上通过
-- [ ] `src/` 三平面结构建立，`src/generated/` 带禁改标记
-- [ ] 5 份契约的 `[v0.1 必须]` 方法全部有对应 `interface`
-- [ ] `transition()` 覆盖 `docs/04-state-machine.md` 的全部 Task 级转移，且有测试
+- [x] `pnpm install && pnpm run check` 在干净克隆上通过（exit 0）
+- [x] `src/` 三平面结构建立，`src/generated/` 带禁改标记
+- [x] 5 份契约的 `[v0.1 必须]` 方法全部有对应 `interface`（共 22 个方法）
+- [x] `transition()` 覆盖 `docs/04-state-machine.md` 的全部 Task 级转移（31 条），15 个测试通过
 
 ### 核心：约束必须真的会失败
 
-**光说"CI 通过"证明不了任何事** —— 一个什么都不检查的 CI 也会通过。
-因此每条约束都必须用**反例**验证：
-
-- [ ] `C1` 反例：手改 `src/generated/` 中一个类型 → CI **失败**
-- [ ] `C2` 反例：在 `src/execution/` 中 import `src/fact/` → CI **失败**
-- [ ] `C3` 反例：在 transition 模块中 import `node:fs` → CI **失败**
-- [ ] `C4` 反例：删掉代码转移表中的一条 `T-*` → CI **失败**
-- [ ] 四个反例验证完成后**全部还原**，主干检查为绿
+- [x] `C1` 反例：手改 `src/generated/` 中一个类型 → CI **失败**
+- [x] `C2` 反例：在 `src/execution/` 中 import `src/fact/` → CI **失败**
+- [x] `C3` 反例：在 transition 模块中 import `node:fs` → CI **失败**
+- [x] `C3b` 反例：在 transition 模块中写 `Date.now()` → CI **失败**
+- [x] `C4` 反例：删掉代码转移表中的 `T-021` → CI **失败**
+- [x] 五个反例验证完成后**全部还原**，主干 `check` 为绿
 
 ### 文档
 
-- [ ] `docs/` 中与实现有出入的部分已同步
-- [ ] 新增依赖在 `design.md` 中有引入理由
+- [x] `docs/` 中与实现有出入的部分已同步（见下「反向修正」）
+- [x] 新增依赖在 `design.md` §2 中有引入理由
+
+---
+
+## 验收执行记录
+
+### 反例验证结果
+
+| 约束 | 注入的违规 | 检查命令 | 结果 |
+|---|---|---|---|
+| `C1` | 在 `ARFC` 中插入 `TAMPERED: number` 并提交 | `check:generated` | ✅ exit 1 |
+| `C2` | `src/execution/index.ts` import `../fact/index.js` | `boundaries` | ✅ exit 1 |
+| `C3a` | `src/control/transition/index.ts` import `node:fs` | `boundaries` | ✅ exit 1 |
+| `C3b` | 同文件写 `export const NOW = Date.now()` | `check:purity` | ✅ exit 1 |
+| `C4` | 从 `table.ts` 删除 `T-021` | `check:transitions` | ✅ exit 1 |
+
+还原后 `git status` 干净，`pnpm run check` exit 0。
+
+### ⚠️ 反例验证发现的真实缺陷（`C1`）
+
+**第一次 `C1` 反例没有拦住。** 原因不是注入失败，而是**检查本身写错了**：
+
+```
+check:generated = pnpm run generate && git diff --exit-code -- src/generated
+```
+
+`git diff`（无 `HEAD`）比较的是**工作区 vs 索引**。而 `check:generated` 会先跑
+`generate` 把工作区覆盖回正确内容 —— 于是「篡改了但还没提交」的情形会被自己抹掉，diff 为空。
+
+修正为 `git diff --exit-code HEAD -- src/generated` 后，无论索引处于什么状态，
+都能捕获「已落库的生成物 ≠ schema 重新生成的结果」。修正见 commit `ac4624f`。
+
+> **这正是反例验证的价值**：`check:generated` 在主干上一直是绿的，
+> 单看 CI 完全正常。若跳过 Stage 8，这个检查会以「看起来在工作」的状态存在很久，
+> 直到某次真正的手改被漏过去 —— 而那时没人会想到是检查本身坏了。
+
+### 实现过程中对 `docs/` 的反向修正
+
+实现暴露了四处文档缺陷，均按 Constraint「同步文档而非让代码将就」处理：
+
+| # | 发现 | 修正 |
+|---|---|---|
+| 1 | `checkpoint` / `stage-outcome` 两份 schema 用 `allOf` + `if/then`，`json-schema-to-typescript` 处理不了，生成出 `{ [k: string]: unknown }` —— **`resume_hint.mode` 这个 L0/L1 降级开关完全无类型** | 改写为 `oneOf` 判别联合。这同时是**更准确的模型**：`session_ref` 模式下 `session_ref` 必填，`rematerialize` 模式下它根本不该存在。同步更新 `docs/06-artifacts.md` §4.1 / §8.1 |
+| 2 | `05-contracts/README.md` 的 `ErrorKind` 注册表只有 10 个，但 `artifact-store.md` 用了 `CONFLICT`、`context-builder.md` 用了 `CONTEXT_BUDGET_EXCEEDED` | 补齐为 12 个，并写明 `retryable` 的判断依据 |
+| 3 | `04-state-machine.md` §2 写「所有转移隐含 `control_mode = 'auto'`，**`T-9xx` 除外**」，但表中根本没有 `T-9xx` | 更正为 `T-040` / `T-041` |
+| 4 | 文档中自环有两种记法：`` `S-BRAINSTORM` ⟲``（T-009）与「同状态 ⟲」（T-030） | `C4` 检查器统一以 ⟲ 标记识别。**这是 C4 检查器第一次运行就抓到的** |
+
+### 超出原计划的产出
+
+| 项 | 原因 |
+|---|---|
+| `production-must-not-import-tests` 边界规则 | 为让测试文件能 import vitest，`transition-must-be-pure` 需豁免 `.test.ts`。该豁免会开一个口子（把不纯的东西写进 `.test.ts` 再从 `index.ts` 引进来），故补此规则堵住 |
 
 ---
 
