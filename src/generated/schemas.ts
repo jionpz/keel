@@ -359,7 +359,8 @@ export const SCHEMAS = {
           "HumanAction",
           "NoTransition",
           "SideEffectApplied",
-          "SideEffectIntent"
+          "SideEffectIntent",
+          "ContextBuilt"
         ]
       },
       "payload": {

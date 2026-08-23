@@ -432,6 +432,7 @@ Task 进入 `S-RFC_READY`（转移 `T-011`）时，当前 version 的 RFC 冻结
 | `ArtifactCommitted` | Artifact Store |
 | `PolicyEvaluated` | Policy Engine |
 | `CapabilityRequested` / `CapabilityGranted` / `CapabilityDenied` | Control Plane |
+| `ContextBuilt` | 每次为 Session 构造上下文时发出，记 `source_ref` 与 `dropped`。<br>**这是「这个 Agent 当时到底看到了什么」的唯一可靠答案** —— 事后无法补录 |
 | `SideEffectSkipped` | 幂等命中（`04-state-machine.md` §5.3） |
 | `SideEffectApplied` | 副作用已施加。**通知类副作用的幂等判重依据** |
 | `SideEffectIntent` | 副作用**尚未落地**，只记录意图（如 v0.1 的 git 操作）。<br>刻意不静默跳过 —— 否则事件流会声称做过了而实际没有 |

@@ -1,0 +1,4 @@
+{"file": "docs/05-contracts/context-builder.md", "reason": "配方、固定降级顺序、dropped 必填、ContextBuilt 事件的可复现要求"}
+{"file": "docs/04-state-machine.md", "reason": "转移表与通用规则 —— 编排循环要按它推进；以及幂等与重放语义"}
+{"file": "docs/09-roadmap.md", "reason": "v0.1 完成判据的三个部分，本任务要一次性全部满足"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "防假绿纪律：没做的事要在数据里如实体现"}

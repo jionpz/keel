@@ -23,7 +23,8 @@
     "08-23-policy-engine",
     "08-23-workflow-driver",
     "08-23-harness-adapters",
-    "08-23-session-manager"
+    "08-23-session-manager",
+    "08-23-e2e-orchestrator"
   ],
   "parent": null,
   "relatedFiles": [],

@@ -1,0 +1,2 @@
+{"file": "docs/09-roadmap.md", "reason": "复核里程碑是否真的满足 v0.1 判据三部分，而非分段验证"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "复核测试中是否有产物注入；未做的裁剪是否如实记为 dropped"}

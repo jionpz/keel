@@ -138,7 +138,7 @@ schema_version: "1.0"
 seq: number
 task_id: string
 run_id?: (string | null)
-type: ("FeedbackReceived" | "TaskCreated" | "TaskStatusChanged" | "ControlModeChanged" | "RunCreated" | "RunStatusChanged" | "ProposalSubmitted" | "ProposalAccepted" | "ProposalRejected" | "ArtifactCommitted" | "PolicyEvaluated" | "CapabilityRequested" | "CapabilityGranted" | "CapabilityDenied" | "SideEffectSkipped" | "BudgetExceeded" | "HumanAction" | "NoTransition" | "SideEffectApplied" | "SideEffectIntent")
+type: ("FeedbackReceived" | "TaskCreated" | "TaskStatusChanged" | "ControlModeChanged" | "RunCreated" | "RunStatusChanged" | "ProposalSubmitted" | "ProposalAccepted" | "ProposalRejected" | "ArtifactCommitted" | "PolicyEvaluated" | "CapabilityRequested" | "CapabilityGranted" | "CapabilityDenied" | "SideEffectSkipped" | "BudgetExceeded" | "HumanAction" | "NoTransition" | "SideEffectApplied" | "SideEffectIntent" | "ContextBuilt")
 /**
  * 状态转移类事件应在 payload 中记录 transition ID（如 T-012），使事件流可直接对照转移表核验
  */
