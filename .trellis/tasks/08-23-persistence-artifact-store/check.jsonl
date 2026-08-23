@@ -1,0 +1,3 @@
+{"file": "docs/03-domain-model.md", "reason": "复核基准：8 条不变量是否真的被 DB 层强制，写权限矩阵是否逐格对应 GRANT"}
+{"file": "docs/adr/0004-persistence.md", "reason": "复核 blob 阈值切分与写入顺序（先 blob 后 artifact，反之会产生悬空引用）"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "含「未经反例验证的检查等同于没有检查」的教训，复核不变量测试是否真的会拒绝"}

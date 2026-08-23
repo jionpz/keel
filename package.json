@@ -11,6 +11,8 @@
   },
   "scripts": {
     "generate": "tsx scripts/generate-types.ts",
+    "db:migrate": "node-pg-migrate up",
+    "db:reset": "node-pg-migrate down 0 && node-pg-migrate up",
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
@@ -25,10 +27,13 @@
   "devDependencies": {
     "@biomejs/biome": "^2.0.0",
     "@types/node": "^24.0.0",
+    "@types/pg": "^8.23.1",
     "ajv": "^8.17.1",
     "ajv-formats": "^3.0.1",
     "dependency-cruiser": "^16.0.0",
     "json-schema-to-typescript": "^15.0.0",
+    "node-pg-migrate": "^9.0.0",
+    "pg": "^8.23.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",
     "vitest": "^3.0.0"

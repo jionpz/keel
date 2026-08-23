@@ -150,10 +150,37 @@ Task 作用的目标仓库。
 | `body` | `jsonb` | 内容，schema 见 `06-artifacts.md` |
 | `produced_by_run` | `uuid` | FK → `run`。哪个 run 提案的；`NULL` = 控制平面自产 |
 | `committed_at` | `timestamptz` | |
+| `committed_at_seq` | `bigint` | FK → `event(seq)`。**`getAsOf()` 的支撑列**，见下 |
 | `superseded_by` | `uuid` | FK → `artifact`，被哪一版取代 |
 
 - `UNIQUE (task_id, kind, key, version)`
 - **只允许 INSERT**。"更新"= 插入新 version + 回填旧行的 `superseded_by`
+
+#### 为什么需要 `committed_at_seq`
+
+契约要求 `getAsOf(task_id, kind, key, at_event_seq)`
+（[`05-contracts/artifact-store.md`](./05-contracts/artifact-store.md) §1.3）——
+ContextBuilder 为 Developer 装填 `A-RFC` 时必须取**该 Run 开始时**的那一版。
+
+**不能用 `committed_at` 近似**：`event.seq` 是全局单调的**逻辑序**，
+`committed_at` 是**墙上时钟**。并发写入下两者会不一致，
+而重放依赖的是 `seq`，不是时间。
+
+提交时先 `INSERT event` 拿到 `seq`，再用它写 artifact（同一事务内）。
+
+> 这一列是实现期发现的缺口：契约要求的能力，在原数据模型里没有支撑。
+> 单看任一文档都自洽，问题在接缝处。
+
+#### `superseded_by` 的唯一写入路径
+
+`I2` 要求 `artifact` 只增不改（不授予 UPDATE），但回填 `superseded_by` 需要 UPDATE ——
+两者直接冲突。
+
+解法是 `SECURITY DEFINER` 函数 `keel_commit_artifact(...)`：
+函数属主拥有 UPDATE 权限，调用者没有。于是**唯一能改 `superseded_by` 的路径就是这个函数**，
+而它只做「插入新版 + 回填旧版」一件事。
+
+这比"授予 UPDATE 然后指望大家只用来回填"强得多。
 
 **为什么用单表**：
 
