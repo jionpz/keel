@@ -213,6 +213,7 @@ awaitResult(handle: RunHandle) -> RunResult | Error
 
 RunResult {
   status:      "SUCCEEDED" | "FAILED" | "TIMEOUT" | "CANCELLED"
+  text:        string | null        // 原始文本；post_validate 模式下必须非空
   proposals:   Proposal[]           // 见 session-manager.md
   usage: {
     tokens_in:  integer | null
@@ -227,6 +228,13 @@ RunResult {
 
 `usage` 全部字段可为 `null` —— 这是 `CAP-COST` 缺失时的诚实表达，
 **不允许用 0 或估算值冒充**。`0` 与"不知道"在预算核算里是完全不同的事实。
+
+`text` 在 `post_validate` 模式下**必须非空**：无 `CAP-STRUCTURED_OUTPUT` 的 Harness
+只能靠调用方从自由文本中提取提案，Adapter 不带出文本，这条降级路径就断了。
+
+> 这一处是实现期发现的：写 SessionManager 时才发现 `RunResult` 没有地方放原始文本，
+> 于是 `post_validate` 无从落地。属于「契约要求的能力在数据结构里没有支撑」——
+> 与 `getAsOf` 缺 `committed_at_seq` 是同一类接缝缺口。
 
 ### 3.4 `collectChanges()` `[v0.1 必须]`
 

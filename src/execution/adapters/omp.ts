@@ -190,6 +190,7 @@ export class OmpAdapter implements HarnessAdapter {
     if (state.aborted) {
       return ok({
         status: 'CANCELLED',
+        text: null,
         proposals: [],
         usage: { tokens_in: null, tokens_out: null, cost_usd: null, cost_basis: 'unavailable' },
         session_ref: null,
@@ -208,8 +209,10 @@ export class OmpAdapter implements HarnessAdapter {
 
     return ok({
       status: 'SUCCEEDED',
-      // Proposal 的解析属 SessionManager 的校验流水线（子任务 5）；
-      // Adapter 只负责把文本原样带出来
+      // post_validate 模式的输入：Adapter 把文本原样带出，
+      // 由调用方提取结构化提案
+      text: parsed.text,
+      // Proposal 的构造属 SessionManager；Adapter 不做解释
       proposals: [],
       usage: parsed.usage,
       session_ref: parsed.sessionRef,

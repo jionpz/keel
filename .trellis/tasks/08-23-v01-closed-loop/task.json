@@ -22,7 +22,8 @@
     "08-23-persistence-artifact-store",
     "08-23-policy-engine",
     "08-23-workflow-driver",
-    "08-23-harness-adapters"
+    "08-23-harness-adapters",
+    "08-23-session-manager"
   ],
   "parent": null,
   "relatedFiles": [],

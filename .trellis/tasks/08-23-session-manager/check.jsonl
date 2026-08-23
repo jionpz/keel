@@ -1,0 +1,2 @@
+{"file": "docs/05-contracts/session-manager.md", "reason": "复核：平面越界检查是否真的拦住了指挥流程的提案；R-007 是否回灌而非直接判失败"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "复核里程碑测试是否真的无人干预 —— 测试代码不得提交任何产物"}

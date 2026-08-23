@@ -84,6 +84,7 @@ export class HumanAdapter implements HarnessAdapter {
     if (submitted === null) {
       return ok({
         status: 'CANCELLED',
+        text: null,
         proposals: [],
         usage: { tokens_in: null, tokens_out: null, cost_usd: null, cost_basis: 'unavailable' },
         session_ref: null,
@@ -91,6 +92,7 @@ export class HumanAdapter implements HarnessAdapter {
     }
     return ok({
       status: 'SUCCEEDED',
+      text: submitted.text,
       proposals: [],
       usage: { tokens_in: null, tokens_out: null, cost_usd: null, cost_basis: 'unavailable' },
       // 无 CAP-RESUME：人工没有可恢复的会话句柄

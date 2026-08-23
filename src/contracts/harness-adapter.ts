@@ -61,6 +61,14 @@ export interface RunSpec {
 
 export interface RunResult {
   readonly status: 'SUCCEEDED' | 'FAILED' | 'TIMEOUT' | 'CANCELLED'
+  /**
+   * Harness 产出的原始文本。
+   *
+   * `post_validate` 模式下**必须非空** —— 调用方要从中提取结构化提案。
+   * 无 CAP-STRUCTURED_OUTPUT 的 Harness 只能走这条路，
+   * 若 Adapter 不带出文本，降级路径就断了。
+   */
+  readonly text: string | null
   readonly proposals: readonly Proposal[]
   readonly usage: Usage
   /** 仅 CAP-RESUME 时非空 */

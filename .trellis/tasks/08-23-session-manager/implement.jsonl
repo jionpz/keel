@@ -1,0 +1,4 @@
+{"file": "docs/05-contracts/session-manager.md", "reason": "契约事实来源：Proposal 五步校验流水线、R-007 回灌语义、Session 能做与不能做的边界表"}
+{"file": "docs/06-artifacts.md", "reason": "A-StageOutcome 的 schema 与各阶段 verdict 取值；它是状态机守卫的唯一输入源"}
+{"file": ".trellis/tasks/archive/2026-08/08-23-harness-adapters/research/omp-interface.md", "reason": "OMP 无原生结构化输出，必须走 post_validate；以及 SIGPIPE 与 thinking block 两个坑"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "SCHEMA_VIOLATION 可重试（走 R-007）而非判 Run 失败；防假绿纪律"}
