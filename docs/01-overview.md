@@ -142,7 +142,7 @@ Workflow → Agent Role → HarnessAdapter → Harness ─┬─▶ Model（Harn
 | 实现语言（ADR-0002） | ✅ **Accepted — TypeScript / Node** |
 | Workflow engine（ADR-0003） | ⚠️ Proposed，待查证 |
 | Harness 接口调研 | ⏳ 仅完成 Claude Code；其余被网关阻塞 |
-| 代码 | 未开始 |
+| 代码 | ✅ v0.1 核心闭环已跑通；⚠️ 真实 GitHub PR/CI 集成待接入 |
 
 ---
 

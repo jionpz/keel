@@ -1,0 +1,6 @@
+{"file": "docs/08-cross-cutting.md", "reason": "凭据、git 写权限边界、CI 外部事实源"}
+{"file": "docs/04-state-machine.md", "reason": "T-021/T-024/T-025 与幂等语义"}
+{"file": "docs/07-flows.md", "reason": "端到端流程中 PR/CI 步骤"}
+{"file": "src/control/driver/effects.ts", "reason": "CreatePullRequest 当前 SideEffectIntent 的接入点"}
+{"file": "src/control/orchestrator/loop.ts", "reason": "S-PR_OPEN 当前 externalCi 注入点"}
+{"file": "src/fact/git-workspace.ts", "reason": "现有 worktree/裸仓库能力，需扩展 push"}

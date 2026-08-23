@@ -101,9 +101,8 @@ pnpm run check     # CI 跑的就是这一条 —— 与本地完全一致
 
 ## 状态
 
-**架构框架 + 仓库骨架已完成。** v0.1 实现未开始。
+**架构框架 + 仓库骨架已完成。** v0.1 最小闭环已跑通：真实反馈在本地 worktree 中无人干预走完 `S-NEW → S-DONE`，事件流可完整重建；回归测试全绿。
 
-下一步：v0.1 最小闭环 —— 数据库与 `ArtifactStore`、第一个 Harness Adapter。
-
-已知空白：Harness 接口调研仅完成 Claude Code 一家，
-其余因推理网关持续限流未完成（见 [`ADR-0005`](./docs/adr/0005-harness-support-tiers.md)）。
+已知空白 / 剩余项：
+- **真实 GitHub PR / CI 集成尚未接入**（当前 `CreatePullRequest` 如实记录 `SideEffectIntent`，CI 由验收测试注入模拟）。需要指定远程仓库与凭据后完成。
+- Harness 接口调研仅完成 Claude Code 一家，其余因推理网关持续限流未完成（见 [`ADR-0005`](./docs/adr/0005-harness-support-tiers.md)）。

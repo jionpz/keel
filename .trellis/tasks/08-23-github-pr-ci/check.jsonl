@@ -1,0 +1,5 @@
+{"file": "docs/08-cross-cutting.md", "reason": "凭据安全与 CI 外部事实源验收"}
+{"file": "docs/04-state-machine.md", "reason": "PR/CI 转移与幂等验收"}
+{"file": "src/control/driver/effects.ts", "reason": "事件流诚实性：SideEffectApplied/Skipped/Intent"}
+{"file": "src/control/orchestrator/loop.ts", "reason": "CI 接线不破坏现有测试"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试与质量要求"}
