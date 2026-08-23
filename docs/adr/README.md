@@ -10,7 +10,7 @@
 | [0002](./0002-implementation-language.md) | 实现语言与运行时 | **Accepted** — TypeScript / Node |
 | [0003](./0003-workflow-engine.md) | Workflow engine 选型 | **Proposed** ⚠️ |
 | [0004](./0004-persistence.md) | 持久化与 Artifact 存储 | **Proposed** |
-| [0005](./0005-harness-support-tiers.md) | Harness 支持优先级与 capability 分级 | **Proposed** ⚠️ |
+| [0005](./0005-harness-support-tiers.md) | Harness 支持优先级与 capability 分级 | **Accepted** — Claude Code + OMP 首批（2026-08-23 修订） |
 | [0006](./0006-session-recovery.md) | Session 恢复策略 | **Proposed** |
 | [0007](./0007-migration-and-query-layer.md) | 迁移工具与查询层 | **Accepted** — node-pg-migrate + raw pg |
 

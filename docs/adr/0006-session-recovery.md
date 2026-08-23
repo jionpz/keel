@@ -20,6 +20,27 @@
 | B. Checkpoint 摘要恢复 | 有损 | 低且**有界** |
 | C. 优先用 Harness 原生 resume，不可用时回退到 B | 视 harness 而定 | 最优 |
 
+
+## 2026-08-23 补充：原生 resume 的收益已被量化
+
+本机 OMP 实测（`research/omp-interface.md` §3）：
+
+| | `input` tokens |
+|---|---|
+| 首轮（全量上下文） | 39,651 |
+| `--resume` 后同一会话 | **208** |
+
+即**约两个数量级**的差距。
+
+这为选项 C（优先用原生 resume，不可用时回退摘要）提供了实测支撑：
+`session_ref` 路径与 `rematerialize` 路径的成本差异不是理论推测，是可测量的。
+
+同时也说明 `docs/05-contracts/harness-adapter.md` §2 那句
+「能力缺失只让闭环**更贵**，不让它**失效**」中的「更贵」是认真的 ——
+量级足以影响是否值得为某个 harness 实现 resume 支持。
+
+---
+
 ## Decision（推荐）
 
 **C**，由 `A-Checkpoint.resume_hint.mode` 分派：

@@ -1,8 +1,8 @@
 {
-  "id": "v01-closed-loop",
-  "name": "v01-closed-loop",
-  "title": "v0.1 最小闭环",
-  "description": "一条真实反馈在无人干预下走完 S-NEW → S-DONE 产出通过 CI 的 PR，且事件流能完整重建全过程",
+  "id": "harness-adapters",
+  "name": "harness-adapters",
+  "title": "Harness Adapter：Claude Code 与 Human",
+  "description": "ClaudeCodeAdapter(L2) + HumanAdapter(L0)；能力协商与降级矩阵；强制 CAP-UNTRUSTED_WORKSPACE",
   "status": "planning",
   "dev_type": null,
   "scope": null,
@@ -18,13 +18,8 @@
   "commit": null,
   "pr_url": null,
   "subtasks": [],
-  "children": [
-    "08-23-persistence-artifact-store",
-    "08-23-policy-engine",
-    "08-23-workflow-driver",
-    "08-23-harness-adapters"
-  ],
-  "parent": null,
+  "children": [],
+  "parent": "08-23-v01-closed-loop",
   "relatedFiles": [],
   "notes": "",
   "meta": {}

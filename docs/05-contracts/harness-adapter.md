@@ -39,24 +39,47 @@
 
 ### 1.2 分级
 
-| 级别 | 必备能力 |
-|---|---|
-| `L0` | `CAP-HEADLESS` |
-| `L1` | L0 + `CAP-RESUME` + `CAP-STRUCTURED_OUTPUT` |
-| `L2` | L1 + `CAP-STREAM` + `CAP-COST` + `CAP-PERMISSION` |
+| 级别 | 必备能力 | 它意味着什么 |
+|---|---|---|
+| `L0` | `CAP-HEADLESS` | 每条降级路径全开 |
+| `L1` | L0 + `CAP-RESUME` | 会话可恢复 —— **最大的 token 杠杆** |
+| `L2` | L1 + `CAP-STREAM` + `CAP-COST` | 中途可观测、可按预算熔断 |
 
-`CAP-UNTRUSTED_WORKSPACE` **不在分级里** —— 见 §1.4，它是准入条件而非能力档次。
+**不在阶梯内的独立能力**：
+`CAP-UNTRUSTED_WORKSPACE`（准入条件）、`CAP-STRUCTURED_OUTPUT`、
+`CAP-PERMISSION`、`CAP-INTERRUPT`、`CAP-PROBE`、`CAP-MODEL_OVERRIDE`。
+
+> ⚠️ **阶梯只是给人看的摘要，不参与决策。**
+> 真正驱动运行时行为的是 §2 的降级矩阵，它本来就是**按能力逐条**的。
+>
+> **这一点是被实测纠正过的。** 早先的定义把 `CAP-STRUCTURED_OUTPUT`
+> 也放进 L1，结果接入 OMP 时发现：它具备 RESUME / STREAM / COST / PERMISSION，
+> 唯独没有原生结构化输出 —— 按旧定义只能标 `L0`，
+> 而 `L0` 在降级矩阵里意味着「每轮重新物化上下文」，
+> 这对一个**实测 resume 有效、且省两个数量级 token** 的 harness 是完全错误的描述。
+>
+> 根因：线性阶梯假设能力是**嵌套**的，但它们其实是**正交**的。
+> 这个假设在只有一个 harness 时不会暴露，接入第二个就塌了。
+> 详见 `research/omp-interface.md` §8。
 
 ### 1.3 已知落级
 
 | Harness | 级别 | 依据 |
 |---|---|---|
-| Claude Code | **L2** | 已查证：`--resume`、`--json-schema`、`stream-json`、`total_cost_usd`、`--allowedTools` / `--permission-mode` |
-| Codex CLI / Aider / OpenCode / OpenHands / Gemini CLI / OMP / TRAE | `未验证` | 网关限流，调研未完成 |
+| Claude Code | **L2** | 官方文档：`--resume`、`--json-schema`、`stream-json`、`total_cost_usd`、`--allowedTools` / `--permission-mode` |
+| Oh My Pi (OMP) | **L2** | **本机实测**（v17.4.2）：`-p`、`--mode=json` NDJSON、`--resume`（恢复了上下文）、`usage.cost.total`、`--tools` / `--approval-mode` |
+| Codex CLI / Aider / OpenCode / OpenHands / Gemini CLI | `未验证` | 网关限流，调研未完成 |
+| TRAE | `未验证` | 无本机可验证实例 |
+
+两者的差别不在档次，而在各自的 capability 集合：
+
+| | Claude Code | OMP |
+|---|---|---|
+| `CAP-STRUCTURED_OUTPUT` | ✅ `--json-schema` | ❌ 需 `post_validate` |
+| `CAP-MODEL_OVERRIDE` | 默认不假设 | ✅ `--model` |
+| `CAP-UNTRUSTED_WORKSPACE` | ✅ `--bare` | 🟡 `--no-extensions --no-skills --no-rules`（**隔离效果尚未反例验证**） |
 
 > ⚠️ 下游任何设计**不得**假定上表 `未验证` 项的能力。
-> 尤其 OMP 与 TRAE：初稿把它们列为主要执行层候选，但公开资料是否存在尚未确认。
-> 在查证前，它们不进入 v0.1 首批支持范围（见 [`../adr/0005-harness-support-tiers.md`](../adr/0005-harness-support-tiers.md)）。
 
 ### 1.4 两段式能力探测
 
