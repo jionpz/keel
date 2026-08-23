@@ -75,6 +75,7 @@ Error {
 | `CAPABILITY_UNSUPPORTED` | ❌ | 调了 Adapter 未声明的能力 —— **这是编程错误，不是运行时故障** |
 | `CONFLICT` | ✅ | Artifact 并发写入冲突（[`artifact-store.md`](./artifact-store.md) §1.1）—— 重读最新版后可重试 |
 | `CONTEXT_BUDGET_EXCEEDED` | ❌ | `required` section 摘要后仍超预算（[`context-builder.md`](./context-builder.md) §4.3）—— 直接升人工 |
+| `NOT_FOUND` | ❌ | 查询的产物 / 事件不存在（[`artifact-store.md`](./artifact-store.md)）—— 重试不会让它出现 |
 
 判断 `retryable` 的依据是**「再试一次有没有可能不同」**：
 凭据失效、越权、预算耗尽、能力不支持 —— 重试永远是同样结果；

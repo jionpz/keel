@@ -136,34 +136,71 @@
 
 ### 基础
 
-- [ ] 一条命令完成建库 + 迁移；重复执行幂等
-- [ ] 7 张表与 `docs/03-domain-model.md` §2 一致
-- [ ] `task.status` 的 `CHECK` 取值与 `src/shared/ids.ts` 的 15 个状态一致（有测试比对）
-- [ ] `ArtifactStore` 7 个方法实现并有测试
-- [ ] blob 阈值切分工作，>256KB 走 blob 且 artifact 中只留引用
-- [ ] `pnpm run check` 仍为绿；骨架的四条约束检查未被放宽
+- [x] 一条命令完成迁移；重复执行幂等（`pnpm run db:migrate`）
+- [x] 7 张表与 `docs/03-domain-model.md` §2 一致
+- [x] `task.status` 的 `CHECK` 取值与 `src/shared/ids.ts` 的 15 个状态一致（有漂移测试比对）
+- [x] `ArtifactStore` 7 个方法实现并有测试
+- [x] blob 阈值切分工作，>256KB 走 blob 且 artifact 中只留引用
+- [x] `pnpm run check` 为绿；骨架的四条约束检查未被放宽
 
 ### 核心：不变量必须真的拒绝
 
-沿用骨架任务的结论 —— **未经反例验证的约束，等同于没有约束**。
-每条都要有「尝试违反 → 被数据库拒绝」的测试：
-
-- [ ] `I1` 以 `keel_control` UPDATE `event` → 被拒
-- [ ] `I1` 以 `keel_control` DELETE `event` → 被拒
-- [ ] `I2` UPDATE / DELETE `artifact` → 被拒
-- [ ] `I3` 插入重复 `idempotency_key` → 被拒
-- [ ] `I5` **以 `keel_execution` INSERT `artifact` → 被拒**
-- [ ] `I5` 以 `keel_execution` INSERT `event` → 被拒
-- [ ] `I5` 以 `keel_execution` SELECT `task` → 被拒
-- [ ] `I6` UPDATE `feedback` → 被拒
-- [ ] `I8` UPDATE 已终结的 `task` → 被拒
-- [ ] `commit()` 的 `supersedes` 指向非最新版 → 返回 `CONFLICT`
-- [ ] `commit()` 事务性：中途失败则 artifact 与 event 都不落盘
+- [x] `I1` `keel_control` UPDATE `event` → 被拒
+- [x] `I1` `keel_control` DELETE `event` → 被拒
+- [x] `I2` UPDATE / DELETE `artifact` → 被拒
+- [x] `I3` 重复 `idempotency_key` → 被拒
+- [x] `I5` **`keel_execution` INSERT `artifact` → 被拒**
+- [x] `I5` `keel_execution` INSERT `event` → 被拒
+- [x] `I5` `keel_execution` SELECT `task` / `feedback` → 被拒
+- [x] `I6` UPDATE / DELETE `feedback` → 被拒
+- [x] `I8` UPDATE 已终结的 `task` → 被拒
+- [x] `commit()` 的 `supersedes` 指向非最新版 → 返回 `CONFLICT`
+- [x] `commit()` 事务性：CONFLICT 时 artifact 与 event 都不落盘
 
 ### 文档
 
-- [ ] 迁移工具选型写入新 ADR
-- [ ] `docs/` 与实现的出入已同步（同步文档，不让代码将就）
+- [x] 迁移工具选型写入 `ADR-0007`
+- [x] `docs/` 与实现的出入已同步
+
+---
+
+## 验收执行记录
+
+**测试**：47 个通过（15 转移 + 20 不变量 + 12 store/blob/漂移），`pnpm run check` exit 0。
+
+### 反例的反例
+
+不只跑了不变量测试，还验证了**这些测试真的会在授权被放宽时失败**：
+
+故意执行 `GRANT INSERT ON artifact TO keel_execution` 后，
+`I5` 测试立刻变红并报「期望被数据库拒绝，但操作成功了」；`REVOKE` 后恢复绿。
+
+> 这一步不可省。**一条写错的 GRANT 和一条正确的 GRANT，日常表现完全一样。**
+
+### 实现反过来改了三处
+
+| # | 发现 | 修正 |
+|---|---|---|
+| 1 | **`getAsOf()` 在原 schema 下无法实现** —— `artifact` 表只有 `committed_at` 时间戳，没有任何字段关联事件序号。用时间戳近似是错的：`event.seq` 是全局单调的逻辑序，`committed_at` 是墙上时钟，并发下不一致，而重放依赖 seq | 增加 `committed_at_seq` 列并同步回 `docs/03-domain-model.md` §2.6 |
+| 2 | `ErrorKind` 注册表没有适合「查不到产物」的 kind | 补 `NOT_FOUND`（不可重试），同步 `docs/05-contracts/README.md` |
+| 3 | 生成的 `ArtifactKind` 含 `event`，但 `A-Event` 有独立的表、不是 artifact 的一种 | 引入 `PersistedArtifactKind = Exclude<ArtifactKind,'event'>`，并加漂移测试比对 DB 的 `CHECK` 取值 |
+
+### 设计上的一个真矛盾
+
+`I2` 要求 `artifact` 只增不改（不授予 UPDATE），但回填 `superseded_by` 需要 UPDATE。
+
+解法：`SECURITY DEFINER` 函数 `keel_commit_artifact`。
+函数属主有 UPDATE 权限，调用者没有 —— 唯一能改 `superseded_by` 的路径就是这个函数，
+而它只做「插入新版 + 回填旧版」一件事。
+这比「授予 UPDATE 然后指望大家只用来回填」强得多。
+
+### 踩到的测试隔离问题
+
+`ArtifactStore` 测试单独跑全过，与不变量测试**合起来跑就挂**。
+原因是两个文件并行执行、共享同一个 Postgres，各自在 `beforeEach` 里 `TRUNCATE`，
+互相清掉了对方刚铺好的数据。
+
+修正：`fileParallelism: false`，并在配置里写明原因与替代方案（per-file schema）。
 
 ---
 

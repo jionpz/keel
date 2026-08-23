@@ -13,21 +13,38 @@
  */
 
 import type { AEvent } from '../generated/artifacts.js'
-import type { ArtifactKind } from '../generated/schemas.js'
+import { ARTIFACT_KINDS, type ArtifactKind } from '../generated/schemas.js'
 import type { ArtifactRef } from '../shared/ids.js'
 import type { Result } from './errors.js'
 import type { Proposal, ProposalVerdict } from './types.js'
 
+/**
+ * 实际落 `artifact` 表的 kind。
+ *
+ * 生成的 `ArtifactKind` 来自 docs/schemas/ 的文件名，含 `event` ——
+ * 但 `A-Event` 有**独立的表**（docs/06-artifacts.md §1），不是 artifact 的一种。
+ * 这里把它排除掉。
+ *
+ * DB 的 `CHECK` 取值与本列表的一致性由 schema 漂移测试保证。
+ */
+export type PersistedArtifactKind = Exclude<ArtifactKind, 'event'>
+
+export const PERSISTED_ARTIFACT_KINDS: readonly PersistedArtifactKind[] = ARTIFACT_KINDS.filter(
+  (k): k is PersistedArtifactKind => k !== 'event',
+)
+
 export interface Artifact {
   readonly id: string
   readonly task_id: string
-  readonly kind: ArtifactKind
+  readonly kind: PersistedArtifactKind
   readonly key: string
   readonly version: number
   readonly schema_version: string
   readonly body: unknown
   readonly produced_by_run: string | null
   readonly committed_at: string
+  /** 见 docs/03-domain-model.md §2.6：getAsOf() 的支撑列 */
+  readonly committed_at_seq: number
   readonly superseded_by: string | null
 }
 
@@ -53,16 +70,25 @@ export interface ArtifactStore {
   commit(proposal: Proposal, ctx: CommitContext): Promise<Result<ArtifactRef>>
 
   /** [v0.1 必须] 取指定版本 */
-  get(task_id: string, kind: ArtifactKind, key: string, version: number): Promise<Result<Artifact>>
+  get(
+    task_id: string,
+    kind: PersistedArtifactKind,
+    key: string,
+    version: number,
+  ): Promise<Result<Artifact>>
 
   /** [v0.1 必须] 取当前版本（superseded_by IS NULL 的那条） */
-  latest(task_id: string, kind: ArtifactKind, key: string): Promise<Result<Artifact>>
+  latest(task_id: string, kind: PersistedArtifactKind, key: string): Promise<Result<Artifact>>
 
   /**
    * [v0.1 必须] 完整版本链，**含已被取代的版本**。
    * 这是「当时是按哪一版做的」能被回答的原因。
    */
-  history(task_id: string, kind: ArtifactKind, key: string): Promise<Result<readonly Artifact[]>>
+  history(
+    task_id: string,
+    kind: PersistedArtifactKind,
+    key: string,
+  ): Promise<Result<readonly Artifact[]>>
 
   /**
    * [v0.1 必须] 取某个事件序号时刻的版本。
@@ -73,7 +99,7 @@ export interface ArtifactStore {
    */
   getAsOf(
     task_id: string,
-    kind: ArtifactKind,
+    kind: PersistedArtifactKind,
     key: string,
     at_event_seq: number,
   ): Promise<Result<Artifact>>

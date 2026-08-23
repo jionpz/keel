@@ -21,6 +21,7 @@ export const ERROR_KINDS = [
   'CAPABILITY_UNSUPPORTED',
   'CONFLICT',
   'CONTEXT_BUDGET_EXCEEDED',
+  'NOT_FOUND',
 ] as const
 
 export type ErrorKind = (typeof ERROR_KINDS)[number]
@@ -57,6 +58,8 @@ export const RETRYABLE: Readonly<Record<ErrorKind, boolean>> = {
   CONFLICT: true,
   /** Context required section 摘要后仍超预算 —— 见 context-builder.md §4.3，直接升人工 */
   CONTEXT_BUDGET_EXCEEDED: false,
+  /** 查询的产物 / 事件不存在。重试不会让它出现 */
+  NOT_FOUND: false,
 }
 
 export interface KeelError {

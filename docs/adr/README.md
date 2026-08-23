@@ -12,6 +12,7 @@
 | [0004](./0004-persistence.md) | 持久化与 Artifact 存储 | **Proposed** |
 | [0005](./0005-harness-support-tiers.md) | Harness 支持优先级与 capability 分级 | **Proposed** ⚠️ |
 | [0006](./0006-session-recovery.md) | Session 恢复策略 | **Proposed** |
+| [0007](./0007-migration-and-query-layer.md) | 迁移工具与查询层 | **Accepted** — node-pg-migrate + raw pg |
 
 ## Status 语义
 

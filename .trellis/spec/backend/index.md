@@ -15,7 +15,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | Guide | Description | Status |
 |-------|-------------|--------|
 | [Directory Structure](./directory-structure.md) | 三平面结构、边界规则、生成物纪律、import 写法 | ✅ 已填（`08-22-repo-skeleton`） |
-| [Database Guidelines](./database-guidelines.md) | ORM patterns, queries, migrations | ⏳ 暂缓 —— 尚无数据库代码 |
+| [Database Guidelines](./database-guidelines.md) | 角色身份写入、SECURITY DEFINER、乐观版本号、错误映射、blob 阈值、测试隔离 | ✅ 已填（`08-23-persistence-artifact-store`） |
 | [Error Handling](./error-handling.md) | `Result<T>`、`ErrorKind` 注册表、`retryable` 语义、防假绿 | ✅ 已填（`08-22-repo-skeleton`） |
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | ⏳ 暂缓 |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | ⏳ 暂缓 —— 尚无日志代码 |
