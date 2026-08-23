@@ -1,1 +1,4 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": "docs/05-contracts/harness-adapter.md", "reason": "契约事实来源：6 个 [v0.1 必须] 方法、capability 注册表、降级矩阵、CAP-UNTRUSTED_WORKSPACE 无降级路径"}
+{"file": ".trellis/tasks/08-23-harness-adapters/research/omp-interface.md", "reason": "OMP 的本机实测数据：argv、NDJSON 事件形状、resume、成本字段，以及 SIGPIPE 与 thinking block 两个坑"}
+{"file": "docs/adr/0005-harness-support-tiers.md", "reason": "分级定义（2026-08-23 修订：能力正交，阶梯不参与决策）与首批支持范围"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Result<T>、ErrorKind（CAPABILITY_UNSUPPORTED 不可重试）、反例验证纪律"}

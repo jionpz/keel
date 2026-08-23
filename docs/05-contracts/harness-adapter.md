@@ -77,7 +77,7 @@
 |---|---|---|
 | `CAP-STRUCTURED_OUTPUT` | ✅ `--json-schema` | ❌ 需 `post_validate` |
 | `CAP-MODEL_OVERRIDE` | 默认不假设 | ✅ `--model` |
-| `CAP-UNTRUSTED_WORKSPACE` | ✅ `--bare` | 🟡 `--no-extensions --no-skills --no-rules`（**隔离效果尚未反例验证**） |
+| `CAP-UNTRUSTED_WORKSPACE` | ✅ `--bare`（依据官方文档） | ✅ `--no-extensions --no-skills --no-rules`（**已反例验证：不加则仓库内扩展会被加载**） |
 
 > ⚠️ 下游任何设计**不得**假定上表 `未验证` 项的能力。
 

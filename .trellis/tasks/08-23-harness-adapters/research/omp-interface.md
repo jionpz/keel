@@ -127,9 +127,24 @@ omp -p --mode=json --resume "<session-id>" "<prompt>"
 
 这组等价于 Claude Code 的 `--bare`。
 
-> ⚠️ **未验证**：没有实测「仓库里放一个恶意扩展，加与不加 `--no-extensions` 的差别」。
-> 上表是**依据 `--help` 的描述**推断的。接入前应补这个反例测试 ——
-> 本项目的纪律是「未经反例验证的约束等同于没有约束」。
+### 5.1 反例验证 ✅ 已完成
+
+往临时仓库放一个**加载时留痕迹**的 OMP 扩展（`.omp/extensions/probe/index.ts`），
+跑两次对比：
+
+| 运行 | 痕迹 |
+|---|---|
+| 不加隔离开关 | ✅ 扩展**被加载了** |
+| 加 `--no-extensions --no-skills --no-rules` | ❌ 痕迹文件不存在 |
+
+**两个结论**：
+
+1. **威胁是真的** —— 在一个含 `.omp/extensions/` 的仓库里跑一次 omp，
+   就等于执行了该仓库作者写的代码。与 Claude Code 的 `--bare` 是同一类问题。
+2. **开关有效** —— `CAP-UNTRUSTED_WORKSPACE` 对 OMP 成立。
+
+该实验已固化为测试（`src/execution/adapters/adapters.test.ts`），
+CI 每次都会重跑 —— 若 OMP 未来改变行为，会立刻红。
 
 ---
 
@@ -154,7 +169,7 @@ omp -p --mode=json --resume "<session-id>" "<prompt>"
 | `CAP-RESUME` | ✅ | `--resume`，**实测恢复了上下文** |
 | `CAP-COST` | ✅ | `usage.cost.total`，实测 |
 | `CAP-PERMISSION` | ✅ | `--tools` / `--approval-mode` |
-| `CAP-UNTRUSTED_WORKSPACE` | 🟡 | 开关存在，**隔离效果未做反例验证** |
+| `CAP-UNTRUSTED_WORKSPACE` | ✅ | 开关存在**且经反例验证有效**，见 §5.1 |
 | `CAP-MODEL_OVERRIDE` | ✅ | `--model` |
 | `CAP-INTERRUPT` | 🟡 | 未测；`--max-time` 可作超时兜底 |
 | **`CAP-STRUCTURED_OUTPUT`** | ❌ | **`--help` 中没有 schema 约束类开关** |
