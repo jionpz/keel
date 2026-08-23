@@ -18,6 +18,7 @@ import { randomUUID } from 'node:crypto'
 import type { PoolClient } from 'pg'
 import type { PolicyEngine } from '../../contracts/policy-engine.js'
 import { commitArtifactOn } from '../../fact/artifact-store.js'
+import type { GitWorkspace } from '../../fact/git-workspace.js'
 import type { Stage } from '../../shared/ids.js'
 import type { SideEffect, TransitionEvent } from '../transition/types.js'
 import { loadPolicyFacts } from './facts.js'
@@ -29,6 +30,17 @@ export interface EffectContext {
   /** 时间由外部注入 —— 控制平面不读时钟 */
   readonly now: string
   readonly policy: PolicyEngine
+  /**
+   * 工作区管理。**可选**：不传时 CreateBranch / CleanWorkspace 退回记录意图。
+   *
+   * 保持可选是为了让 driver 的单元测试不必准备 git 仓库 ——
+   * 但真实编排必须传，否则事件流里会是 SideEffectIntent 而不是真做了。
+   */
+  readonly workspace?: {
+    readonly git: GitWorkspace
+    readonly repoId: string
+    readonly baseBranch: string
+  }
 }
 
 export interface AppliedEffect {
@@ -208,6 +220,60 @@ async function recordIntent(
   return { kind: effect.kind, outcome: 'intent', detail: '已记录意图，尚未落地' }
 }
 
+/**
+ * 建分支 —— 幂等：worktree 已存在则复用。
+ *
+ * 分支名由 task_id 决定（非随机），这是重放安全的前提。
+ */
+async function createBranch(c: PoolClient, ctx: EffectContext): Promise<AppliedEffect> {
+  if (ctx.workspace === undefined) {
+    await emit(c, ctx.taskId, 'SideEffectIntent', {
+      kind: 'CreateBranch',
+      transition: ctx.transitionId,
+      note: '未注入 workspace，仅记录意图',
+    })
+    return { kind: 'CreateBranch', outcome: 'intent', detail: '未注入 workspace' }
+  }
+  const { git, repoId, baseBranch } = ctx.workspace
+  const wt = await git.ensureWorktree(repoId, ctx.taskId, baseBranch)
+  if (!wt.ok) throw new Error(`建 worktree 失败：${wt.error.detail}`)
+
+  await emit(c, ctx.taskId, 'SideEffectApplied', {
+    kind: 'CreateBranch',
+    dedupe_key: wt.value.branch,
+    branch: wt.value.branch,
+    worktree: wt.value.path,
+  })
+  return { kind: 'CreateBranch', outcome: 'applied', detail: wt.value.branch }
+}
+
+/** 清理工作区。分支保留在裸仓库里 —— 移除的是工作树，不是历史 */
+async function cleanWorkspace(c: PoolClient, ctx: EffectContext): Promise<AppliedEffect> {
+  if (ctx.workspace === undefined) return recordIntent(c, ctx, { kind: 'CleanWorkspace' })
+  await ctx.workspace.git.remove(ctx.workspace.repoId, ctx.taskId)
+  await emit(c, ctx.taskId, 'SideEffectApplied', {
+    kind: 'CleanWorkspace',
+    dedupe_key: ctx.taskId,
+  })
+  return { kind: 'CleanWorkspace', outcome: 'applied', detail: '已移除 worktree' }
+}
+
+/**
+ * 保留现场（T-041，S-FAILED）。
+ *
+ * **刻意什么都不做** —— 但要如实记下路径，否则没人知道现场在哪。
+ * 不可恢复失败的判定标准很窄，一旦触发就说明有需要人看的东西。
+ */
+async function preserveWorkspace(c: PoolClient, ctx: EffectContext): Promise<AppliedEffect> {
+  const path = ctx.workspace?.git.preservePath(ctx.taskId) ?? '(未注入 workspace)'
+  await emit(c, ctx.taskId, 'SideEffectApplied', {
+    kind: 'PreserveWorkspace',
+    dedupe_key: ctx.taskId,
+    preserved_at: path,
+  })
+  return { kind: 'PreserveWorkspace', outcome: 'applied', detail: `保留现场：${path}` }
+}
+
 export async function applyEffects(
   c: PoolClient,
   ctx: EffectContext,
@@ -234,15 +300,21 @@ export async function applyEffects(
       case 'AskUser':
         applied.push(await notifyOnce(c, ctx, e.kind, ctx.transitionId, {}))
         break
+      case 'CreateBranch':
+        applied.push(await createBranch(c, ctx))
+        break
+      case 'CleanWorkspace':
+        applied.push(await cleanWorkspace(c, ctx))
+        break
+      case 'PreserveWorkspace':
+        applied.push(await preserveWorkspace(c, ctx))
+        break
       // 以下 v0.1 只记录意图：真实 git / 定时器 / 会话取消属后续子任务
       case 'CreateTask':
       case 'LinkFeedback':
-      case 'CreateBranch':
       case 'CreatePullRequest':
       case 'StartTimer':
       case 'CancelRun':
-      case 'CleanWorkspace':
-      case 'PreserveWorkspace':
       case 'RecordReason':
       case 'MaybeAutoMerge':
         applied.push(await recordIntent(c, ctx, e))

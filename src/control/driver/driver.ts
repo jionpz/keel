@@ -15,6 +15,7 @@
 import { err, makeError, ok, type Result } from '../../contracts/errors.js'
 import type { PolicyEngine } from '../../contracts/policy-engine.js'
 import { asRole } from '../../fact/db.js'
+import type { GitWorkspace } from '../../fact/git-workspace.js'
 import type { ControlMode, TaskStatus } from '../../shared/ids.js'
 import { transition } from '../transition/index.js'
 import type { TransitionEvent } from '../transition/types.js'
@@ -32,8 +33,21 @@ export interface AdvanceOutcome {
   readonly reason: string | null
 }
 
+export interface WorkspaceBinding {
+  readonly git: GitWorkspace
+  readonly repoId: string
+  readonly baseBranch: string
+}
+
 export class WorkflowDriver {
-  constructor(private readonly policy: PolicyEngine) {}
+  /**
+   * @param workspace 可选。不传时 CreateBranch / CleanWorkspace 退回记录意图 ——
+   *   单元测试不必准备 git 仓库，但真实编排必须传。
+   */
+  constructor(
+    private readonly policy: PolicyEngine,
+    private readonly workspace?: WorkspaceBinding,
+  ) {}
 
   /**
    * 推进一个 Task。
@@ -90,7 +104,14 @@ export class WorkflowDriver {
 
       const effects = await applyEffects(
         c,
-        { taskId, event, transitionId: result.id, now, policy: this.policy },
+        {
+          taskId,
+          event,
+          transitionId: result.id,
+          now,
+          policy: this.policy,
+          ...(this.workspace === undefined ? {} : { workspace: this.workspace }),
+        },
         result.effects,
       )
 

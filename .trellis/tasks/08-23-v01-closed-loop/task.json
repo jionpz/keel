@@ -24,7 +24,8 @@
     "08-23-workflow-driver",
     "08-23-harness-adapters",
     "08-23-session-manager",
-    "08-23-e2e-orchestrator"
+    "08-23-e2e-orchestrator",
+    "08-23-git-workspace"
   ],
   "parent": null,
   "relatedFiles": [],
