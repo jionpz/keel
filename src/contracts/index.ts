@@ -10,8 +10,10 @@
  */
 
 export * from './artifact-store.js'
+export * from './ci-gateway.js'
 export * from './context-builder.js'
 export * from './errors.js'
+export * from './git-provider.js'
 export * from './harness-adapter.js'
 export * from './policy-engine.js'
 export * from './session-manager.js'

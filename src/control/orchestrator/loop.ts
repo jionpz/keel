@@ -15,6 +15,7 @@
  * durable timer 与 work queue 属后续子任务，两件事应分开验证。
  */
 
+import type { CiGateway } from '../../contracts/ci-gateway.js'
 import { err, makeError, ok, type Result } from '../../contracts/errors.js'
 import type { HarnessAdapter } from '../../contracts/harness-adapter.js'
 import type { HarnessSessionManager } from '../../execution/session/manager.js'
@@ -91,6 +92,10 @@ export interface RunOptions {
    * 由调用方注入，且注入的事件会被明确标记来源。
    */
   readonly externalCi?: (taskId: string) => Promise<'passed' | 'failed'>
+  /**
+   * 真实 CI 网关。传入时优先于 `externalCi`，用于读取 GitHub Checks / Status。
+   */
+  readonly ci?: CiGateway
 }
 
 export async function runTaskToCompletion(
@@ -135,6 +140,29 @@ export async function runTaskToCompletion(
 
     // ── S-PR_OPEN：等外部 CI ──
     if (state.status === 'S-PR_OPEN') {
+      if (opts.ci !== undefined) {
+        if (deps.workspace.mode !== 'worktree') {
+          return err(makeError('WORKSPACE_ERROR', '真实 CI 需要 worktree 模式才能读取 head SHA'))
+        }
+        const sha = await deps.workspace.git.headSha(deps.workspace.repoId, taskId)
+        if (!sha.ok) return err(sha.error)
+        const remote = await readRemoteUrl(deps.workspace.repoId)
+        if (!remote.ok) return err(remote.error)
+        const ciResult = await opts.ci.waitForCi({
+          repoId: deps.workspace.repoId,
+          remoteUrl: remote.value,
+          headSha: sha.value,
+        })
+        if (!ciResult.ok) return err(ciResult.error)
+        const adv = await deps.driver.advance(
+          taskId,
+          { type: ciResult.value === 'passed' ? 'CIPassed' : 'CIFailed' },
+          deps.now(),
+        )
+        if (!adv.ok) return err(adv.error)
+        steps.push(record(state.status, adv, null, `外部 CI：${ciResult.value}`))
+        continue
+      }
       if (opts.externalCi === undefined) {
         return ok({ finalStatus: state.status, steps })
       }
@@ -292,6 +320,15 @@ function record(
     transition: adv.value.transition_id,
     note,
   }
+}
+
+async function readRemoteUrl(repoId: string): Promise<Result<string>> {
+  const r = await asRole('keel_control', (c) =>
+    c.query<{ remote_url: string }>('SELECT remote_url FROM repo WHERE id=$1', [repoId]),
+  )
+  const row = r.rows[0]
+  if (row === undefined) return err(makeError('NOT_FOUND', `找不到 repo ${repoId}`))
+  return ok(row.remote_url)
 }
 
 async function readState(taskId: string): Promise<{ status: TaskStatus } | null> {

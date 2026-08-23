@@ -16,9 +16,10 @@
 
 import { randomUUID } from 'node:crypto'
 import type { PoolClient } from 'pg'
+import type { PullRequestGateway } from '../../contracts/git-provider.js'
 import type { PolicyEngine } from '../../contracts/policy-engine.js'
 import { commitArtifactOn } from '../../fact/artifact-store.js'
-import type { GitWorkspace } from '../../fact/git-workspace.js'
+import { branchFor, type GitWorkspace } from '../../fact/git-workspace.js'
 import type { Stage } from '../../shared/ids.js'
 import type { SideEffect, TransitionEvent } from '../transition/types.js'
 import { loadPolicyFacts } from './facts.js'
@@ -41,6 +42,11 @@ export interface EffectContext {
     readonly repoId: string
     readonly baseBranch: string
   }
+  /**
+   * Git 托管方网关。**可选**：不传时 CreatePullRequest 退回记录意图。
+   * 真实编排要关闭 v0.1 最后空缺时必须传。
+   */
+  readonly github?: PullRequestGateway
 }
 
 export interface AppliedEffect {
@@ -274,6 +280,67 @@ async function preserveWorkspace(c: PoolClient, ctx: EffectContext): Promise<App
   return { kind: 'PreserveWorkspace', outcome: 'applied', detail: `保留现场：${path}` }
 }
 
+/**
+ * 创建 PR —— 幂等：先 push 分支，再交给 PullRequestGateway。
+ *
+ * 未注入 github / workspace 时退回记录意图，不假装成功。
+ */
+async function createPullRequest(c: PoolClient, ctx: EffectContext): Promise<AppliedEffect> {
+  if (ctx.github === undefined || ctx.workspace === undefined) {
+    await emit(c, ctx.taskId, 'SideEffectIntent', {
+      kind: 'CreatePullRequest',
+      transition: ctx.transitionId,
+      note: '未注入 github provider / workspace，仅记录意图',
+    })
+    return { kind: 'CreatePullRequest', outcome: 'intent', detail: '未注入 github provider' }
+  }
+
+  const { git, repoId, baseBranch } = ctx.workspace
+  const repo = await c.query<{ remote_url: string; default_branch: string; title: string }>(
+    `SELECT r.remote_url, r.default_branch, t.title
+     FROM repo r JOIN task t ON t.repo_id = r.id
+     WHERE r.id = $1 AND t.id = $2`,
+    [repoId, ctx.taskId],
+  )
+  const row = repo.rows[0]
+  if (row === undefined) throw new Error(`找不到 repo/task：${repoId}/${ctx.taskId}`)
+
+  const headBranch = branchFor(ctx.taskId)
+  const push = await git.push(repoId, ctx.taskId, row.remote_url)
+  if (!push.ok) throw new Error(`push 失败：${push.error.detail}`)
+
+  const pr = await ctx.github.createPullRequest({
+    repoId,
+    remoteUrl: row.remote_url,
+    baseBranch: baseBranch || row.default_branch,
+    headBranch,
+    title: row.title,
+    body: `Keel Task ${ctx.taskId}\n\nAutomated PR.`,
+  })
+  if (!pr.ok) throw new Error(`创建 PR 失败：${pr.error.detail}`)
+
+  const dedupeKey = headBranch
+  if (pr.value.created) {
+    await emit(c, ctx.taskId, 'SideEffectApplied', {
+      kind: 'CreatePullRequest',
+      dedupe_key: dedupeKey,
+      pr_number: pr.value.number,
+      pr_url: pr.value.url,
+      head_branch: headBranch,
+    })
+    return { kind: 'CreatePullRequest', outcome: 'applied', detail: `PR #${pr.value.number}` }
+  }
+
+  await emit(c, ctx.taskId, 'SideEffectSkipped', {
+    kind: 'CreatePullRequest',
+    dedupe_key: dedupeKey,
+    pr_number: pr.value.number,
+    pr_url: pr.value.url,
+    head_branch: headBranch,
+  })
+  return { kind: 'CreatePullRequest', outcome: 'skipped', detail: `复用 PR #${pr.value.number}` }
+}
+
 export async function applyEffects(
   c: PoolClient,
   ctx: EffectContext,
@@ -309,10 +376,12 @@ export async function applyEffects(
       case 'PreserveWorkspace':
         applied.push(await preserveWorkspace(c, ctx))
         break
+      case 'CreatePullRequest':
+        applied.push(await createPullRequest(c, ctx))
+        break
       // 以下 v0.1 只记录意图：真实 git / 定时器 / 会话取消属后续子任务
       case 'CreateTask':
       case 'LinkFeedback':
-      case 'CreatePullRequest':
       case 'StartTimer':
       case 'CancelRun':
       case 'RecordReason':

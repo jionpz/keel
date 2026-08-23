@@ -158,6 +158,47 @@ export class GitWorkspace {
     }
   }
 
+  /** 读该 Task 分支在裸仓库中的 HEAD SHA */
+  async headSha(repoId: string, taskId: string): Promise<Result<string>> {
+    const bare = this.bareRepoPath(repoId)
+    const branch = branchFor(taskId)
+    if (!existsSync(bare)) {
+      return err(makeError('WORKSPACE_ERROR', `裸仓库不存在：${bare}`))
+    }
+    try {
+      const { stdout } = await exec('git', ['-C', bare, 'rev-parse', `refs/heads/${branch}`])
+      return ok(stdout.trim())
+    } catch (e) {
+      return err(makeError('WORKSPACE_ERROR', `读取分支 ${branch} HEAD 失败：${msg(e)}`))
+    }
+  }
+
+  /**
+   * 把该 Task 的分支 push 到远程。
+   *
+   * 只允许 `ai/*` 分支；不使用 `--force`。
+   * 幂等由 git 自身保证：远程已是最新时输出 "Everything up-to-date"。
+   */
+  async push(repoId: string, taskId: string, remoteUrl: string): Promise<Result<string>> {
+    const bare = this.bareRepoPath(repoId)
+    const branch = branchFor(taskId)
+    if (!existsSync(bare)) {
+      return err(makeError('WORKSPACE_ERROR', `裸仓库不存在：${bare}`))
+    }
+    if (!branch.startsWith('ai/')) {
+      return err(makeError('WORKSPACE_ERROR', `拒绝 push 非 ai/* 分支：${branch}`))
+    }
+    if (!(await this.branchExists(bare, branch))) {
+      return err(makeError('WORKSPACE_ERROR', `分支不存在：${branch}`))
+    }
+    try {
+      const { stdout } = await exec('git', ['-C', bare, 'push', remoteUrl, `${branch}:${branch}`])
+      return ok(stdout.trim())
+    } catch (e) {
+      return err(makeError('WORKSPACE_ERROR', `push ${branch} 到 ${remoteUrl} 失败：${msg(e)}`))
+    }
+  }
+
   /** 读工作树的改动摘要 */
   async status(taskId: string): Promise<Result<string>> {
     const wt = this.worktreePath(taskId)

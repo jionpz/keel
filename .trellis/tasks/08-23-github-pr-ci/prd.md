@@ -83,5 +83,12 @@
 
 ## Notes
 
-- 本任务需要用户提供：远程仓库 URL、凭据方式（推荐 fine-grained PAT 或已登录 `gh`）。
-- 在拿到凭据前，先完成接口、假实现、测试与文档；不把未验证的代码标成已完成。
+- 本任务需要用户提供:远程仓库 URL、凭据方式(推荐 fine-grained PAT 或已登录 `gh`)。
+- 在拿到凭据前,先完成接口、假实现、测试与文档;不把未验证的代码标成已完成。
+
+## 进度(2026-08-23)
+
+代码层完成:`GitWorkspace.push`、`GitHubProvider`(REST)、effects/orchestrator 接线、
+单测 17+3 用例、`pnpm run check` 全绿(162 tests)。README 状态已同步。
+剩余全部阻塞在**真实远程仓库与凭据**(Stage 4.4/5.3 单测与 6.x 验收除外):
+提供 `KEEL_GITHUB_TOKEN` 与远程 URL 后即可跑真实验收路径。

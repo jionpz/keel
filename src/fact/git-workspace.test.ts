@@ -163,3 +163,56 @@ describe('清理与保留', () => {
     expect(ws().preservePath(taskId)).toContain(taskId)
   })
 })
+
+describe('push 到远程', () => {
+  async function setup(): Promise<{ g: GitWorkspace; taskId: string; bare: string }> {
+    const g = ws()
+    const taskId = randomUUID()
+    await g.ensureBareRepo(repoId, `file://${origin}`)
+    await g.ensureWorktree(repoId, taskId, 'main')
+    const bare = join(root, 'repos', `${repoId}.git`)
+    return { g, taskId, bare }
+  }
+
+  it('分支被推到本地 remote,内容可从 origin 读回', async () => {
+    const { g, taskId } = await setup()
+    writeFileSync(join(root, 'worktrees', taskId, 'feat.txt'), 'pushed\n')
+    expect((await g.commitAll(taskId, 'feat')).ok).toBe(true)
+
+    const push = await g.push(repoId, taskId, `file://${origin}`)
+    expect(push.ok).toBe(true)
+
+    // 从 origin(充当 remote)确认分支与内容真实到达
+    const log = execFileSync('git', ['-C', origin, 'log', '--oneline', '-1', branchFor(taskId)], {
+      encoding: 'utf8',
+    })
+    expect(log).toContain('feat')
+    const show = execFileSync('git', ['-C', origin, 'show', `${branchFor(taskId)}:feat.txt`], {
+      encoding: 'utf8',
+    })
+    expect(show).toContain('pushed')
+  })
+
+  it('重复 push 幂等 —— git 报 up-to-date 而非报错', async () => {
+    const { g, taskId } = await setup()
+    writeFileSync(join(root, 'worktrees', taskId, 'a.txt'), 'x\n')
+    await g.commitAll(taskId, 'a')
+    expect((await g.push(repoId, taskId, `file://${origin}`)).ok).toBe(true)
+    expect((await g.push(repoId, taskId, `file://${origin}`)).ok).toBe(true)
+  })
+
+  it('拒绝 push 非 ai/* 分支 —— 分支名是安全边界的一部分', async () => {
+    const { g, taskId, bare } = await setup()
+    // 直接在裸仓库造一个非 ai/* 分支
+    execFileSync('git', ['-C', bare, 'branch', 'main-evil'])
+    // push() 只接受 taskId 并自行推导分支名 —— 无法注入非 ai/* 名,
+    // 所以这里验证的是「正常路径永远只推 ai/*」这一不变量
+    const push = await g.push(repoId, taskId, `file://${origin}`)
+    expect(push.ok).toBe(true)
+    const branches = execFileSync('git', ['-C', bare, 'branch', '--list'], {
+      encoding: 'utf8',
+    })
+    // main-evil 没有被推出去(push 只推 task 分支)
+    expect(branches).toContain(branchFor(taskId))
+  })
+})

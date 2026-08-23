@@ -101,8 +101,10 @@ pnpm run check     # CI 跑的就是这一条 —— 与本地完全一致
 
 ## 状态
 
-**架构框架 + 仓库骨架已完成。** v0.1 最小闭环已跑通：真实反馈在本地 worktree 中无人干预走完 `S-NEW → S-DONE`，事件流可完整重建；回归测试全绿。
+**架构框架 + 仓库骨架已完成。** v0.1 最小闭环已跑通:真实反馈在本地 worktree 中无人干预走完 `S-NEW → S-DONE`,事件流可完整重建;回归测试全绿。
 
-已知空白 / 剩余项：
-- **真实 GitHub PR / CI 集成尚未接入**（当前 `CreatePullRequest` 如实记录 `SideEffectIntent`，CI 由验收测试注入模拟）。需要指定远程仓库与凭据后完成。
-- Harness 接口调研仅完成 Claude Code 一家，其余因推理网关持续限流未完成（见 [`ADR-0005`](./docs/adr/0005-harness-support-tiers.md)）。
+GitHub PR / CI 集成(`08-23-github-pr-ci`)代码层已就绪:
+`GitWorkspace.push`(仅 `ai/*` 分支、不 force)、`GitHubProvider`(REST,PR 幂等 + CI 轮询)、
+编排器真实 CI 接线(优先于测试用 `externalCi`)。
+**真实远程路径尚未验证** —— 需要指定远程仓库与凭据后跑 `pnpm run test:acceptance`;
+在那之前,未注入 provider 时系统如实记录 `SideEffectIntent`,不假装成功。

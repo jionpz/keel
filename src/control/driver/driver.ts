@@ -13,6 +13,7 @@
  */
 
 import { err, makeError, ok, type Result } from '../../contracts/errors.js'
+import type { PullRequestGateway } from '../../contracts/git-provider.js'
 import type { PolicyEngine } from '../../contracts/policy-engine.js'
 import { asRole } from '../../fact/db.js'
 import type { GitWorkspace } from '../../fact/git-workspace.js'
@@ -43,10 +44,12 @@ export class WorkflowDriver {
   /**
    * @param workspace 可选。不传时 CreateBranch / CleanWorkspace 退回记录意图 ——
    *   单元测试不必准备 git 仓库，但真实编排必须传。
+   * @param github 可选。不传时 CreatePullRequest 退回记录意图。
    */
   constructor(
     private readonly policy: PolicyEngine,
     private readonly workspace?: WorkspaceBinding,
+    private readonly github?: PullRequestGateway,
   ) {}
 
   /**
@@ -111,6 +114,7 @@ export class WorkflowDriver {
           now,
           policy: this.policy,
           ...(this.workspace === undefined ? {} : { workspace: this.workspace }),
+          ...(this.github === undefined ? {} : { github: this.github }),
         },
         result.effects,
       )
