@@ -27,6 +27,7 @@ import { OmpAdapter } from '../execution/adapters/omp.js'
 import { HarnessSessionManager } from '../execution/session/manager.js'
 import { PgArtifactStore } from '../fact/artifact-store.js'
 import { asOwner, closePool } from '../fact/db.js'
+import { branchFor, GitWorkspace } from '../fact/git-workspace.js'
 
 const store = new PgArtifactStore()
 const FEEDBACK = '导出的 Excel 希望能够按照日期筛选'
@@ -44,6 +45,7 @@ afterAll(closePool)
 interface Seeded {
   taskId: string
   ws: string
+  repoId: string
 }
 
 /**
@@ -53,7 +55,7 @@ interface Seeded {
  */
 async function seed(): Promise<Seeded> {
   const ws = mkdtempSync(join(tmpdir(), 'keel-v01-'))
-  execFileSync('git', ['init', '-q', '.'], { cwd: ws })
+  execFileSync('git', ['init', '-q', '-b', 'main', '.'], { cwd: ws })
   execFileSync('git', ['config', 'user.email', 'keel@test'], { cwd: ws })
   execFileSync('git', ['config', 'user.name', 'keel'], { cwd: ws })
   writeFileSync(
@@ -87,21 +89,29 @@ async function seed(): Promise<Seeded> {
     ])
   })
 
-  return { taskId, ws }
+  return { taskId, ws, repoId }
 }
 
 describe('v0.1 完成判据（完整）', () => {
   it('一条真实反馈在无人干预下走完 S-NEW → S-DONE，事件流可完整重建', async () => {
-    const { taskId, ws } = await seed()
+    const { taskId, ws, repoId } = await seed()
     let ciCalls = 0
+
+    // 每个 Task 一个独立 worktree —— 与生产接线一致（docs/08-cross-cutting.md §4.1）。
+    // 裸仓库与工作树都建在临时目录下，测试结束一并清掉。
+    const git = new GitWorkspace({ root: mkdtempSync(join(tmpdir(), 'keel-v01-root-')) })
+    const bare = await git.ensureBareRepo(repoId, `file://${ws}`)
+    expect(bare.ok, bare.ok ? '' : `建裸仓库失败：${bare.error.detail}`).toBe(true)
+    if (!bare.ok) return
+    const binding = { git, repoId, baseBranch: 'main' } as const
 
     const result = await runTaskToCompletion(
       taskId,
       {
-        driver: new WorkflowDriver(new RuleBasedPolicyEngine(DEFAULT_RULESET)),
+        driver: new WorkflowDriver(new RuleBasedPolicyEngine(DEFAULT_RULESET), binding),
         sessions: new HarnessSessionManager(),
         adapter: new OmpAdapter(),
-        workspacePath: ws,
+        workspace: { mode: 'worktree', ...binding },
         // 时间由外部注入 —— Control Plane 不读时钟
         now: () => '2026-08-23T13:00:00Z',
       },
@@ -143,8 +153,17 @@ describe('v0.1 完成判据（完整）', () => {
     }
 
     // ── 3. develop 阶段做了真实的文件改动 ──
-    const status = execFileSync('git', ['status', '--porcelain'], { cwd: ws }).toString()
-    expect(status.trim(), 'develop 阶段应在工作区留下真实改动').not.toBe('')
+    //
+    // 查的是**分支**而不是工作树：进 S-DONE 时 CleanWorkspace 会移除工作树，
+    // 分支留在裸仓库里。这正是「能在进程崩溃后存活的只有 Artifact」的
+    // git 侧对应物 —— 没提交的东西不算数。
+    const branch = branchFor(taskId)
+    const commits = execFileSync(
+      'git',
+      ['-C', bare.value, 'log', '--format=%s', `main..${branch}`],
+      { encoding: 'utf8' },
+    ).trim()
+    expect(commits, 'develop 阶段应在该 Task 的分支上留下提交').not.toBe('')
 
     // ── 4. 事件流能完整重建全过程 ──
     const evs = await store.readEvents(taskId, 0, 1000)

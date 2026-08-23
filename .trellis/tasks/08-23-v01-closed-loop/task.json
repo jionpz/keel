@@ -25,7 +25,8 @@
     "08-23-harness-adapters",
     "08-23-session-manager",
     "08-23-e2e-orchestrator",
-    "08-23-git-workspace"
+    "08-23-git-workspace",
+    "08-23-split-acceptance-tests"
   ],
   "parent": null,
   "relatedFiles": [],

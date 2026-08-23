@@ -1,20 +1,17 @@
 import { defineConfig } from 'vitest/config'
+import { ACCEPTANCE_GLOB, BASE_EXCLUDE, SHARED_TEST_CONFIG } from './vitest.shared.js'
 
 export default defineConfig({
   test: {
-    globalSetup: ['./vitest.globalSetup.ts'],
+    ...SHARED_TEST_CONFIG,
 
-    // 数据库测试必须串行。
+    // 验收测试不进默认 check —— 理由见 src/acceptance/README.md。
     //
-    // 多个测试文件共享同一个 Postgres，各自在 beforeEach 里 TRUNCATE ——
-    // 并行执行时会互相清掉对方刚铺好的数据，表现为「单独跑全过、合起来跑就挂」。
+    // 一句话：它们的断言依赖模型「说了什么」，因此天然有波动；
+    // 一个 flaky 测试留在默认 check 里，会侵蚀 check 本身的可信度。
     //
-    // 替代方案是给每个文件分配独立 schema，但在当前规模下不值得那个复杂度。
-    // 若日后测试变慢到成为问题，再考虑 per-file schema。
-    fileParallelism: false,
-
-    env: {
-      KEEL_DATABASE_URL: process.env.KEEL_DATABASE_URL ?? 'postgres://localhost/keel_test',
-    },
+    // 这**不是**「不可用就跳过」：它们没有被静默跳过，而是移到了
+    // `pnpm run test:acceptance`，条件不满足时明确失败。
+    exclude: [...BASE_EXCLUDE, ACCEPTANCE_GLOB],
   },
 })

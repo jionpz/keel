@@ -19,17 +19,48 @@ import { err, makeError, ok, type Result } from '../../contracts/errors.js'
 import type { HarnessAdapter } from '../../contracts/harness-adapter.js'
 import type { HarnessSessionManager } from '../../execution/session/manager.js'
 import { asRole } from '../../fact/db.js'
+import type { GitWorkspace } from '../../fact/git-workspace.js'
 import type { RoleId, Stage, TaskStatus } from '../../shared/ids.js'
 import { FactPlaneContextBuilder } from '../context/builder.js'
 import type { WorkflowDriver } from '../driver/driver.js'
 import { runSessionUntilValid } from '../proposal/pipeline.js'
 import { expectedArtifact, promptFor, ROLE_INSTRUCTIONS } from './prompts.js'
 
+/**
+ * Session 干活的地方。
+ *
+ * 建模为判别联合而不是「一个可选 git + 一个可选 path」——
+ * 后者能表达「两个都没给」和「两个都给了」这两种无意义状态。
+ */
+export type OrchestratorWorkspace =
+  /**
+   * 每 Task 一个独立 worktree（`docs/08-cross-cutting.md` §4.1 的 `N1`）。
+   *
+   * 这是**真实编排应该走的路径**：两个 Task 同时改一个仓库时互不可见，
+   * 且 Agent 污染工作区后销毁 worktree 即完全清理（`S1`）。
+   *
+   * 路径解析走 `ensureWorktree`，与副作用执行器里的 `CreateBranch` 是**同一个幂等操作** ——
+   * 谁先跑到都不影响结果，这正是当初把分支名定成 `f(task_id)` 的原因。
+   */
+  | {
+      readonly mode: 'worktree'
+      readonly git: GitWorkspace
+      readonly repoId: string
+      readonly baseBranch: string
+    }
+  /**
+   * 固定目录，所有 Task 共用。
+   *
+   * **只适用于单 Task 的测试**。并发下它是错的 —— 保留它是为了让
+   * 不关心 git 的测试不必准备裸仓库，而不是因为它是一种合理的生产配置。
+   */
+  | { readonly mode: 'fixed'; readonly path: string }
+
 export interface OrchestratorDeps {
   readonly driver: WorkflowDriver
   readonly sessions: HarnessSessionManager
   readonly adapter: HarnessAdapter
-  readonly workspacePath: string
+  readonly workspace: OrchestratorWorkspace
   /** 时间由外部注入 —— Control Plane 不读时钟 */
   readonly now: () => string
 }
@@ -167,6 +198,10 @@ async function executeRun(
   if (!ctx.ok) return err(ctx.error)
 
   const expect = expectedArtifact(pending.stage)
+
+  const place = await resolveWorkspace(taskId, deps.workspace)
+  if (!place.ok) return err(place.error)
+
   const outcome = await runSessionUntilValid(
     deps.sessions,
     {
@@ -180,9 +215,9 @@ async function executeRun(
         },
         idempotency_key: `${taskId}/${pending.stage}/1`,
         workspace: {
-          path: deps.workspacePath,
-          repo_id: 'local',
-          branch: 'main',
+          path: place.value.path,
+          repo_id: place.value.repo_id,
+          branch: place.value.branch,
           // 目标仓库内容不可信 —— 见 docs/08-cross-cutting.md §1.2
           untrusted: true,
         },
@@ -207,7 +242,41 @@ async function executeRun(
   await asRole('keel_control', (c) =>
     c.query(`UPDATE run SET status='SUCCEEDED', ended_at=now() WHERE id=$1`, [pending.id]),
   )
+
+  // 把这一轮的改动提交到该 Task 的分支。
+  //
+  // **不提交就等于没做**：进 S-DONE 时 CleanWorkspace 会 `worktree remove --force`，
+  // 未提交的改动随工作树一起消失。分支留在裸仓库里，所以提交过的活不会丢
+  // （见 src/fact/git-workspace.ts 的 remove()）。
+  //
+  // 无改动时 commitAll 返回 null —— 「这一轮没改东西」是正常情况，不是故障。
+  if (deps.workspace.mode === 'worktree') {
+    const sha = await deps.workspace.git.commitAll(
+      taskId,
+      `${pending.stage}: run ${pending.id.slice(0, 8)}`,
+    )
+    if (!sha.ok) return err(sha.error)
+  }
+
   return ok(undefined)
+}
+
+/**
+ * 解析这个 Task 该在哪个目录里干活。
+ *
+ * worktree 模式下每次都调 `ensureWorktree` 而不是缓存路径：它本来就是幂等的，
+ * 而缓存会在「worktree 被清理后又要用」时给出一条已经不存在的路径。
+ */
+async function resolveWorkspace(
+  taskId: string,
+  ws: OrchestratorWorkspace,
+): Promise<Result<{ path: string; repo_id: string; branch: string }>> {
+  if (ws.mode === 'fixed') {
+    return ok({ path: ws.path, repo_id: 'local', branch: 'main' })
+  }
+  const wt = await ws.git.ensureWorktree(ws.repoId, taskId, ws.baseBranch)
+  if (!wt.ok) return err(wt.error)
+  return ok({ path: wt.value.path, repo_id: ws.repoId, branch: wt.value.branch })
 }
 
 function record(
