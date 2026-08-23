@@ -3,7 +3,7 @@
   "name": "split-acceptance-tests",
   "title": "分离验收测试与回归测试",
   "description": "把依赖真实 LLM 的验收测试移出默认 check；保留全部确定性断言在 check 中；编排器改用 worktree",
-  "status": "in_progress",
+  "status": "completed",
   "dev_type": null,
   "scope": null,
   "package": null,
