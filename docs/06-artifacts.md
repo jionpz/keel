@@ -433,6 +433,9 @@ Task 进入 `S-RFC_READY`（转移 `T-011`）时，当前 version 的 RFC 冻结
 | `PolicyEvaluated` | Policy Engine |
 | `CapabilityRequested` / `CapabilityGranted` / `CapabilityDenied` | Control Plane |
 | `SideEffectSkipped` | 幂等命中（`04-state-machine.md` §5.3） |
+| `SideEffectApplied` | 副作用已施加。**通知类副作用的幂等判重依据** |
+| `SideEffectIntent` | 副作用**尚未落地**，只记录意图（如 v0.1 的 git 操作）。<br>刻意不静默跳过 —— 否则事件流会声称做过了而实际没有 |
+| `NoTransition` | 收到事件但当前状态下无转移（暂停中、终态、guard 未过）。<br>记录它是为了保留"系统看到了这个事件但没动"这个事实 |
 | `BudgetExceeded` | 成本核算 |
 | `HumanAction` | 人工操作（含接管、交还、审批） |
 

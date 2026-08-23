@@ -100,6 +100,19 @@ module.exports = {
       to: { pathNot: `^src/control/policy|^src/contracts|${ONLY_SHARED_AND_GENERATED}` },
     },
 
+
+    {
+      name: 'driver-must-not-touch-execution',
+      severity: 'error',
+      comment:
+        'Workflow driver 属 Control Plane，硬约束是「绝不直接调用 LLM」。' +
+        'driver 必须做 I/O（它不是纯的），但它不该依赖 Execution Plane —— ' +
+        '派发会话是 SessionManager 的事，driver 只创建 run 记录。' +
+        '这条规则是「控制平面不调 LLM」的结构性保证。',
+      from: { path: '^src/control/driver', pathNot: '\\.test\\.ts$' },
+      to: { path: '^src/execution' },
+    },
+
     {
       name: 'no-circular',
       severity: 'error',

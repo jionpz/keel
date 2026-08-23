@@ -49,6 +49,7 @@ async function seed(): Promise<Fixture> {
 function proposal(taskId: string, over: Partial<Proposal> = {}, body?: unknown): Proposal {
   return {
     proposal_id: randomUUID(),
+    task_id: taskId,
     kind: 'state',
     key: '',
     body: body ?? { schema_version: '1.0', task_id: taskId, current_goal: 'g' },

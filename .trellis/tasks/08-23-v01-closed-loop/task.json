@@ -20,7 +20,8 @@
   "subtasks": [],
   "children": [
     "08-23-persistence-artifact-store",
-    "08-23-policy-engine"
+    "08-23-policy-engine",
+    "08-23-workflow-driver"
   ],
   "parent": null,
   "relatedFiles": [],

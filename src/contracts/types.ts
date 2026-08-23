@@ -96,6 +96,14 @@ export interface Context {
 
 export interface Proposal {
   readonly proposal_id: string
+  /**
+   * 提案归属的 Task。
+   *
+   * 显式字段而非从 body 里读：产物的 schema 是严格的
+   * （additionalProperties: false），body 里塞不进 task_id。
+   * 而提案本来就是**关于某个 Task 的** —— 归属属于信封，不属于内容。
+   */
+  readonly task_id: string
   /** 与 docs/06-artifacts.md §1 的 kind 列一致，取值见 generated/schemas.ts 的 ArtifactKind */
   readonly kind: string
   readonly key: string

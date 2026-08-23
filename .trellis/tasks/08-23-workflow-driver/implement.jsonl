@@ -1,0 +1,4 @@
+{"file": "docs/04-state-machine.md", "reason": "转移表、通用规则、幂等与重放语义（§5）、control_mode 正交维度"}
+{"file": "docs/06-artifacts.md", "reason": "A-StageOutcome 是守卫的唯一输入源；事件类型注册表（§9.1）"}
+{"file": "docs/03-domain-model.md", "reason": "不变量 I3/I4 与写权限矩阵；run 表的 idempotency_key"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "以角色身份写入、错误映射、乐观版本号、测试隔离"}

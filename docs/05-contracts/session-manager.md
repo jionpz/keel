@@ -23,6 +23,7 @@
 ```
 Proposal {
   proposal_id:      string
+  task_id:          string            // 提案归属的 Task
   kind:             ArtifactKind      // state | rfc | critic_review | capability_request | checkpoint
   key:              string
   body:             object            // 必须符合 kind 对应的 JSON Schema
@@ -30,6 +31,12 @@ Proposal {
   produced_by_run:  string
 }
 ```
+
+> `task_id` 是**显式字段**，不从 `body` 里读。
+> 产物 schema 是严格的（`additionalProperties: false`），body 里塞不进 `task_id`；
+> 而提案本来就是**关于某个 Task 的** —— 归属属于信封，不属于内容。
+>
+> 这一处是实现期发现的。
 
 ```
 ProposalVerdict {

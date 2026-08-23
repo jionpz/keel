@@ -97,7 +97,7 @@ export class PgArtifactStore implements ArtifactStore {
           `INSERT INTO event (task_id, run_id, type, payload)
            VALUES ($1, $2, 'ArtifactCommitted', $3::jsonb) RETURNING seq`,
           [
-            taskIdOf(proposal),
+            proposal.task_id,
             ctx.run_id,
             JSON.stringify({ kind: proposal.kind, key: proposal.key, version }),
           ],
@@ -108,7 +108,7 @@ export class PgArtifactStore implements ArtifactStore {
         // 回填 superseded_by 也在函数内 —— 调用者没有 UPDATE 权限
         await c.query(`SELECT keel_commit_artifact($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10)`, [
           proposal.proposal_id,
-          taskIdOf(proposal),
+          proposal.task_id,
           proposal.kind,
           proposal.key,
           version,
@@ -252,6 +252,50 @@ export class PgArtifactStore implements ArtifactStore {
   }
 }
 
+/**
+ * 在**调用方已开启的事务内**提交产物。
+ *
+ * 与 PgArtifactStore.commit 的区别只在于事务归属：
+ * 后者自己 asRole 开事务，本函数复用传入的 client ——
+ * 供 Workflow driver 在它自己的事务里提交 A-PolicyDecision 等产物，
+ * 避免嵌套事务。
+ *
+ * 调用方必须已经是 keel_control 身份。
+ */
+export async function commitArtifactOn(
+  c: PoolClient,
+  args: {
+    id: string
+    taskId: string
+    kind: PersistedArtifactKind
+    key: string
+    body: unknown
+    producedByRun: string | null
+    committedAtSeq: number
+    supersedes: string | null
+  },
+): Promise<void> {
+  const body = await externalizeIfLarge(args.body)
+  const schemaVersion = readSchemaVersion(args.body)
+  const r = await c.query<{ max: number | null }>(
+    `SELECT max(version) AS max FROM artifact WHERE task_id=$1 AND kind=$2 AND key=$3`,
+    [args.taskId, args.kind, args.key],
+  )
+  const version = (r.rows[0]?.max ?? 0) + 1
+  await c.query(`SELECT keel_commit_artifact($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10)`, [
+    args.id,
+    args.taskId,
+    args.kind,
+    args.key,
+    version,
+    schemaVersion,
+    JSON.stringify(body),
+    args.producedByRun,
+    args.committedAtSeq,
+    args.supersedes,
+  ])
+}
+
 // ─────────────────────────────── 辅助 ───────────────────────────────
 
 /**
@@ -264,22 +308,9 @@ export class PgArtifactStore implements ArtifactStore {
 async function nextVersion(c: PoolClient, p: Proposal): Promise<number> {
   const r = await c.query<{ max: number | null }>(
     `SELECT max(version) AS max FROM artifact WHERE task_id=$1 AND kind=$2 AND key=$3`,
-    [taskIdOf(p), p.kind, p.key],
+    [p.task_id, p.kind, p.key],
   )
   return (r.rows[0]?.max ?? 0) + 1
-}
-
-/**
- * Proposal 自身不带 task_id —— 它在 produced_by_run 的上下文里。
- * v0.1 约定：proposal.body 中携带 task_id，或由调用方在 key 中体现。
- * 这里从 body 读，读不到则报错而不是猜。
- */
-function taskIdOf(p: Proposal): string {
-  const t = (p.body as { task_id?: unknown })?.task_id
-  if (typeof t !== 'string') {
-    throw new Error(`Proposal ${p.proposal_id} 的 body 缺少 task_id —— 无法确定归属`)
-  }
-  return t
 }
 
 function readSchemaVersion(body: unknown): string {

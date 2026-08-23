@@ -356,7 +356,10 @@ export const SCHEMAS = {
           "CapabilityDenied",
           "SideEffectSkipped",
           "BudgetExceeded",
-          "HumanAction"
+          "HumanAction",
+          "NoTransition",
+          "SideEffectApplied",
+          "SideEffectIntent"
         ]
       },
       "payload": {
