@@ -87,6 +87,19 @@ module.exports = {
       to: { path: '\\.test\\.ts$' },
     },
 
+
+    {
+      name: 'policy-must-be-pure',
+      severity: 'error',
+      comment:
+        'Policy 求值必须是纯函数（docs/05-contracts/policy-engine.md §4.1）：' +
+        'facts 只能来自 Fact Plane，求值不得读时钟、查外部系统或调 LLM。' +
+        '与 transition 同理，这是可重放性的前提。' +
+        'Date.now() 等全局由 scripts/check-purity.ts 覆盖。',
+      from: { path: '^src/control/policy', pathNot: '\\.test\\.ts$' },
+      to: { pathNot: `^src/control/policy|^src/contracts|${ONLY_SHARED_AND_GENERATED}` },
+    },
+
     {
       name: 'no-circular',
       severity: 'error',

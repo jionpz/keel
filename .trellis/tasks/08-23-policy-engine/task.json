@@ -1,9 +1,9 @@
 {
-  "id": "v01-closed-loop",
-  "name": "v01-closed-loop",
-  "title": "v0.1 最小闭环",
-  "description": "一条真实反馈在无人干预下走完 S-NEW → S-DONE 产出通过 CI 的 PR，且事件流能完整重建全过程",
-  "status": "planning",
+  "id": "policy-engine",
+  "name": "policy-engine",
+  "title": "Policy Engine 实现",
+  "description": "受限表达式求值 + 严格性偏序裁决 + 默认 deny + validate()；产出可重放的 A-PolicyDecision",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,
@@ -18,11 +18,8 @@
   "commit": null,
   "pr_url": null,
   "subtasks": [],
-  "children": [
-    "08-23-persistence-artifact-store",
-    "08-23-policy-engine"
-  ],
-  "parent": null,
+  "children": [],
+  "parent": "08-23-v01-closed-loop",
   "relatedFiles": [],
   "notes": "",
   "meta": {}

@@ -11,6 +11,7 @@
  * 解法：严格性偏序 + 默认 deny。
  */
 
+import type { APolicyDecision } from '../generated/artifacts.js'
 import type { Result } from './errors.js'
 
 /** Policy 只在明确的判定点求值，不是随时求值 */
@@ -70,6 +71,14 @@ export function mostRestrictive(actions: readonly PolicyAction[]): PolicyAction 
 
 export interface Rule {
   readonly id: string
+  /**
+   * 本规则在哪些判定点参与求值。
+   *
+   * 必须按判定点划分：不同判定点可用的 fact 不同 ——
+   * `rfc_ready` 时还没有 `actual_files_changed`。
+   * 若不划分，引用尚不存在的 fact 的规则会**抛错**而不是「不命中」。
+   */
+  readonly points: readonly DecisionPoint[]
   /** 数值大的先求值。同 priority 按 id 升序 —— 保证完全确定的求值顺序 */
   readonly priority: number
   /** 受限表达式，不是通用脚本。见 docs/05-contracts/policy-engine.md §5 */
@@ -102,13 +111,16 @@ export interface PolicyEngine {
   /**
    * [v0.1 必须] 求值。
    *
-   * **必须是纯函数**：相同 (ruleset_version, point, facts) 永远得到相同结果。
-   * 不得读时钟、不得查外部系统、不得调 LLM（Control Plane 硬约束）。
+   * **必须是纯函数**：相同 (ruleset_version, point, facts, evaluated_at)
+   * 永远得到相同结果。不得读时钟、不得查外部系统、不得调 LLM（Control Plane 硬约束）。
+   *
+   * `evaluated_at` 由**调用方传入**而不是引擎内部取 —— 否则引擎就不纯了，
+   * 而 Policy 的可重放性是整个 Fact Plane 可信的前提之一。
    *
    * 产出的 A-PolicyDecision 中，facts_snapshot 是**输入的完整快照**而非引用 ——
    * 快照才能保证同输入同裁决。
    */
-  evaluate(point: DecisionPoint, facts: FactSet): Result<unknown>
+  evaluate(point: DecisionPoint, facts: FactSet, evaluated_at: string): Result<APolicyDecision>
 
   /**
    * [v0.1 必须] 规则集在**加载时**校验，不是等到求值才发现问题。

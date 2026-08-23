@@ -17,8 +17,13 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
 
-/** 受检目录（相对仓库根） */
-const GUARDED_DIR = 'src/control/transition'
+/**
+ * 受检目录（相对仓库根）。
+ *
+ * transition 与 policy 都属 Control Plane，受同一条硬约束：
+ * 必须可确定性重放，因此不得读时钟、不得引入非确定性。
+ */
+const GUARDED_DIRS = ['src/control/transition', 'src/control/policy']
 
 /** 禁用的全局用法。key 用于报错信息，value 为匹配正则 */
 const BANNED: ReadonlyArray<{ label: string; pattern: RegExp; why: string }> = [
@@ -61,19 +66,23 @@ interface Violation {
 }
 
 function main(): void {
-  let files: string[]
-  try {
-    files = collectTsFiles(GUARDED_DIR)
-  } catch {
-    console.error(`✗ 受检目录不存在：${GUARDED_DIR}`)
-    console.error('  若目录被重命名，请同步更新本脚本与 .dependency-cruiser.cjs')
-    process.exit(1)
-  }
+  const files: string[] = []
 
-  // 防假绿：扫到 0 个文件不能算通过
-  if (files.length === 0) {
-    console.error(`✗ ${GUARDED_DIR} 下没有 .ts 文件 —— 拒绝以"无违规"通过`)
-    process.exit(1)
+  for (const dir of GUARDED_DIRS) {
+    let found: string[]
+    try {
+      found = collectTsFiles(dir)
+    } catch {
+      console.error(`✗ 受检目录不存在：${dir}`)
+      console.error('  若目录被重命名，请同步更新本脚本与 .dependency-cruiser.cjs')
+      process.exit(1)
+    }
+    // 防假绿：任一受检目录扫到 0 个文件都不能算通过
+    if (found.length === 0) {
+      console.error(`✗ ${dir} 下没有 .ts 文件 —— 拒绝以"无违规"通过`)
+      process.exit(1)
+    }
+    files.push(...found)
   }
 
   const violations: Violation[] = []
@@ -97,7 +106,9 @@ function main(): void {
   }
 
   if (violations.length > 0) {
-    console.error(`✗ C3 纯度检查失败：${GUARDED_DIR} 中发现 ${violations.length} 处禁用全局\n`)
+    console.error(
+      `✗ C3 纯度检查失败：${GUARDED_DIRS.join(' / ')} 中发现 ${violations.length} 处禁用全局\n`,
+    )
     for (const v of violations) {
       console.error(`  ${v.file}:${v.line}  ${v.label} —— ${v.why}`)
       console.error(`    ${v.text}`)

@@ -38,12 +38,17 @@ rules:
 ```
 Rule {
   id:        string
+  points:    DecisionPoint[]   // 本规则在哪些判定点参与求值
   priority:  integer          // 数值大的先求值
   condition: Expression
   action:    Action
   stop:      boolean          // true = 命中后不再求值后续规则
 }
 ```
+
+> `points` 是必须的：不同判定点可用的 fact 不同 —— `rfc_ready` 时还没有
+> `actual_files_changed`。若不按判定点划分，引用尚不存在的 fact 的规则会
+> **抛错**而不是「不命中」。
 
 ### 1.2 求值算法
 
@@ -130,15 +135,25 @@ DEFAULT_ACTION = human_review
 
 RFC 说 `estimated_files_changed: 4`，实际改了 40 —— 这说明 RFC 的判断严重偏离。
 
-**规则**：当 `actual_files_changed` 超过 `estimated_files_changed` 的阈值倍数时，
+**规则**：当 `actual_files_changed` 显著超过 `estimated_files_changed` 时，
 必须在 `post_develop` 判定点**重新求值** Policy，而不是沿用 `rfc_ready` 时的裁决。
+
+比值由调用方算好后作为一个**派生 fact** 传入：
 
 ```
 - id: P-DRIFT
+  points: [post_develop]
   priority: 900
-  condition: "actual_files_changed > estimated_files_changed * 3"
+  condition: "facts.files_drift_ratio > 3"
   action: architecture_review
 ```
+
+> **为什么不是 `actual_files_changed > estimated_files_changed * 3`**：
+> 受限表达式语言**不支持算术**（见 §5）。
+> 与其为这一条规则给语言加乘法，不如把比值算成一个派生 fact ——
+> 保持表达式语言最小，正是它可静态分析、可审计的前提。
+>
+> 这处是实现期发现的：契约原本给的示例规则用了语言本身不支持的语法。
 
 > 初稿没有这条。但"当初判断这是个小改动所以自动放行了，结果它不是"
 > 是自动开发系统最典型的失控方式 —— 必须有一个点把它抓住。
