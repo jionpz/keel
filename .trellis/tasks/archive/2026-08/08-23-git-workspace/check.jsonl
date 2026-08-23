@@ -1,0 +1,2 @@
+{"file": "docs/08-cross-cutting.md", "reason": "复核 worktree 隔离是否真的做到，S-FAILED 是否保留现场"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "复核是否有空实现假装做过了"}

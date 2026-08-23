@@ -1,0 +1,2 @@
+{"file": "docs/05-contracts/policy-engine.md", "reason": "复核基准：求值顺序是否完全确定、是否取最严而非最高优先级、默认是否 deny"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "复核 validate() 的每项检查是否都有会被它抓住的坏规则集"}

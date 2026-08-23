@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schemas/stage-outcome.schema.json",
+  "title": "A-StageOutcome",
+  "description": "某阶段的结构化结论。状态机转移守卫的唯一输入源 —— 守卫必须读枚举，不能解析自由文本。建模为按 stage 判别的联合，使守卫在类型层面就能被收窄。",
+  "oneOf": [
+    {
+      "title": "PmOutcome",
+      "type": "object",
+      "required": ["schema_version", "run_id", "stage", "verdict", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": { "const": "1.0" },
+        "run_id": { "type": "string" },
+        "stage": { "const": "pm" },
+        "verdict": { "enum": ["actionable", "unclear", "reject"] },
+        "reason": { "type": "string" },
+        "details": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "needs_design": {
+              "type": "boolean",
+              "description": "区分 T-003（走 brainstorm）与 T-004（直接起草 RFC）"
+            }
+          }
+        }
+      }
+    },
+    {
+      "title": "BrainstormOutcome",
+      "type": "object",
+      "required": ["schema_version", "run_id", "stage", "verdict", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": { "const": "1.0" },
+        "run_id": { "type": "string" },
+        "stage": { "const": "brainstorm" },
+        "verdict": { "enum": ["converged", "needs_more"] },
+        "reason": { "type": "string" },
+        "details": { "type": "object" }
+      }
+    },
+    {
+      "title": "RfcDraftOutcome",
+      "type": "object",
+      "required": ["schema_version", "run_id", "stage", "verdict", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": { "const": "1.0" },
+        "run_id": { "type": "string" },
+        "stage": { "const": "rfc_draft" },
+        "verdict": { "const": "drafted" },
+        "reason": { "type": "string" },
+        "details": { "type": "object" }
+      }
+    },
+    {
+      "title": "CriticOutcome",
+      "type": "object",
+      "required": ["schema_version", "run_id", "stage", "verdict", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": { "const": "1.0" },
+        "run_id": { "type": "string" },
+        "stage": { "const": "critic" },
+        "verdict": { "const": "reviewed" },
+        "reason": { "type": "string" },
+        "details": { "type": "object" }
+      }
+    },
+    {
+      "title": "DevelopOutcome",
+      "type": "object",
+      "required": ["schema_version", "run_id", "stage", "verdict", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": { "const": "1.0" },
+        "run_id": { "type": "string" },
+        "stage": { "const": "develop" },
+        "verdict": { "enum": ["implemented", "blocked"] },
+        "reason": { "type": "string" },
+        "details": { "type": "object" }
+      }
+    },
+    {
+      "title": "VerificationOutcome",
+      "description": "QA 与 Review 的结论形状相同（pass / fail），故合为一支。",
+      "type": "object",
+      "required": ["schema_version", "run_id", "stage", "verdict", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": { "const": "1.0" },
+        "run_id": { "type": "string" },
+        "stage": { "enum": ["qa", "review"] },
+        "verdict": { "enum": ["pass", "fail"] },
+        "reason": { "type": "string" },
+        "details": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "failed_criteria": { "type": "array", "items": { "type": "string" } },
+            "report_ref": { "type": "string" }
+          }
+        }
+      }
+    }
+  ]
+}

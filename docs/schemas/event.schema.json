@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schemas/event.schema.json",
+  "title": "A-Event",
+  "description": "append-only 事件信封。存于独立 event 表，只增不改。",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "seq",
+    "task_id",
+    "type",
+    "occurred_at"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "seq": {
+      "type": "integer",
+      "description": "全局单调，排序与重放游标"
+    },
+    "task_id": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "type": {
+      "enum": [
+        "FeedbackReceived",
+        "TaskCreated",
+        "TaskStatusChanged",
+        "ControlModeChanged",
+        "RunCreated",
+        "RunStatusChanged",
+        "ProposalSubmitted",
+        "ProposalAccepted",
+        "ProposalRejected",
+        "ArtifactCommitted",
+        "PolicyEvaluated",
+        "CapabilityRequested",
+        "CapabilityGranted",
+        "CapabilityDenied",
+        "SideEffectSkipped",
+        "BudgetExceeded",
+        "HumanAction",
+        "NoTransition",
+        "SideEffectApplied",
+        "SideEffectIntent",
+        "ContextBuilt"
+      ]
+    },
+    "payload": {
+      "type": "object",
+      "description": "状态转移类事件应在 payload 中记录 transition ID（如 T-012），使事件流可直接对照转移表核验"
+    },
+    "trace_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "span_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

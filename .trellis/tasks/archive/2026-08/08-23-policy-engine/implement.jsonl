@@ -1,0 +1,4 @@
+{"file": "docs/05-contracts/policy-engine.md", "reason": "契约的事实来源：求值算法、严格性偏序、默认 deny、facts 来源、validate 五项检查、受限表达式语法"}
+{"file": "docs/06-artifacts.md", "reason": "A-PolicyDecision 的字段语义，尤其 facts_snapshot 为完整快照与 default_applied 的用途"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "三平面结构与边界规则；policy 属 Control Plane，受纯函数与可重放约束"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Result<T> 约定与「未经反例验证的检查等同于没有检查」"}

@@ -1,0 +1,2 @@
+{"file": "docs/04-state-machine.md", "reason": "复核幂等落地是否覆盖 §5.2 列出的全部副作用；重放是否真的不重复执行"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "复核 matched:false 是否被当作正常状态而非错误；反例验证是否到位"}

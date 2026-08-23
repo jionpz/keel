@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    # 不变量测试需要真实 Postgres —— 它们验证的是 GRANT 与触发器，
+    # 用内存替身或 mock 验证不了任何东西。
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: keel
+          POSTGRES_PASSWORD: keel
+          POSTGRES_DB: keel_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      KEEL_DATABASE_URL: postgres://keel:keel@localhost:5432/keel_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # CI 只跑这一条命令 —— 与本地完全一致。
+      #
+      # 这是刻意的：若 CI 与本地跑的是不同命令，迟早会出现「本地过了 CI 红」，
+      # 而人们解决这种摩擦的方式通常是放宽 CI。
+      #
+      # check 聚合了四条架构约束的检查：
+      #   C1 check:generated   —— schema 是类型的唯一事实来源
+      #   C2 boundaries        —— Execution Plane 不得写 Fact Plane
+      #   C3 boundaries + check:purity —— 转移函数必须是纯函数
+      #   C4 check:transitions —— 代码转移表 ⟷ 文档转移表
+      #
+      # 要放宽任何一条，走 ADR。不要在这里加 continue-on-error。
+      - run: pnpm run check
+
+      # ⚠️ 验收测试（pnpm run test:acceptance）**刻意不在 CI 中**。
+      #
+      # 它们要调真实模型，因此：
+      #   1. 需要 API 凭据。往 CI 放凭据会扩大泄漏面，而收益只是早几小时知道结果。
+      #   2. 每次 push 都花钱，且成本随提交频率线性增长。
+      #   3. 断言依赖模型「说了什么」，天然有波动 —— 放进 CI 会让 CI 因
+      #      非代码原因变红，而人对不可信的红灯的反应是忽略它。
+      #      那会连带毁掉上面那条 check 的可信度。
+      #
+      # 代价是诚实的：**CI 绿不代表 v0.1 判据仍然成立**。
+      # 判据由人在发版前手动跑 `pnpm run test:acceptance` 验证，
+      # 结果记进对应任务的 prd.md（见 src/acceptance/README.md）。

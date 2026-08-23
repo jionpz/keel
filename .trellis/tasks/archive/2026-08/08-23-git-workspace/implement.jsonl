@@ -1,0 +1,3 @@
+{"file": "docs/08-cross-cutting.md", "reason": "N1 每 Task 独立 worktree、S1-S3 隔离要求、S-FAILED 保留现场的理由"}
+{"file": "docs/04-state-machine.md", "reason": "T-040/T-041 的 side-effect：CleanWorkspace 与 PreserveWorkspace 的语义差别；幂等要求"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "未做的事要在数据里如实体现 —— CreatePullRequest 保持 intent 而非空实现"}

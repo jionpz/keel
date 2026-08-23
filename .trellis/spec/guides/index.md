@@ -23,6 +23,7 @@ These guides help you **ask the right questions before coding**.
 |-------|---------|-------------|
 | [Code Reuse Thinking Guide](./code-reuse-thinking-guide.md) | Identify patterns and reduce duplication | When you notice repeated patterns |
 | [Cross-Layer Thinking Guide](./cross-layer-thinking-guide.md) | Think through data flow across layers | Features spanning multiple layers |
+| [架构文档约定](./architecture-doc-conventions.md) | 让架构文档可被脚本检查：可寻址 ID、`未验证` 标记、方法优先级、流程走查作为证伪测试 | 修改 `docs/` 下任何架构文档时 |
 
 ---
 

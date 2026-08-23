@@ -10,9 +10,35 @@
 - **Session inside, State outside**：Agent 会话是临时计算资源，结构化 State / RFC / Checkpoint 才是事实来源
 - 人工与 AI 使用同一套工程规范，可随时 PAUSE → HUMAN_TAKEOVER → RESUME
 
-## 立项文档
+## 📐 架构文档
 
-- `AI_Engineering_Runtime_Architecture.md` — 完整架构设计（22 章，源文档，2026-08-22 立项归档）
+**[`docs/`](./docs/README.md) 是架构的事实来源。**
+
+赶时间就读这三篇：
+[总览](./docs/01-overview.md) → [术语表](./docs/02-glossary.md) → [状态机](./docs/04-state-machine.md)
+
+| | |
+|---|---|
+| [`docs/README.md`](./docs/README.md) | 索引、阅读顺序、文档约定 |
+| [`docs/05-contracts/`](./docs/05-contracts/) | 5 个核心接口契约 |
+| [`docs/schemas/`](./docs/schemas/) | 8 份机器可读 JSON Schema |
+| [`docs/adr/`](./docs/adr/) | 6 份架构决策记录 |
+| [`docs/archive/`](./docs/archive/) | 立项初稿（已归档，**请勿据其实现**） |
+
+## 中心不变量
+
+> 能在进程崩溃后存活的，只有 Artifact。其余一切都是 Session。
+
+由此推出三个平面，每个平面由它**不许做什么**定义：
+
+| 平面 | 职责 | 硬约束 |
+|---|---|---|
+| Control | 决定下一步做什么 | 绝不直接调用 LLM；必须可确定性重放 |
+| Fact | 唯一事实来源 | 只由 Control Plane 写入 |
+| Execution | 干活 | 绝不直接写 Fact Plane；只能 emit 提案 |
+
+Fact 与 Execution 之间只有两条单向通道：`Context` 下行、`Proposal` 上行。
+这条边界靠**数据库授权**强制，不靠代码自觉。
 
 ## 核心原则
 
@@ -21,21 +47,63 @@
 3. Workflow 决定流程（Agent 不自作主张）
 4. Policy 决定权限（自动 vs 人工审核）
 5. Context Builder 决定上下文（不每次从零读项目）
-6. Harness 是执行层（OMP / TRAE / OpenCode 可替换）
-7. 人工与 AI 同一套规范
+6. Harness 是执行层（能力分级 + 显式降级，L0 也能跑通闭环）
+7. 人工与 AI 同一套规范（**人工被建模为一种 Harness**）
 
-## 分层架构
+每条原则落成机制的位置见 [`docs/01-overview.md`](./docs/01-overview.md) §4。
 
+## v0.1 完成判据
+
+> 一条真实的用户反馈进入系统后，在无人干预的情况下走完 `S-NEW → S-DONE`，
+> 产出一个通过 CI 的 PR；且 `readEvents(task_id, 0)` 能完整重建这个 Task 的全过程。
+
+## 技术栈
+
+**TypeScript / Node**（[`ADR-0002`](./docs/adr/0002-implementation-language.md)）。
+
+选它的主要收益是 `docs/schemas/` 的 8 份 JSON Schema 可以**直接生成类型** ——
+让"文档里的 schema"与"代码里的类型"机械对齐，而不是靠人维护同步。
+这一步必须纳入 CI，否则选 TS 与选任何语言就没区别了。
+
+契约文档**刻意保持语言中立**，不改写成 TS 语法：它的读者不只是 Keel 的代码，
+还有 Harness 实现者与人工操作者。
+
+Workflow engine 推荐 v0.1 自研最小状态机（[`ADR-0003`](./docs/adr/0003-workflow-engine.md)，
+Proposed，待查证）。
+
+## 开发
+
+```bash
+pnpm install
+pnpm run check     # CI 跑的就是这一条 —— 与本地完全一致
 ```
-Workflow → Agent Role → Runtime Adapter → Harness → Model
-```
 
-## 规划
+`check` 聚合了 lint / typecheck / 架构边界 / 类型同步 / 转移表比对 / 纯度 / 测试。
 
-- 阶段一：核心闭环 — API/Event → 简单 Workflow 状态机 → Session Manager → PostgreSQL → Harness → GitHub
-- 阶段二：Checkpoint / Context Builder / Policy Engine / Critic / QA
-- 阶段三：Temporal / 多项目调度 / Agent Pool / Observability / Cost Tracking
+### 四条被机械化的架构约束
+
+骨架的价值不在于「能 build」，而在于把架构约束变成 **CI 会失败的东西**：
+
+| 约束 | 说的是 | 违反时 |
+|---|---|---|
+| `C1` | `docs/schemas/` 是产物类型的唯一事实来源，TS 类型由其生成、不手改 | `check:generated` 红 |
+| `C2` | Execution Plane 不得写 Fact Plane | `boundaries` 红 |
+| `C3` | 状态转移必须是纯函数（`ADR-0003`） | `boundaries` + `check:purity` 红 |
+| `C4` | 代码转移表必须与 `docs/04-state-machine.md` 一致 | `check:transitions` 红 |
+
+每条都经过**反例验证** —— 逐条制造违规确认检查真的会红，
+而不是只看 CI 是绿的（一个什么都不检查的 CI 也是绿的）。
+
+> 改 `docs/04-state-machine.md` §2 的转移表后，必须同步
+> `src/control/transition/table.ts`，否则 CI 不过。这是刻意的。
+
+要放宽任何一条约束，**走 ADR**，不要在配置里临时注释掉。
 
 ## 状态
 
-**立项**（2026-08-22）。下一步：阶段一最小闭环设计。
+**架构框架 + 仓库骨架已完成。** v0.1 实现未开始。
+
+下一步：v0.1 最小闭环 —— 数据库与 `ArtifactStore`、第一个 Harness Adapter。
+
+已知空白：Harness 接口调研仅完成 Claude Code 一家，
+其余因推理网关持续限流未完成（见 [`ADR-0005`](./docs/adr/0005-harness-support-tiers.md)）。

@@ -1,0 +1,5 @@
+{"file": "docs/03-domain-model.md", "reason": "schema 的事实来源：7 张表的字段/类型/键/不变量，以及 §4 写权限矩阵（本任务核心）"}
+{"file": "docs/05-contracts/artifact-store.md", "reason": "ArtifactStore 的 7 个 [v0.1 必须] 方法契约，以及 commit 的两项硬检查"}
+{"file": "docs/adr/0004-persistence.md", "reason": "存储设计决策：单张多态 artifact 表、256KB blob 阈值、内容寻址、先写 blob 后写 artifact"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "三平面结构与边界规则、生成物纪律、nodenext 的 .js 后缀要求"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Result<T> 约定、ErrorKind 注册表（CONFLICT 的语义）、检查脚本防假绿"}
