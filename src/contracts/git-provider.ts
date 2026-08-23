@@ -13,7 +13,10 @@ export interface PullRequestInput {
   readonly remoteUrl: string
   /** PR 目标分支（通常是 repo.default_branch） */
   readonly baseBranch: string
-  /** PR 源分支（必须是 ai/* 命名空间） */
+  /**
+   * PR 源分支（必须是 ai/* 命名空间）。**调用前必须已 push 到远程** ——
+   * 幂等查询按 `owner:branch` 过滤,GitHub 只在 head 分支可解析时返回已有 PR。
+   */
   readonly headBranch: string
   readonly title: string
   readonly body: string
@@ -22,7 +25,7 @@ export interface PullRequestInput {
 export interface PullRequestInfo {
   readonly number: number
   readonly url: string
-  /** true = 本次新建；false = 该 head 分支已有 PR，复用 */
+  /** true = 本次新建;false = 该 head 分支已有 PR,复用 */
   readonly created: boolean
 }
 

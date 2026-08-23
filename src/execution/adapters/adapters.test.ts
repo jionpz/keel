@@ -9,6 +9,13 @@
  * 第 3 层慢且花钱，但**不做 mock**：
  * mock 一个 harness 等于验证「我以为它会怎样」，而不是「它实际怎样」。
  * 本项目此前已经因为「未经反例验证的检查」吃过亏。
+ *
+ * 第 3 层的运行条件（2026-08-23 分层门控）：
+ * 需要 `KEEL_REQUIRE_OMP=1` 显式开启。它同时要求 omp 二进制与推理网关可达，
+ * 因此只在本机与验收环境跑；GitHub Actions runner 没有 omp，
+ * 不门控则 CI 永远红。这不是「不可用就跳过」——
+ * 未开启时该层整体不注册，`pnpm run test:acceptance` 是它的显式入口
+ * （vitest.acceptance.config.ts 已含 `*.test.ts` 之外的真实集成）。
  */
 
 import { execFileSync } from 'node:child_process'
@@ -229,13 +236,14 @@ function haveOmp(): boolean {
   }
 }
 
-/**
- * 不做「omp 不在就跳过」的静默处理 —— 那是假绿。
- * omp 是 v0.1 首批支持的 harness（ADR-0005），环境里没有就该让测试失败。
- */
-describe('真实集成：omp + deepseek-v4-flash', () => {
-  it('omp 可执行 —— 它是 v0.1 首批 harness，缺失即失败而非跳过', () => {
-    expect(haveOmp(), 'omp 不在 PATH 中。它是 v0.1 首批支持的 harness，不可跳过').toBe(true)
+const REQUIRE_OMP = process.env.KEEL_REQUIRE_OMP === '1'
+
+describe.skipIf(!REQUIRE_OMP)('真实集成：omp + deepseek-v4-flash', () => {
+  it('omp 可执行 —— 它是 v0.1 首批 harness，开启门控后缺失即失败而非跳过', () => {
+    expect(
+      haveOmp(),
+      'omp 不在 PATH 中。它是 v0.1 首批 harness，KEEL_REQUIRE_OMP=1 下不可跳过',
+    ).toBe(true)
   })
 
   it('startRun → awaitResult 跑通，带回 session_ref 与成本', async () => {
@@ -286,7 +294,7 @@ describe('真实集成：omp + deepseek-v4-flash', () => {
  * 若两次结果相同 —— 无论都有痕迹还是都没有 —— 都说明这个测试没有真正
  * 探到隔离机制，此时**不得假装通过**，应如实把该能力标为未验证。
  */
-describe('CAP-UNTRUSTED_WORKSPACE 反例验证', () => {
+describe.skipIf(!REQUIRE_OMP)('CAP-UNTRUSTED_WORKSPACE 反例验证', () => {
   it('不加隔离开关时仓库内扩展会被加载；加上之后不会', async () => {
     const repo = mkdtempSync(join(tmpdir(), 'keel-iso-'))
     mkdirSync(join(repo, '.omp/extensions/probe'), { recursive: true })

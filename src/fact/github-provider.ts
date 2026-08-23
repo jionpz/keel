@@ -121,13 +121,20 @@ export class GitHubProvider implements PullRequestGateway, CiGateway {
     return ok({ status: res.status, json })
   }
 
-  /** 按 head 分支查已有 PR —— 幂等的前提 */
+  /**
+   * 按 head 分支查已有 PR —— 幂等的前提。
+   *
+   * head 过滤器必须是 `owner:branch`。实测(2026-08-23 验收):
+   * `owner/repo:branch`(无论是否 %2F 编码)GitHub 一律返回空集,
+   * 导致幂等查询永远落空、重复调用撞 422。
+   */
   private async findExistingPr(
     slug: string,
     headBranch: string,
   ): Promise<Result<PullRequestInfo | null>> {
+    const owner = slug.split('/')[0] ?? slug
     const r = await this.request(
-      `/repos/${slug}/pulls?head=${encodeURIComponent(slug)}:${headBranch}&state=open`,
+      `/repos/${slug}/pulls?head=${encodeURIComponent(owner)}:${encodeURIComponent(headBranch)}&state=open`,
     )
     if (!r.ok) return r
     const list = r.value.json as { number: number; html_url: string }[] | null
