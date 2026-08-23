@@ -4,9 +4,12 @@
 
 ---
 
-## Overview
+## 状态:整体暂缓
 
-This directory contains guidelines for frontend development. Fill in each file with your project's specific conventions.
+本项目当前是纯后端(TypeScript / Node,无任何 UI 代码)。
+按「记录现实而非理想」的规则,**本目录全部文件刻意留空**:
+没有前端代码时写约定 = 凭空发明,子 agent 会照着写出与实际不符的代码。
+将来若加入前端(如 Run 观测面板),再以真实代码为来源填写。
 
 ---
 
