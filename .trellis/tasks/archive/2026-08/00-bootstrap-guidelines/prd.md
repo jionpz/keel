@@ -19,11 +19,11 @@ the rest conversationally.
 
 ---
 
-## Status (update the checkboxes as you complete each item)
-
-- [ ] Fill backend guidelines
-- [ ] Fill frontend guidelines
-- [ ] Add code examples
+- [x] Fill backend guidelines —— directory-structure / database-guidelines / error-handling 此前已填;
+      quality-guidelines 于 2026-08-23 收尾(测试分层、mock 纪律、禁用模式、review 清单)
+- [x] Fill frontend guidelines —— 项目纯后端,frontend/index.md 标记「整体暂缓」(记录现实而非理想)
+- [x] Add code examples —— 各 spec 均引用真实文件路径与真实先例(如 `adapters.test.ts` 分层注释、
+      `invariants.test.ts` 反例验证、`vitest.shared.ts` 串行理由)
 
 ---
 
