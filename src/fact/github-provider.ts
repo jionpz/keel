@@ -41,7 +41,13 @@ export function readTokenFromEnv(): string | undefined {
   return process.env.KEEL_GITHUB_TOKEN ?? process.env.GITHUB_TOKEN
 }
 
-function ownerRepo(remoteUrl: string): Result<string> {
+/**
+ * 从远程 URL 解析 owner/repo（`owner/repo`）。
+ *
+ * 支持 https://github.com/owner/repo(.git) 与 git@github.com:owner/repo.git。
+ * 验收测试的 cleanup 也用它 —— 单一事实源,不写第二份正则(#1-11)。
+ */
+export function ownerRepo(remoteUrl: string): Result<string> {
   // 支持 https://github.com/owner/repo(.git) 与 git@github.com:owner/repo.git
   const m = remoteUrl.match(/github\.com[/:]([^/]+)\/(.+?)(?:\.git)?\/?$/)
   if (m === null || m[1] === undefined || m[2] === undefined) {

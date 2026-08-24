@@ -25,7 +25,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { GitWorkspace } from '../fact/git-workspace.js'
-import { GitHubProvider, readTokenFromEnv } from '../fact/github-provider.js'
+import { GitHubProvider, ownerRepo, readTokenFromEnv } from '../fact/github-provider.js'
 
 const token: string | undefined = readTokenFromEnv()
 const remote = process.env.KEEL_TEST_REMOTE_REPO
@@ -139,12 +139,16 @@ describe('真实 GitHub PR / CI(需要凭据与远程仓库)', () => {
       if (!ci.ok) return
       expect(ci.value).toBe('passed')
     } finally {
-      // 收尾:关 PR + 删远端分支,不留垃圾
+      // 收尾:关 PR + 删远端分支,不留垃圾。
+      // repo 从 KEEL_TEST_REMOTE_REPO 解析 —— 禁止写死默认 owner/repo(#1-11)
       if (prNumber !== undefined) {
         try {
-          execFileSync('gh', ['pr', 'close', String(prNumber), '--repo', 'jionpz/keel'], {
-            stdio: 'pipe',
-          })
+          const slug = ownerRepo(remote)
+          if (slug.ok) {
+            execFileSync('gh', ['pr', 'close', String(prNumber), '--repo', slug.value], {
+              stdio: 'pipe',
+            })
+          }
         } catch {
           /* 已关闭则忽略 */
         }

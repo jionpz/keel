@@ -14,7 +14,7 @@
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { GitHubProvider } from './github-provider.js'
+import { GitHubProvider, ownerRepo } from './github-provider.js'
 
 let server: Server
 let baseUrl: string
@@ -301,5 +301,34 @@ describe('waitForCi 三态归并', () => {
     ciRoutes({ total_count: 0, check_runs: [] }, { state: null })
     const r = await provider().waitForCi({ repoId: 'r1', remoteUrl: REMOTE, headSha: 'sha-x' })
     expect(r.ok && r.value).toBe('passed')
+  })
+})
+
+// ──────────────────── #1-11 · ownerRepo 解析(验收 cleanup 复用)────────────────────
+
+describe('ownerRepo —— 从远程 URL 解析 owner/repo(#1-11)', () => {
+  it('https 带 .git 尾部', () => {
+    const r = ownerRepo('https://github.com/jionpz/keel.git')
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.value).toBe('jionpz/keel')
+  })
+
+  it('https 不带 .git', () => {
+    const r = ownerRepo('https://github.com/jionpz/keel')
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.value).toBe('jionpz/keel')
+  })
+
+  it('ssh 形式 git@github.com:owner/repo.git', () => {
+    const r = ownerRepo('git@github.com:acme/widget.git')
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.value).toBe('acme/widget')
+  })
+
+  it('无法解析 → error(不抛出,返回 Result)', () => {
+    const r = ownerRepo('https://example.com/x/y')
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('WORKSPACE_ERROR')
   })
 })
