@@ -18,6 +18,7 @@ import type {
   WorkspaceDiff,
 } from '../../contracts/harness-adapter.js'
 import type { CapabilityId } from '../../shared/ids.js'
+import { collectGitDiff } from './git-diff.js'
 import { parseOmpStream } from './omp-parse.js'
 import { tierOf } from './tier.js'
 
@@ -128,31 +129,7 @@ export class OmpAdapter implements HarnessAdapter {
     if (state === undefined) {
       return err(makeError('NOT_FOUND', `未知 run ${handle.run_id}`))
     }
-    const cwd = state.spec.workspace.path
-
-    const status = await run('git', ['status', '--porcelain'], cwd)
-    if (status.code !== 0) {
-      return err(makeError('WORKSPACE_ERROR', `git status 失败：${status.stderr}`))
-    }
-    const patch = await run('git', ['diff'], cwd)
-
-    const files = status.stdout
-      .split('\n')
-      .map((l) => l.trim())
-      .filter((l) => l !== '')
-      .map((l) => {
-        const code = l.slice(0, 2).trim()
-        const path = l.slice(2).trim()
-        const change = code.includes('D') ? 'deleted' : code.includes('?') ? 'added' : 'modified'
-        return { path, change } as const
-      })
-
-    return ok({
-      files_changed: files,
-      patch: patch.stdout === '' ? null : patch.stdout,
-      commits: [],
-      is_dirty: files.length > 0,
-    })
+    return collectGitDiff(state.spec.workspace.path)
   }
 
   async interrupt(handle: RunHandle, _reason: InterruptReason): Promise<Result<void>> {

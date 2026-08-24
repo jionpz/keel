@@ -23,6 +23,7 @@ import type {
   WorkspaceDiff,
 } from '../../contracts/harness-adapter.js'
 import type { CapabilityId } from '../../shared/ids.js'
+import { collectGitDiff } from './git-diff.js'
 import { tierOf } from './tier.js'
 
 /**
@@ -103,11 +104,21 @@ export class HumanAdapter implements HarnessAdapter {
   /**
    * 读工作区 git 状态 —— **与 AI 路径完全相同的实现**。
    *
-   * v0.1 复用 OmpAdapter 的实现方式；日后应抽成共享工具。
-   * 现在保持各自实现是为了避免过早抽象。
+   * 人改的、模型改的,都落在同一个 git 工作树里(#1-06):
+   * collectChanges 必须看到同一份脏树,否则人工轮的改动会丢。
    */
-  async collectChanges(_handle: RunHandle): Promise<Result<WorkspaceDiff>> {
-    return ok({ files_changed: [], patch: null, commits: [], is_dirty: false })
+  async collectChanges(handle: RunHandle): Promise<Result<WorkspaceDiff>> {
+    let spec: RunSpec | undefined
+    for (const v of this.runs.values()) {
+      if (v.run.run_id === handle.run_id) {
+        spec = v
+        break
+      }
+    }
+    if (spec === undefined) {
+      return err(makeError('NOT_FOUND', `未知 run ${handle.run_id}`))
+    }
+    return collectGitDiff(spec.workspace.path)
   }
 
   async interrupt(handle: RunHandle, _reason: InterruptReason): Promise<Result<void>> {

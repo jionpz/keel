@@ -223,6 +223,44 @@ describe('HumanAdapter —— 人工作为一种 Harness', () => {
     const res = await a.awaitResult(started.value)
     expect(res.ok && res.value.status).toBe('CANCELLED')
   })
+
+  it('collectChanges 读真实 git 脏树(#1-06)—— 人工改的文件必须可见', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'keel-human-dirty-'))
+    execFileSync('git', ['init', '-q', '-b', 'main', '.'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 'h@test'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'h'], { cwd: repo })
+    writeFileSync(join(repo, 'f.txt'), 'v1\n')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: repo })
+
+    try {
+      const inbox: HumanInbox = {
+        notify: async () => undefined,
+        await: async () => ({ text: '做完了' }),
+        withdraw: async () => undefined,
+      }
+      const a = new HumanAdapter(inbox)
+      const started = await a.startRun(
+        spec({ workspace: { path: repo, repo_id: 'r', branch: 'main', untrusted: true } }),
+      )
+      expect(started.ok).toBe(true)
+      if (!started.ok) return
+
+      // 干净时
+      const clean = await a.collectChanges(started.value)
+      expect(clean.ok && clean.value.is_dirty).toBe(false)
+
+      // 人工在 worktree 里改了文件
+      writeFileSync(join(repo, 'f.txt'), 'v2\n')
+      const dirty = await a.collectChanges(started.value)
+      expect(dirty.ok, dirty.ok ? '' : dirty.error.detail).toBe(true)
+      if (!dirty.ok) return
+      expect(dirty.value.is_dirty).toBe(true)
+      expect(dirty.value.files_changed.map((f) => f.path)).toContain('f.txt')
+    } finally {
+      rmSync(repo, { recursive: true, force: true })
+    }
+  })
 })
 
 // ───────────────────── 3. 真实集成（会花钱） ─────────────────────
