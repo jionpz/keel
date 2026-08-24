@@ -184,7 +184,8 @@ describe('纯函数', () => {
 
 describe('判定点划分', () => {
   it('rfc_ready 不会去求值引用运行期 fact 的规则', () => {
-    // 若不按判定点划分，P-DRIFT 会因 facts.files_drift_ratio 未提供而抛错
+    // 规则按判定点过滤 —— rfc_ready 只看到该点可用的 fact。
+    // (P-DRIFT 等运行期规则已随 #1-09 从 DEFAULT_RULES 删除,不接线不假装接线)
     const r = engine.evaluate(
       'rfc_ready',
       {
@@ -199,14 +200,17 @@ describe('判定点划分', () => {
     expect(r.ok).toBe(true)
   })
 
-  it('post_develop 上漂移超阈值 → architecture_review', () => {
+  it('post_develop 未接线 → 无规则命中 → 默认 human_review(#1-09)', () => {
+    // 漂移检测(P-DRIFT)曾声明在 post_develop 求值,但转移表从未挂 EvaluatePolicy。
+    // 未接线的规则写了也没人读 —— 本轮删除,不假装接线。
     const r = engine.evaluate(
       'post_develop',
       { actual_files_changed: 40, estimated_files_changed: 4, files_drift_ratio: 10, risk: 'low' },
       AT,
     )
-    expect(r.ok && r.value.decision).toBe('architecture_review')
-    expect(r.ok && r.value.matched_rules.map((m) => m.id)).toContain('P-DRIFT')
+    expect(r.ok && r.value.decision).toBe('human_review')
+    expect(r.ok && r.value.default_applied).toBe(true)
+    expect(r.ok && r.value.matched_rules).toEqual([])
   })
 })
 

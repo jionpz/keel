@@ -158,6 +158,12 @@ RFC 说 `estimated_files_changed: 4`，实际改了 40 —— 这说明 RFC 的�
 > 初稿没有这条。但"当初判断这是个小改动所以自动放行了，结果它不是"
 > 是自动开发系统最典型的失控方式 —— 必须有一个点把它抓住。
 
+> **接线状态（2026-08-24，issue #21 修订）**：本条是设计意图，
+> 但 v0.1 实现中 `post_develop` 判定点**未挂 EvaluatePolicy 副作用**
+> （转移表只有 `rfc_ready` / `capability_request` 接线）——
+> 写了也没人读的规则已从 `DEFAULT_RULES` 删除，不假装接线。
+> 接入漂移检测时：补 `run(develop)` 成功后的转移 + 恢复本规则。
+
 ---
 
 ## 3. 判定点（Decision Point）

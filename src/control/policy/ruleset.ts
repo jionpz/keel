@@ -6,6 +6,11 @@
  * 默认规则集来自初稿 §12 的 5 条规则 + 契约 §2.2 的漂移检测。
  * 初稿那 5 条里藏着一个未被察觉的冲突（见 P3 与 P4 的注），
  * 正是它促成了「严格性偏序 + 默认 deny」这套设计。
+ *
+ * **接线纪律（issue #21 修订）**：只保留**已挂 EvaluatePolicy 副作用**
+ * 的判定点（当前仅 `rfc_ready`）的规则。`post_develop`（P-DRIFT 漂移检测）、
+ * `qa_failed`、`pre_pr` 的规则从未被求值 —— 写了也没人读,已删除,不假装接线。
+ * 它们的设计意图仍在契约文档,接入对应转移时恢复规则而非凭空新增。
  */
 
 import type { DecisionPoint, Rule, Ruleset } from '../../contracts/policy-engine.js'
@@ -79,16 +84,8 @@ export const FACTS_AT: Readonly<Record<DecisionPoint, readonly string[]>> = {
  */
 export const DEFAULT_RULES: readonly Rule[] = [
   {
-    id: 'P-DRIFT',
-    points: ['post_develop'],
-    priority: 900,
-    condition: 'facts.files_drift_ratio > 3',
-    action: 'architecture_review',
-    stop: false,
-  },
-  {
     id: 'P1',
-    points: ['rfc_ready', 'pre_pr'],
+    points: ['rfc_ready'],
     priority: 800,
     condition: "facts.risk == 'high'",
     action: 'human_review',
@@ -100,7 +97,7 @@ export const DEFAULT_RULES: readonly Rule[] = [
     // 按声明顺序取第一条碰巧对；按「最后匹配优先」就把安全改动自动放行了。
     // 严格性偏序保证这里胜出的是 security_review。
     id: 'P3',
-    points: ['rfc_ready', 'pre_pr'],
+    points: ['rfc_ready'],
     priority: 700,
     condition: 'facts.security_related == true',
     action: 'security_review',
@@ -112,14 +109,6 @@ export const DEFAULT_RULES: readonly Rule[] = [
     priority: 600,
     condition: 'facts.estimated_files_changed > 30',
     action: 'architecture_review',
-    stop: false,
-  },
-  {
-    id: 'P5',
-    points: ['qa_failed', 'pre_pr'],
-    priority: 500,
-    condition: 'facts.tests_failed >= 3',
-    action: 'human_review',
     stop: false,
   },
   {
