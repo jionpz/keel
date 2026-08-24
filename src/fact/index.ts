@@ -6,8 +6,11 @@
  * 见 docs/03-domain-model.md §4 写权限矩阵、不变量 I5。
  *
  * 代码层面由 .dependency-cruiser.cjs 的 execution-must-not-write-fact 规则强制；
- * 真正的强制在数据库授权（keel_execution 角色无写权限），属 v0.1 任务。
+ * 数据库层面由 GRANT 强制（migrations/1000000000000_initial-schema.sql：
+ * keel_execution 对 artifact / event / feedback / task 一律无权限,
+ * 写 artifact 的唯一通道 keel_commit_artifact 也只授 keel_control ——
+ * 反例固化在 src/fact/invariants.test.ts）。
  *
- * v0.1 将在此实现 ArtifactStore 与 event log。
+ * blob 大 body 落库见 src/fact/blob.ts（ADR-0004,256 KB 阈值）。
  */
 export const PLANE = 'fact' as const

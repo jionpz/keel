@@ -130,6 +130,35 @@ describe('I5 · Execution Plane 不得触碰 Fact Plane', () => {
     const rows = await asRole('keel_execution', (c) => c.query('SELECT * FROM run'))
     expect(rows.rowCount).toBe(0) // 有权限，只是没数据
   })
+
+  it('keel_execution 不能 SELECT artifact（#1-12 —— 读也不行,不只写）', async () => {
+    await seed()
+    const msg = await expectRejected(() =>
+      asRole('keel_execution', (c) => c.query('SELECT * FROM artifact')),
+    )
+    expect(msg).toMatch(/permission denied/i)
+  })
+
+  it('keel_execution 不能 SELECT event（#1-12 —— 事件流只增不改,执行侧连读都不行）', async () => {
+    await seed()
+    const msg = await expectRejected(() =>
+      asRole('keel_execution', (c) => c.query('SELECT * FROM event')),
+    )
+    expect(msg).toMatch(/permission denied/i)
+  })
+
+  it('keel_execution 不能 EXECUTE keel_commit_artifact（#1-12 —— 写 artifact 的唯一通道也被关死）', async () => {
+    const f = await seed()
+    const msg = await expectRejected(() =>
+      asRole('keel_execution', (c) =>
+        c.query(
+          `SELECT keel_commit_artifact($1, $2, 'state', '', 1, '1.0', '{}'::jsonb, NULL, $3, NULL)`,
+          [randomUUID(), f.taskId, f.eventSeq],
+        ),
+      ),
+    )
+    expect(msg).toMatch(/permission denied/i)
+  })
 })
 
 // ───────────────────────── I1 / I2 · 只增不改 ─────────────────────────

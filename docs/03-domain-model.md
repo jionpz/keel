@@ -83,6 +83,7 @@ Task 作用的目标仓库。
 |---|---|---|
 | `id` | `uuid` | PK |
 | `status` | `text` | **状态机位置**，取值为 `S-*`。见 `04-state-machine.md` |
+| `control_mode` | `text` | 与 `status` 正交的维度：status 说业务走到哪，control_mode 说谁在驾驶。`auto` \| `paused` \| `human`，默认 `auto`。触发 `ControlModeChanged`（`C-*` 转移） |
 | `title` | `text` | |
 | `repo_id` | `uuid` | FK → `repo` |
 | `base_branch` | `text` | |
@@ -115,7 +116,7 @@ Task 作用的目标仓库。
 |---|---|---|
 | `id` | `uuid` | PK |
 | `task_id` | `uuid` | FK → `task` |
-| `stage` | `text` | `pm` \| `brainstorm` \| `critic` \| `develop` \| `qa` \| `review` |
+| `stage` | `text` | `pm` \| `brainstorm` \| `rfc_draft` \| `critic` \| `develop` \| `qa` \| `review` |
 | `role` | `text` | `PM` \| `Critic` \| `Developer` \| `QA` \| `Reviewer` \| … |
 | `attempt` | `int` | 第几次尝试，从 1 起 |
 | `status` | `text` | `PENDING` \| `RUNNING` \| `SUCCEEDED` \| `FAILED` \| `TIMEOUT` \| `CANCELLED` |
@@ -127,6 +128,7 @@ Task 作用的目标仓库。
 | `error_kind` / `error_detail` | `text` | 仅失败态有值 |
 | `tokens_in` / `tokens_out` | `bigint` | `NULL` = Harness 未上报（非 `CAP-COST`） |
 | `cost_usd` | `numeric` | 同上 |
+| `cost_basis` | `text` | `billed` \| `estimated` \| `unavailable`。禁止用 `0` 冒充 `unavailable` —— 两者在核算里是不同的事实 |
 
 - `UNIQUE (task_id, stage, attempt)`
 - `UNIQUE (idempotency_key)` ← **重放安全的落点**：重复投递不会产生第二次副作用
@@ -143,7 +145,7 @@ Task 作用的目标仓库。
 |---|---|---|
 | `id` | `uuid` | PK |
 | `task_id` | `uuid` | FK → `task` |
-| `kind` | `text` | `state` \| `rfc` \| `checkpoint` \| `critic_review` \| `policy_decision` \| `capability_request` |
+| `kind` | `text` | `state` \| `rfc` \| `checkpoint` \| `stage_outcome` \| `critic_review` \| `policy_decision` \| `capability_request`。`event` 不在此列 —— 它有独立的表 |
 | `key` | `text` | 同类多实例时的区分键。如 checkpoint 用 `run_id`；state 用 `''` |
 | `version` | `int` | 同 `(task_id, kind, key)` 下递增，从 1 起 |
 | `schema_version` | `text` | **产物 schema 自身的版本**，如 `1.0` |
@@ -155,6 +157,12 @@ Task 作用的目标仓库。
 
 - `UNIQUE (task_id, kind, key, version)`
 - **只允许 INSERT**。"更新"= 插入新 version + 回填旧行的 `superseded_by`
+
+> **大 body 落 blob（ADR-0004）**：`body` 超过 256 KB（`BLOB_THRESHOLD_BYTES`，
+> `src/fact/blob.ts`）时，body 只存 `{"blob": "<sha256>"}` 引用，
+> 真实内容进 `blob` 表。写顺序：先写 blob，后写 artifact ——
+> 反过来会产生悬空引用；孤儿 blob 只是垃圾，可后台清理。
+> 读回时由 `materialize()` 还原（`src/fact/artifact-store.ts`）。
 
 #### 为什么需要 `committed_at_seq`
 
@@ -265,7 +273,7 @@ Event log 一表四用：
 | `feedback` | `SELECT` | ⛔ **无直接访问**（经 Context） | `INSERT` `SELECT` |
 | `task` | `SELECT` `INSERT` `UPDATE` | ⛔ **无直接访问**（经 Context） | ⛔ |
 | `task_feedback` | `SELECT` `INSERT` | ⛔ | ⛔ |
-| `run` | `SELECT` `INSERT` `UPDATE` | `SELECT`（仅自身 run） | ⛔ |
+| `run` | `SELECT` `INSERT` `UPDATE` | `SELECT` | ⛔ |
 | `artifact` | `SELECT` `INSERT` | ⛔ **禁止** | ⛔ |
 | `event` | `SELECT` `INSERT` | ⛔ **禁止** | ⛔ |
 
@@ -300,7 +308,7 @@ Execution Plane 想让任何东西落盘，**只有一条路**：emit 一个 Pro
 
 | 项 | 状态 | 去向 |
 |---|---|---|
-| 大产物（完整对话、diff 全文）是否外置对象存储 | 未定 | `adr/0004` |
+| 大产物（完整对话、diff 全文）是否外置对象存储 | **已定案**：256 KB 阈值落本地 `blob` 表（ADR-0004） | `adr/0004`、`src/fact/blob.ts` |
 | 是否需要 `task` 的乐观锁版本列 | 取决于 workflow engine 选型 | `adr/0003` |
 | 多项目 / 多 repo 的租户隔离 | v0.1 不做 | `09-roadmap.md` Non-Goals |
 
