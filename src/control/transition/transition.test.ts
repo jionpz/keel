@@ -261,12 +261,7 @@ describe('端到端：docs/07-flows.md 流程一（Excel 日期筛选）', () =>
   })
 
   it('critic run 完成 → T-009b 回流 brainstorm(n+1),不推进状态', () => {
-    const r = transition(
-      'S-BRAINSTORM',
-      'auto',
-      { type: 'RunSucceeded', stage: 'critic' },
-      facts(),
-    )
+    const r = transition('S-BRAINSTORM', 'auto', { type: 'RunSucceeded', stage: 'critic' }, facts())
     expect(r.matched && r.id).toBe('T-009b')
     expect(r.matched && r.next_status).toBe('S-BRAINSTORM') // 自环
     expect(r.matched && r.effects).toContainEqual({
@@ -277,12 +272,7 @@ describe('端到端：docs/07-flows.md 流程一（Excel 日期筛选）', () =>
   })
 
   it('非 brainstorm/critic 的 stage 完成在 S-BRAINSTORM 不匹配', () => {
-    const r = transition(
-      'S-BRAINSTORM',
-      'auto',
-      { type: 'RunSucceeded', stage: 'pm' },
-      facts(),
-    )
+    const r = transition('S-BRAINSTORM', 'auto', { type: 'RunSucceeded', stage: 'pm' }, facts())
     expect(r.matched).toBe(false)
   })
 })
