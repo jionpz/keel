@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "check 阶段按质量门槛验证:每批回归 + 防假绿"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "验证 #1-03 ErrorKind 映射与 retryable 语义"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "验证 #1-12/#1-13/#1-14 授权与 DDL 一致性"}
+{"file": "docs/05-contracts/policy-engine.md", "reason": "验证 #1-02 capability 裁决接线与 #1-09 规则收缩"}
+{"file": "docs/05-contracts/harness-adapter.md", "reason": "验证 #1-05/#1-06/#1-07 Adapter 行为与 tier 定义"}
+{"file": "docs/04-state-machine.md", "reason": "验证 #1-08 guardText 对齐与转移语义未收窄"}
+{"file": "docs/03-domain-model.md", "reason": "验证 #1-13 文档与代码实况一致性"}

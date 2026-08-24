@@ -58,10 +58,10 @@ export function promptFor(stage: Stage, runId: string): string {
         ' "goals":["<目标>"],"non_goals":["<不做什么>"],',
         ' "proposed_change":{"summary":"<摘要>","affected_areas":["<模块>"],"approach":"<做法>"},',
         ' "acceptance_criteria":[{"id":"AC1","text":"<可验证的判据>","verifiable_by":"人工核对"}],',
-        ' "policy_facts":{"risk":"low","complexity":"low",',
-        '  "estimated_files_changed":1,"security_related":false}}',
+        ' "policy_facts":{"risk":"<low|medium|high>","complexity":"<low|medium|high>",',
+        '  "estimated_files_changed":<整数>,"security_related":<true|false>}}',
         '```',
-        'policy_facts 要如实填写：这是一个低风险、低复杂度、非安全相关的小改动。',
+        'policy_facts 必须按 RFC 的真实内容填写，不要套用固定取值。',
       ].join('\n')
 
     case 'develop':

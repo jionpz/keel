@@ -1,0 +1,11 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "#1-12/#1-13/#1-14 涉及 GRANT 授权、blob 阈值、control_mode/cost_basis 字段、DDL CHECK 一致性测试"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "#1-03 按 RunResult.status 映射 ErrorKind;retryable 语义决定 CANCELLED 不重试"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "防假绿纪律:#1-14 purity 空目录必失败;每批针对性回归"}
+{"file": "docs/05-contracts/policy-engine.md", "reason": "#1-02 capability_request 判定点定义与默认 deny 语义;#1-09 未接线判定点删除依据"}
+{"file": "docs/05-contracts/harness-adapter.md", "reason": "#1-05/#1-06 Adapter 契约(interrupt/collectChanges)与 tier 定义(#1-07)"}
+{"file": "docs/05-contracts/session-manager.md", "reason": "#1-03 advance 错误语义;契约文档为交付物之一"}
+{"file": "docs/05-contracts/artifact-store.md", "reason": "#1-10 artifact-store 契约与 Proposal.kind 对应关系"}
+{"file": "docs/03-domain-model.md", "reason": "#1-13 权限矩阵/artifact/run 字段对账目标文档"}
+{"file": "docs/04-state-machine.md", "reason": "#1-08 T-013/guardText 文档对齐;#1-09 转移表表述"}
+{"file": "docs/06-artifacts.md", "reason": "#1-10/#1-13 artifact kind 与事实模型"}
+{"file": "docs/adr/0005-harness-support-tiers.md", "reason": "#1-07 TIER_REQUIREMENTS 对齐依据"}
