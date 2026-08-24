@@ -85,10 +85,20 @@ function main(): void {
     files.push(...found)
   }
 
+  // 防假绿第二层：skip 掉 .test.ts 后,若生产文件集合为空,
+  // 上面「有文件」的检查就是假的 —— 全部被 skip,等于没扫。
+  const prodFiles = files.filter((f) => !f.endsWith('.test.ts'))
+  if (prodFiles.length === 0) {
+    console.error(
+      `✗ ${GUARDED_DIRS.join(' / ')} 下只有测试文件、没有生产 .ts —— ` +
+        '全部被 skip,拒绝以"无违规"通过',
+    )
+    process.exit(1)
+  }
+
   const violations: Violation[] = []
 
-  for (const file of files) {
-    if (file.endsWith('.test.ts')) continue
+  for (const file of prodFiles) {
     const lines = stripComments(readFileSync(file, 'utf8')).split('\n')
     lines.forEach((line, i) => {
       for (const { label, pattern, why } of BANNED) {

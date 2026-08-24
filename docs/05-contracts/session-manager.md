@@ -74,7 +74,12 @@ Control Plane 收到 Proposal 后依次校验，**任一步失败即整体拒绝
 
 ## 2. 接口
 
-### 2.1 `selectAdapter()` `[v0.1 必须]`
+> **实现状态（2026-08-24，issue #21 修订）**：v0.1 的 `HarnessSessionManager`
+> （`src/execution/session/manager.ts`）只实现 `open / advance / close`。
+> `selectAdapter`（2.1）、`checkpoint`（2.4）、`restore`（2.5）标 `[可延后]` ——
+> 契约里完整描述,实现不假装接线;接入第二个 Adapter 或长会话恢复时再补。
+
+### 2.1 `selectAdapter()` `[可延后]`
 
 ```
 selectAdapter(role: RoleId, requirements: CapabilityId[]) -> HarnessAdapter | Error
@@ -115,7 +120,7 @@ TurnOutcome {
 }
 ```
 
-### 2.4 `checkpoint()` `[v0.1 必须]`
+### 2.4 `checkpoint()` `[可延后]`
 
 ```
 checkpoint(handle: SessionHandle) -> A-Checkpoint | Error
@@ -136,7 +141,7 @@ checkpoint(handle: SessionHandle) -> A-Checkpoint | Error
 > 中间两条是必须的：前者因为等待 Critic 期间 Session 可能被回收，
 > 后者因为不落 checkpoint 就关闭，等于把这次会话的推理成果扔掉。
 
-### 2.5 `restore()` `[v0.1 必须]` —— resume 如何重建上下文
+### 2.5 `restore()` `[可延后]` —— resume 如何重建上下文
 
 ```
 restore(checkpoint: A-Checkpoint, context: Context) -> SessionHandle | Error

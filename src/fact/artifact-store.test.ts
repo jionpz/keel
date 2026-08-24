@@ -10,7 +10,7 @@ import { rm } from 'node:fs/promises'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { PERSISTED_ARTIFACT_KINDS } from '../contracts/artifact-store.js'
 import type { Proposal } from '../contracts/types.js'
-import { TASK_STATUSES } from '../shared/ids.js'
+import { CONTROL_MODES, RUN_STATUSES, TASK_STATUSES } from '../shared/ids.js'
 import { PgArtifactStore } from './artifact-store.js'
 import { BLOB_THRESHOLD_BYTES, blobRoot, get, isBlobRef, put } from './blob.js'
 import { asOwner, closePool } from './db.js'
@@ -281,6 +281,18 @@ describe('schema 与代码的一致性', () => {
   it('artifact.kind 的 CHECK 取值与 PERSISTED_ARTIFACT_KINDS 一致', async () => {
     const dbValues = await checkValues('artifact', 'kind')
     expect(dbValues).toEqual([...PERSISTED_ARTIFACT_KINDS].sort())
+  })
+
+  it('task.control_mode 的 CHECK 取值与 CONTROL_MODES 一致(#1-14)', async () => {
+    const dbValues = await checkValues('task', 'control_mode')
+    expect(dbValues).toEqual([...CONTROL_MODES].sort())
+    expect(dbValues).toHaveLength(3)
+  })
+
+  it('run.status 的 CHECK 取值与 RUN_STATUSES 一致(#1-14)', async () => {
+    const dbValues = await checkValues('run', 'status')
+    expect(dbValues).toEqual([...RUN_STATUSES].sort())
+    expect(dbValues).toHaveLength(6)
   })
 
   it('七张业务表都存在 —— 防假绿：读到 0 张表即失败', async () => {
