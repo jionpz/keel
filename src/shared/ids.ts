@@ -113,18 +113,11 @@ export type CapabilityId = (typeof CAPABILITIES)[number]
 export const HARNESS_TIERS = ['L0', 'L1', 'L2'] as const
 export type HarnessTier = (typeof HARNESS_TIERS)[number]
 
-/** 各级别的必备能力（docs/05-contracts/harness-adapter.md §1.2） */
+/** 各级别的必备能力（docs/05-contracts/harness-adapter.md §1.2，与 tierOf 一致） */
 export const TIER_REQUIREMENTS: Readonly<Record<HarnessTier, readonly CapabilityId[]>> = {
   L0: ['CAP-HEADLESS'],
-  L1: ['CAP-HEADLESS', 'CAP-RESUME', 'CAP-STRUCTURED_OUTPUT'],
-  L2: [
-    'CAP-HEADLESS',
-    'CAP-RESUME',
-    'CAP-STRUCTURED_OUTPUT',
-    'CAP-STREAM',
-    'CAP-COST',
-    'CAP-PERMISSION',
-  ],
+  L1: ['CAP-HEADLESS', 'CAP-RESUME'],
+  L2: ['CAP-HEADLESS', 'CAP-RESUME', 'CAP-STREAM', 'CAP-COST'],
 }
 
 // ──────────────────────────── 转移 ID ────────────────────────────

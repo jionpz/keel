@@ -232,4 +232,20 @@ describe('端到端：docs/07-flows.md 流程一（Excel 日期筛选）', () =>
     expect(r.matched && r.id).toBe('T-013')
     expect(r.matched && r.next_status).toBe('S-HUMAN_REVIEW')
   })
+
+  it('security_review 同样走 T-013 —— 守卫是「非 auto_develop」而非「仅 human_review」(#1-08)', () => {
+    const r = transition(
+      'S-RFC_READY',
+      'auto',
+      { type: 'PolicyEvaluated', decision: 'security_review' },
+      facts(),
+    )
+    expect(r.matched && r.id).toBe('T-013')
+    expect(r.matched && r.next_status).toBe('S-HUMAN_REVIEW')
+  })
+
+  it('T-013 的 guardText 与守卫一致：decision != auto_develop', () => {
+    const t013 = TASK_TRANSITIONS.find((t) => t.id === 'T-013')
+    expect(t013?.guardText).toBe('decision != auto_develop')
+  })
 })

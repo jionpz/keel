@@ -159,7 +159,7 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
     from: 'S-RFC_READY',
     on: ['PolicyEvaluated'],
     guard: (_f, e) => e.type === 'PolicyEvaluated' && e.decision !== 'auto_develop',
-    guardText: 'decision=human_review',
+    guardText: 'decision != auto_develop',
     to: 'S-HUMAN_REVIEW',
     effects: [{ kind: 'NotifyHuman', reason: 'policy_requires_review' }],
     ignoresControlMode: false,

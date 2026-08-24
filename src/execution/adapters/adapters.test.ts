@@ -26,6 +26,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import type { RunSpec } from '../../contracts/harness-adapter.js'
+import { TIER_REQUIREMENTS } from '../../shared/ids.js'
 import { HUMAN_CAPABILITIES, HumanAdapter, type HumanInbox } from './human.js'
 import { buildArgv, OMP_CAPABILITIES, OmpAdapter } from './omp.js'
 import { parseOmpStream } from './omp-parse.js'
@@ -121,6 +122,20 @@ describe('tier 由 capability 推导，不硬编码', () => {
 
   it('缺 CAP-HEADLESS 直接拒绝', () => {
     expect(() => tierOf(['CAP-RESUME'])).toThrow()
+  })
+
+  it('TIER_REQUIREMENTS 与 tierOf 互证 —— 各级别要求恰好推出该级别(#1-07)', () => {
+    for (const tier of ['L0', 'L1', 'L2'] as const) {
+      expect(tierOf(TIER_REQUIREMENTS[tier]), `${tier} 的要求应推出 ${tier}`).toBe(tier)
+      // 级别是嵌套的：L2 ⊇ L1 ⊇ L0
+      const lower = TIER_REQUIREMENTS['L0'].every((c) => TIER_REQUIREMENTS[tier].includes(c))
+      expect(lower, `${tier} 应含 L0 的全部能力`).toBe(true)
+    }
+  })
+
+  it('STRUCTURED_OUTPUT 不在阶梯内(ADR-0005)—— L1 不含它', () => {
+    expect(TIER_REQUIREMENTS['L1']).not.toContain('CAP-STRUCTURED_OUTPUT')
+    expect(TIER_REQUIREMENTS['L2']).not.toContain('CAP-STRUCTURED_OUTPUT')
   })
 })
 

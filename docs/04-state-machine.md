@@ -94,7 +94,7 @@
 | `T-010` | `S-BRAINSTORM` | `RunSucceeded` | — | `S-RFC_DRAFT` | 创建 `run(rfc_draft, 1)` |
 | `T-011` | `S-RFC_DRAFT` | `ArtifactCommitted(rfc)` | — | `S-RFC_READY` | **冻结 RFC**（不变量 `I7`）；触发 Policy 求值 |
 | `T-012` | `S-RFC_READY` | `PolicyEvaluated` | `decision=auto_develop` | `S-DEVELOPING` | 建工作分支（幂等）；创建 `run(develop, 1)` |
-| `T-013` | `S-RFC_READY` | `PolicyEvaluated` | `decision=human_review` | `S-HUMAN_REVIEW` | 通知人工 |
+| `T-013` | `S-RFC_READY` | `PolicyEvaluated` | `decision != auto_develop` | `S-HUMAN_REVIEW` | 通知人工（`security_review` 同样走这里） |
 | `T-014` | `S-HUMAN_REVIEW` | `HumanApproved` | — | `S-DEVELOPING` | 建工作分支（幂等）；创建 `run(develop, n+1)` |
 | `T-015` | `S-HUMAN_REVIEW` | `HumanRejected` | — | `S-REJECTED` ★ | — |
 | `T-016` | `S-HUMAN_REVIEW` | `HumanRequestedRework` | — | `S-BRAINSTORM` | 创建 `run(brainstorm, n+1)` |
