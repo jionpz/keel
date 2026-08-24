@@ -5,3 +5,32 @@
 
 ---
 
+## 2026-08-24 · Round 1 组件专家审查修复(#1-01..#1-14)
+
+任务:`.trellis/tasks/08-24-round1-fixes/`(GitHub issue #21,Base 7b27e03)。
+
+14 项全部落地,11 个 commit,`pnpm run check` 全绿(198 tests)。
+
+- #1-01 `rfc_draft` 提示词去写死 policy_facts → Policy 重新成为决策者
+- #1-02 capability_request 真正接线(validate 第 4 步求值 + T-009 guard 现场求值 + capability fact 注入),缺裁决一律拒收
+- #1-03 RunResult.status→ErrorKind 表映射(CANCELLED 不再被打成 retryable PROTOCOL_ERROR)
+- #1-04 executeRun 用 pending.attempt + deps.now()(幂等键与 createRun 同构)
+- #1-05 OmpAdapter.interrupt 持有并 kill 子进程(不再只标 aborted)
+- #1-06 Human collectChanges 读真实 git(与 OMP 抽共享 git-diff.ts)
+- #1-07 TIER_REQUIREMENTS 对齐 tierOf/ADR-0005(STRUCTURED_OUTPUT 移出阶梯)
+- #1-08 T-013 guardText/文档对齐守卫(decision != auto_develop,不收窄)
+- #1-09 删未接线判定点规则(P-DRIFT/P5;P1/P3 收窄到 rfc_ready),不假装接线
+- #1-10 补 git-provider.md/ci-gateway.md 契约;Proposal.kind→ProposalKind
+- #1-11 验收 cleanup 从 KEEL_TEST_REMOTE_REPO 解析(ownerRepo 导出复用)
+- #1-12 I5 反例补 SELECT artifact/event + EXECUTE keel_commit_artifact
+- #1-13 fact 层与 domain-model 对账(rfc_draft/cost_basis/control_mode/stage_outcome/blob/权限矩阵)
+- #1-14 C4 比 guardText;purity 空生产文件必败;SessionManager 文档降级;DDL 补 CHECK
+
+经验沉淀:
+- 「未接线判定点删规则不假装接线」→ ruleset.ts 注释 + policy-engine.md §2.2
+- 防假绿第二层(skip 后空生产文件必败)→ error-handling.md + check-purity.ts
+- C4 双向比对扩到 guardText → 防 T-013 类 guardText 分叉复发
+
+遗留:真实 GitHub 验收(test:acceptance)需 KEEL_GITHUB_TOKEN + KEEL_TEST_REMOTE_REPO,
+本轮环境未设,cleanup 逻辑已被 ownerRepo 单测覆盖。
+

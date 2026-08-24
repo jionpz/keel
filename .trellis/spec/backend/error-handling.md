@@ -88,3 +88,23 @@ if (files.length === 0) {
 > 比较基准写错（用了工作区 vs 索引而非 vs `HEAD`）而**一直是绿的却拦不住手改**，
 > 是 Stage 8 的反例验证抓出来的。
 > **未经反例验证的检查，等同于没有检查。**
+
+### 第二层：skip 之后仍要防假绿（2026-08-24，issue #21）
+
+「扫描到 0 个文件即失败」只防住了目录为空。如果扫描器**搜集了全部文件、
+再在循环里 skip 掉测试文件**，那么目录里全是 `.test.ts` 时——
+第一层通过（目录有文件），实际扫了个寂寞（生产文件全被 skip）。
+
+解法：过滤后**再检查一次**生产文件集合非空，且对**过滤后的集合**做扫描：
+
+```ts
+const prodFiles = files.filter((f) => !f.endsWith('.test.ts'))
+if (prodFiles.length === 0) {
+  console.error('✗ 只有测试文件、没有生产 .ts —— 全部被 skip,拒绝以「无违规」通过')
+  process.exit(1)
+}
+for (const file of prodFiles) { … }
+```
+
+这条是 `check-purity.ts` 实况：`GUARDED_DIRS` 全是 Control Plane 代码，
+若某天目录只剩测试文件，原检查会假绿。
