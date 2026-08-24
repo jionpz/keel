@@ -50,7 +50,17 @@ export function promptFor(stage: Stage, runId: string): string {
       ].join('\n')
 
     case 'brainstorm':
-      return ['推敲实现方案，收敛到一个。', outcome('"converged" | "needs_more"')].join('\n')
+      return [
+        '推敲实现方案，收敛到一个。只输出一个 JSON 对象（用 ```json 围栏），形如：',
+        '```json',
+        '{"schema_version":"1.0","run_id":"<run id>","stage":"brainstorm",',
+        ' "verdict":"converged","reason":"<一句话理由>",',
+        ' "details":{"candidates":[{"id":"A","summary":"<方案>"}],',
+        '   "needs_critic":true}}',
+        '```',
+        '若存在多个候选方案且取舍需要架构评审，将 needs_critic 置为 true —— ' +
+          '系统会派发 Critic 评审后再让你收敛。',
+      ].join('\n')
 
     case 'rfc_draft':
       return [

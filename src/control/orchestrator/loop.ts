@@ -15,10 +15,12 @@
  * durable timer 与 work queue 属后续子任务，两件事应分开验证。
  */
 
+import { randomUUID } from 'node:crypto'
 import type { CiGateway } from '../../contracts/ci-gateway.js'
 import { err, makeError, ok, type Result } from '../../contracts/errors.js'
 import type { HarnessAdapter } from '../../contracts/harness-adapter.js'
 import type { HarnessSessionManager } from '../../execution/session/manager.js'
+import { commitArtifactOn } from '../../fact/artifact-store.js'
 import { asRole } from '../../fact/db.js'
 import type { GitWorkspace } from '../../fact/git-workspace.js'
 import type { RoleId, Stage, TaskStatus } from '../../shared/ids.js'
@@ -185,6 +187,21 @@ export async function runTaskToCompletion(
 
     const executed = await executeRun(taskId, pending, deps, ctxBuilder)
     if (!executed.ok) return err(executed.error)
+
+    // brainstorm 收敛产物若请求 Critic 评审(needs_critic),
+    // 走 T-009:合成 A-CapabilityRequest → CapabilityRequested → 创建 run(critic)。
+    // 评审完成后 T-009b 回流 brainstorm(n+1),新一轮收敛再走 T-010。
+    if (pending.stage === 'brainstorm' && (await brainstormNeedsCritic(taskId))) {
+      await synthesizeCapabilityRequest(taskId, pending.id, 'critic_review')
+      const adv = await deps.driver.advance(
+        taskId,
+        { type: 'CapabilityRequested', capability: 'critic_review' },
+        deps.now(),
+      )
+      if (!adv.ok) return err(adv.error)
+      steps.push(record(state.status, adv, 'critic', 'brainstorm 请求 Critic 评审'))
+      continue
+    }
 
     const event =
       pending.stage === 'rfc_draft'
@@ -368,4 +385,71 @@ async function readPolicyDecision(taskId: string): Promise<string | null> {
     ),
   )
   return r.rows[0]?.body?.decision ?? null
+}
+
+/**
+ * 最新 brainstorm 收敛产物是否请求 Critic 评审。
+ *
+ * verdict=converged 且 details.needs_critic=true ——
+ * 由 brainstorm 提示词引导模型置位(brainstorm 阶段特有)。
+ */
+async function brainstormNeedsCritic(taskId: string): Promise<boolean> {
+  const r = await asRole('keel_control', (c) =>
+    c.query<{ body: { verdict?: string; details?: { needs_critic?: unknown } } }>(
+      `SELECT body FROM artifact
+       WHERE task_id=$1 AND kind='stage_outcome' AND key='brainstorm'
+       ORDER BY committed_at_seq DESC LIMIT 1`,
+      [taskId],
+    ),
+  )
+  const body = r.rows[0]?.body
+  return body?.verdict === 'converged' && body.details?.needs_critic === true
+}
+
+/**
+ * 合成 A-CapabilityRequest 落库(Control Plane 侧构造)。
+ *
+ * 单产物执行模型下,brainstorm 的收敛产物(stage_outcome)携带
+ * needs_critic 请求;这里把该事实物化为契约规定的 capability_request
+ * artifact,供审计与 T-009 的 Policy 求值(capability fact 从事件取)。
+ *
+ * 幂等:同一 produced_by_run 只写一次(commitArtifactOn 的 version 递增
+ * 会重复写 —— 用固定 key='latest' + 查重保护)。
+ */
+async function synthesizeCapabilityRequest(
+  taskId: string,
+  producedByRun: string,
+  capability: string,
+): Promise<void> {
+  await asRole('keel_control', async (c) => {
+    const existing = await c.query<{ id: string }>(
+      `SELECT id FROM artifact WHERE task_id=$1 AND produced_by_run=$2 AND kind='capability_request'`,
+      [taskId, producedByRun],
+    )
+    if (existing.rows.length > 0) return // 已合成,幂等
+
+    const ev = await c.query<{ seq: string }>(
+      `INSERT INTO event (task_id, run_id, type, payload)
+       VALUES ($1,$2,'ProposalAccepted',$3::jsonb) RETURNING seq`,
+      [taskId, producedByRun, JSON.stringify({ kind: 'capability_request', key: 'latest' })],
+    )
+    await commitArtifactOn(c, {
+      id: randomUUID(),
+      taskId,
+      kind: 'capability_request',
+      key: 'latest',
+      body: {
+        schema_version: '1.0',
+        request_id: `${taskId}:${producedByRun}`,
+        requested_by_run: producedByRun,
+        capability,
+        params: {},
+        rationale: 'brainstorm 收敛产物请求架构评审(needs_critic)',
+        blocking: true,
+      },
+      producedByRun,
+      committedAtSeq: Number(ev.rows[0]?.seq),
+      supersedes: null,
+    })
+  })
 }

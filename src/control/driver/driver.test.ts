@@ -399,39 +399,23 @@ describe('CapabilityRequested · 缺裁决不放行(#1-02)', () => {
     return taskId
   }
 
-  it('DEFAULT_RULES 无 capability_request 规则 → 裁决为默认 deny → T-009 不推进', async () => {
+  it('未接线的 capability(human_input)→ 默认 deny → T-009 不推进', async () => {
     const taskId = await seedToBrainstorm()
     const r = await driver.advance(
       taskId,
-      { type: 'CapabilityRequested', capability: 'critic_review' },
+      { type: 'CapabilityRequested', capability: 'human_input' },
       NOW,
     )
-    // 缺裁决 = 不放行:NoTransition,状态不动
+    // 缺规则 = 缺裁决 = 不放行:NoTransition,状态不动
     expect(r.ok).toBe(true)
     if (!r.ok) return
     expect(r.value.advanced).toBe(false)
     expect(await statusOf(taskId)).toBe('S-BRAINSTORM')
   })
 
-  it('有放行规则时 CapabilityRequested 推进 T-009(自环,创建 critic run)', async () => {
+  it('critic_review 经 DEFAULT_RULES 的 P-ALLOW-CRITIC 放行 → T-009(#1-15)', async () => {
     const taskId = await seedToBrainstorm()
-    // 局部 driver:规则集带 capability_request 放行规则
-    const allowRuleset = {
-      ...DEFAULT_RULESET,
-      rules: [
-        ...DEFAULT_RULESET.rules,
-        {
-          id: 'P-ALLOW-CRITIC',
-          points: ['capability_request'] as const,
-          priority: 100,
-          condition: "facts.capability == 'critic_review'",
-          action: 'auto_develop' as const,
-          stop: false,
-        },
-      ],
-    }
-    const localDriver = new WorkflowDriver(new RuleBasedPolicyEngine(allowRuleset))
-    const r = await localDriver.advance(
+    const r = await driver.advance(
       taskId,
       { type: 'CapabilityRequested', capability: 'critic_review' },
       NOW,
@@ -451,25 +435,9 @@ describe('CapabilityRequested · 缺裁决不放行(#1-02)', () => {
 
   it('capability 值不匹配规则 → 裁决仍为默认 deny → 不推进', async () => {
     const taskId = await seedToBrainstorm()
-    const allowRuleset = {
-      ...DEFAULT_RULESET,
-      rules: [
-        ...DEFAULT_RULESET.rules,
-        {
-          id: 'P-ALLOW-CRITIC',
-          points: ['capability_request'] as const,
-          priority: 100,
-          condition: "facts.capability == 'critic_review'",
-          action: 'auto_develop' as const,
-          stop: false,
-        },
-      ],
-    }
-    const localDriver = new WorkflowDriver(new RuleBasedPolicyEngine(allowRuleset))
-    // 请求 human_input —— 不匹配 P-ALLOW-CRITIC
-    const r = await localDriver.advance(
+    const r = await driver.advance(
       taskId,
-      { type: 'CapabilityRequested', capability: 'human_input' },
+      { type: 'CapabilityRequested', capability: 'additional_context' },
       NOW,
     )
     expect(r.ok && r.value.advanced).toBe(false)
