@@ -210,7 +210,7 @@ export async function runTaskToCompletion(
 /** 跑一个 run：造 Context → 真实 session → 校验落库 → 标记 SUCCEEDED */
 async function executeRun(
   taskId: string,
-  pending: { id: string; stage: Stage; role: RoleId },
+  pending: { id: string; stage: Stage; role: RoleId; attempt: number },
   deps: OrchestratorDeps,
   ctxBuilder: FactPlaneContextBuilder,
 ): Promise<Result<void>> {
@@ -239,9 +239,12 @@ async function executeRun(
           task_id: taskId,
           stage: pending.stage,
           role: pending.role,
-          attempt: 1,
+          // 与 createRun 副作用写入的 attempt 同源 ——
+          // 幂等键必须同构,否则 Run 级幂等失效
+          attempt: pending.attempt,
         },
-        idempotency_key: `${taskId}/${pending.stage}/1`,
+        // 幂等键与 docs/04-state-machine.md §5.1 一致：(task_id, stage, attempt)
+        idempotency_key: `${taskId}/${pending.stage}/${pending.attempt}`,
         workspace: {
           path: place.value.path,
           repo_id: place.value.repo_id,
@@ -268,7 +271,7 @@ async function executeRun(
   if (!outcome.ok) return err(outcome.error)
 
   await asRole('keel_control', (c) =>
-    c.query(`UPDATE run SET status='SUCCEEDED', ended_at=now() WHERE id=$1`, [pending.id]),
+    c.query(`UPDATE run SET status='SUCCEEDED', ended_at=$2 WHERE id=$1`, [pending.id, deps.now()]),
   )
 
   // 把这一轮的改动提交到该 Task 的分支。
@@ -340,10 +343,10 @@ async function readState(taskId: string): Promise<{ status: TaskStatus } | null>
 
 async function readPendingRun(
   taskId: string,
-): Promise<{ id: string; stage: Stage; role: RoleId } | null> {
+): Promise<{ id: string; stage: Stage; role: RoleId; attempt: number } | null> {
   const r = await asRole('keel_control', (c) =>
-    c.query<{ id: string; stage: Stage; role: RoleId }>(
-      `SELECT id, stage, role FROM run WHERE task_id=$1 AND status='PENDING'
+    c.query<{ id: string; stage: Stage; role: RoleId; attempt: number }>(
+      `SELECT id, stage, role, attempt FROM run WHERE task_id=$1 AND status='PENDING'
        ORDER BY attempt DESC LIMIT 1`,
       [taskId],
     ),

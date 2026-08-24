@@ -11,8 +11,8 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { err, makeError, ok, type Result } from '../../contracts/errors.js'
-import type { HarnessAdapter, RunSpec } from '../../contracts/harness-adapter.js'
+import { type ErrorKind, err, makeError, ok, type Result } from '../../contracts/errors.js'
+import type { HarnessAdapter, RunResult, RunSpec } from '../../contracts/harness-adapter.js'
 import type { Proposal, Usage } from '../../contracts/types.js'
 import { extractJson } from './extract.js'
 
@@ -43,6 +43,19 @@ export interface SessionSpec {
   readonly adapter: HarnessAdapter
   /** 期望产出的产物 kind */
   readonly expect: { readonly kind: string; readonly key: string }
+}
+
+/**
+ * Run 状态 → ErrorKind 映射。
+ *
+ * 与 RETRYABLE 表配合：CANCELLED 是人工撤回,重试无意义(retryable=false);
+ * TIMEOUT / FAILED 可重试。PROTOCOL_ERROR 一词描述「输出无法解析」,
+ * 不能覆盖「超时 / 撤回 / 失败」这些可区分、语义不同的状态。
+ */
+const RUN_STATUS_ERROR: Readonly<Record<Exclude<RunResult['status'], 'SUCCEEDED'>, ErrorKind>> = {
+  TIMEOUT: 'RUN_TIMEOUT',
+  CANCELLED: 'RUN_CANCELLED',
+  FAILED: 'PROTOCOL_ERROR',
 }
 
 export class HarnessSessionManager {
@@ -95,8 +108,12 @@ export class HarnessSessionManager {
 
     const res = await spec.adapter.awaitResult(started.value)
     if (!res.ok) return err(res.error)
+
+    // 非 SUCCEEDED 按 Run 状态映射 ErrorKind —— 不能一律 PROTOCOL_ERROR：
+    // CANCELLED 是人工撤回(retryable=false,T-030 不应重试),
+    // TIMEOUT 是超时(retryable=true,可再试)。
     if (res.value.status !== 'SUCCEEDED') {
-      return err(makeError('PROTOCOL_ERROR', `Run 状态 ${res.value.status}`))
+      return err(makeError(RUN_STATUS_ERROR[res.value.status], `Run 状态 ${res.value.status}`))
     }
 
     // Adapter 已声明无 CAP-STRUCTURED_OUTPUT，走 post_validate：从自由文本提取
