@@ -18,7 +18,7 @@
  * （vitest.acceptance.config.ts 已含 `*.test.ts` 之外的真实集成）。
  */
 
-import { execFileSync } from 'node:child_process'
+import { execFileSync, type spawn } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -341,4 +341,88 @@ describe.skipIf(!REQUIRE_OMP)('CAP-UNTRUSTED_WORKSPACE 反例验证', () => {
 
     rmSync(repo, { recursive: true, force: true })
   }, 240_000)
+})
+
+// ────────────── #1-05 · interrupt 持有并杀子进程 ──────────────
+
+/**
+ * 旧实现只置 state.aborted,已 spawn 的 omp 继续跑完 —— 白耗 token 与时间。
+ * 现在 interrupt 必须 kill 子进程。
+ *
+ * 注入 fake spawnFn:记录的 kill 调用即证据,不需要真起 omp。
+ */
+describe('interrupt 杀子进程(注入 spawn fixture)', () => {
+  interface FakeProc {
+    killed: Array<string | number>
+    stdout: { on: () => void }
+    stderr: { on: () => void }
+    on: (ev: 'error' | 'close', cb: (code?: number | null) => void) => void
+    kill: (signal: string | number) => boolean
+    emitClose: (code: number) => void
+  }
+
+  function hangingSpawn(): { spawnFn: typeof spawn; procs: FakeProc[] } {
+    const procs: FakeProc[] = []
+    const spawnFn = ((_cmd: string, _args: readonly string[]): unknown => {
+      const closeHandlers: Array<(code?: number | null) => void> = []
+      const proc: FakeProc = {
+        killed: [],
+        stdout: { on: () => {} },
+        stderr: { on: () => {} },
+        on: (ev, cb) => {
+          if (ev === 'close') closeHandlers.push(cb)
+          else if (ev === 'error') {
+            /* 测试里不触发 error */
+          }
+        },
+        kill: (signal) => {
+          proc.killed.push(signal)
+          return true
+        },
+        emitClose: (code) => {
+          for (const cb of closeHandlers) cb(code)
+        },
+      }
+      procs.push(proc)
+      return proc
+    }) as typeof spawn
+    return { spawnFn, procs }
+  }
+
+  it('interrupt 后子进程收到 SIGTERM,awaitResult 收敛为 CANCELLED', async () => {
+    const { spawnFn, procs } = hangingSpawn()
+    const adapter = new OmpAdapter({ spawnFn })
+    const started = await adapter.startRun(spec())
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+
+    // spawnFn 在 run() 的 Promise executor 内同步执行 —— startRun 返回时 proc 已就位
+    expect(procs.length, '应 spawn 了子进程').toBe(1)
+
+    const intr = await adapter.interrupt(started.value, 'cancelled')
+    expect(intr.ok).toBe(true)
+    expect(procs[0]?.killed, 'interrupt 应 kill 子进程').toEqual(['SIGTERM'])
+
+    // 被杀的进程退出 → 挂起的 awaitResult 返回 CANCELLED
+    procs[0]?.emitClose(143)
+    const res = await adapter.awaitResult(started.value)
+    expect(res.ok).toBe(true)
+    if (res.ok) expect(res.value.status).toBe('CANCELLED')
+  })
+
+  it('中断发生在子进程已结束时不再 kill(引用已清空)', async () => {
+    const { spawnFn, procs } = hangingSpawn()
+    const adapter = new OmpAdapter({ spawnFn })
+    const started = await adapter.startRun(spec())
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+
+    // 进程先自行结束
+    procs[0]?.emitClose(0)
+    await adapter.awaitResult(started.value)
+
+    const intr = await adapter.interrupt(started.value, 'cancelled')
+    expect(intr.ok).toBe(true)
+    expect(procs[0]?.killed).toEqual([])
+  })
 })

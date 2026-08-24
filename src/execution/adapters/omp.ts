@@ -5,7 +5,7 @@
  * 本文件中每一个 argv 参数都有实测依据，不是从文档推断的。
  */
 
-import { spawn } from 'node:child_process'
+import { type ChildProcess, spawn } from 'node:child_process'
 import { err, makeError, ok, type Result } from '../../contracts/errors.js'
 import type {
   DisposeReport,
@@ -48,6 +48,8 @@ interface RunState {
   readonly spec: RunSpec
   promise: Promise<Result<RunResult>>
   aborted: boolean
+  /** 已 spawn 的子进程 —— interrupt 需要它做优雅终止 */
+  proc: ChildProcess | null
 }
 
 export class OmpAdapter implements HarnessAdapter {
@@ -105,6 +107,7 @@ export class OmpAdapter implements HarnessAdapter {
       handle,
       spec,
       aborted: false,
+      proc: null,
       promise: Promise.resolve(ok({} as RunResult)),
     }
     state.promise = this.exec(spec, state)
@@ -157,9 +160,11 @@ export class OmpAdapter implements HarnessAdapter {
     if (state === undefined) {
       return err(makeError('NOT_FOUND', `未知 run ${handle.run_id}`))
     }
-    // v0.1 未持有子进程引用做优雅中断；标记后由 awaitResult 返回 CANCELLED。
-    // 无 CAP-INTERRUPT 时的降级就是「该次 Run 作废」（R-010）。
+    // 标记 + 杀子进程：只标 aborted 会让已 spawn 的 omp 继续跑完、
+    // 白耗 token 与时间。SIGTERM 先给优雅退出机会,
+    // 由 awaitResult 的退出码路径收敛为 CANCELLED。
     state.aborted = true
+    state.proc?.kill('SIGTERM')
     return ok(undefined)
   }
 
@@ -185,7 +190,19 @@ export class OmpAdapter implements HarnessAdapter {
     const argv = buildArgv(spec, this.model)
     const prompt = renderPrompt(spec)
 
-    const proc = await run(this.bin, [...argv, prompt], spec.workspace.path, this.opts.spawnFn)
+    const proc = await run(
+      this.bin,
+      [...argv, prompt],
+      spec.workspace.path,
+      this.opts.spawnFn,
+      // 子进程创建后立即持有引用 —— interrupt 需要 kill 它
+      (p) => {
+        state.proc = p
+      },
+    )
+
+    // 进程已结束 —— 引用不再有意义
+    state.proc = null
 
     if (state.aborted) {
       return ok({
@@ -286,15 +303,20 @@ interface ProcResult {
  * 见 research/omp-interface.md §1。
  *
  * stdin 显式关闭，否则 omp 可能等待输入而挂起（实测超时过一次）。
+ *
+ * `onSpawn` 在子进程创建后立即回调，把 `ChildProcess` 交给调用方 ——
+ * 中断需要它来 kill(见 interrupt)。
  */
 function run(
   bin: string,
   args: readonly string[],
   cwd: string,
   spawnFn: typeof spawn = spawn,
+  onSpawn?: (p: ChildProcess) => void,
 ): Promise<ProcResult> {
   return new Promise((resolve) => {
     const p = spawnFn(bin, [...args], { cwd, stdio: ['ignore', 'pipe', 'pipe'] })
+    onSpawn?.(p)
     let stdout = ''
     let stderr = ''
     p.stdout?.on('data', (d: Buffer) => {
