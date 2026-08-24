@@ -129,11 +129,11 @@ describe('真实 GitHub PR / CI(需要凭据与远程仓库)', () => {
       expect(again.value.created, '第二次应复用').toBe(false)
       expect(again.value.number).toBe(prNumber)
 
-      // ── E. CI 回读:该仓库无 CI 配置 → passed(不卡死) ──
+      // ── E. CI 回读:真实 GitHub Actions 跑 ~60s,给足余量等它到终态 ──
       const ci = await new GitHubProvider({
         token: requireToken(),
-        pollIntervalMs: 2_000,
-        pollTimeoutMs: 60_000,
+        pollIntervalMs: 5_000,
+        pollTimeoutMs: 300_000,
       }).waitForCi({ repoId, remoteUrl: remote, headSha: headSha.value, prNumber })
       expect(ci.ok, ci.ok ? '' : `CI 查询失败:${ci.error.detail}`).toBe(true)
       if (!ci.ok) return

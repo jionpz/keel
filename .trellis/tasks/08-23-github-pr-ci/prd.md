@@ -86,9 +86,26 @@
 - 本任务需要用户提供:远程仓库 URL、凭据方式(推荐 fine-grained PAT 或已登录 `gh`)。
 - 在拿到凭据前,先完成接口、假实现、测试与文档;不把未验证的代码标成已完成。
 
-## 进度(2026-08-23)
+## 验收记录
 
-代码层完成:`GitWorkspace.push`、`GitHubProvider`(REST)、effects/orchestrator 接线、
-单测 17+3 用例、`pnpm run check` 全绿(162 tests)。README 状态已同步。
-剩余全部阻塞在**真实远程仓库与凭据**(Stage 4.4/5.3 单测与 6.x 验收除外):
-提供 `KEEL_GITHUB_TOKEN` 与远程 URL 后即可跑真实验收路径。
+### 2026-08-24 · 真实 GitHub PR + CI 全链路 ✅
+
+- 远程仓库:`https://github.com/jionpz/keel`(private,gh 登录 jionpz)
+- 凭据:`KEEL_GITHUB_TOKEN="$(gh auth token)"`(无新密钥产生)
+- 测试:`pnpm run test:acceptance` → `github-pr.acceptance.test.ts`,**77.6s 通过**
+- 验证内容:真实 push `ai/*` 分支 → 真实创建 PR(#19)→ 幂等复用(created=false)→
+  真实 GitHub Actions 跑完(~61s)→ waitForCi 回读 `passed`
+- 事件与产物中无明文 token;测试收尾自动关 PR、删远端分支
+
+### 验收抓出的三个真 bug(全部修复)
+
+| Bug | 根因 | 修复 |
+|---|---|---|
+| 幂等查询永远落空 | GitHub head 过滤器必须是 `owner:branch`;`owner/repo:branch`(含 %2F 编码)一律空集 → 重复调用撞 422 | `findExistingPr` 改用 owner |
+| Actions-only 仓库 CI 永远 pending | Actions 用 check-runs 不写 commit status,combined status 恒 `pending + statuses=[]` → 轮询到超时判 failed | 空上报视为终态 passed |
+| runner 无 omp 导致远程 CI 恒红 | adapters.test.ts 第 3 层(真调 omp)在 GitHub Actions 上必失败 | `KEEL_REQUIRE_OMP=1` 门控 |
+
+### 剩余(不阻塞 v0.1 判据)
+
+- Stage 4.4 / 5.3:driver 层 fake gateway 单测(幂等复用、无 provider 退回已有 e2e 覆盖,补齐属加固)
+- 完整编排器路径(`runTaskToCompletion` + 真实 GitHub)的验收 —— 待推理网关稳定后与 v0.1 判据合并跑

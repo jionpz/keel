@@ -103,8 +103,10 @@ pnpm run check     # CI 跑的就是这一条 —— 与本地完全一致
 
 **架构框架 + 仓库骨架已完成。** v0.1 最小闭环已跑通:真实反馈在本地 worktree 中无人干预走完 `S-NEW → S-DONE`,事件流可完整重建;回归测试全绿。
 
-GitHub PR / CI 集成(`08-23-github-pr-ci`)代码层已就绪:
-`GitWorkspace.push`(仅 `ai/*` 分支、不 force)、`GitHubProvider`(REST,PR 幂等 + CI 轮询)、
-编排器真实 CI 接线(优先于测试用 `externalCi`)。
-**真实远程路径尚未验证** —— 需要指定远程仓库与凭据后跑 `pnpm run test:acceptance`;
-在那之前,未注入 provider 时系统如实记录 `SideEffectIntent`,不假装成功。
+GitHub PR / CI 集成已完成**真实验收**(2026-08-24,`jionpz/keel`):
+真实 push → 真实创建 PR(幂等复用)→ 真实 GitHub Actions 跑完 → CI 状态回读 `passed`,
+全链路 77.6s。验收抓出并修复三个真 bug(head 过滤器编码、Actions-only 仓库的
+pending 归并、runner 无 omp),记录见任务 `prd.md`。
+
+运行真实验收:`KEEL_GITHUB_TOKEN="$(gh auth token)" KEEL_TEST_REMOTE_REPO=<url> pnpm run test:acceptance`
+(缺凭据时明确失败,不静默跳过)。未注入 provider 时系统如实记录 `SideEffectIntent`,不假装成功。

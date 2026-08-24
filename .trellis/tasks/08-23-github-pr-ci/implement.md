@@ -31,9 +31,9 @@
 - [ ] 5.3 单测:fake CiGateway 驱动 `T-024` / `T-025` —— **待补**
 
 ## Stage 6 · 验收与文档
-- [ ] 6.1 更新 `src/acceptance/` 或新增真实 GitHub 验收测试(可选运行)—— 待远程仓库
+- [x] 6.1 新增真实 GitHub 验收测试 `src/acceptance/github-pr.acceptance.test.ts`(可选运行,缺凭据明确失败)
 - [x] 6.2 更新 README / docs 状态(2026-08-23)
-- [x] 6.3 在正常环境跑 `pnpm run check` 全绿(162 tests,2026-08-23)
-- [ ] 6.4 在提供远程与凭据后跑 `pnpm run test:acceptance` 并记录 —— **阻塞:需用户提供**
-- [ ] 6.5 本任务 `prd.md` 写验收记录
+- [x] 6.3 在正常环境跑 `pnpm run check` 全绿(159+4 skipped,2026-08-24)
+- [x] 6.4 真实验收通过:2026-08-24 77.6s,push→建 PR→幂等复用→真实 Actions CI 回读 passed
+- [x] 6.5 验收记录已写入本任务 `prd.md`
 
