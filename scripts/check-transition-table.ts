@@ -68,8 +68,9 @@ function parseDoc(): DocRow[] {
   const rows: DocRow[] = []
 
   for (const raw of text.split('\n')) {
-    // 只认「ID 在首列」的行 —— 文档中另有可达性自检表也提到 T-*，但 ID 不在首列
-    if (!/^\|\s*`T-\d{3}`\s*\|/.test(raw)) continue
+    // 只认「ID 在首列」的行 —— 文档中另有可达性自检表也提到 T-*，但 ID 不在首列。
+    // 支持字母后缀(T-009b):critic 回流转移使用
+    if (!/^\|\s*`T-\d{3}[a-z]?`\s*\|/.test(raw)) continue
 
     const cells = raw
       .replace(/\\\|/g, ESC)

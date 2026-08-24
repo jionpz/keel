@@ -248,4 +248,41 @@ describe('端到端：docs/07-flows.md 流程一（Excel 日期筛选）', () =>
     const t013 = TASK_TRANSITIONS.find((t) => t.id === 'T-013')
     expect(t013?.guardText).toBe('decision != auto_develop')
   })
+
+  it('T-010 只匹配 brainstorm 收敛,不再误接 critic 完成(#1-15)', () => {
+    const r = transition(
+      'S-BRAINSTORM',
+      'auto',
+      { type: 'RunSucceeded', stage: 'brainstorm' },
+      facts(),
+    )
+    expect(r.matched && r.id).toBe('T-010')
+    expect(r.matched && r.next_status).toBe('S-RFC_DRAFT')
+  })
+
+  it('critic run 完成 → T-009b 回流 brainstorm(n+1),不推进状态', () => {
+    const r = transition(
+      'S-BRAINSTORM',
+      'auto',
+      { type: 'RunSucceeded', stage: 'critic' },
+      facts(),
+    )
+    expect(r.matched && r.id).toBe('T-009b')
+    expect(r.matched && r.next_status).toBe('S-BRAINSTORM') // 自环
+    expect(r.matched && r.effects).toContainEqual({
+      kind: 'CreateRun',
+      stage: 'brainstorm',
+      attempt: 'next',
+    })
+  })
+
+  it('非 brainstorm/critic 的 stage 完成在 S-BRAINSTORM 不匹配', () => {
+    const r = transition(
+      'S-BRAINSTORM',
+      'auto',
+      { type: 'RunSucceeded', stage: 'pm' },
+      facts(),
+    )
+    expect(r.matched).toBe(false)
+  })
 })

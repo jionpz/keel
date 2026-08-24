@@ -128,10 +128,26 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
     id: 'T-010',
     from: 'S-BRAINSTORM',
     on: ['RunSucceeded'],
-    guard: null,
-    guardText: '—',
+    // 只有 brainstorm 自身的收敛产物才进 RFC_DRAFT;
+    // critic run 的完成走 T-009b(评审回灌,不推进状态)
+    guard: (_f, e) => e.type === 'RunSucceeded' && e.stage === 'brainstorm',
+    guardText: 'stage=brainstorm',
     to: 'S-RFC_DRAFT',
     effects: [firstRun('rfc_draft')],
+    ignoresControlMode: false,
+  },
+  {
+    // critic run 完成:评审已落库(A-CriticReview),
+    // 重新派发 brainstorm(n+1) —— 新 run 的 Context 自带评审(recipe 的 critic section),
+    // 下一轮收敛后再走 T-010。
+    // 回流 = rematerialize 语义(ADR-0003 仍 Proposed,不实现 session resume)
+    id: 'T-009b',
+    from: 'S-BRAINSTORM',
+    on: ['RunSucceeded'],
+    guard: (_f, e) => e.type === 'RunSucceeded' && e.stage === 'critic',
+    guardText: 'stage=critic',
+    to: 'SELF',
+    effects: [nextRun('brainstorm')],
     ignoresControlMode: false,
   },
 

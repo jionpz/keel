@@ -91,7 +91,8 @@
 | `T-007` | `S-NEED_CLARIFICATION` | `ClarificationReceived` | — | `S-PM_ANALYZING` | 关联新 feedback；创建 `run(pm, n+1)` |
 | `T-008` | `S-NEED_CLARIFICATION` | `TimerFired(clarification_ttl)` | — | `S-ABANDONED` ★ | — |
 | `T-009` | `S-BRAINSTORM` | `CapabilityRequested(critic)` | `policy=allow` | `S-BRAINSTORM` ⟲ | 创建 `run(critic, n)`；结果写回 `A-CriticReview` |
-| `T-010` | `S-BRAINSTORM` | `RunSucceeded` | — | `S-RFC_DRAFT` | 创建 `run(rfc_draft, 1)` |
+| `T-010` | `S-BRAINSTORM` | `RunSucceeded` | `stage=brainstorm` | `S-RFC_DRAFT` | 创建 `run(rfc_draft, 1)` |
+| `T-009b` | `S-BRAINSTORM` | `RunSucceeded` | `stage=critic` | `S-BRAINSTORM` ⟲ | 评审回灌：创建 `run(brainstorm, n+1)`（`A-CriticReview` 经 Context 带入） |
 | `T-011` | `S-RFC_DRAFT` | `ArtifactCommitted(rfc)` | — | `S-RFC_READY` | **冻结 RFC**（不变量 `I7`）；触发 Policy 求值 |
 | `T-012` | `S-RFC_READY` | `PolicyEvaluated` | `decision=auto_develop` | `S-DEVELOPING` | 建工作分支（幂等）；创建 `run(develop, 1)` |
 | `T-013` | `S-RFC_READY` | `PolicyEvaluated` | `decision != auto_develop` | `S-HUMAN_REVIEW` | 通知人工（`security_review` 同样走这里） |
