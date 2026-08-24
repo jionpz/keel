@@ -50,6 +50,24 @@
 **桥接检查**：第 4、12、19 步的所有读取均经 Context；
 第 6、8、13、15、20、23、25 步的所有写入均经 Proposal。**无旁路。** ✅
 
+### 流程一的实现注记（2026-08-24，issue #21）
+
+上表是理想态。v0.1 实现的 critic 路径有三处与理想态的**载体差异**（语义等价，非缺口）：
+
+- **步骤 8（请求评审）**：单产物执行模型下，Brainstorm 不直接产出
+  `A-CapabilityRequest`。它在收敛产物里置 `details.needs_critic=true`，
+  Control Plane 读取后**合成** `A-CapabilityRequest` 落库（`loop.ts`
+  `synthesizeCapabilityRequest`，幂等：同 `produced_by_run` 只写一次），
+  再触发 `CapabilityRequested` 事件。
+- **步骤 12（评审回灌）**：不实现 `SessionManager.resume`（契约标 `[可延后]`）。
+  回流 = critic 完成（`T-009b`）→ 重新派发 `run(brainstorm, n+1)`，
+  新 run 的 Context 经 recipe 的 `critic` section 自动带上最新
+  `A-CriticReview`（等价于 L0 的 `rematerialize` 路径）。
+- **步骤 21（漂移检测）**：`post_develop` 判定点**未接线**
+  （`EvaluatePolicy` 副作用只挂 `rfc_ready` / `capability_request`）。
+  P-DRIFT 规则已从 `DEFAULT_RULES` 删除（见 `policy-engine.md` §2.2），
+  本步是设计意图，接入对应转移时恢复。
+
 ---
 
 ## 2. 流程二 · 复杂需求 → 人工接管 → 交还 AI
