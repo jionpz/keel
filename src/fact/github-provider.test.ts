@@ -268,22 +268,38 @@ describe('waitForCi 三态归并', () => {
     expect(r.ok && r.value).toBe('failed')
   })
 
-  it('无任何 CI 配置 → passed(仓库不该永远卡死)', async () => {
-    ciRoutes({ total_count: 0, check_runs: [] }, { state: null })
+  it('Commit Status state=pending 且无 status 上报 → passed(Actions-only 仓库的真实形态)', async () => {
+    ciRoutes(
+      { total_count: 1, check_runs: [{ status: 'completed', conclusion: 'success' }] },
+      {
+        state: 'pending',
+        statuses: [],
+      },
+    )
     const r = await provider().waitForCi({ repoId: 'r1', remoteUrl: REMOTE, headSha: 'sha-x' })
     expect(r.ok && r.value).toBe('passed')
   })
 
-  it('硬超时 → failed(不是永远等下去)', async () => {
+  it('Commit Status 有真实上报且 pending → 继续等待', async () => {
     ciRoutes(
-      { total_count: 1, check_runs: [{ status: 'in_progress', conclusion: null }] },
-      { state: 'pending' },
+      { total_count: 0, check_runs: [] },
+      {
+        state: 'pending',
+        statuses: [{ state: 'pending', context: 'ci/legacy' }],
+      },
     )
     const r = await provider({ pollIntervalMs: 1, pollTimeoutMs: 10 }).waitForCi({
       repoId: 'r1',
       remoteUrl: REMOTE,
       headSha: 'sha-x',
     })
+    // 轮询到硬超时仍 pending → failed(不是永远等)
     expect(r.ok && r.value).toBe('failed')
+  })
+
+  it('无任何 CI 配置 → passed(仓库不该永远卡死)', async () => {
+    ciRoutes({ total_count: 0, check_runs: [] }, { state: null })
+    const r = await provider().waitForCi({ repoId: 'r1', remoteUrl: REMOTE, headSha: 'sha-x' })
+    expect(r.ok && r.value).toBe('passed')
   })
 })

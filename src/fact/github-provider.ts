@@ -225,12 +225,15 @@ export class GitHubProvider implements PullRequestGateway, CiGateway {
         if (run.status !== 'completed') return ok('pending')
       }
     }
-    const sj = statuses.value.json as {
-      state: 'success' | 'failure' | 'error' | 'pending' | null
-    } | null
+
+    const sj = statuses.value.json as { state: string | null; statuses: unknown[] } | null
     if (sj !== null && sj.state !== null) {
-      if (sj.state === 'failure' || sj.state === 'error') return ok('failed')
-      if (sj.state === 'pending') return ok('pending')
+      // state=pending 且无任何 status 上报 = 没人上报(如只有 Actions 的仓库),
+      // 不是「还在跑」。有显式 status 时才按 pending 等待。
+      if (sj.state === 'pending') {
+        return ok(Array.isArray(sj.statuses) && sj.statuses.length > 0 ? 'pending' : 'passed')
+      }
+      return ok(sj.state === 'success' ? 'passed' : 'failed')
     }
 
     // 无任何 check/status:视为通过 —— 没有配置 CI 的仓库不该永远卡死
