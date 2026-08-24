@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { promptFor } from './prompts.js'
+import { expectedArtifact, promptFor } from './prompts.js'
 
 describe('promptFor · rfc_draft 的 policy_facts', () => {
   const prompt = promptFor('rfc_draft', 'run-1')
@@ -29,5 +29,33 @@ describe('promptFor · rfc_draft 的 policy_facts', () => {
 
   it('明确要求如实填写', () => {
     expect(prompt).toContain('必须按 RFC 的真实内容填写')
+  })
+})
+
+describe('promptFor · critic 的结构化评审(#1-15)', () => {
+  const prompt = promptFor('critic', 'run-c1')
+
+  it('期望产物是 critic_review 而非 stage_outcome', () => {
+    expect(expectedArtifact('critic')).toEqual({ kind: 'critic_review', key: 'latest' })
+  })
+
+  it('提示词给出 critic_review 的关键字段形状', () => {
+    for (const field of [
+      'review_type',
+      'subject_ref',
+      'scale',
+      'criteria',
+      'scores',
+      'findings',
+      'recommendation',
+      'confidence',
+    ]) {
+      expect(prompt, `应含字段 ${field}`).toContain(field)
+    }
+  })
+
+  it('要求覆盖所有候选方案并如实报置信度', () => {
+    expect(prompt).toContain('必须覆盖被评审的每个候选方案')
+    expect(prompt).toContain('confidence')
   })
 })

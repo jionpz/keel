@@ -20,6 +20,7 @@ export const ROLE_INSTRUCTIONS: Readonly<Record<string, string>> = {
 /** 某阶段期望产出的产物 kind */
 export function expectedArtifact(stage: Stage): { kind: ProposalKind; key: string } {
   if (stage === 'rfc_draft') return { kind: 'rfc', key: '' }
+  if (stage === 'critic') return { kind: 'critic_review', key: 'latest' }
   return { kind: 'stage_outcome', key: stage }
 }
 
@@ -88,6 +89,18 @@ export function promptFor(stage: Stage, runId: string): string {
       ].join('\n')
 
     case 'critic':
-      return ['对候选方案给出评审。', outcome('"reviewed"')].join('\n')
+      return [
+        '对候选方案给出结构化评审。只输出一个 JSON 对象（用 ```json 围栏），形如：',
+        '```json',
+        '{"schema_version":"1.0","review_type":"architecture","request_id":"<请求 ID>",',
+        ' "subject_ref":"<被评审对象引用>","scale":{"min":0,"max":10,"higher_is_better":true},',
+        ' "criteria":["<评分维度>"],',
+        ' "scores":[{"option_id":"<方案 ID>","total":8.2,',
+        '   "by_criterion":{"<维度>":8}}],',
+        ' "findings":[{"id":"CF1","severity":"medium","text":"<发现>","evidence":"<证据>"}],',
+        ' "recommendation":"<推荐方案 ID>","confidence":0.75,"dissent":null}',
+        '```',
+        'scores 必须覆盖被评审的每个候选方案;confidence 与证据要如实反映判断强度。',
+      ].join('\n')
   }
 }

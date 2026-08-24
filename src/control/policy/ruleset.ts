@@ -120,9 +120,21 @@ export const DEFAULT_RULES: readonly Rule[] = [
     action: 'auto_develop',
     stop: false,
   },
+  {
+    // capability_request 的唯一放行口(T-009):
+    // 只有显式请求 critic_review 才允许;human_input / additional_context
+    // 无规则 → 默认 deny(缺裁决即拒,Round 1 决策 #1-02)。
+    // 这是 #1-09 纪律的正当恢复:capability_request 已由 #1-02 真正接线。
+    id: 'P-ALLOW-CRITIC',
+    points: ['capability_request'],
+    priority: 100,
+    condition: "facts.capability == 'critic_review'",
+    action: 'auto_develop',
+    stop: false,
+  },
 ]
 
 export const DEFAULT_RULESET: Ruleset = {
-  version: '2026-08-23',
+  version: '2026-08-24',
   rules: DEFAULT_RULES,
 }

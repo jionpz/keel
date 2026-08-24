@@ -1,0 +1,4 @@
+{"file": "docs/04-state-machine.md", "reason": "验证 T-009/T-010/T-009b 转移与 guardText 一致性(C4)"}
+{"file": "docs/05-contracts/policy-engine.md", "reason": "验证 P-ALLOW-CRITIC 规则符合判定点语义与默认 deny"}
+{"file": "docs/07-flows.md", "reason": "验证实现路径与 flow 步骤 8-14 一致(含回流语义)"}
+{"file": "docs/06-artifacts.md", "reason": "验证 critic_review 提示词产出形状符合 schema"}

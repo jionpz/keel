@@ -212,6 +212,27 @@ describe('判定点划分', () => {
     expect(r.ok && r.value.default_applied).toBe(true)
     expect(r.ok && r.value.matched_rules).toEqual([])
   })
+
+  it('capability_request + critic_review → auto_develop(P-ALLOW-CRITIC)', () => {
+    const r = engine.evaluate(
+      'capability_request',
+      { capability: 'critic_review', dev_attempts: 0, cost_spent_usd: 0 },
+      AT,
+    )
+    expect(r.ok && r.value.decision).toBe('auto_develop')
+    expect(r.ok && r.value.default_applied).toBe(false)
+    expect(r.ok && r.value.matched_rules.map((m) => m.id)).toContain('P-ALLOW-CRITIC')
+  })
+
+  it('capability_request + human_input → 默认 deny(缺规则不放行)', () => {
+    const r = engine.evaluate(
+      'capability_request',
+      { capability: 'human_input', dev_attempts: 0, cost_spent_usd: 0 },
+      AT,
+    )
+    expect(r.ok && r.value.decision).toBe('human_review')
+    expect(r.ok && r.value.default_applied).toBe(true)
+  })
 })
 
 // ─────────────────────────── validate 的反例 ───────────────────────────

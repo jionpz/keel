@@ -1,0 +1,5 @@
+{"file": "docs/07-flows.md", "reason": "critic 路径理想态参照(步骤 8-14):CapabilityRequest → 裁决 → critic run → 回灌 → 收敛"}
+{"file": "docs/04-state-machine.md", "reason": "T-009/T-010 转移语义与 guardText 对齐;T-009b 新增行"}
+{"file": "docs/05-contracts/policy-engine.md", "reason": "capability_request 判定点定义、capability fact 注册、默认 deny 语义"}
+{"file": "docs/05-contracts/session-manager.md", "reason": "checkpoint/restore 标[可延后] —— 回流用 brainstorm(n+1) 而非 resume"}
+{"file": "docs/06-artifacts.md", "reason": "A-CapabilityRequest 与 A-CriticReview 的 schema/形状,提示词要产出该形状"}
