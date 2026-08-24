@@ -14,6 +14,7 @@
 import { randomUUID } from 'node:crypto'
 import type { PersistedArtifactKind } from '../../contracts/artifact-store.js'
 import { err, makeError, ok, type Result } from '../../contracts/errors.js'
+import type { PolicyEngine } from '../../contracts/policy-engine.js'
 import type {
   HarnessSessionManager,
   SessionHandle,
@@ -26,6 +27,10 @@ import { validateProposal, violationsToFeedback } from './validate.js'
 export interface PipelineOptions {
   /** 连续被拒多少次后判 Run 失败（R-006）。默认 3 */
   readonly maxProposalRetries?: number
+  /** 校验 Policy 用（#1-02）。缺省 = 不校验需要授权的 Proposal？不 —— 缺省即无裁决，直接拒收 */
+  readonly policy?: PolicyEngine
+  /** 求值时间。不传则用 Date.now()（破坏可重放）—— 因此必传 */
+  readonly now?: string
 }
 
 export interface PipelineOutcome {
@@ -87,7 +92,12 @@ export async function runSessionUntilValid(
       }
 
       const committed = await asRole('keel_control', async (c) => {
-        const verdict = await validateProposal(proposal, { client: c })
+        // Policy 缺省视为「无裁决」——需要授权的 Proposal 会被第 4 步拒收
+        const verdict = await validateProposal(proposal, {
+          client: c,
+          ...(opts.policy === undefined ? {} : { policy: opts.policy }),
+          ...(opts.now === undefined ? {} : { now: opts.now }),
+        })
         if (!verdict.accepted) return { ok: false as const, verdict }
 
         // 校验通过 → 落库。写 event 拿 seq，再提交 artifact（同事务）

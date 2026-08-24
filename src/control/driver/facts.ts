@@ -10,7 +10,7 @@
  */
 
 import type { PoolClient } from 'pg'
-import type { DecisionPoint, FactSet } from '../../contracts/policy-engine.js'
+import type { DecisionPoint, FactSet, PolicyEngine } from '../../contracts/policy-engine.js'
 import type { TransitionEvent, TransitionFacts } from '../transition/types.js'
 
 /** 重试上限。v0.1 写死，日后从配置读 */
@@ -47,21 +47,49 @@ async function latestStageOutcome(
 }
 
 /**
+ * capability_request 判定点的求值。
+ *
+ * 在现场做(而非读落库 A-PolicyDecision)：T-009 的 guard 在 effects 之前执行,
+ * 若读上一轮的落库裁决,首次 CapabilityRequested 会因无裁决被拒且永远不会产生
+ * 裁决(effects 不执行) —— 死锁。这里由 driver 注入 policy/now 现场求值,
+ * 「缺裁决即拒」由 evaluate 失败表达(#1-02)。
+ */
+async function capabilityAllowed(
+  c: PoolClient,
+  taskId: string,
+  deps: { policy: PolicyEngine; now: string },
+  event: TransitionEvent,
+): Promise<boolean> {
+  const capability = 'capability' in event ? event.capability : undefined
+  const facts = await loadPolicyFacts(c, taskId, 'capability_request', {
+    ...(capability === undefined ? {} : { capability }),
+  })
+  const decision = deps.policy.evaluate('capability_request', facts, deps.now)
+  if (!decision.ok) return false
+  return decision.value.decision === 'auto_develop'
+}
+
+/**
  * 组装转移守卫的 facts。
  *
  * `stage_attempts` 取自事件携带的 stage（RunFailed/RunTimeout 才有）；
  * 其余事件用 0 —— 通用重试规则只在阶段态 + Run 失败时才会命中。
+ *
+ * @param deps 仅 CapabilityRequested 事件需要 —— 现场求值 Policy。
  */
 export async function loadTransitionFacts(
   c: PoolClient,
   taskId: string,
   event: TransitionEvent,
+  deps: { policy: PolicyEngine; now: string },
 ): Promise<TransitionFacts> {
   const outcome = await latestStageOutcome(c, taskId)
   const devAttempts = await attemptsOf(c, taskId, 'develop')
 
   const eventStage = 'stage' in event ? event.stage : undefined
   const stageAttempts = eventStage === undefined ? 0 : await attemptsOf(c, taskId, eventStage)
+
+  const isCapability = event.type === 'CapabilityRequested'
 
   return {
     verdict: outcome?.verdict ?? null,
@@ -70,9 +98,7 @@ export async function loadTransitionFacts(
     max_dev_attempts: MAX_DEV_ATTEMPTS,
     stage_attempts: stageAttempts,
     max_stage_attempts: MAX_STAGE_ATTEMPTS,
-    // capability_request 的裁决在副作用执行器中单独求值；
-    // 这里给 true 表示「转移层面不拦」，真正的裁决权在 Policy
-    capability_allowed: true,
+    capability_allowed: isCapability ? await capabilityAllowed(c, taskId, deps, event) : false,
   }
 }
 
@@ -86,6 +112,7 @@ export async function loadPolicyFacts(
   c: PoolClient,
   taskId: string,
   point: DecisionPoint,
+  extra: FactSet = {},
 ): Promise<FactSet> {
   if (point === 'rfc_ready' || point === 'pre_pr') {
     const rfc = await c.query<{ body: Record<string, unknown> }>(
@@ -141,6 +168,9 @@ export async function loadPolicyFacts(
     return {
       dev_attempts: await attemptsOf(c, taskId, 'develop'),
       cost_spent_usd: await costSpent(c, taskId),
+      // capability 由调用方注入：driver 从事件取,validate 从提案 body 取。
+      // 它是「本次请求要什么能力」—— 不在 Fact Plane,不该由这里猜
+      ...extra,
     }
   }
 

@@ -119,7 +119,9 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
     guard: (f) => f.capability_allowed,
     guardText: 'policy=allow',
     to: 'SELF',
-    effects: [nextRun('critic')],
+    // guard 现场求值 Policy 决定放行;通过后仍落一条可重放的裁决记录,
+    // 与本轮 guard 的输入一致(同 policy、同 facts、同 now)
+    effects: [{ kind: 'EvaluatePolicy', point: 'capability_request' }, nextRun('critic')],
     ignoresControlMode: false,
   },
   {

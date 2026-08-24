@@ -52,6 +52,11 @@ export class WorkflowDriver {
     private readonly github?: PullRequestGateway,
   ) {}
 
+  /** 编排器校验 Proposal 时用同一个 Policy 实例 —— 裁决必须一致 */
+  get policyEngine(): PolicyEngine {
+    return this.policy
+  }
+
   /**
    * 推进一个 Task。
    *
@@ -75,7 +80,10 @@ export class WorkflowDriver {
         return err<AdvanceOutcome>(makeError('NOT_FOUND', `找不到 task ${taskId}`))
       }
 
-      const facts = await loadTransitionFacts(c, taskId, event)
+      const facts = await loadTransitionFacts(c, taskId, event, {
+        policy: this.policy,
+        now,
+      })
       const result = transition(task.status, task.control_mode, event, facts)
 
       // matched:false 不是错误，是「这个事件在当前状态下无事发生」。

@@ -267,6 +267,11 @@ async function executeRun(
       expect,
     },
     promptFor(pending.stage, pending.id),
+    {
+      // #1-02:capability_request 等需要授权的 Proposal 由同一 Policy 实例裁决
+      policy: deps.driver.policyEngine,
+      now: deps.now(),
+    },
   )
   if (!outcome.ok) return err(outcome.error)
 

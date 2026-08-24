@@ -149,7 +149,11 @@ async function evaluatePolicy(
   effect: SideEffect & { kind: 'EvaluatePolicy' },
 ): Promise<AppliedEffect> {
   const point = effect.point as Parameters<PolicyEngine['evaluate']>[0]
-  const facts = await loadPolicyFacts(c, ctx.taskId, point)
+  // capability_request 判定点的 capability fact 来自触发事件（如 CapabilityRequested）
+  const capability = 'capability' in ctx.event ? ctx.event.capability : undefined
+  const facts = await loadPolicyFacts(c, ctx.taskId, point, {
+    ...(capability === undefined ? {} : { capability }),
+  })
   const decision = ctx.policy.evaluate(point, facts, ctx.now)
   if (!decision.ok) {
     throw new Error(`Policy 求值失败：${decision.error.detail}`)

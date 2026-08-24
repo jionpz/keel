@@ -40,6 +40,11 @@ export const FACT_REGISTRY: Readonly<Record<string, 'static' | 'runtime'>> = {
    * 见 docs/05-contracts/policy-engine.md §2.2。
    */
   files_drift_ratio: 'runtime',
+  /**
+   * 请求的能力（capability_request 判定点）。
+   * 由调用方从事件 / 提案注入 —— 属运行期事实。
+   */
+  capability: 'runtime',
 }
 
 export const KNOWN_FACTS: readonly string[] = Object.keys(FACT_REGISTRY).sort()
@@ -53,7 +58,7 @@ export const FACTS_AT: Readonly<Record<DecisionPoint, readonly string[]>> = {
     'security_related',
     'critic_confidence',
   ],
-  capability_request: ['dev_attempts', 'cost_spent_usd'],
+  capability_request: ['dev_attempts', 'cost_spent_usd', 'capability'],
   post_develop: ['actual_files_changed', 'estimated_files_changed', 'files_drift_ratio', 'risk'],
   qa_failed: ['tests_failed', 'dev_attempts'],
   pre_pr: [

@@ -12,8 +12,10 @@ import type { ValidateFunction } from 'ajv'
 import { Ajv2020 } from 'ajv/dist/2020.js'
 import * as ajvFormats from 'ajv-formats'
 import type { PoolClient } from 'pg'
+import type { DecisionPoint, PolicyEngine } from '../../contracts/policy-engine.js'
 import type { Proposal, ProposalVerdict, SchemaViolation } from '../../contracts/types.js'
 import { SCHEMAS } from '../../generated/schemas.js'
+import { loadPolicyFacts } from '../driver/facts.js'
 
 /**
  * 平面越界的禁用键名。
@@ -56,8 +58,12 @@ for (const [kind, schema] of Object.entries(SCHEMAS)) {
 }
 
 export interface ValidateDeps {
-  /** 第 2 步要查当前最新版；第 4 步可能要查 Policy */
+  /** 第 2 步要查当前最新版；第 4 步要查 Policy */
   readonly client: PoolClient
+  /** 第 4 步：capability_request 等需要授权的 Proposal 求值 Policy。缺省 = 无裁决 → 拒收 */
+  readonly policy?: PolicyEngine
+  /** 第 4 步：求值时间由外部注入 —— 可重放性要求不读时钟 */
+  readonly now?: string
 }
 
 /**
@@ -88,10 +94,73 @@ export async function validateProposal(
   }
 
   // ── 第 4 步：Policy ──
-  // v0.1 只有 capability_request 需要授权，且其裁决在 driver 的 T-009 上做。
-  // 这里留位置，不做空实现假装校验过了。
+  //
+  // 需要授权的 Proposal（v0.1 是 capability_request —— Session emit
+  // A-CapabilityRequest 请求一个能力）必须过 Policy 求值。
+  // 缺裁决 / 求值失败 → 拒收——不默认放行。
+  //
+  // 转移侧（driver 的 T-009）也有能力检查,但那是**转移发生前**的守卫;
+  // 这里拦截的是**提案本身** —— 未获授权的提案根本不该落库。
+  const policyViolations = await checkPolicy(proposal, deps)
+  if (policyViolations.length > 0) {
+    return { accepted: false, artifact_ref: null, violations: policyViolations }
+  }
 
   return { accepted: true, artifact_ref: null, violations: [] }
+}
+
+/**
+ * 需要授权才可落库的 Proposal 做 Policy 求值。
+ *
+ * 按 kind 映射判定点：v0.1 只有 capability_request。
+ * 缺裁决（policy/now 未注入或 evaluate 失败）同样拒收 ——
+ * 失败的信息写进 violation 回灌,不默认放行。
+ */
+async function checkPolicy(proposal: Proposal, deps: ValidateDeps): Promise<SchemaViolation[]> {
+  const point = POLICY_POINTS[proposal.kind]
+  if (point === undefined) return [] // 该 kind 不需要授权
+
+  if (deps.policy === undefined || deps.now === undefined) {
+    return [
+      {
+        path: 'policy',
+        rule: 'policy-unavailable',
+        message: '未注入 Policy 引擎 —— 需要授权的 Proposal 一律拒收',
+      },
+    ]
+  }
+
+  const body = proposal.body as { capability?: unknown }
+  const facts = await loadPolicyFacts(deps.client, proposal.task_id, point, {
+    ...(body.capability === undefined ? {} : { capability: String(body.capability) }),
+  })
+  const decision = deps.policy.evaluate(point, facts, deps.now)
+  if (!decision.ok) {
+    return [
+      {
+        path: 'policy',
+        rule: 'policy-unavailable',
+        message: `Policy 求值失败：${decision.error.detail}`,
+      },
+    ]
+  }
+
+  const action = decision.value.decision
+  if (action !== 'auto_develop') {
+    return [
+      {
+        path: 'policy',
+        rule: 'policy-denied',
+        message: `capability_request 未获授权（裁决 ${action}）`,
+      },
+    ]
+  }
+  return []
+}
+
+/** Proposal kind → Policy 判定点。未列出的 kind 不需要授权 */
+const POLICY_POINTS: Readonly<Record<string, DecisionPoint>> = {
+  capability_request: 'capability_request',
 }
 
 /** 第 1 步：按 kind 用 ajv 校验 body */
