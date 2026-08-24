@@ -104,8 +104,13 @@ export interface ArtifactStore {
     at_event_seq: number,
   ): Promise<Result<Artifact>>
 
-  /** [v0.1 必须] 追加事件。只增不改（不变量 I1）。返回分配到的全局单调 seq */
-  appendEvent(event: AEvent): Promise<Result<number>>
+  /**
+   * [v0.1 必须] 追加事件。只增不改（不变量 I1）。返回分配到的全局单调 seq。
+   *
+   * 入参为 `Omit<AEvent,'seq'>` —— seq 由数据库 bigserial 分配,
+   * 调用方不应也不得伪造(#22 P2-20)。
+   */
+  appendEvent(event: Omit<AEvent, 'seq'>): Promise<Result<number>>
 
   /** [v0.1 必须] 读事件流。重放与审计的入口，按 seq 升序 */
   readEvents(task_id: string, from_seq: number, limit: number): Promise<Result<readonly AEvent[]>>

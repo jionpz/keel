@@ -190,11 +190,11 @@ export class PgArtifactStore implements ArtifactStore {
     )
   }
 
-  async appendEvent(event: AEvent): Promise<Result<number>> {
+  async appendEvent(event: Omit<AEvent, 'seq'>): Promise<Result<number>> {
     const r = await asRole('keel_control', (c) =>
       c.query<{ seq: string }>(
-        `INSERT INTO event (task_id, run_id, type, payload, trace_id, span_id)
-         VALUES ($1,$2,$3,$4::jsonb,$5,$6) RETURNING seq`,
+        `INSERT INTO event (task_id, run_id, type, payload, trace_id, span_id, occurred_at)
+         VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7) RETURNING seq`,
         [
           event.task_id,
           event.run_id ?? null,
@@ -202,6 +202,9 @@ export class PgArtifactStore implements ArtifactStore {
           JSON.stringify(event.payload ?? {}),
           event.trace_id ?? null,
           event.span_id ?? null,
+          // 事件时间来自调用方 —— 重放不读时钟(ADR-0003);
+          // 契约 AEvent.occurred_at 必填,不依赖 DB 默认 now()
+          event.occurred_at,
         ],
       ),
     )

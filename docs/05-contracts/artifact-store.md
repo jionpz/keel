@@ -66,10 +66,14 @@ getAsOf(task_id, kind, key, at_event_seq: integer) -> Artifact | Error
 ### 1.4 `appendEvent()` `[v0.1 必须]`
 
 ```
-appendEvent(event: A-Event) -> seq: integer | Error
+appendEvent(event: Omit<A-Event, 'seq'>) -> seq: integer | Error
 ```
 
-只增不改（不变量 `I1`）。返回分配到的全局单调 `seq`。
+只增不改（不变量 `I1`）。入参不含 `seq` —— 它是数据库 bigserial 自增列
+（DDL `event.seq`），调用方伪造等于撒谎；返回分配到的全局单调 `seq`。
+
+`occurred_at` 由调用方注入并原样落库，不依赖 DB 默认 `now()` ——
+事件时间是「这个事实何时发生」的重放依据，读时钟会破坏可重放性（ADR-0003）。
 
 ### 1.5 `readEvents()` `[v0.1 必须]`
 

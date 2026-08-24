@@ -150,6 +150,41 @@ describe('ArtifactStore · 基本读写', () => {
     expect(r.error.kind).toBe('NOT_FOUND')
     expect(r.error.retryable).toBe(false)
   })
+
+  it('appendEvent 入参不含 seq,返回 DB 自增 seq(#22 P2-20)', async () => {
+    const f = await seed()
+    const occurred = '2026-08-24T12:00:00.000Z'
+    const seq = await store.appendEvent({
+      schema_version: '1.0',
+      task_id: f.taskId,
+      type: 'TaskCreated',
+      payload: { from: 'test' },
+      trace_id: null,
+      span_id: null,
+      occurred_at: occurred,
+    })
+    expect(seq.ok).toBe(true)
+    if (!seq.ok) return
+    expect(seq.value).toBeGreaterThan(0)
+
+    // 读回:注入的时间落库(不是 DB 默认 now——重放不读时钟)
+    const evs = await store.readEvents(f.taskId, 0, 100)
+    expect(evs.ok).toBe(true)
+    if (!evs.ok) return
+    const first = evs.value.find((e) => e.type === 'TaskCreated')
+    expect(first?.occurred_at).toBe(occurred)
+
+    // 自增:再 append 一条,seq 严格递增(不重复、不倒退)
+    const seq2 = await store.appendEvent({
+      schema_version: '1.0',
+      task_id: f.taskId,
+      type: 'RunCreated',
+      occurred_at: occurred,
+    })
+    expect(seq2.ok).toBe(true)
+    if (!seq2.ok) return
+    expect(seq2.value).toBeGreaterThan(seq.value)
+  })
 })
 
 describe('ArtifactStore · CONFLICT', () => {
