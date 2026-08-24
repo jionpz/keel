@@ -1,0 +1,5 @@
+{"file": "docs/04-state-machine.md", "reason": "核查 32 条转移与 T-009b 语义是否真实落地"}
+{"file": "docs/05-contracts/policy-engine.md", "reason": "核查 capability_request 裁决链正确性与 P-ALLOW-CRITIC 漏洞面"}
+{"file": "docs/05-contracts/artifact-store.md", "reason": "核查 appendEvent Omit seq 与 I1 不变式"}
+{"file": "docs/07-flows.md", "reason": "核查 critic 路径实现与理想态差异的诚实性"}
+{"file": "docs/03-domain-model.md", "reason": "核查 I5/I1/I2 未被修复破坏"}

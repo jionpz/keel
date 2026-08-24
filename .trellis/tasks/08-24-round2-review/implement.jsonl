@@ -1,0 +1,8 @@
+{"file": "docs/05-contracts/policy-engine.md", "reason": "capability_request 接线后的裁决语义、P-ALLOW-CRITIC、post_develop 未接线状态"}
+{"file": "docs/05-contracts/session-manager.md", "reason": "checkpoint/restore 标[可延后];appendEvent Omit seq 后的契约现状"}
+{"file": "docs/05-contracts/artifact-store.md", "reason": "appendEvent/readEvents 契约与 occurred_at 注入语义"}
+{"file": "docs/05-contracts/harness-adapter.md", "reason": "interrupt/collectChanges/TIER 定义 —— Round 1 修复处对照"}
+{"file": "docs/04-state-machine.md", "reason": "32 条转移含 T-009b;guardText 语义;编排器同步限制的呈现"}
+{"file": "docs/07-flows.md", "reason": "critic 路径实现注记 —— 需求_critic 合成、回流 rematerialize"}
+{"file": "docs/03-domain-model.md", "reason": "I5/I1/I2 不变式、权限矩阵、对照 DDL 现状"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "分级纪律与防假绿惯例 —— 审查报告分级依据"}
