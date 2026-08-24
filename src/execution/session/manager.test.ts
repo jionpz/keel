@@ -59,7 +59,7 @@ function adapterWithStatus(status: RunResult['status']): HarnessAdapter {
 const spec: {
   runSpec: RunSpec
   adapter: HarnessAdapter
-  expect: { kind: string; key: string }
+  expect: { kind: 'stage_outcome'; key: 'pm' }
 } = {
   runSpec: {
     run: { run_id: 'r1', task_id: 't1', stage: 'pm', role: 'PM', attempt: 1 },

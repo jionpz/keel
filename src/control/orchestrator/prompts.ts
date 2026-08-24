@@ -5,6 +5,7 @@
  * 写在测试里会让「模型能不能产出合法提案」变成测试的属性而非系统的属性。
  */
 
+import type { ProposalKind } from '../../contracts/types.js'
 import type { Stage } from '../../shared/ids.js'
 
 /** 各 Role 的固定指令（ContextBuilder 的 `fixed` 来源） */
@@ -17,7 +18,7 @@ export const ROLE_INSTRUCTIONS: Readonly<Record<string, string>> = {
 }
 
 /** 某阶段期望产出的产物 kind */
-export function expectedArtifact(stage: Stage): { kind: string; key: string } {
+export function expectedArtifact(stage: Stage): { kind: ProposalKind; key: string } {
   if (stage === 'rfc_draft') return { kind: 'rfc', key: '' }
   return { kind: 'stage_outcome', key: stage }
 }

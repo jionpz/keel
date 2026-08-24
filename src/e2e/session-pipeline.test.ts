@@ -119,7 +119,8 @@ describe('第 1 步 · Schema 校验', () => {
   })
 
   it('未知 kind → 拒绝并列出可选值', () => {
-    const v = checkSchema(proposal({ kind: 'nonsense' }))
+    // 类型层面已收窄为 ProposalKind,但校验器仍须防御运行时越界(如旧数据/强转)
+    const v = checkSchema(proposal({ kind: 'nonsense' as Proposal['kind'] }))
     expect(v[0]?.message).toMatch(/未知的产物 kind/)
   })
 })

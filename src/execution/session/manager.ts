@@ -13,7 +13,7 @@
 import { randomUUID } from 'node:crypto'
 import { type ErrorKind, err, makeError, ok, type Result } from '../../contracts/errors.js'
 import type { HarnessAdapter, RunResult, RunSpec } from '../../contracts/harness-adapter.js'
-import type { Proposal, Usage } from '../../contracts/types.js'
+import type { Proposal, ProposalKind, Usage } from '../../contracts/types.js'
 import { extractJson } from './extract.js'
 
 export interface SessionHandle {
@@ -42,7 +42,7 @@ export interface SessionSpec {
   readonly runSpec: RunSpec
   readonly adapter: HarnessAdapter
   /** 期望产出的产物 kind */
-  readonly expect: { readonly kind: string; readonly key: string }
+  readonly expect: { readonly kind: ProposalKind; readonly key: string }
 }
 
 /**

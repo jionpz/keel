@@ -8,6 +8,7 @@
  * 依赖方向：types.ts ← 各契约文件。types.ts 本身只依赖 generated / shared。
  */
 
+import type { ArtifactKind } from '../generated/schemas.js'
 import type { ArtifactRef, CapabilityId, RoleId, Stage } from '../shared/ids.js'
 
 // ─────────────────────────────── 用量与成本 ───────────────────────────────
@@ -90,9 +91,23 @@ export interface Context {
 
 // ────────────────────────── Proposal（上行桥）──────────────────────────
 // 定义处：docs/05-contracts/session-manager.md §1
-//
-// 这是 Execution Plane 向 Control Plane 提交结果的**唯一通道**。
-// emit 不等于写入 —— 提案必须经校验流水线后才成为 Artifact。
+
+// ─────────────────────────── 通用 ───────────────────────────
+
+/**
+ * Proposal 的产物 kind —— 与 `PersistedArtifactKind` 同构（`Exclude<ArtifactKind,'event'>`）。
+ *
+ * `A-Event` 有独立的表（docs/06-artifacts.md §1），不走 artifact 落库，
+ * 因此 Proposal 不可能携带 `event`（#1-10）。
+ */
+export type ProposalKind = Exclude<ArtifactKind, 'event'>
+
+/**
+ * Proposal —— Session 产出、待校验的产物。
+ *
+ * **这是 Execution Plane 向 Control Plane 提交结果的唯一通道。**
+ * emit 不等于写入 —— 提案必须经校验流水线后才成为 Artifact。
+ */
 
 export interface Proposal {
   readonly proposal_id: string
@@ -104,8 +119,8 @@ export interface Proposal {
    * 而提案本来就是**关于某个 Task 的** —— 归属属于信封，不属于内容。
    */
   readonly task_id: string
-  /** 与 docs/06-artifacts.md §1 的 kind 列一致，取值见 generated/schemas.ts 的 ArtifactKind */
-  readonly kind: string
+  /** 与 docs/06-artifacts.md §1 的 kind 列一致；排除 event（有独立表） */
+  readonly kind: ProposalKind
   readonly key: string
   /** 必须符合 kind 对应的 JSON Schema */
   readonly body: unknown

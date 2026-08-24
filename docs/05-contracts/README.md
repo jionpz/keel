@@ -13,6 +13,8 @@
 | `ContextBuilder` | 不让 Agent 每次从零读项目 | [`context-builder.md`](./context-builder.md) |
 | `PolicyEngine` | Policy 决定权限 | [`policy-engine.md`](./policy-engine.md) |
 | `ArtifactStore` | State 是事实 | [`artifact-store.md`](./artifact-store.md) |
+| `PullRequestGateway` | 外部写操作，幂等 | [`git-provider.md`](./git-provider.md) |
+| `CiGateway` | CI 是外部事实源，只读归并 | [`ci-gateway.md`](./ci-gateway.md) |
 
 ---
 
