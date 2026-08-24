@@ -128,14 +128,14 @@ describe('tier 由 capability 推导，不硬编码', () => {
     for (const tier of ['L0', 'L1', 'L2'] as const) {
       expect(tierOf(TIER_REQUIREMENTS[tier]), `${tier} 的要求应推出 ${tier}`).toBe(tier)
       // 级别是嵌套的：L2 ⊇ L1 ⊇ L0
-      const lower = TIER_REQUIREMENTS['L0'].every((c) => TIER_REQUIREMENTS[tier].includes(c))
+      const lower = TIER_REQUIREMENTS.L0.every((c) => TIER_REQUIREMENTS[tier].includes(c))
       expect(lower, `${tier} 应含 L0 的全部能力`).toBe(true)
     }
   })
 
   it('STRUCTURED_OUTPUT 不在阶梯内(ADR-0005)—— L1 不含它', () => {
-    expect(TIER_REQUIREMENTS['L1']).not.toContain('CAP-STRUCTURED_OUTPUT')
-    expect(TIER_REQUIREMENTS['L2']).not.toContain('CAP-STRUCTURED_OUTPUT')
+    expect(TIER_REQUIREMENTS.L1).not.toContain('CAP-STRUCTURED_OUTPUT')
+    expect(TIER_REQUIREMENTS.L2).not.toContain('CAP-STRUCTURED_OUTPUT')
   })
 })
 
