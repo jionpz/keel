@@ -109,3 +109,7 @@
 
 - Stage 4.4 / 5.3:driver 层 fake gateway 单测(幂等复用、无 provider 退回已有 e2e 覆盖,补齐属加固)
 - 完整编排器路径(`runTaskToCompletion` + 真实 GitHub)的验收 —— 待推理网关稳定后与 v0.1 判据合并跑
+
+### 加固收尾(2026-08-24)
+
+- Stage 4.4 / 5.3 已补齐:`src/control/driver/effects.test.ts`(3 用例)+ `src/control/orchestrator/ci-wiring.test.ts`(2 用例,commit `c1e7929`),`pnpm run check` 164 passed 全绿。「剩余」一节中 4.4/5.3 关闭;完整编排器路径验收仍留待后续。

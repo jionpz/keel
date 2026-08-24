@@ -23,12 +23,12 @@
 - [x] 4.1 `CreatePullRequest` 分支接真实 provider
 - [x] 4.2 无 provider 时保持 `SideEffectIntent`
 - [x] 4.3 事件 payload 含 `pr_url` / `pr_number` / `head_branch`,不含凭据
-- [ ] 4.4 单测:幂等复用、失败回滚、无 provider 退回 —— **待补**(driver 层 fake gateway)
+- [x] 4.4 单测:幂等复用、失败回滚、无 provider 退回 —— `src/control/driver/effects.test.ts`(fake gateway,3 用例:记账诚实/已存在跳过/无 provider 退 Intent)
 
 ## Stage 5 · 编排器 CI 接线
 - [x] 5.1 `S-PR_OPEN` 使用 `ci.waitForCi`
 - [x] 5.2 保留 `externalCi` 作为测试/本地兼容路径
-- [ ] 5.3 单测:fake CiGateway 驱动 `T-024` / `T-025` —— **待补**
+- [x] 5.3 单测:fake CiGateway 驱动 `T-024` / `T-025` —— `src/control/orchestrator/ci-wiring.test.ts`(passed→S-DONE+SHA 传递;failed→T-025→S-DEVELOPING+新 develop run;opts.ci 优先于 externalCi)
 
 ## Stage 6 · 验收与文档
 - [x] 6.1 新增真实 GitHub 验收测试 `src/acceptance/github-pr.acceptance.test.ts`(可选运行,缺凭据明确失败)
