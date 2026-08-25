@@ -317,6 +317,7 @@ idempotency_key = hash(task_id, stage, attempt)
 | 创建 Session | 以 `idempotency_key` 查 `run`；已有 `session_ref` 即复用（需 `CAP-RESUME`） |
 | 发通知 | 以 `(task_id, event_seq)` 去重 |
 | 提交 Artifact | `UNIQUE (task_id, kind, key, version)` 天然幂等 |
+| **启动 / 收割 timer**(issue #24) | 部分唯一索引 `(task_id, kind) WHERE state='pending'`:重复 StartTimer DO NOTHING;ConsumeTimer 只 UPDATE 仍 pending 到期行,0 行即 skipped(重放安全) |
 
 ### 5.3 重放规则
 
@@ -337,8 +338,8 @@ idempotency_key = hash(task_id, stage, attempt)
 
 | 计时器 | 作用域 | 到期事件 | 默认值 |
 |---|---|---|---|
-| `wall_clock(stage)` | Run | `RunTimeout` → `R-009` | 按 stage 配置 |
-| `clarification_ttl` | Task | `TimerFired` → `T-008` | 待定，见 `09-roadmap.md` |
+| `wall_clock(stage)` | Run | `RunTimeout` → `R-009` | 按 stage 配置(**由 harness `--max-time` 产生**,`src/shared/timers.ts` 无此常量) |
+| `clarification_ttl` | Task | `TimerFired` → `T-008` | **24h**(issue #24,`src/shared/timers.ts`) |
 | `human_review_ttl` | Task | 仅通知升级，**不自动转移** | 待定 |
 
 > `human_review_ttl` 刻意**不触发状态转移**。等人这件事没有超时兜底 ——

@@ -240,6 +240,23 @@ Event log 一表四用：
 | 可观测 | trace/span 的天然载体 |
 | 投影 | `artifact(kind='state')` 是 event 的投影 |
 
+### 2.9 `timer` — 可变的定时器状态机(issue #24)
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | `uuid` | PK |
+| `task_id` | `uuid` | FK → `task` |
+| `run_id` | `uuid` | FK → `run`，可空（run 级 timer 预留；v0.1 恒 NULL） |
+| `kind` | `text` | `clarification_ttl` \| `wall_clock`（本轮只插前者） |
+| `due_at` | `timestamptz` | 到期时间 = 注入 now + 期限 |
+| `state` | `text` | `pending` → `fired` \| `cancelled` |
+| `fired_at` | `timestamptz` | `state='fired'` 时必有（I9） |
+| `created_at` / `updated_at` | `timestamptz` | |
+
+- **可变状态机**：pending → fired / cancelled。与 `event` / `artifact` 的只增不改**不同**。
+- 幂等：部分唯一索引 `(task_id, kind) WHERE state='pending'`。
+- 收割语义（方案 A）：claim 只锁不标；`ConsumeTimer` 在 T-008 的 `advance` 事务内置 fired —— 崩溃仍 pending，可重投。
+
 ---
 
 ## 3. 不变量
@@ -256,6 +273,7 @@ Event log 一表四用：
 | `I6` | `feedback` 永不修改 | DB 授权：只授予 INSERT / SELECT |
 | `I7` | 进入 `S-RFC_READY` 后 RFC 冻结 | 应用层校验 + `superseded_by` 链 |
 | `I8` | 终态 Task 不再变更 | `CHECK`：`terminal_at IS NOT NULL` 时禁止 UPDATE（触发器） |
+| `I9` | `fired` 的 timer 必有 `fired_at` | `CHECK (state <> 'fired' OR fired_at IS NOT NULL)` |
 
 > `I5` 是中心不变量的落点。**它必须靠数据库授权强制，而不是靠约定。**
 > 只写在文档里的边界，迟早会被一次"临时先这样"绕过 —— 而这条一旦被绕过，
@@ -276,6 +294,7 @@ Event log 一表四用：
 | `run` | `SELECT` `INSERT` `UPDATE` | `SELECT` | ⛔ |
 | `artifact` | `SELECT` `INSERT` | ⛔ **禁止** | ⛔ |
 | `event` | `SELECT` `INSERT` | ⛔ **禁止** | ⛔ |
+| `timer` | `SELECT` `INSERT` `UPDATE` | ⛔ **禁止** | ⛔ |
 
 **矩阵中不存在"Execution Plane 可写 Fact Plane"的格子** —— 这不是疏漏，是本架构的定义性约束。
 
