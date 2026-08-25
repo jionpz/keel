@@ -152,21 +152,15 @@ describe('完整编排器合并验收(真实 OMP + 真实 GitHub)', () => {
         )
       }
       if (result.value.finalStatus === 'S-HUMAN_REVIEW') {
-        // 诊断:读最新 A-RFC 的 policy_facts,归因 auto/human 裁决
+        // 诊断:读最新 A-RFC 全 body,归因 auto/human 裁决(模型产物 vs 逻辑)
         const rfc = await asOwner((c) =>
-          c.query<{ body: { policy_facts?: Record<string, unknown>; title?: string } }>(
+          c.query<{ body: Record<string, unknown> }>(
             `SELECT body FROM artifact WHERE task_id=$1 AND kind='rfc'
              ORDER BY version DESC LIMIT 1`,
             [taskId],
           ),
         )
-        console.log(
-          'merge-acc human_review, rfc:',
-          JSON.stringify({
-            title: rfc.rows[0]?.body?.title,
-            policy_facts: rfc.rows[0]?.body?.policy_facts,
-          }),
-        )
+        console.log('merge-acc human_review, rfc body:', JSON.stringify(rfc.rows[0]?.body))
       }
       expect(TERMINAL_LEGIT, `应到合法终态,实际 ${result.value.finalStatus}`).toContain(
         result.value.finalStatus,
