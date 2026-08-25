@@ -254,3 +254,108 @@ describe('#1-15 · Critic 能力路径全链路', () => {
     expect(transitionIds).toContain('T-010')
   })
 })
+
+// ────────────────────── R3/R4/R5(issue #23)回归 ──────────────────────
+
+describe('R3/R4/R5 · capability 来源确判 / guard 拒=停 / 活锁上限', () => {
+  /** 铺到 S-BRAINSTORM 前:pm run 完成带 needs_design=true */
+  function pmBody(): Record<string, unknown> {
+    return {
+      schema_version: '1.0',
+      run_id: 'r',
+      stage: 'pm',
+      verdict: 'actionable',
+      reason: 'ok',
+      details: { needs_design: true },
+    }
+  }
+  function brainstormBody(capability: string): Record<string, unknown> {
+    return {
+      schema_version: '1.0',
+      run_id: 'r',
+      stage: 'brainstorm',
+      verdict: 'converged',
+      reason: '需要评审',
+      details: { needs_critic: true, capability, candidates: [{ id: 'A', summary: 'a' }] },
+    }
+  }
+  function criticBody(): Record<string, unknown> {
+    return {
+      schema_version: '1.0',
+      review_type: 'architecture',
+      request_id: 'c1',
+      subject_ref: 'x',
+      scale: { min: 0, max: 10, higher_is_better: true },
+      criteria: ['c'],
+      scores: [{ option_id: 'A', total: 8, by_criterion: { c: 8 } }],
+      findings: [],
+      recommendation: 'A',
+      confidence: 0.8,
+      dissent: null,
+    }
+  }
+
+  it('R3+R4:capability=other(非 critic_review)→ P-ALLOW-CRITIC 不命中 → 拒 → 停', async () => {
+    const taskId = await seedTask()
+    // pm(run1):needs_design → S-BRAINSTORM;brainstorm(run1):needs_critic+capability='human_input'
+    adapter.appendBody(pmBody())
+    adapter.appendBody(brainstormBody('human_input'))
+    // 尝试执行过程中 reject 会怎样?看 loop —— 直接用 maxSteps 兜住
+    await runTaskToCompletion(taskId, depsFor(), { maxSteps: 6 })
+
+    // guard 拒 → loop 返回停(brainstormRequestedCapability='human_input' 不中 P-ALLOW-CRITIC)
+    // finalStatus 停在 S-BRAINSTORM
+    const status = await statusOf(taskId)
+    expect(status).toBe('S-BRAINSTORM')
+
+    // 只创建了 pm/brainstorm run,没有 critic run(拒绝,未派发)
+    const criticRuns = await asOwner((c) =>
+      c.query<{ n: string }>(`SELECT count(*) AS n FROM run WHERE task_id=$1 AND stage='critic'`, [
+        taskId,
+      ]),
+    )
+    expect(Number(criticRuns.rows[0]?.n)).toBe(0)
+  })
+
+  it('R5:连续 needs_critic → 第 3 次强制收敛走 T-010,不无限循环', async () => {
+    const taskId = await seedTask()
+    // pm(1) + brainstorm(1,需要批评)+ critic(1) + brainstorm(2,再次需要)+ critic(2)
+    // + brainstorm(3,再次需要 → 活锁上限强制收敛)→ T-010 → rfc
+    adapter.appendBody(pmBody())
+    adapter.appendBody(brainstormBody('critic_review'))
+    adapter.appendBody(criticBody())
+    adapter.appendBody(brainstormBody('critic_review'))
+    adapter.appendBody(criticBody())
+    adapter.appendBody(brainstormBody('critic_review')) // 第 3 次:≥2 critic run → 强制收敛
+    adapter.appendBody({
+      schema_version: '1.0',
+      title: 't',
+      problem: 'p',
+      goals: ['g'],
+      non_goals: [],
+      proposed_change: { summary: 's', affected_areas: ['x'], approach: 'a' },
+      acceptance_criteria: [{ id: 'AC1', text: 't', verifiable_by: '测试' }],
+      policy_facts: {
+        risk: 'low',
+        complexity: 'low',
+        estimated_files_changed: 1,
+        security_related: false,
+      },
+    })
+
+    // maxSteps=7:第 7 轮完成 rfc run 停在 S-RFC_READY(develop run 不执行)
+    await runTaskToCompletion(taskId, depsFor(), { maxSteps: 7 })
+
+    // critic 恰好 2 次(R5 上限,第 3 次 needs_critic 被强制收敛)
+    const criticRuns = await asOwner((c) =>
+      c.query<{ n: string }>(`SELECT count(*) AS n FROM run WHERE task_id=$1 AND stage='critic'`, [
+        taskId,
+      ]),
+    )
+    expect(Number(criticRuns.rows[0]?.n)).toBe(2)
+
+    // 最终走过 T-010(进入 S-RFC_DRAFT 及以上)
+    const status = await statusOf(taskId)
+    expect(['S-RFC_DRAFT', 'S-RFC_READY', 'S-DEVELOPING']).toContain(status)
+  })
+})

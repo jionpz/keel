@@ -203,16 +203,26 @@ export async function runTaskToCompletion(
 
     // brainstorm 收敛产物若请求 Critic 评审(needs_critic),
     // 走 T-009:合成 A-CapabilityRequest → CapabilityRequested → 创建 run(critic)。
+    // capability 来自产物 details.capability(R3)——模型声明,不硬编码;
+    // 非 critic_review 时 P-ALLOW-CRITIC 不命中 → 默认 deny → guard 拒(R4)→ 停。
     // 评审完成后 T-009b 回流 brainstorm(n+1),新一轮收敛再走 T-010。
     if (pending.stage === 'brainstorm' && (await brainstormNeedsCritic(taskId))) {
-      await synthesizeCapabilityRequest(taskId, pending.id, 'critic_review')
+      const capability = await brainstormRequestedCapability(taskId)
+      await synthesizeCapabilityRequest(taskId, pending.id, capability)
       const adv = await deps.driver.advance(
         taskId,
-        { type: 'CapabilityRequested', capability: 'critic_review' },
+        { type: 'CapabilityRequested', capability },
         deps.now(),
       )
       if (!adv.ok) return err(adv.error)
-      steps.push(record(state.status, adv, 'critic', 'brainstorm 请求 Critic 评审'))
+      if (!adv.value.advanced) {
+        // R4(issue #23):capability 被拒(缺规则/deny)——
+        // NoTransition 已落库留痕;能力请求无法受理,停(需要人工/外部),
+        // 不假装成功继续。
+        steps.push(record(state.status, adv, 'critic', `capability ${capability} 被拒(guard 未过)`))
+        return ok({ finalStatus: state.status, steps })
+      }
+      steps.push(record(state.status, adv, 'critic', `brainstorm 请求 Critic 评审(${capability})`))
       continue
     }
 
@@ -457,20 +467,50 @@ async function readPolicyDecision(taskId: string): Promise<string | null> {
 /**
  * 最新 brainstorm 收敛产物是否请求 Critic 评审。
  *
- * verdict=converged 且 details.needs_critic=true ——
- * 由 brainstorm 提示词引导模型置位(brainstorm 阶段特有)。
+ * verdict=converged 且 details.needs_critic=true(brainstorm 提示词引导)。
+ * 活锁上限(R5,issue #23):critic run 已 ≥2 次 → 强制收敛(不再接受新请求),
+ * 第 2 回流后必须走 T-010 —— 不依赖模型自控。
  */
 async function brainstormNeedsCritic(taskId: string): Promise<boolean> {
+  const body = await latestBrainstormOutcome(taskId)
+  const wantsCritic = body?.verdict === 'converged' && body.details?.needs_critic === true
+  if (!wantsCritic) return false
+
   const r = await asRole('keel_control', (c) =>
-    c.query<{ body: { verdict?: string; details?: { needs_critic?: unknown } } }>(
+    c.query<{ n: string }>(`SELECT count(*) AS n FROM run WHERE task_id=$1 AND stage='critic'`, [
+      taskId,
+    ]),
+  )
+  return Number(r.rows[0]?.n ?? 0) < 2
+}
+
+/**
+ * 最新 brainstorm 收敛产物请求的 capability 名。
+ *
+ * 来自 details.capability(模型声明,R3,issue #23);缺省 'critic_review'
+ * (向后兼容:提示词已加字段说明,旧模型不带 capability 时走缺省)。
+ */
+async function brainstormRequestedCapability(taskId: string): Promise<string> {
+  const body = await latestBrainstormOutcome(taskId)
+  const cap = body?.details?.capability
+  return typeof cap === 'string' && cap.trim() !== '' ? cap : 'critic_review'
+}
+
+async function latestBrainstormOutcome(taskId: string): Promise<{
+  verdict?: string
+  details?: { needs_critic?: unknown; capability?: unknown }
+} | null> {
+  const r = await asRole('keel_control', (c) =>
+    c.query<{
+      body: { verdict?: string; details?: { needs_critic?: unknown; capability?: unknown } }
+    }>(
       `SELECT body FROM artifact
        WHERE task_id=$1 AND kind='stage_outcome' AND key='brainstorm'
        ORDER BY committed_at_seq DESC LIMIT 1`,
       [taskId],
     ),
   )
-  const body = r.rows[0]?.body
-  return body?.verdict === 'converged' && body.details?.needs_critic === true
+  return r.rows[0]?.body ?? null
 }
 
 /**

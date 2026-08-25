@@ -56,9 +56,10 @@ export function promptFor(stage: Stage, runId: string): string {
         '{"schema_version":"1.0","run_id":"<run id>","stage":"brainstorm",',
         ' "verdict":"converged","reason":"<一句话理由>",',
         ' "details":{"candidates":[{"id":"A","summary":"<方案>"}],',
-        '   "needs_critic":true}}',
+        '   "needs_critic":true,"capability":"critic_review"}}',
         '```',
-        '若存在多个候选方案且取舍需要架构评审，将 needs_critic 置为 true —— ' +
+        '若存在多个候选方案且取舍需要架构评审，将 needs_critic 置为 true，' +
+          '并在 capability 注明请求的能力（当前仅支持 critic_review）—— ' +
           '系统会派发 Critic 评审后再让你收敛。',
       ].join('\n')
 
