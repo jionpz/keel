@@ -114,7 +114,7 @@ export async function loadPolicyFacts(
   point: DecisionPoint,
   extra: FactSet = {},
 ): Promise<FactSet> {
-  if (point === 'rfc_ready' || point === 'pre_pr') {
+  if (point === 'rfc_ready') {
     const rfc = await c.query<{ body: Record<string, unknown> }>(
       `SELECT body FROM artifact
        WHERE task_id = $1 AND kind = 'rfc' AND superseded_by IS NULL
@@ -123,7 +123,7 @@ export async function loadPolicyFacts(
     )
     const body = rfc.rows[0]?.body
     if (body === undefined) {
-      throw new Error(`判定点 ${point} 需要 A-RFC，但 task ${taskId} 还没有`)
+      throw new Error(`判定点 rfc_ready 需要 A-RFC，但 task ${taskId} 还没有`)
     }
     const pf = body.policy_facts as Record<string, unknown> | undefined
     if (pf === undefined) {
@@ -138,7 +138,7 @@ export async function loadPolicyFacts(
     )
     const confidence = critic.rows[0]?.body?.confidence
 
-    const base: FactSet = {
+    return {
       risk: String(pf.risk),
       complexity: String(pf.complexity),
       estimated_files_changed: Number(pf.estimated_files_changed),
@@ -146,21 +146,6 @@ export async function loadPolicyFacts(
       // 没有 Critic 评审时给 1.0：视作「无异议」。
       // 这是刻意的宽松 —— 收紧它会让所有未经评审的 Task 都落到人工
       critic_confidence: typeof confidence === 'number' ? confidence : 1,
-    }
-    if (point === 'rfc_ready') return base
-
-    return {
-      ...base,
-      dev_attempts: await attemptsOf(c, taskId, 'develop'),
-      tests_failed: await failedCount(c, taskId, 'qa'),
-      cost_spent_usd: await costSpent(c, taskId),
-    }
-  }
-
-  if (point === 'qa_failed') {
-    return {
-      tests_failed: await failedCount(c, taskId, 'qa'),
-      dev_attempts: await attemptsOf(c, taskId, 'develop'),
     }
   }
 
@@ -174,33 +159,10 @@ export async function loadPolicyFacts(
     }
   }
 
-  // post_develop
-  const rfc = await c.query<{ body: Record<string, unknown> }>(
-    `SELECT body FROM artifact
-     WHERE task_id = $1 AND kind = 'rfc' AND superseded_by IS NULL
-     ORDER BY version DESC LIMIT 1`,
-    [taskId],
-  )
-  const pf = (rfc.rows[0]?.body?.policy_facts ?? {}) as Record<string, unknown>
-  const estimated = Number(pf.estimated_files_changed ?? 0)
-  const actual = await actualFilesChanged(c, taskId)
-  return {
-    estimated_files_changed: estimated,
-    actual_files_changed: actual,
-    // 派生 fact：受限表达式语言不支持算术，比值在这里算好
-    // （docs/05-contracts/policy-engine.md §2.2）
-    files_drift_ratio: estimated === 0 ? 0 : actual / estimated,
-    risk: String(pf.risk ?? 'low'),
-  }
-}
-
-async function failedCount(c: PoolClient, taskId: string, stage: string): Promise<number> {
-  const r = await c.query<{ n: string }>(
-    `SELECT count(*) AS n FROM run
-     WHERE task_id = $1 AND stage = $2 AND status IN ('FAILED','TIMEOUT')`,
-    [taskId, stage],
-  )
-  return Number(r.rows[0]?.n ?? 0)
+  // R6(issue #23):post_develop / qa_failed / pre_pr 未接线(EvaluatePolicy
+  // 只挂 rfc_ready / capability_request) —— 加载分支不可达,已删除,
+  // 不假装接线。设计意图保留在 docs/05-contracts/policy-engine.md §2.2。
+  throw new Error(`判定点 ${point} 未接线,不应触发 loadPolicyFacts`)
 }
 
 async function costSpent(c: PoolClient, taskId: string): Promise<number> {
@@ -209,16 +171,4 @@ async function costSpent(c: PoolClient, taskId: string): Promise<number> {
     [taskId],
   )
   return Number(r.rows[0]?.s ?? 0)
-}
-
-/** 实际改动文件数 —— v0.1 从最新 A-StageOutcome 的 details 读，接入 git 后改为 WorkspaceDiff */
-async function actualFilesChanged(c: PoolClient, taskId: string): Promise<number> {
-  const r = await c.query<{ body: Record<string, unknown> }>(
-    `SELECT body FROM artifact
-     WHERE task_id = $1 AND kind = 'stage_outcome'
-     ORDER BY committed_at_seq DESC LIMIT 1`,
-    [taskId],
-  )
-  const details = (r.rows[0]?.body?.details ?? {}) as { files_changed?: unknown }
-  return typeof details.files_changed === 'number' ? details.files_changed : 0
 }

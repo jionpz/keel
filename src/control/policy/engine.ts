@@ -124,6 +124,15 @@ export class RuleBasedPolicyEngine implements PolicyEngine {
       // 2b. 且必须在该规则的每个判定点上可用 —— 否则求值时会抛错而非不命中
       for (const point of rule.points) {
         const available = FACTS_AT[point]
+        if (available === undefined) {
+          // R6(issue #23):规则引用未接线判定点(无 EvaluatePolicy 副作用)——
+          // 写了没人读,validate 拒绝,不假装接线
+          errors.push({
+            rule_id: rule.id,
+            message: `判定点 ${point} 未接线(FACTS_AT 无此点) —— 规则永不求值`,
+          })
+          continue
+        }
         for (const f of collectFields(ast)) {
           if (KNOWN_FACTS.includes(f) && !available.includes(f)) {
             errors.push({

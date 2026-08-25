@@ -54,8 +54,14 @@ export const FACT_REGISTRY: Readonly<Record<string, 'static' | 'runtime'>> = {
 
 export const KNOWN_FACTS: readonly string[] = Object.keys(FACT_REGISTRY).sort()
 
-/** 判定点上可用的 fact —— validate() 与调用方都以此为准 */
-export const FACTS_AT: Readonly<Record<DecisionPoint, readonly string[]>> = {
+/**
+ * 判定点上可用的 fact —— validate() 与调用方都以此为准。
+ *
+ * R6(issue #23):只列**已接线**(有 EvaluatePolicy 副作用)的判定点 ——
+ * rfc_ready / capability_request。post_develop / qa_failed / pre_pr 未接线,
+ * 求值入口为零,不假装可用(设计意图在 policy-engine.md §2.2)。
+ */
+export const FACTS_AT: Readonly<Partial<Record<DecisionPoint, readonly string[]>>> = {
   rfc_ready: [
     'risk',
     'complexity',
@@ -64,16 +70,6 @@ export const FACTS_AT: Readonly<Record<DecisionPoint, readonly string[]>> = {
     'critic_confidence',
   ],
   capability_request: ['dev_attempts', 'cost_spent_usd', 'capability'],
-  post_develop: ['actual_files_changed', 'estimated_files_changed', 'files_drift_ratio', 'risk'],
-  qa_failed: ['tests_failed', 'dev_attempts'],
-  pre_pr: [
-    'risk',
-    'complexity',
-    'security_related',
-    'dev_attempts',
-    'tests_failed',
-    'cost_spent_usd',
-  ],
 }
 
 /**
