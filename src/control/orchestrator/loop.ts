@@ -17,7 +17,7 @@
 
 import { randomUUID } from 'node:crypto'
 import type { CiGateway } from '../../contracts/ci-gateway.js'
-import { err, makeError, ok, type Result } from '../../contracts/errors.js'
+import { err, type KeelError, makeError, ok, type Result } from '../../contracts/errors.js'
 import type { HarnessAdapter } from '../../contracts/harness-adapter.js'
 import type { HarnessSessionManager } from '../../execution/session/manager.js'
 import { commitArtifactOn } from '../../fact/artifact-store.js'
@@ -186,7 +186,20 @@ export async function runTaskToCompletion(
     }
 
     const executed = await executeRun(taskId, pending, deps, ctxBuilder)
-    if (!executed.ok) return err(executed.error)
+    if (!executed.ok) {
+      const runErr = executed.error
+      // R1(issue #23):失败是状态流转,不是编排器异常 ——
+      // 标 run 状态 + emit 失败事件,交给 T-030(重试)/T-031(升人工)。
+      const next = await failRunAndAdvance(taskId, pending, runErr, deps, state, steps)
+      if (next === 'stopped-cancelled') {
+        // 人工撤回(R-010):不重试;下一轮无 PENDING,loop 自然停
+        continue
+      }
+      if (next === 'error') return err(runErr)
+      // next === 'advanced':失败已交给转移,T-030 建新 run 或 T-031 升人工,
+      // 循环继续读取下一 PENDING run
+      continue
+    }
 
     // brainstorm 收敛产物若请求 Critic 评审(needs_critic),
     // 走 T-009:合成 A-CapabilityRequest → CapabilityRequested → 创建 run(critic)。
@@ -374,6 +387,60 @@ async function readPendingRun(
     ),
   )
   return r.rows[0] ?? null
+}
+
+/**
+ * R1(issue #23):run 失败的处理 —— 标状态 + 交给转移表,不中止编排。
+ *
+ * 失败是**正常状态流转**:T-030(重试)/T-031(升人工)已经在转移表里,
+ * 之前编排器用 `return err` 绕过它们,导致失败 run 卡 PENDING、
+ * T-030/T-031 死转移、重入按同幂等键重复执行。
+ *
+ * 返回:
+ * - 'advanced'         失败已 emit + driver.advance;T-030 建新 run 或 T-031 升人工
+ * - 'stopped-cancelled' 人工撤回(R-010):标 CANCELLED 不重试,loop 下一轮自然停
+ * - 'error'            转移本身失败(编排错误)或 CANCELLED 状态异常 —— return err
+ */
+async function failRunAndAdvance(
+  taskId: string,
+  pending: { id: string; stage: Stage },
+  runErr: KeelError,
+  deps: OrchestratorDeps,
+  state: { status: TaskStatus },
+  steps: StepRecord[],
+): Promise<'advanced' | 'stopped-cancelled' | 'error'> {
+  // 失败类型 → run 状态:超时 / 人工撤回 / 其他(重试类)
+  const status =
+    runErr.kind === 'RUN_TIMEOUT'
+      ? 'TIMEOUT'
+      : runErr.kind === 'RUN_CANCELLED'
+        ? 'CANCELLED'
+        : 'FAILED'
+
+  await asRole('keel_control', (c) =>
+    c.query(`UPDATE run SET status=$2, ended_at=$3, error_kind=$4, error_detail=$5 WHERE id=$1`, [
+      pending.id,
+      status,
+      deps.now(),
+      runErr.kind,
+      runErr.detail,
+    ]),
+  )
+
+  // 人工撤回:不重试(R-010)。run 已脱离 PENDING,下一轮无 PENDING → 停。
+  if (status === 'CANCELLED') {
+    return 'stopped-cancelled'
+  }
+
+  const event =
+    status === 'TIMEOUT'
+      ? ({ type: 'RunTimeout', stage: pending.stage } as const)
+      : ({ type: 'RunFailed', stage: pending.stage } as const)
+
+  const adv = await deps.driver.advance(taskId, event, deps.now())
+  if (!adv.ok) return 'error'
+  steps.push(record(state.status, adv, pending.stage, `${pending.stage} 失败(${runErr.kind})`))
+  return 'advanced'
 }
 
 async function readPolicyDecision(taskId: string): Promise<string | null> {
