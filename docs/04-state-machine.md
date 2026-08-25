@@ -88,8 +88,8 @@
 | `T-004` | `S-PM_ANALYZING` | `RunSucceeded` | `verdict=actionable ∧ ¬needs_design` | `S-RFC_DRAFT` | 创建 `run(rfc_draft, 1)` |
 | `T-005` | `S-PM_ANALYZING` | `RunSucceeded` | `verdict=unclear` | `S-NEED_CLARIFICATION` | 向用户发问；启动 `clarification_ttl` 定时器 |
 | `T-006` | `S-PM_ANALYZING` | `RunSucceeded` | `verdict=reject` | `S-REJECTED` ★ | 记录理由 |
-| `T-007` | `S-NEED_CLARIFICATION` | `ClarificationReceived` | — | `S-PM_ANALYZING` | 关联新 feedback；创建 `run(pm, n+1)` |
-| `T-008` | `S-NEED_CLARIFICATION` | `TimerFired(clarification_ttl)` | — | `S-ABANDONED` ★ | — |
+| `T-007` | `S-NEED_CLARIFICATION` | `ClarificationReceived` | — | `S-PM_ANALYZING` | 关联新 feedback；**取消澄清 timer**；创建 `run(pm, n+1)` |
+| `T-008` | `S-NEED_CLARIFICATION` | `TimerFired(clarification_ttl)` | `timer=clarification_ttl` | `S-ABANDONED` ★ | **收割 timer(置 fired,T-008 事务内)** |
 | `T-009` | `S-BRAINSTORM` | `CapabilityRequested(critic)` | `policy=allow` | `S-BRAINSTORM` ⟲ | 创建 `run(critic, n)`；结果写回 `A-CriticReview` |
 | `T-010` | `S-BRAINSTORM` | `RunSucceeded` | `stage=brainstorm` | `S-RFC_DRAFT` | 创建 `run(rfc_draft, 1)` |
 | `T-009b` | `S-BRAINSTORM` | `RunSucceeded` | `stage=critic` | `S-BRAINSTORM` ⟲ | 评审回灌：创建 `run(brainstorm, n+1)`（`A-CriticReview` 经 Context 带入） |

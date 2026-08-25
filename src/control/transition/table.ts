@@ -97,17 +97,24 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
     guard: null,
     guardText: '—',
     to: 'S-PM_ANALYZING',
-    effects: [{ kind: 'LinkFeedback' }, nextRun('pm')],
+    // 回答澄清 → 取消 pending 澄清 timer,否则后续 claim 会误走 T-008(issue #24)
+    effects: [
+      { kind: 'LinkFeedback' },
+      { kind: 'CancelTimer', timer: 'clarification_ttl' },
+      nextRun('pm'),
+    ],
     ignoresControlMode: false,
   },
   {
     id: 'T-008',
     from: 'S-NEED_CLARIFICATION',
     on: ['TimerFired'],
-    guard: null,
-    guardText: '—',
+    // 只认澄清 TTL;TimerFired 事件类型已收窄为字面量,guard 防御性再查
+    guard: (_f, e) => e.type === 'TimerFired' && e.timer === 'clarification_ttl',
+    guardText: 'timer=clarification_ttl',
     to: 'S-ABANDONED',
-    effects: [],
+    // 收割:置 fired 在 T-008 事务内(方案 A:claim 只锁不标,崩溃可重投)
+    effects: [{ kind: 'ConsumeTimer', timer: 'clarification_ttl' }],
     ignoresControlMode: false,
   },
 

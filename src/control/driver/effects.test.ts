@@ -240,3 +240,98 @@ describe('CreatePullRequest 副作用记账', () => {
     expect(intent?.payload.kind).toBe('CreatePullRequest')
   })
 })
+
+// ────────────────────── timer 副作用(issue #24,方案 A)──────────────────────
+
+describe('timer 副作用 · StartTimer/CancelTimer/ConsumeTimer', () => {
+  /** 铺一个 S-NEED_CLARIFICATION 的 task + 手动插澄清 timer */
+  async function seedClarification(): Promise<{ taskId: string; timerId: string }> {
+    const repoId = randomUUID()
+    const taskId = randomUUID()
+    const timerId = randomUUID()
+    await asOwner(async (c) => {
+      await c.query(
+        `INSERT INTO repo (id, provider, remote_url, default_branch)
+         VALUES ($1,'local','file:///tmp/x','main')`,
+        [repoId],
+      )
+      await c.query(
+        `INSERT INTO task (id, status, title, repo_id, base_branch, work_branch)
+         VALUES ($1,'S-NEED_CLARIFICATION','澄清',$2,'main','ai/t')`,
+        [taskId, repoId],
+      )
+      await c.query(
+        `INSERT INTO timer (id, task_id, run_id, kind, due_at, state)
+         VALUES ($1,$2,NULL,'clarification_ttl',$3,'pending')`,
+        [timerId, taskId, NOW],
+      )
+    })
+    return { taskId, timerId }
+  }
+
+  async function timerState(
+    taskId: string,
+  ): Promise<{ state: string; fired_at: string | null } | null> {
+    const r = await asOwner((c) =>
+      c.query<{ state: string; fired_at: string | null }>(
+        `SELECT state, fired_at FROM timer WHERE task_id=$1 AND kind='clarification_ttl'`,
+        [taskId],
+      ),
+    )
+    return r.rows[0] ?? null
+  }
+
+  it('T-008:TimerFired → S-ABANDONED,timer 置 fired(I9:带 fired_at)', async () => {
+    const { taskId } = await seedClarification()
+    const driver = new WorkflowDriver(new RuleBasedPolicyEngine(DEFAULT_RULESET))
+
+    const r = await driver.advance(taskId, { type: 'TimerFired', timer: 'clarification_ttl' }, NOW)
+    expect(r.ok && r.value.advanced).toBe(true)
+    if (!r.ok || !r.value.advanced) return
+    expect(r.value.transition_id).toBe('T-008')
+    expect(r.value.to).toBe('S-ABANDONED')
+
+    const t = await timerState(taskId)
+    expect(t?.state).toBe('fired')
+    expect(t?.fired_at).not.toBeNull() // I9
+  })
+
+  it('T-007:ClarificationReceived → 澄清 timer 置 cancelled(不会误走 T-008)', async () => {
+    const { taskId } = await seedClarification()
+    const driver = new WorkflowDriver(new RuleBasedPolicyEngine(DEFAULT_RULESET))
+
+    const r = await driver.advance(taskId, { type: 'ClarificationReceived' }, NOW)
+    expect(r.ok && r.value.advanced).toBe(true)
+    if (!r.ok || !r.value.advanced) return
+    expect(r.value.transition_id).toBe('T-007')
+
+    const t = await timerState(taskId)
+    expect(t?.state).toBe('cancelled')
+  })
+
+  it('idempotency:已 fired 的 timer 再 advance(TimerFired)→ ConsumeTimer skipped,T-008 不再推进', async () => {
+    const { taskId } = await seedClarification()
+    const driver = new WorkflowDriver(new RuleBasedPolicyEngine(DEFAULT_RULESET))
+
+    // 第一次:consume + 推进
+    const first = await driver.advance(
+      taskId,
+      { type: 'TimerFired', timer: 'clarification_ttl' },
+      NOW,
+    )
+    expect(first.ok && first.value.advanced).toBe(true)
+
+    // 第二次:task 已在 S-ABANDONED,TimerFired 不匹配(NoTransition),timer 仍 fired 不重复
+    const second = await driver.advance(
+      taskId,
+      { type: 'TimerFired', timer: 'clarification_ttl' },
+      NOW,
+    )
+    expect(second.ok).toBe(true)
+    if (!second.ok) return
+    expect(second.value.advanced).toBe(false)
+
+    const t = await timerState(taskId)
+    expect(t?.state).toBe('fired')
+  })
+})

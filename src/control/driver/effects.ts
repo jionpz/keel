@@ -21,6 +21,7 @@ import type { PolicyEngine } from '../../contracts/policy-engine.js'
 import { commitArtifactOn } from '../../fact/artifact-store.js'
 import { branchFor, type GitWorkspace } from '../../fact/git-workspace.js'
 import type { Stage } from '../../shared/ids.js'
+import { TIMER_DURATIONS } from '../../shared/timers.js'
 import type { SideEffect, TransitionEvent } from '../transition/types.js'
 import { loadPolicyFacts } from './facts.js'
 
@@ -53,6 +54,74 @@ export interface AppliedEffect {
   readonly kind: SideEffect['kind']
   readonly outcome: 'applied' | 'skipped' | 'intent'
   readonly detail: string
+}
+
+/**
+ * StartTimer(issue #24,方案 A):clarification TTL 持久化。
+ *
+ * due_at = 注入 now + TIMER_DURATIONS.kind。幂等:同 (task_id, kind)
+ * 至多一个 pending(部分唯一索引),重复启动 DO NOTHING → skipped。
+ */
+async function startTimer(
+  c: PoolClient,
+  ctx: EffectContext,
+  effect: SideEffect & { kind: 'StartTimer' },
+): Promise<AppliedEffect> {
+  const durationMs = TIMER_DURATIONS[effect.timer]
+  const due = new Date(new Date(ctx.now).getTime() + durationMs).toISOString()
+  const ins = await c.query(
+    `INSERT INTO timer (id, task_id, run_id, kind, due_at, state)
+     VALUES ($1,$2,NULL,$3,$4,'pending')
+     ON CONFLICT (task_id, kind) WHERE state = 'pending' DO NOTHING`,
+    [randomUUID(), ctx.taskId, effect.timer, due],
+  )
+  if (ins.rowCount === 0) {
+    return { kind: 'StartTimer', outcome: 'skipped', detail: '该 timer 已 pending' }
+  }
+  return { kind: 'StartTimer', outcome: 'applied', detail: `due ${due}` }
+}
+
+/**
+ * CancelTimer(T-007):回答澄清时取消 pending 澄清 timer。
+ * 0 行更新(已 fired/无)→ skipped —— 已 fire 的由 T-008 吃掉,重放安全。
+ */
+async function cancelTimer(
+  c: PoolClient,
+  ctx: EffectContext,
+  effect: SideEffect & { kind: 'CancelTimer' },
+): Promise<AppliedEffect> {
+  const r = await c.query(
+    `UPDATE timer SET state='cancelled', updated_at=$3
+     WHERE task_id=$1 AND kind=$2 AND state='pending'`,
+    [ctx.taskId, effect.timer, ctx.now],
+  )
+  if (r.rowCount === 0) {
+    return { kind: 'CancelTimer', outcome: 'skipped', detail: '无 pending 澄清 timer' }
+  }
+  return { kind: 'CancelTimer', outcome: 'applied', detail: '已取消澄清 timer' }
+}
+
+/**
+ * ConsumeTimer(T-008):收割到期澄清 timer,置 fired。
+ *
+ * **必须在 advance 同一事务内执行**(方案 A:claim 只锁不标;fired 属于
+ * T-008 的原子性) —— 失败回滚则仍 pending,崩溃可重投。
+ * 0 行(未到期/已 fired)→ skipped:重放或误投不重复收割。
+ */
+async function consumeTimer(
+  c: PoolClient,
+  ctx: EffectContext,
+  effect: SideEffect & { kind: 'ConsumeTimer' },
+): Promise<AppliedEffect> {
+  const r = await c.query(
+    `UPDATE timer SET state='fired', fired_at=$3, updated_at=$3
+     WHERE task_id=$1 AND kind=$2 AND state='pending' AND due_at <= $3`,
+    [ctx.taskId, effect.timer, ctx.now],
+  )
+  if (r.rowCount === 0) {
+    return { kind: 'ConsumeTimer', outcome: 'skipped', detail: '无到期 pending 澄清 timer' }
+  }
+  return { kind: 'ConsumeTimer', outcome: 'applied', detail: '澄清 timer 已 fire' }
 }
 
 /** 写一条事件。所有副作用记录都走事件流 —— 不另建表 */
@@ -451,10 +520,18 @@ export async function applyEffects(
       case 'CreatePullRequest':
         applied.push(await createPullRequest(c, ctx))
         break
-      // 以下 v0.1 只记录意图：真实 git / 定时器 / 会话取消属后续子任务
+      case 'StartTimer':
+        applied.push(await startTimer(c, ctx, e))
+        break
+      case 'CancelTimer':
+        applied.push(await cancelTimer(c, ctx, e))
+        break
+      case 'ConsumeTimer':
+        applied.push(await consumeTimer(c, ctx, e))
+        break
+      // 以下 v0.1 只记录意图：真实 git / 会话取消属后续子任务
       case 'CreateTask':
       case 'LinkFeedback':
-      case 'StartTimer':
       case 'CancelRun':
       case 'RecordReason':
       case 'MaybeAutoMerge':
