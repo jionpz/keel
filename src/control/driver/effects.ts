@@ -61,10 +61,12 @@ async function emit(
   taskId: string,
   type: string,
   payload: Record<string, unknown>,
+  occurredAt: string,
 ): Promise<number> {
   const r = await c.query<{ seq: string }>(
-    `INSERT INTO event (task_id, type, payload) VALUES ($1, $2, $3::jsonb) RETURNING seq`,
-    [taskId, type, JSON.stringify(payload)],
+    `INSERT INTO event (task_id, type, payload, occurred_at)
+     VALUES ($1, $2, $3::jsonb, $4) RETURNING seq`,
+    [taskId, type, JSON.stringify(payload), occurredAt],
   )
   return Number(r.rows[0]?.seq)
 }
@@ -122,11 +124,17 @@ async function createRun(
   )
 
   if (ins.rowCount === 0) {
-    await emit(c, ctx.taskId, 'SideEffectSkipped', { kind: 'CreateRun', idempotency_key: key })
+    await emit(
+      c,
+      ctx.taskId,
+      'SideEffectSkipped',
+      { kind: 'CreateRun', idempotency_key: key },
+      ctx.now,
+    )
     return { kind: 'CreateRun', outcome: 'skipped', detail: `${key} 已存在` }
   }
 
-  await emit(c, ctx.taskId, 'RunCreated', { stage, attempt, idempotency_key: key })
+  await emit(c, ctx.taskId, 'RunCreated', { stage, attempt, idempotency_key: key }, ctx.now)
   return { kind: 'CreateRun', outcome: 'applied', detail: key }
 }
 
@@ -159,11 +167,17 @@ async function evaluatePolicy(
     throw new Error(`Policy 求值失败：${decision.error.detail}`)
   }
 
-  const seq = await emit(c, ctx.taskId, 'PolicyEvaluated', {
-    point,
-    decision: decision.value.decision,
-    default_applied: decision.value.default_applied,
-  })
+  const seq = await emit(
+    c,
+    ctx.taskId,
+    'PolicyEvaluated',
+    {
+      point,
+      decision: decision.value.decision,
+      default_applied: decision.value.default_applied,
+    },
+    ctx.now,
+  )
 
   await commitArtifactOn(c, {
     id: randomUUID(),
@@ -192,7 +206,7 @@ async function freezeRfc(c: PoolClient, ctx: EffectContext): Promise<AppliedEffe
   if (Number(r.rows[0]?.n ?? 0) > 0) {
     return { kind: 'FreezeRfc', outcome: 'skipped', detail: 'RFC 已冻结' }
   }
-  await emit(c, ctx.taskId, 'SideEffectApplied', { kind: 'FreezeRfc', dedupe_key: 'rfc' })
+  await emit(c, ctx.taskId, 'SideEffectApplied', { kind: 'FreezeRfc', dedupe_key: 'rfc' }, ctx.now)
   return { kind: 'FreezeRfc', outcome: 'applied', detail: 'RFC 已冻结' }
 }
 
@@ -204,10 +218,16 @@ async function notifyOnce(
   payload: Record<string, unknown>,
 ): Promise<AppliedEffect> {
   if (await alreadyApplied(c, ctx.taskId, kind, dedupeKey)) {
-    await emit(c, ctx.taskId, 'SideEffectSkipped', { kind, dedupe_key: dedupeKey })
+    await emit(c, ctx.taskId, 'SideEffectSkipped', { kind, dedupe_key: dedupeKey }, ctx.now)
     return { kind, outcome: 'skipped', detail: dedupeKey }
   }
-  await emit(c, ctx.taskId, 'SideEffectApplied', { kind, dedupe_key: dedupeKey, ...payload })
+  await emit(
+    c,
+    ctx.taskId,
+    'SideEffectApplied',
+    { kind, dedupe_key: dedupeKey, ...payload },
+    ctx.now,
+  )
   return { kind, outcome: 'applied', detail: dedupeKey }
 }
 
@@ -222,11 +242,17 @@ async function recordIntent(
   ctx: EffectContext,
   effect: SideEffect,
 ): Promise<AppliedEffect> {
-  await emit(c, ctx.taskId, 'SideEffectIntent', {
-    kind: effect.kind,
-    transition: ctx.transitionId,
-    params: effect,
-  })
+  await emit(
+    c,
+    ctx.taskId,
+    'SideEffectIntent',
+    {
+      kind: effect.kind,
+      transition: ctx.transitionId,
+      params: effect,
+    },
+    ctx.now,
+  )
   return { kind: effect.kind, outcome: 'intent', detail: '已记录意图，尚未落地' }
 }
 
@@ -237,23 +263,35 @@ async function recordIntent(
  */
 async function createBranch(c: PoolClient, ctx: EffectContext): Promise<AppliedEffect> {
   if (ctx.workspace === undefined) {
-    await emit(c, ctx.taskId, 'SideEffectIntent', {
-      kind: 'CreateBranch',
-      transition: ctx.transitionId,
-      note: '未注入 workspace，仅记录意图',
-    })
+    await emit(
+      c,
+      ctx.taskId,
+      'SideEffectIntent',
+      {
+        kind: 'CreateBranch',
+        transition: ctx.transitionId,
+        note: '未注入 workspace，仅记录意图',
+      },
+      ctx.now,
+    )
     return { kind: 'CreateBranch', outcome: 'intent', detail: '未注入 workspace' }
   }
   const { git, repoId, baseBranch } = ctx.workspace
   const wt = await git.ensureWorktree(repoId, ctx.taskId, baseBranch)
   if (!wt.ok) throw new Error(`建 worktree 失败：${wt.error.detail}`)
 
-  await emit(c, ctx.taskId, 'SideEffectApplied', {
-    kind: 'CreateBranch',
-    dedupe_key: wt.value.branch,
-    branch: wt.value.branch,
-    worktree: wt.value.path,
-  })
+  await emit(
+    c,
+    ctx.taskId,
+    'SideEffectApplied',
+    {
+      kind: 'CreateBranch',
+      dedupe_key: wt.value.branch,
+      branch: wt.value.branch,
+      worktree: wt.value.path,
+    },
+    ctx.now,
+  )
   return { kind: 'CreateBranch', outcome: 'applied', detail: wt.value.branch }
 }
 
@@ -261,10 +299,16 @@ async function createBranch(c: PoolClient, ctx: EffectContext): Promise<AppliedE
 async function cleanWorkspace(c: PoolClient, ctx: EffectContext): Promise<AppliedEffect> {
   if (ctx.workspace === undefined) return recordIntent(c, ctx, { kind: 'CleanWorkspace' })
   await ctx.workspace.git.remove(ctx.workspace.repoId, ctx.taskId)
-  await emit(c, ctx.taskId, 'SideEffectApplied', {
-    kind: 'CleanWorkspace',
-    dedupe_key: ctx.taskId,
-  })
+  await emit(
+    c,
+    ctx.taskId,
+    'SideEffectApplied',
+    {
+      kind: 'CleanWorkspace',
+      dedupe_key: ctx.taskId,
+    },
+    ctx.now,
+  )
   return { kind: 'CleanWorkspace', outcome: 'applied', detail: '已移除 worktree' }
 }
 
@@ -276,11 +320,17 @@ async function cleanWorkspace(c: PoolClient, ctx: EffectContext): Promise<Applie
  */
 async function preserveWorkspace(c: PoolClient, ctx: EffectContext): Promise<AppliedEffect> {
   const path = ctx.workspace?.git.preservePath(ctx.taskId) ?? '(未注入 workspace)'
-  await emit(c, ctx.taskId, 'SideEffectApplied', {
-    kind: 'PreserveWorkspace',
-    dedupe_key: ctx.taskId,
-    preserved_at: path,
-  })
+  await emit(
+    c,
+    ctx.taskId,
+    'SideEffectApplied',
+    {
+      kind: 'PreserveWorkspace',
+      dedupe_key: ctx.taskId,
+      preserved_at: path,
+    },
+    ctx.now,
+  )
   return { kind: 'PreserveWorkspace', outcome: 'applied', detail: `保留现场：${path}` }
 }
 
@@ -291,11 +341,17 @@ async function preserveWorkspace(c: PoolClient, ctx: EffectContext): Promise<App
  */
 async function createPullRequest(c: PoolClient, ctx: EffectContext): Promise<AppliedEffect> {
   if (ctx.github === undefined || ctx.workspace === undefined) {
-    await emit(c, ctx.taskId, 'SideEffectIntent', {
-      kind: 'CreatePullRequest',
-      transition: ctx.transitionId,
-      note: '未注入 github provider / workspace，仅记录意图',
-    })
+    await emit(
+      c,
+      ctx.taskId,
+      'SideEffectIntent',
+      {
+        kind: 'CreatePullRequest',
+        transition: ctx.transitionId,
+        note: '未注入 github provider / workspace，仅记录意图',
+      },
+      ctx.now,
+    )
     return { kind: 'CreatePullRequest', outcome: 'intent', detail: '未注入 github provider' }
   }
 
@@ -325,23 +381,35 @@ async function createPullRequest(c: PoolClient, ctx: EffectContext): Promise<App
 
   const dedupeKey = headBranch
   if (pr.value.created) {
-    await emit(c, ctx.taskId, 'SideEffectApplied', {
+    await emit(
+      c,
+      ctx.taskId,
+      'SideEffectApplied',
+      {
+        kind: 'CreatePullRequest',
+        dedupe_key: dedupeKey,
+        pr_number: pr.value.number,
+        pr_url: pr.value.url,
+        head_branch: headBranch,
+      },
+      ctx.now,
+    )
+    return { kind: 'CreatePullRequest', outcome: 'applied', detail: `PR #${pr.value.number}` }
+  }
+
+  await emit(
+    c,
+    ctx.taskId,
+    'SideEffectSkipped',
+    {
       kind: 'CreatePullRequest',
       dedupe_key: dedupeKey,
       pr_number: pr.value.number,
       pr_url: pr.value.url,
       head_branch: headBranch,
-    })
-    return { kind: 'CreatePullRequest', outcome: 'applied', detail: `PR #${pr.value.number}` }
-  }
-
-  await emit(c, ctx.taskId, 'SideEffectSkipped', {
-    kind: 'CreatePullRequest',
-    dedupe_key: dedupeKey,
-    pr_number: pr.value.number,
-    pr_url: pr.value.url,
-    head_branch: headBranch,
-  })
+    },
+    ctx.now,
+  )
   return { kind: 'CreatePullRequest', outcome: 'skipped', detail: `复用 PR #${pr.value.number}` }
 }
 

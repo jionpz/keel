@@ -1,0 +1,5 @@
+{"file": "docs/04-state-machine.md", "reason": "T-030/T-031 失败转移语义、run.status 枚举、R-010 CANCELLED 语义"}
+{"file": "docs/05-contracts/artifact-store.md", "reason": "appendEvent occurred_at 注入契约 —— R2 统一的参照"}
+{"file": "docs/05-contracts/session-manager.md", "reason": "R-006 判 Run FAILED 的契约表述、ProposalAccepted/Rejected 事件"}
+{"file": "docs/07-flows.md", "reason": "失败流转在流程中的位置(若描述),与实现注记对齐"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "防假绿与测试分层纪律 —— 新 e2e 的归属"}

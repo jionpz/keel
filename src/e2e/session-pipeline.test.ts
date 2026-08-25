@@ -24,6 +24,7 @@ import { HarnessSessionManager } from '../execution/session/manager.js'
 import { PgArtifactStore } from '../fact/artifact-store.js'
 import { asOwner, closePool } from '../fact/db.js'
 
+const NOW = '2026-08-23T12:00:00Z'
 const store = new PgArtifactStore()
 
 function proposal(over: Partial<Proposal> = {}): Proposal {
@@ -262,6 +263,7 @@ describe('R-007 · 校验失败不等于 Run 失败', () => {
         expect: { kind: 'stage_outcome', key: 'pm' },
       },
       '判断这条反馈要不要做',
+      { now: NOW },
     )
 
     expect(r.ok, r.ok ? '' : r.error.detail).toBe(true)
@@ -275,6 +277,18 @@ describe('R-007 · 校验失败不等于 Run 失败', () => {
     // 落库了
     const got = await store.latest(taskId, 'stage_outcome', 'pm')
     expect(got.ok && (got.value.body as { verdict: string }).verdict).toBe('actionable')
+
+    // R2:事件时间来自注入的 now,不回落 DB 时钟(重放不读时钟)
+    const evs = await store.readEvents(taskId, 0, 100)
+    expect(evs.ok).toBe(true)
+    if (!evs.ok) return
+    const norm = (t: string | undefined): string => new Date(t ?? '').toISOString()
+    const acc = evs.value.filter((e) => e.type === 'ProposalAccepted')
+    expect(acc.length).toBeGreaterThan(0)
+    expect(norm(acc[0]?.occurred_at)).toBe(norm(NOW))
+    const rej = evs.value.filter((e) => e.type === 'ProposalRejected')
+    expect(rej.length).toBeGreaterThan(0)
+    expect(norm(rej[0]?.occurred_at)).toBe(norm(NOW))
   })
 
   it('连续失败到上限 → 判 Run 失败，且什么都没落库', async () => {
@@ -290,7 +304,7 @@ describe('R-007 · 校验失败不等于 Run 失败', () => {
         expect: { kind: 'stage_outcome', key: 'pm' },
       },
       'x',
-      { maxProposalRetries: 2 },
+      { maxProposalRetries: 2, now: NOW },
     )
     expect(r.ok).toBe(false)
     if (r.ok) return

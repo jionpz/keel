@@ -96,6 +96,7 @@ describe('里程碑：真实 OMP session 驱动状态推进（无人干预）', 
       new HarnessSessionManager(),
       { runSpec, adapter: new OmpAdapter(), expect: { kind: 'stage_outcome', key: 'pm' } },
       prompt,
+      { now: NOW },
     )
 
     expect(r.ok, r.ok ? '' : `session 未产出合法提案：${r.error.detail}`).toBe(true)

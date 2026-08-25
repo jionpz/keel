@@ -29,8 +29,19 @@ export interface PipelineOptions {
   readonly maxProposalRetries?: number
   /** 校验 Policy 用（#1-02）。缺省 = 不校验需要授权的 Proposal？不 —— 缺省即无裁决，直接拒收 */
   readonly policy?: PolicyEngine
-  /** 求值时间。不传则用 Date.now()（破坏可重放）—— 因此必传 */
+  /**
+   * 事件与求值时间。**必传** —— 重放不读时钟(ADR-0003,R2)。
+   * 缺失时 requireNow 抛错,不静默回落 DB now()。
+   */
   readonly now?: string
+}
+
+/** now 缺失即编程错误:事件时间是重放依据,不能由 DB 时钟决定 */
+function requireNow(opts: PipelineOptions): string {
+  if (opts.now === undefined) {
+    throw new Error('pipeline 需要注入 now —— 重放不读时钟(ADR-0003),缺失即抛错')
+  }
+  return opts.now
 }
 
 export interface PipelineOutcome {
@@ -102,12 +113,13 @@ export async function runSessionUntilValid(
 
         // 校验通过 → 落库。写 event 拿 seq，再提交 artifact（同事务）
         const ev = await c.query<{ seq: string }>(
-          `INSERT INTO event (task_id, run_id, type, payload)
-           VALUES ($1,$2,'ProposalAccepted',$3::jsonb) RETURNING seq`,
+          `INSERT INTO event (task_id, run_id, type, payload, occurred_at)
+           VALUES ($1,$2,'ProposalAccepted',$3::jsonb,$4) RETURNING seq`,
           [
             proposal.task_id,
             proposal.produced_by_run,
             JSON.stringify({ kind: proposal.kind, key: proposal.key, attempt }),
+            requireNow(opts),
           ],
         )
         const id = randomUUID()
@@ -139,12 +151,13 @@ export async function runSessionUntilValid(
 
       await asRole('keel_control', (c) =>
         c.query(
-          `INSERT INTO event (task_id, run_id, type, payload)
-           VALUES ($1,$2,'ProposalRejected',$3::jsonb)`,
+          `INSERT INTO event (task_id, run_id, type, payload, occurred_at)
+           VALUES ($1,$2,'ProposalRejected',$3::jsonb,$4)`,
           [
             proposal.task_id,
             proposal.produced_by_run,
             JSON.stringify({ attempt, violations: committed.verdict.violations }),
+            requireNow(opts),
           ],
         ),
       )

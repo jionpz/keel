@@ -1,0 +1,3 @@
+{"file": "docs/04-state-machine.md", "reason": "验证 T-030/T-031 重试与升人工的转移语义未破"}
+{"file": "docs/05-contracts/artifact-store.md", "reason": "验证 occurred_at 注入纪律在全部事件路径生效"}
+{"file": "docs/05-contracts/session-manager.md", "reason": "验证 R-006 判 Run FAILED 与流水线行为一致"}
