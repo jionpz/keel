@@ -45,3 +45,16 @@
 - R2 occurred_at 统一:effects emit + pipeline 注入注入 now,requireNow 缺失抛错。
 
 验证:pnpm run check 211 tests 全绿;issue #23 关闭。
+
+## 2026-08-25 · Round 2 P2 行为正确性组(issue #23)
+
+任务:`.trellis/tasks/archive/2026-08/08-25-round2-p2-behavior`。
+
+- R8 git-diff 分类按工作区列(porcelain XY,Y 为主;AD/MM/?? 正确)
+- R9 FAILED→PROTOCOL_ERROR 取舍注释真相化(不新增 ErrorKind)
+- R7 interrupt 进程组 SIGTERM + 兜底 SIGKILL(spawn detached)
+- R5 critic 活锁上限(≥2 强制收敛)
+- R3 capability 来自 details.capability(deny 真正可达)
+- R4 guard 拒=停(NoTransition 留痕,不假装成功)
+
+验证:pnpm run check 215 tests 全绿。
