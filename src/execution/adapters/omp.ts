@@ -42,6 +42,8 @@ export interface OmpOptions {
   readonly model?: string
   /** 覆盖 spawn，供测试注入 */
   readonly spawnFn?: typeof spawn
+  /** interrupt 后 SIGTERM 到 SIGKILL 的兜底毫秒；默认 2000。测试注入短值 */
+  readonly interruptKillTimeoutMs?: number
 }
 
 interface RunState {
@@ -137,11 +139,29 @@ export class OmpAdapter implements HarnessAdapter {
     if (state === undefined) {
       return err(makeError('NOT_FOUND', `未知 run ${handle.run_id}`))
     }
-    // 标记 + 杀子进程：只标 aborted 会让已 spawn 的 omp 继续跑完、
-    // 白耗 token 与时间。SIGTERM 先给优雅退出机会,
-    // 由 awaitResult 的退出码路径收敛为 CANCELLED。
+    // 标记 + 杀子进程组(R7,issue #23):
+    //   spawn 用 detached:true 建了进程组,pid 是组 leader —— kill(-pid) 整组终止,
+    //   防 omp 派生的子进程逃逸。
+    //   SIGTERM 先给优雅退出机会;兜底超时后 SIGKILL(进程可能无视 TERM 不退出)。
     state.aborted = true
-    state.proc?.kill('SIGTERM')
+    const proc = state.proc
+    if (proc === null || proc.pid === undefined) return ok(undefined)
+    const group = -proc.pid
+    try {
+      process.kill(group, 'SIGTERM')
+    } catch {
+      // 进程已退出:无需兜底
+      return ok(undefined)
+    }
+    const killTimeout = this.opts.interruptKillTimeoutMs ?? 2000
+    const timer = setTimeout(() => {
+      try {
+        process.kill(group, 'SIGKILL')
+      } catch {
+        // 已退出 —— 兜底完成
+      }
+    }, killTimeout)
+    timer.unref()
     return ok(undefined)
   }
 
@@ -292,7 +312,13 @@ function run(
   onSpawn?: (p: ChildProcess) => void,
 ): Promise<ProcResult> {
   return new Promise((resolve) => {
-    const p = spawnFn(bin, [...args], { cwd, stdio: ['ignore', 'pipe', 'pipe'] })
+    const p = spawnFn(bin, [...args], {
+      cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      // R7(issue #23):独立进程组 —— interrupt 可用 kill(-pid) 整组终止,
+      // 防 omp 派生的子进程逃逸
+      detached: true,
+    })
     onSpawn?.(p)
     let stdout = ''
     let stderr = ''

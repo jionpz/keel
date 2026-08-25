@@ -24,7 +24,7 @@ import { readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { RunSpec } from '../../contracts/harness-adapter.js'
 import { TIER_REQUIREMENTS } from '../../shared/ids.js'
 import { HUMAN_CAPABILITIES, HumanAdapter, type HumanInbox } from './human.js'
@@ -406,6 +406,7 @@ describe.skipIf(!REQUIRE_OMP)('CAP-UNTRUSTED_WORKSPACE 反例验证', () => {
  */
 describe('interrupt 杀子进程(注入 spawn fixture)', () => {
   interface FakeProc {
+    pid: number
     killed: Array<string | number>
     stdout: { on: () => void }
     stderr: { on: () => void }
@@ -418,7 +419,9 @@ describe('interrupt 杀子进程(注入 spawn fixture)', () => {
     const procs: FakeProc[] = []
     const spawnFn = ((_cmd: string, _args: readonly string[]): unknown => {
       const closeHandlers: Array<(code?: number | null) => void> = []
+      const pid = 40000 + procs.length
       const proc: FakeProc = {
+        pid,
         killed: [],
         stdout: { on: () => {} },
         stderr: { on: () => {} },
@@ -442,25 +445,55 @@ describe('interrupt 杀子进程(注入 spawn fixture)', () => {
     return { spawnFn, procs }
   }
 
-  it('interrupt 后子进程收到 SIGTERM,awaitResult 收敛为 CANCELLED', async () => {
+  it('interrupt 对进程组发 SIGTERM,awaitResult 收敛为 CANCELLED', async () => {
     const { spawnFn, procs } = hangingSpawn()
-    const adapter = new OmpAdapter({ spawnFn })
-    const started = await adapter.startRun(spec())
-    expect(started.ok).toBe(true)
-    if (!started.ok) return
+    // 捕获 process.kill(-pid, signal) —— R7 用组终止
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true)
+    try {
+      const adapter = new OmpAdapter({ spawnFn, interruptKillTimeoutMs: 5 })
+      const started = await adapter.startRun(spec())
+      expect(started.ok).toBe(true)
+      if (!started.ok) return
 
-    // spawnFn 在 run() 的 Promise executor 内同步执行 —— startRun 返回时 proc 已就位
-    expect(procs.length, '应 spawn 了子进程').toBe(1)
+      expect(procs.length, '应 spawn 了子进程').toBe(1)
+      const pid = procs[0]?.pid
 
-    const intr = await adapter.interrupt(started.value, 'cancelled')
-    expect(intr.ok).toBe(true)
-    expect(procs[0]?.killed, 'interrupt 应 kill 子进程').toEqual(['SIGTERM'])
+      const intr = await adapter.interrupt(started.value, 'cancelled')
+      expect(intr.ok).toBe(true)
+      expect(killSpy).toHaveBeenCalledWith(-(pid as number), 'SIGTERM')
 
-    // 被杀的进程退出 → 挂起的 awaitResult 返回 CANCELLED
-    procs[0]?.emitClose(143)
-    const res = await adapter.awaitResult(started.value)
-    expect(res.ok).toBe(true)
-    if (res.ok) expect(res.value.status).toBe('CANCELLED')
+      // 被杀的进程退出 → 挂起的 awaitResult 返回 CANCELLED
+      procs[0]?.emitClose(143)
+      const res = await adapter.awaitResult(started.value)
+      expect(res.ok).toBe(true)
+      if (res.ok) expect(res.value.status).toBe('CANCELLED')
+    } finally {
+      killSpy.mockRestore()
+    }
+  })
+
+  it('SIGTERM 后进程不退 → 兜底 SIGKILL(R7)', async () => {
+    const { spawnFn, procs } = hangingSpawn()
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true)
+    vi.useFakeTimers()
+    try {
+      const adapter = new OmpAdapter({ spawnFn, interruptKillTimeoutMs: 1000 })
+      const started = await adapter.startRun(spec())
+      expect(started.ok).toBe(true)
+      if (!started.ok) return
+      const pid = procs[0]?.pid
+
+      await adapter.interrupt(started.value, 'cancelled')
+      expect(killSpy).toHaveBeenCalledWith(-(pid as number), 'SIGTERM')
+      // 未到兜底:不应有 SIGKILL
+      expect(killSpy).not.toHaveBeenCalledWith(-(pid as number), 'SIGKILL')
+      // 推进 1s+ → 兜底 SIGKILL 触发
+      vi.advanceTimersByTime(1001)
+      expect(killSpy).toHaveBeenCalledWith(-(pid as number), 'SIGKILL')
+    } finally {
+      vi.useRealTimers()
+      killSpy.mockRestore()
+    }
   })
 
   it('中断发生在子进程已结束时不再 kill(引用已清空)', async () => {
