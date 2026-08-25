@@ -244,6 +244,17 @@ describe('端到端：docs/07-flows.md 流程一（Excel 日期筛选）', () =>
     expect(r.matched && r.next_status).toBe('S-HUMAN_REVIEW')
   })
 
+  it('human_review 显式裁决同样走 T-013(S1,issue #23 —— 非 auto_develop 一律人工)', () => {
+    const r = transition(
+      'S-RFC_READY',
+      'auto',
+      { type: 'PolicyEvaluated', decision: 'human_review' },
+      facts(),
+    )
+    expect(r.matched && r.id).toBe('T-013')
+    expect(r.matched && r.next_status).toBe('S-HUMAN_REVIEW')
+  })
+
   it('T-013 的 guardText 与守卫一致：decision != auto_develop', () => {
     const t013 = TASK_TRANSITIONS.find((t) => t.id === 'T-013')
     expect(t013?.guardText).toBe('decision != auto_develop')

@@ -81,6 +81,11 @@ export const STAGES = [
 ] as const
 export type Stage = (typeof STAGES)[number]
 
+/**
+ * 角色约定(S2,issue #23):`run.role` 是**描述性字段**,DB 无 CHECK 是有意的 ——
+ * 它记录「这个 run 由谁执行」,正确性由 effects.roleFor(stage) 保证,
+ * 不参与授权或转移决策。ROLES 仅作类型约定,与 DB 无强制绑定。
+ */
 export const ROLES = [
   'PM',
   'Critic',

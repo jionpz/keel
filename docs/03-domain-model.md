@@ -308,7 +308,7 @@ Execution Plane 想让任何东西落盘，**只有一条路**：emit 一个 Pro
 
 | 项 | 状态 | 去向 |
 |---|---|---|
-| 大产物（完整对话、diff 全文）是否外置对象存储 | **已定案**：256 KB 阈值落本地 `blob` 表（ADR-0004） | `adr/0004`、`src/fact/blob.ts` |
+| 大产物（完整对话、diff 全文）是否外置对象存储 | **已定案**：256 KB 阈值落本地 `blob` **文件存储**（ADR-0004，内容寻址） | `adr/0004`、`src/fact/blob.ts` |
 | 是否需要 `task` 的乐观锁版本列 | 取决于 workflow engine 选型 | `adr/0003` |
 | 多项目 / 多 repo 的租户隔离 | v0.1 不做 | `09-roadmap.md` Non-Goals |
 

@@ -23,6 +23,16 @@ import { join, relative } from 'node:path'
  * transition 与 policy 都属 Control Plane，受同一条硬约束：
  * 必须可确定性重放，因此不得读时钟、不得引入非确定性。
  */
+/**
+ * 受检目录（相对仓库根）。
+ *
+ * transition 与 policy 都属 Control Plane，受同一条硬约束：
+ * 必须可确定性重放，因此不得读时钟、不得引入非确定性。
+ *
+ * S3(issue #23)：新增受纯检查的目录时,须**同步**改两处 ——
+ * 本清单 + .dependency-cruiser.cjs 的 transition/policy 纯规则,
+ * 否则出现「规则管 3 目录、脚本扫 2 目录」的静默空转。
+ */
 const GUARDED_DIRS = ['src/control/transition', 'src/control/policy']
 
 /** 禁用的全局用法。key 用于报错信息，value 为匹配正则 */
