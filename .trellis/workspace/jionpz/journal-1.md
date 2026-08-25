@@ -58,3 +58,17 @@
 - R4 guard 拒=停(NoTransition 留痕,不假装成功)
 
 验证:pnpm run check 215 tests 全绿。
+
+## 2026-08-25 · Round 2 P2 架构一致性组(issue #23)
+
+任务:`.trellis/tasks/archive/2026-08/08-25-round2-p2-arch`(已归档)。
+
+- R10 tierOf 以 TIER_REQUIREMENTS 为唯一数据源(消除双事实源)+ 最小性断言
+- R6 loadPolicyFacts 删未接线分支 post_develop/qa_failed/pre_pr;FACTS_AT
+  只列已接线点;validate 对引用未接线点规则报错(强化 #1-09)
+- R11 DDL 漂移补 run.stage ↔ STAGES、run.harness_tier ↔ HARNESS_TIERS
+- R12 check:generated 生成前先查手改(不再静默覆盖),脚本化
+- R13 blob 边界文档真相化(进程存储不经 DB 授权)
+- S1 human_review→T-013;S2 ROLES 注释;S3 purity 双清单纪律;S4 blob 措辞
+
+验证:pnpm run check 219 tests 全绿。Round 2(issue #23)全清。
