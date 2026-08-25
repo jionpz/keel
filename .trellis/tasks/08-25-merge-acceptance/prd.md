@@ -47,6 +47,15 @@
 - [ ] R3:验收记录写入 prd.md(日期/路径/耗时/PR 号)
 - [ ] 清理:验证后远程无残留(PR 关、分支删)
 
+## 验收记录(2026-08-25)
+
+- **路径**:真实 OMP 全链路,pm → brainstorm(+A-State 合成)→ rfc_draft → T-011 → Policy 裁决(S-HUMAN_REVIEW,正当终态)
+- **耗时**:407–503s/轮
+- **发现 1(已修)**:brainstorm 方案未物化为 A-State,下游 rfc_draft 无方案 → 3 次不合格 T-031。修复:synthesizeStateFromBrainstorm(commit 3617891)。
+- **发现 2(上下文质量,未修)**:模型在 rfc_draft 仍倾向写项目级 RFC(keel 整体目标)而非 feedback 对应的方案。根因待查:context builder 的 state section 内容或 workspace 项目文件干扰。**不阻塞编排器验收** —— Policy 对模型如实填的 facts 裁决 human_review 是正确行为。
+- **结论**:合并验收核心成立 —— 真实 OMP 全链路 + A-State 传递 + Policy 裁决各段真实合并工作,到合法终态。S-DONE 段的真实 PR/CI 由 github-pr.acceptance(工具级)+ ci-wiring(FakeCi 编排级)各自覆盖。
+- **残留**:本次验收 **无真实 PR 创建**(S-HUMAN_REVIEW 在 T-021 之前)—— 远程无残留,cleanup 空转安全。
+
 ## Constraints
 
 - 不改 `check`(验收仍独立命令 test:acceptance)。
