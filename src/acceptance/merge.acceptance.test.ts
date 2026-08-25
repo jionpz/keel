@@ -162,7 +162,10 @@ describe('完整编排器合并验收(真实 OMP + 真实 GitHub)', () => {
         )
         console.log(
           'merge-acc human_review, rfc:',
-          JSON.stringify({ title: rfc.rows[0]?.body?.title, policy_facts: rfc.rows[0]?.body?.policy_facts }),
+          JSON.stringify({
+            title: rfc.rows[0]?.body?.title,
+            policy_facts: rfc.rows[0]?.body?.policy_facts,
+          }),
         )
       }
       expect(TERMINAL_LEGIT, `应到合法终态,实际 ${result.value.finalStatus}`).toContain(
