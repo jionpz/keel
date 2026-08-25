@@ -85,3 +85,17 @@
 
 用户收敛规划为方案 A:不造 wall_clock Task 事件、不打断 in-flight run、
 不做并发池。验证:pnpm run check 228 tests 全绿。
+
+## 2026-08-25 · 完整编排器合并验收(真实 OMP + 真实 GitHub)
+
+任务:`.trellis/tasks/archive/2026-08/08-25-merge-acceptance`(已归档)。
+
+- 凭据:gh token 内联(不进文件);Actions 启用、ci.yml 触发 ** 分支。
+- 真实验收暴露并修复:**brainstorm 方案未物化为 A-State → 下游 rfc_draft
+  无方案 → 3 次不合格 T-031**。修复 synthesizeStateFromBrainstorm。
+- 验收 4 轮跑通到合法终态(S-HUMAN_REVIEW ×2 + S-NEED_CLARIFICATION +
+  S-HUMAN_REVIEW);Policy 对模型如实填 facts 裁决 human 是正当行为。
+- 残留发现:rfc_draft 模型倾向写项目级 RFC(keel 整体)而非 feedback 方案
+  —— context state section 内容/workspace 干扰待查,不阻塞编排器验收。
+- 远程零残留(0 PR / 0 ai/* 分支);S-DONE 段由 github-pr.acceptance +
+  ci-wiring 各自覆盖。
