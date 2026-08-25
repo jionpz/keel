@@ -12,5 +12,7 @@
  * 反例固化在 src/fact/invariants.test.ts）。
  *
  * blob 大 body 落库见 src/fact/blob.ts（ADR-0004,256 KB 阈值）。
+ * ⚠️ blob 是**进程存储**(不经 DB 授权),I5 的 DB 平面强制不覆盖它 ——
+ * 见 blob.ts 头注(R13,issue #23)。
  */
 export const PLANE = 'fact' as const

@@ -10,6 +10,12 @@
  *
  * ⚠️ 写入顺序：**先 blob，后 artifact**。
  * 孤儿 blob 由后台清理；反过来会产生悬空引用，不可接受。
+ *
+ * R13(issue #23)边界：blob 是**进程内文件系统**（对象存储语义），
+ * **不经 DB 角色授权**（SET ROLE 之外）—— 它不是 Fact 平面的 DB 表。
+ * I5 的强制边界是 DB 平面：`artifact` 表的写入由 GRANT 钉死，
+ * blob 引用（hash）的完整性由 DB 授权保证；blob 本体由进程文件权限保护
+ * （KEEL_BLOB_DIR 仅本进程可写）。
  */
 
 import { createHash } from 'node:crypto'
