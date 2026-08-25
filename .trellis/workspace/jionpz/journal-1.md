@@ -72,3 +72,16 @@
 - S1 human_review→T-013;S2 ROLES 注释;S3 purity 双清单纪律;S4 blob 措辞
 
 验证:pnpm run check 219 tests 全绿。Round 2(issue #23)全清。
+
+## 2026-08-25 · durable timer(方案 A,issue #24)
+
+任务:`.trellis/tasks/archive/2026-08/08-25-durable-timer-workqueue`。
+
+- T1 timer 表(I9 CHECK、部分唯一索引、GRANT keel_control arw)+ 常量(澄清 24h)
+- T2 StartTimer/CancelTimer/ConsumeTimer 真实落库(T-005/T-007/T-008)
+- T3 claimDueTimers(SKIP LOCKED,只锁不标)+ loop S-NEED_CLARIFICATION 空闲收割
+- T4 e2e:澄清 TTL 全链路 + 取消 + 幂等
+- T5 文档(I9/权限/默认值)
+
+用户收敛规划为方案 A:不造 wall_clock Task 事件、不打断 in-flight run、
+不做并发池。验证:pnpm run check 228 tests 全绿。
