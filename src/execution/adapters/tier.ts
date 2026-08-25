@@ -15,6 +15,7 @@
  */
 
 import type { CapabilityId, HarnessTier } from '../../shared/ids.js'
+import { TIER_REQUIREMENTS } from '../../shared/ids.js'
 
 /**
  * L0 = CAP-HEADLESS
@@ -23,13 +24,16 @@ import type { CapabilityId, HarnessTier } from '../../shared/ids.js'
  *
  * CAP-STRUCTURED_OUTPUT / CAP-PERMISSION / CAP-UNTRUSTED_WORKSPACE
  * 等**不在阶梯内** —— 它们是正交能力。
+ *
+ * R10(issue #23):阶梯要求**唯一事实源**是 TIER_REQUIREMENTS(ids.ts),
+ * 这里只做「满足哪档」判断,不再内联重实现阶梯内容。
  */
 export function tierOf(caps: readonly CapabilityId[]): HarnessTier {
   const has = (c: CapabilityId): boolean => caps.includes(c)
   if (!has('CAP-HEADLESS')) {
     throw new Error('CAP-HEADLESS 是最低门槛，不具备则无法接入')
   }
-  if (has('CAP-RESUME') && has('CAP-STREAM') && has('CAP-COST')) return 'L2'
-  if (has('CAP-RESUME')) return 'L1'
+  if (TIER_REQUIREMENTS.L2.every(has)) return 'L2'
+  if (TIER_REQUIREMENTS.L1.every(has)) return 'L1'
   return 'L0'
 }

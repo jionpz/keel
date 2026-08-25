@@ -1,0 +1,3 @@
+{"file": "docs/adr/0005-harness-support-tiers.md", "reason": "验证 R10 tierOf 单一事实源后语义与 ADR-0005 一致"}
+{"file": "docs/05-contracts/policy-engine.md", "reason": "验证 R6 后契约标注与实际判定点接线一致"}
+{"file": "docs/adr/0004-persistence.md", "reason": "验证 R13 blob 边界文档与实现一致"}

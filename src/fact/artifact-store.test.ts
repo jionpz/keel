@@ -10,7 +10,7 @@ import { rm } from 'node:fs/promises'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { PERSISTED_ARTIFACT_KINDS } from '../contracts/artifact-store.js'
 import type { Proposal } from '../contracts/types.js'
-import { CONTROL_MODES, RUN_STATUSES, TASK_STATUSES } from '../shared/ids.js'
+import { CONTROL_MODES, HARNESS_TIERS, RUN_STATUSES, STAGES, TASK_STATUSES } from '../shared/ids.js'
 import { PgArtifactStore } from './artifact-store.js'
 import { BLOB_THRESHOLD_BYTES, blobRoot, get, isBlobRef, put } from './blob.js'
 import { asOwner, closePool } from './db.js'
@@ -328,6 +328,18 @@ describe('schema 与代码的一致性', () => {
     const dbValues = await checkValues('run', 'status')
     expect(dbValues).toEqual([...RUN_STATUSES].sort())
     expect(dbValues).toHaveLength(6)
+  })
+
+  it('run.stage 的 CHECK 取值与 STAGES 一致(R11,issue #23)', async () => {
+    const dbValues = await checkValues('run', 'stage')
+    expect(dbValues).toEqual([...STAGES].sort())
+    expect(dbValues).toHaveLength(7)
+  })
+
+  it('run.harness_tier 的 CHECK 取值与 HARNESS_TIERS 一致(R11,issue #23)', async () => {
+    const dbValues = await checkValues('run', 'harness_tier')
+    expect(dbValues).toEqual([...HARNESS_TIERS].sort())
+    expect(dbValues).toHaveLength(3)
   })
 
   it('七张业务表都存在 —— 防假绿：读到 0 张表即失败', async () => {

@@ -137,6 +137,11 @@ describe('tier 由 capability 推导，不硬编码', () => {
     expect(TIER_REQUIREMENTS.L1).not.toContain('CAP-STRUCTURED_OUTPUT')
     expect(TIER_REQUIREMENTS.L2).not.toContain('CAP-STRUCTURED_OUTPUT')
   })
+
+  it('L1 要求去掉 CAP-RESUME → 降 L0(表与推导互证反方向,R10)', () => {
+    const l1WithoutResume = TIER_REQUIREMENTS.L1.filter((c) => c !== 'CAP-RESUME')
+    expect(tierOf(l1WithoutResume)).toBe('L0')
+  })
 })
 
 describe('buildArgv', () => {
