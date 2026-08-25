@@ -342,7 +342,7 @@ describe('schema 与代码的一致性', () => {
     expect(dbValues).toHaveLength(3)
   })
 
-  it('七张业务表都存在 —— 防假绿：读到 0 张表即失败', async () => {
+  it('八张业务表都存在(含 timer,issue #24)—— 防假绿：读到 0 张表即失败', async () => {
     const r = await asOwner((c) =>
       c.query<{ tablename: string }>(
         `SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename <> 'pgmigrations'`,
@@ -351,7 +351,28 @@ describe('schema 与代码的一致性', () => {
     const tables = r.rows.map((x) => x.tablename).sort()
     expect(tables.length).toBeGreaterThan(0)
     expect(tables).toEqual(
-      ['artifact', 'event', 'feedback', 'repo', 'run', 'task', 'task_feedback'].sort(),
+      ['artifact', 'event', 'feedback', 'repo', 'run', 'task', 'task_feedback', 'timer'].sort(),
     )
+  })
+
+  it('timer.kind 的 CHECK 取值与 TimerKind 一致(issue #24)', async () => {
+    const dbValues = await checkValues('timer', 'kind')
+    expect(dbValues).toEqual(['clarification_ttl', 'wall_clock'].sort())
+  })
+
+  it('timer.state 的 CHECK 取值包含三态(issue #24)', async () => {
+    const dbValues = await checkValues('timer', 'state')
+    expect(dbValues).toEqual(['cancelled', 'fired', 'pending'].sort())
+  })
+
+  it('I9:keel_control 对 timer 有 SELECT/INSERT/UPDATE,无 DELETE(issue #24)', async () => {
+    const r = await asOwner((c) =>
+      c.query<{ privilege_type: string }>(
+        `SELECT privilege_type FROM information_schema.role_table_grants
+         WHERE grantee='keel_control' AND table_name='timer'`,
+      ),
+    )
+    const privs = r.rows.map((x) => x.privilege_type).sort()
+    expect(privs).toEqual(['INSERT', 'SELECT', 'UPDATE'].sort())
   })
 })

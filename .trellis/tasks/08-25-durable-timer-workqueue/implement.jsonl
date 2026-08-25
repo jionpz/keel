@@ -1,0 +1,7 @@
+{"file": "docs/04-state-machine.md", "reason": "R-008/R-009/R-010 Run 级转移、T-005/T-007/T-008 timer 相关 Task 转移、side-effect 幂等语义"}
+{"file": "docs/05-contracts/harness-adapter.md", "reason": "limits.wall_clock_s 契约（R-009 时限来源）、interrupt/CANCEL 语义"}
+{"file": "docs/09-roadmap.md", "reason": "durable timer 属 v0.1 欠债；并发调度为 Non-Goal（范围校准依据）"}
+{"file": "docs/02-glossary.md", "reason": "术语一致性（timer/事件驱动/调度词汇）"}
+{"file": "docs/adr/0003-workflow-engine.md", "reason": "ADR-0003 副作用描述式 —— StartTimer/CancelTimer 作为副作用描述的可重放性"}
+{"file": "src/control/orchestrator/loop.ts", "reason": "S-PR_OPEN 空闲等待与 failRunAndAdvance(RUN_TIMEOUT) 是方案 A 的对接面"}
+{"file": "src/control/driver/effects.ts", "reason": "StartTimer 现为 recordIntent,本轮拆成落库 + CancelTimer/ConsumeTimer"}

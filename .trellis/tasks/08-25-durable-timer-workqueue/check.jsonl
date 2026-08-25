@@ -1,0 +1,3 @@
+{"file": "docs/04-state-machine.md", "reason": "验证 R-009 wall_clock/T-008 clarification 转移语义未破"}
+{"file": "docs/05-contracts/harness-adapter.md", "reason": "验证 wall_clock_s 契约与 timer 创建一致"}
+{"file": "docs/adr/0003-workflow-engine.md", "reason": "验证 StartTimer/CancelTimer 作为副作用描述的可重放性"}

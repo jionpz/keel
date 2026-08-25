@@ -80,7 +80,14 @@ export type SideEffect =
   | { readonly kind: 'CreatePullRequest' }
   | { readonly kind: 'NotifyHuman'; readonly reason: string }
   | { readonly kind: 'AskUser' }
-  | { readonly kind: 'StartTimer'; readonly timer: string }
+  | { readonly kind: 'StartTimer'; readonly timer: 'clarification_ttl' }
+  | { readonly kind: 'CancelTimer'; readonly timer: 'clarification_ttl' }
+  /**
+   * T-008 的收割副作用:把该 task 到期 pending 的澄清 timer 置 fired。
+   * 必须在 advance 同一事务内执行(claim 只锁不标;fired 属于 T-008 原子性)——
+   * 见 docs/04-state-machine.md §5.2 / issue #24 方案 A。
+   */
+  | { readonly kind: 'ConsumeTimer'; readonly timer: 'clarification_ttl' }
   | { readonly kind: 'CancelRun' }
   | { readonly kind: 'CleanWorkspace' }
   /** S-FAILED 刻意保留现场供诊断 */
