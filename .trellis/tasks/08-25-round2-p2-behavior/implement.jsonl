@@ -1,0 +1,5 @@
+{"file": "docs/04-state-machine.md", "reason": "T-009/T-009b 转移语义、R-010 CANCELLED、critic 回流边界"}
+{"file": "docs/07-flows.md", "reason": "critic 路径实现注记 —— capability 来源与活锁上限的适配"}
+{"file": "docs/05-contracts/harness-adapter.md", "reason": "interrupt 契约、RunResult.status 语义(FAILED/TIMEOUT/CANCELLED 区分)"}
+{"file": "docs/05-contracts/artifact-store.md", "reason": "NoTransition 事件语义(R4 拒绝留痕参照)"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "防假绿与测试分层 —— 新增 e2e 归属"}

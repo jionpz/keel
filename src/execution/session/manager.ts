@@ -49,8 +49,12 @@ export interface SessionSpec {
  * Run 状态 → ErrorKind 映射。
  *
  * 与 RETRYABLE 表配合：CANCELLED 是人工撤回,重试无意义(retryable=false);
- * TIMEOUT / FAILED 可重试。PROTOCOL_ERROR 一词描述「输出无法解析」,
- * 不能覆盖「超时 / 撤回 / 失败」这些可区分、语义不同的状态。
+ * TIMEOUT 可重试。PROTOCOL_ERROR 一词描述「输出无法解析」——
+ * **FAILED 映射 PROTOCOL_ERROR 是刻意的取舍**(R9,issue #23):
+ * Adapter 的 RunResult.status=FAILED 不带细分类(运行终止但非超时/非取消),
+ * 没有一个更贴切的 ErrorKind 表达它;PROTOCOL_ERROR 作为
+ * 「运行已终止、可重试」的通配标签。若日后需要区分「业务失败 vs 协议失败」,
+ * 需新增 ErrorKind(当前改动面/收益不匹配,不做)。
  */
 const RUN_STATUS_ERROR: Readonly<Record<Exclude<RunResult['status'], 'SUCCEEDED'>, ErrorKind>> = {
   TIMEOUT: 'RUN_TIMEOUT',

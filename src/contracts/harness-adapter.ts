@@ -60,6 +60,15 @@ export interface RunSpec {
 }
 
 export interface RunResult {
+  /**
+   * 运行终态四选一(R9,issue #23):
+   * - SUCCEEDED  正常完成,text 应有值
+   * - FAILED     运行开始后已终止,但非超时、非主动取消 ——
+   *   不带细分类(输出不可解析 / 内部错误 / 业务失败都归此);
+   *   调用方按「可重试失败」处理
+   * - TIMEOUT    超过 limits.wall_clock_s 强制终止
+   * - CANCELLED  收到 interrupt(人工撤回 / 预算熔断)后终止 —— 不可重试
+   */
   readonly status: 'SUCCEEDED' | 'FAILED' | 'TIMEOUT' | 'CANCELLED'
   /**
    * Harness 产出的原始文本。

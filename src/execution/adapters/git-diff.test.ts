@@ -63,4 +63,36 @@ describe('collectGitDiff · 读真实 git 脏树', () => {
     if (!r.ok) return
     expect(r.value.is_dirty).toBe(false)
   })
+
+  it('R8 · 双状态 porcelain 按工作区列分类,不再误判', async () => {
+    // 注入 exec:精确控 porcelain 输出,构造 AD/MM/??/AM 四态
+    const exec = (_cmd: string, args: readonly string[], _cwd: string) => {
+      if (args[0] === 'status') {
+        return {
+          code: 0,
+          stdout:
+            [
+              'AD staged-deleted.txt', // 暂存新增 + 工作区删除 → 工作区 D 说了算 → deleted
+              'MM both-modified.txt', // 暂存改 + 工作区改 → modified
+              '?? untracked.txt', // 未跟踪 → added
+              'AM add-mod.txt', // 暂存新增 + 工作区改 → modified
+              'A  staged-added.txt', // X=A,Y=空格:暂存新增,工作区未动 → added
+            ].join('\n') + '\n',
+          stderr: '',
+        }
+      }
+      return { code: 0, stdout: '', stderr: '' } // diff 空
+    }
+
+    const r = await collectGitDiff(repo, { exec })
+    expect(r.ok, r.ok ? '' : r.error.detail).toBe(true)
+    if (!r.ok) return
+
+    const byPath = new Map(r.value.files_changed.map((f) => [f.path, f.change]))
+    expect(byPath.get('staged-deleted.txt'), 'AD 按工作区 D → deleted').toBe('deleted')
+    expect(byPath.get('both-modified.txt'), 'MM → modified').toBe('modified')
+    expect(byPath.get('untracked.txt'), '?? → added').toBe('added')
+    expect(byPath.get('add-mod.txt'), 'AM 工作区 M → modified').toBe('modified')
+    expect(byPath.get('staged-added.txt'), 'Y=A 暂存新增且工作区未动 → added').toBe('added')
+  })
 })

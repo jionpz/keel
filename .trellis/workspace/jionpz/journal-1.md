@@ -34,3 +34,14 @@
 遗留:真实 GitHub 验收(test:acceptance)需 KEEL_GITHUB_TOKEN + KEEL_TEST_REMOTE_REPO,
 本轮环境未设,cleanup 逻辑已被 ownerRepo 单测覆盖。
 
+
+## 2026-08-25 · Round 2 P1 修复(issue #23 R1+R2)
+
+任务:`.trellis/tasks/archive/2026-08/08-25-round2-p1`(已归档)。
+
+- R1 run 失败面:executeRun 失败不再 return err 中止 → failRunAndAdvance
+  标 run FAILED/TIMEOUT/CANCELLED + emit RunFailed/RunTimeout →
+  T-030(重试,key /n 递增)/T-031(升人工);CANCELLED 不重试(R-010)。
+- R2 occurred_at 统一:effects emit + pipeline 注入注入 now,requireNow 缺失抛错。
+
+验证:pnpm run check 211 tests 全绿;issue #23 关闭。

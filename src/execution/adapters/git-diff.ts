@@ -60,12 +60,29 @@ export async function collectGitDiff(
 
   const files = status.stdout
     .split('\n')
-    .map((l) => l.trim())
+    .map((l) => l.replace(/\s+$/, '')) // 只去行尾,保留行首 XY 列(porcelain 固定格式)
     .filter((l) => l !== '')
     .map((l) => {
-      const code = l.slice(0, 2).trim()
-      const path = l.slice(2).trim()
-      const change = code.includes('D') ? 'deleted' : code.includes('?') ? 'added' : 'modified'
+      // porcelain 格式:XY path —— X=暂存区状态,Y=工作区状态。
+      // Y 列取值:空格(工作区未动)/ M / D / ?(未跟踪,此时 X 也 ?)。
+      // X 列可含 A(暂存新增)/ M / D / R / C / ?。以 Y 列(工作区)为主,
+      // 未跟踪(??/!!)整体 added;Y=空格时回看 X。R8(issue #23)。
+      const path = l.slice(3).trim()
+      const isUntracked = l.startsWith('??') || l.startsWith('!!')
+      const x = l[0] ?? ''
+      const y = l[1] ?? ' '
+      let change: 'added' | 'modified' | 'deleted'
+      if (isUntracked) change = 'added'
+      else if (y === 'D')
+        change = 'deleted' // 工作区删除(含 AD:暂存新增后删除)
+      else if (y === 'M')
+        change = 'modified' // 工作区改(含 AM/MM)
+      else if (y === ' ') {
+        // 工作区未动:看暂存区 —— 新增 → added;删除 → deleted(理论上 X=D 时 Y 必 D,防御)
+        if (x === 'A' || x === 'R' || x === 'C') change = 'added'
+        else if (x === 'D') change = 'deleted'
+        else change = 'modified'
+      } else change = 'modified'
       return { path, change } as const
     })
 
