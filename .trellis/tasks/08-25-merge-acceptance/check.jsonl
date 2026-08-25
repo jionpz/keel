@@ -1,0 +1,2 @@
+{"file": "src/acceptance/README.md", "reason": "验收记录纪律核对(日期/路径/耗时/断言强度)"}
+{"file": "docs/05-contracts/ci-gateway.md", "reason": "验证真实 waitForCi 路径与契约一致"}

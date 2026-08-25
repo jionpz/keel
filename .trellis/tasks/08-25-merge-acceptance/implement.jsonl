@@ -1,0 +1,4 @@
+{"file": "src/acceptance/README.md", "reason": "验收纪律:明确失败不 skip、断言强度不放宽、记录入 prd"}
+{"file": "docs/09-roadmap.md", "reason": "CI 为外部事实源、v0.1 判据、验收范围"}
+{"file": "docs/05-contracts/ci-gateway.md", "reason": "waitForCi 契约(pending 无上报=passed 语义)与真实 provider 行为"}
+{"file": "docs/05-contracts/git-provider.md", "reason": "PR 幂等/owner:branch 过滤器 —— 真实 push 路径"}
