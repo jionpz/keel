@@ -227,6 +227,18 @@ describe('#1-15 · Critic 能力路径全链路', () => {
     const reviewBody = review.rows[0]?.body as { recommendation?: string } | undefined
     expect(reviewBody?.recommendation).toBe('A')
 
+    // issue #24 合并验收暴露:brainstorm 收敛后须合成 A-State(候选方案),
+    // 否则下游 rfc_draft 无方案可写
+    const states = await asOwner((c) =>
+      c.query<{ body: { candidate_options?: unknown } }>(
+        `SELECT body FROM artifact WHERE task_id=$1 AND kind='state' ORDER BY version`,
+        [taskId],
+      ),
+    )
+    expect(states.rows.length, 'brainstorm 每轮收敛都应合成 A-State').toBeGreaterThan(0)
+    const last = states.rows.at(-1)?.body
+    expect(Array.isArray(last?.candidate_options)).toBe(true)
+
     // capability_request 落库(合成的 + 事件可重建)
     const req = await asOwner((c) =>
       c.query<{ body: Record<string, unknown> }>(

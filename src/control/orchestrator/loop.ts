@@ -227,6 +227,16 @@ export async function runTaskToCompletion(
       continue
     }
 
+    // brainstorm 收敛:把候选方案物化为 A-State(issue #24 合并验收暴露)。
+    //
+    // 此前 brainstorm 只落 stage_outcome.details;下游(rfc_draft/develop)
+    // 的 ContextBuilder 读 A-State(kind='state')——恒空,模型无方案可写,
+    // rfc_draft 3 次不合格 → T-031 升人工。这里把收敛细节合成 A-State
+    // (flow 步骤 13「写 A-State@3」的实现),下游才有方案。
+    if (pending.stage === 'brainstorm') {
+      await synthesizeStateFromBrainstorm(taskId, pending.id, deps.now())
+    }
+
     // brainstorm 收敛产物若请求 Critic 评审(needs_critic),
     // 走 T-009:合成 A-CapabilityRequest → CapabilityRequested → 创建 run(critic)。
     // capability 来自产物 details.capability(R3)——模型声明,不硬编码;
@@ -579,6 +589,66 @@ async function synthesizeCapabilityRequest(
         params: {},
         rationale: 'brainstorm 收敛产物请求架构评审(needs_critic)',
         blocking: true,
+      },
+      producedByRun,
+      committedAtSeq: Number(ev.rows[0]?.seq),
+      supersedes: null,
+    })
+  })
+}
+
+/**
+ * 把 brainstorm 收敛产物物化为 A-State(issue #24 合并验收暴露)。
+ *
+ * 断链根源:brainstorm 的候选方案只落 stage_outcome.details,下游
+ * (rfc_draft/develop)的 ContextBuilder 读 A-State(kind='state')——
+ * 恒空导致模型无方案可写,rfc_draft 连续不合格升人工。
+ *
+ * 这里读 latest brainstorm stage_outcome 的 details 合成 A-State
+ * (flow 步骤 13「写 A-State@3」的实现)。幂等:同 produced_by_run 只写一次;
+ * version 由 commitArtifactOn 自增(每次收敛新一版,superseded_by 链天然)。
+ */
+async function synthesizeStateFromBrainstorm(
+  taskId: string,
+  producedByRun: string,
+  now: string,
+): Promise<void> {
+  await asRole('keel_control', async (c) => {
+    const existing = await c.query<{ id: string }>(
+      `SELECT id FROM artifact WHERE task_id=$1 AND produced_by_run=$2 AND kind='state'`,
+      [taskId, producedByRun],
+    )
+    if (existing.rows.length > 0) return // 已合成,幂等
+
+    const outcome = await c.query<{ body: Record<string, unknown> }>(
+      `SELECT body FROM artifact
+       WHERE task_id=$1 AND kind='stage_outcome' AND key='brainstorm' AND produced_by_run=$2
+       ORDER BY committed_at_seq DESC LIMIT 1`,
+      [taskId, producedByRun],
+    )
+    const details = (outcome.rows[0]?.body?.details ?? {}) as Record<string, unknown>
+    const candidates = Array.isArray(details.candidates) ? details.candidates : []
+
+    const ev = await c.query<{ seq: string }>(
+      `INSERT INTO event (task_id, run_id, type, payload)
+       VALUES ($1,$2,'ProposalAccepted',$3::jsonb) RETURNING seq`,
+      [taskId, producedByRun, JSON.stringify({ kind: 'state', key: '' })],
+    )
+    await commitArtifactOn(c, {
+      id: randomUUID(),
+      taskId,
+      kind: 'state',
+      key: '',
+      body: {
+        schema_version: '1.0',
+        current_goal: String(details.goal ?? '候选方案待定'),
+        confirmed_facts: [],
+        decisions: [],
+        open_questions: [],
+        risks: [],
+        // 候选方案:brainstorm 的收敛内容 —— 下游 rfc_draft 据此写 RFC
+        candidate_options: candidates,
+        context_summary: `brainstorm @ ${now}:${details.reason !== undefined ? String(details.reason) : ''}`,
       },
       producedByRun,
       committedAtSeq: Number(ev.rows[0]?.seq),
