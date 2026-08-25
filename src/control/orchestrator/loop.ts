@@ -24,6 +24,7 @@ import { commitArtifactOn } from '../../fact/artifact-store.js'
 import { asRole } from '../../fact/db.js'
 import type { GitWorkspace } from '../../fact/git-workspace.js'
 import type { RoleId, Stage, TaskStatus } from '../../shared/ids.js'
+import { claimDueTimers } from '../../timer/drain.js'
 import { FactPlaneContextBuilder } from '../context/builder.js'
 import type { WorkflowDriver } from '../driver/driver.js'
 import { runSessionUntilValid } from '../proposal/pipeline.js'
@@ -138,6 +139,31 @@ export async function runTaskToCompletion(
       if (!adv.ok) return err(adv.error)
       steps.push(record(state.status, adv, null, `Policy 裁决 ${decision}`))
       continue
+    }
+
+    // ── S-NEED_CLARIFICATION：等人工回答或澄清 TTL 到期(issue #24,方案 A)──
+    //
+    // 有 PENDING run 先执行(阶段态在前面?不——此分支在阶段态处理前,
+    // 但澄清态无 run)。对齐 S-PR_OPEN 的空闲等待:claim 本 task 的到期
+    // 澄清 timer → advance(TimerFired) → T-008 → S-ABANDONED。
+    // 未到期且无外部 ClarificationReceived 注入 → 停(调用方稍后用
+    // 已推进的 now 再进 loop)。
+    if (state.status === 'S-NEED_CLARIFICATION') {
+      const due = await claimDueTimers(deps.now(), { taskId, limit: 1 })
+      if (due.length > 0) {
+        const adv = await deps.driver.advance(
+          taskId,
+          { type: 'TimerFired', timer: 'clarification_ttl' },
+          deps.now(),
+        )
+        if (!adv.ok) return err(adv.error)
+        // T-008 的 ConsumeTimer 把 timer 置 fired(同一事务);若 advance 未匹配
+        // (task 已离开澄清态)则不 Consume,行仍 pending —— 幂等,下次再说
+        steps.push(record(state.status, adv, null, '澄清 TTL 到期 → 弃单'))
+        continue
+      }
+      // 未到期:等人工回答(生产由外部 ClarificationReceived 驱动,注入 now)
+      return ok({ finalStatus: state.status, steps })
     }
 
     // ── S-PR_OPEN：等外部 CI ──
