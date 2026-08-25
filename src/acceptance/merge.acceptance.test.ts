@@ -128,9 +128,27 @@ describe('完整编排器合并验收(真实 OMP + 真实 GitHub)', () => {
       )
 
       expect(result.ok, result.ok ? '' : `编排失败:${result.error.detail}`).toBe(true)
-      if (!result.ok) return
+      if (!result.ok) {
+        // 失败诊断:编排错误详情(模型波动 vs 合并逻辑归因)
+        console.log('merge-acc error:', result.error.detail)
+        return
+      }
 
       // ── 1. 真实 CI 回读 passed → S-DONE ──
+      if (result.value.finalStatus !== 'S-DONE') {
+        console.log(
+          'merge-acc stopped at',
+          result.value.finalStatus,
+          'steps:',
+          JSON.stringify(
+            result.value.steps.map(
+              (s) => `${s.stage ?? ''}:${s.transition ?? ''}->${s.status_after}`,
+            ),
+            null,
+            1,
+          ),
+        )
+      }
       expect(result.value.finalStatus).toBe('S-DONE')
 
       // ── 2. 事件流含 T-024(CIPassed → S-DONE)──
