@@ -9,8 +9,10 @@
  *
  * 诚实边界：`S-PR_OPEN → S-DONE` 需要 CI 结果，而 CI 是 Keel 的
  * **外部事实源**（docs/09-roadmap.md §3），系统本身不产生它。
- * v0.1 尚无真实 git/CI 接入（子任务 7），因此由测试注入，
- * 且注入处**显式标记为模拟** —— 不混进真实产出里。
+ * 真实 git/CI 接入已完成（子任务 7：GitHubProvider + `opts.ci`），
+ * 但本文件**刻意**仍由测试注入 CI —— 保留一个不依赖远程仓库与凭据的
+ * 本地 cheap 版本；真实 GitHub 全链路由
+ * `v01-criterion-github.acceptance.test.ts` 验证。注入处显式标记为模拟。
  */
 
 import { execFileSync } from 'node:child_process'
@@ -118,10 +120,11 @@ describe('v0.1 完成判据（完整）', () => {
       {
         maxSteps: 25,
         /**
-         * ⚠️ 模拟的外部 CI。
+         * ⚠️ 模拟的外部 CI（本地版的刻意设计）。
          *
          * CI 是 Keel 的外部事实源，系统本身不产生它。
-         * v0.1 无真实 git/CI 接入（子任务 7），此处代其发声。
+         * 真实接入已存在（`opts.ci` + GitHubProvider），本文件刻意不用 ——
+         * 保持本测试无远程依赖；真实路径由 v01-criterion-github 覆盖。
          * 这**不是**编排器自己造活 —— 它造的是外部世界的回应。
          */
         externalCi: async () => {

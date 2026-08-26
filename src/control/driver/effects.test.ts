@@ -240,3 +240,90 @@ describe('CreatePullRequest 副作用记账', () => {
     expect(intent?.payload.kind).toBe('CreatePullRequest')
   })
 })
+
+/**
+ * 幂等重放 —— 父任务集成复核第 2 问的确定性答案。
+ *
+ * 事件投递是 at-least-once（docs/04-state-machine.md §5），
+ * 「重放一次会怎样」不能靠推断,要真的重放一次看事件流。
+ * 两种重放各测一条:
+ *
+ *   a. 事务提交**前**崩溃后的重投:状态还在事件发生前 → 转移会再次命中,
+ *      副作用必须自行判重（SideEffectSkipped）,不产生第二个 PR;
+ *   b. 事务提交**后**的重复投递:状态已推进 → 转移不命中（NoTransition）,
+ *      任何副作用都不该被再碰。
+ */
+describe('幂等重放（at-least-once 投递）', () => {
+  it('提交前重放:转移再次命中 → 第二次 SideEffectSkipped,无重复 PR', async () => {
+    const { taskId, repoId } = await seedTaskWithRemote()
+    const git = new GitWorkspace({ root })
+    await git.ensureBareRepo(repoId, `file://${origin}`)
+    // 模拟 GitHub 的幂等语义:同一 head 第二次返回已有 PR（created:false）
+    const gateway = firstTimeCreated()
+    const driver = new WorkflowDriver(
+      new RuleBasedPolicyEngine(DEFAULT_RULESET),
+      { git, repoId, baseBranch: 'main' },
+      gateway,
+    )
+
+    const first = await driver.advance(taskId, { type: 'RunSucceeded', stage: 'review' }, NOW)
+    expect(first.ok && first.value.to === 'S-PR_OPEN').toBe(true)
+
+    // 把状态拨回事件发生前 —— 等价于「状态更新未提交时进程崩溃,事件被重投」
+    await asOwner((c) => c.query(`UPDATE task SET status='S-REVIEW' WHERE id=$1`, [taskId]))
+
+    const second = await driver.advance(taskId, { type: 'RunSucceeded', stage: 'review' }, NOW)
+    expect(second.ok, second.ok ? '' : second.error.detail).toBe(true)
+    if (!second.ok) return
+    expect(second.value.to).toBe('S-PR_OPEN')
+    expect(
+      second.value.effects.find((e) => e.kind === 'CreatePullRequest')?.outcome,
+      '重放的 CreatePullRequest 应为 skipped',
+    ).toBe('skipped')
+
+    // 幂等不是「不再调用」,而是「再调也只有一个 PR」—— gateway 被问了两次
+    expect(gateway.calls.length).toBe(2)
+
+    // 事件流如实记录两次:一次 Applied、一次 Skipped,指向同一个 PR
+    const evs = await eventsOf(taskId)
+    const applied = evs.filter(
+      (e) => e.type === 'SideEffectApplied' && e.payload.kind === 'CreatePullRequest',
+    )
+    const skipped = evs.filter(
+      (e) => e.type === 'SideEffectSkipped' && e.payload.kind === 'CreatePullRequest',
+    )
+    expect(applied.length, '恰好一次真实创建').toBe(1)
+    expect(skipped.length, '恰好一次幂等复用').toBe(1)
+    expect(skipped[0]?.payload.pr_number).toBe(applied[0]?.payload.pr_number)
+  })
+
+  it('提交后重复投递:NoTransition,不再触碰任何副作用', async () => {
+    const { taskId, repoId } = await seedTaskWithRemote()
+    const git = new GitWorkspace({ root })
+    await git.ensureBareRepo(repoId, `file://${origin}`)
+    const gateway = firstTimeCreated()
+    const driver = new WorkflowDriver(
+      new RuleBasedPolicyEngine(DEFAULT_RULESET),
+      { git, repoId, baseBranch: 'main' },
+      gateway,
+    )
+
+    const first = await driver.advance(taskId, { type: 'RunSucceeded', stage: 'review' }, NOW)
+    expect(first.ok && first.value.to === 'S-PR_OPEN').toBe(true)
+    const callsAfterFirst = gateway.calls.length
+
+    // 状态已在 S-PR_OPEN,同一事件再来一次
+    const again = await driver.advance(taskId, { type: 'RunSucceeded', stage: 'review' }, NOW)
+    expect(again.ok).toBe(true)
+    if (!again.ok) return
+    expect(again.value.advanced, '不该有转移').toBe(false)
+    expect(again.value.effects).toEqual([])
+    expect(gateway.calls.length, 'gateway 不该被再次调用').toBe(callsAfterFirst)
+
+    // 「系统看到了这个事件但没动」被如实记录
+    const evs = await eventsOf(taskId)
+    const noTransition = evs.find((e) => e.type === 'NoTransition')
+    expect(noTransition, '应有 NoTransition 事件').toBeDefined()
+    expect(noTransition?.payload.event).toBe('RunSucceeded')
+  })
+})
