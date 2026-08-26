@@ -516,4 +516,27 @@ describe('interrupt 杀子进程(注入 spawn fixture)', () => {
     expect(intr.ok).toBe(true)
     expect(procs[0]?.killed).toEqual([])
   })
+
+  it('interrupt reason=timeout → awaitResult 返 TIMEOUT(B1,方案 B);cancelled → CANCELLED', async () => {
+    async function runWith(reason: 'cancelled' | 'timeout') {
+      const { spawnFn, procs } = hangingSpawn()
+      const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true)
+      try {
+        const adapter = new OmpAdapter({ spawnFn, interruptKillTimeoutMs: 1 })
+        const started = await adapter.startRun(spec())
+        expect(started.ok).toBe(true)
+        if (!started.ok) return null
+        const intr = await adapter.interrupt(started.value, reason)
+        expect(intr.ok).toBe(true)
+        procs[0]?.emitClose(143)
+        const res = await adapter.awaitResult(started.value)
+        return res.ok ? res.value.status : null
+      } finally {
+        killSpy.mockRestore()
+      }
+    }
+
+    expect(await runWith('timeout')).toBe('TIMEOUT')
+    expect(await runWith('cancelled')).toBe('CANCELLED')
+  })
 })

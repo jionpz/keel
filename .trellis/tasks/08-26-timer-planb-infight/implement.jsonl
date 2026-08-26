@@ -1,0 +1,5 @@
+{"file": "docs/04-state-machine.md", "reason": "R-008/R-009/R-010 Run 级转移、TIMEOUT vs CANCELLED 语义、timer 幂等"}
+{"file": "docs/05-contracts/harness-adapter.md", "reason": "InterruptReason 契约、CAP-INTERRUPT 降级、awaitResult 四态"}
+{"file": "docs/05-contracts/session-manager.md", "reason": "runSessionUntilValid/advance 语义与 R-007 回灌循环"}
+{"file": "docs/05-contracts/artifact-store.md", "reason": "event 投递、幂等(reap 与事件一致性)"}
+{"file": "docs/adr/0003-workflow-engine.md", "reason": "可重放性 —— 打断属执行层非控制面"}

@@ -1,0 +1,3 @@
+{"file": "docs/04-state-machine.md", "reason": "验证 R-009 TIMEOUT → T-030 重试语义未破"}
+{"file": "docs/05-contracts/harness-adapter.md", "reason": "验证 InterruptReason timeout 与四态一致性"}
+{"file": "docs/05-contracts/session-manager.md", "reason": "验证 pipeline 打断不破坏 R-007 循环"}

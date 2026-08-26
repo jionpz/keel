@@ -51,6 +51,8 @@ interface RunState {
   readonly spec: RunSpec
   promise: Promise<Result<RunResult>>
   aborted: boolean
+  /** interrupt reason='timeout' 时置 —— awaitResult 分流 TIMEOUT vs CANCELLED(方案 B) */
+  timeout: boolean
   /** 已 spawn 的子进程 —— interrupt 需要它做优雅终止 */
   proc: ChildProcess | null
 }
@@ -110,6 +112,7 @@ export class OmpAdapter implements HarnessAdapter {
       handle,
       spec,
       aborted: false,
+      timeout: false,
       proc: null,
       promise: Promise.resolve(ok({} as RunResult)),
     }
@@ -144,6 +147,9 @@ export class OmpAdapter implements HarnessAdapter {
     //   防 omp 派生的子进程逃逸。
     //   SIGTERM 先给优雅退出机会;兜底超时后 SIGKILL(进程可能无视 TERM 不退出)。
     state.aborted = true
+    // 方案 B:reason='timeout'(R-009 墙钟超时)与人工取消(R-010)分流 ——
+    // awaitResult 依 timeout 返回 TIMEOUT 而非 CANCELLED,使 T-030 可重试
+    state.timeout = _reason === 'timeout'
     const proc = state.proc
     if (proc === null || proc.pid === undefined) return ok(undefined)
     const group = -proc.pid
@@ -202,8 +208,9 @@ export class OmpAdapter implements HarnessAdapter {
     state.proc = null
 
     if (state.aborted) {
+      // 方案 B:timeout(R-009,墙钟超时→TIMEOUT→可重试)vs 人工取消(R-010→CANCELLED)
       return ok({
-        status: 'CANCELLED',
+        status: state.timeout ? 'TIMEOUT' : 'CANCELLED',
         text: null,
         proposals: [],
         usage: { tokens_in: null, tokens_out: null, cost_usd: null, cost_basis: 'unavailable' },

@@ -101,7 +101,7 @@ export interface WorkspaceDiff {
   readonly is_dirty: boolean
 }
 
-export type InterruptReason = 'cancelled' | 'budget' | 'takeover'
+export type InterruptReason = 'cancelled' | 'budget' | 'takeover' | 'timeout'
 
 export interface DisposeReport {
   /**
