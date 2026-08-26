@@ -1,0 +1,3 @@
+{"file": "docs/adr/0003-workflow-engine.md", "reason": "查证对象:硬约束/可重放声明/待查证清单"}
+{"file": "docs/04-state-machine.md", "reason": "§5 幂等与重放语义 —— H2 可重放性代码对应"}
+{"file": "docs/02-glossary.md", "reason": "Control Plane 硬约束(纯函数/时间注入)定义"}

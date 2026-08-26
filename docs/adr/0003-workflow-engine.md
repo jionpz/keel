@@ -1,8 +1,8 @@
 # ADR-0003 · Workflow engine 选型
 
-**Status**: Proposed ⚠️ **依赖未完成的查证**
-**Date**: 2026-08-22
-**依据**: `.trellis/tasks/08-22-keel-architecture-framework/research/workflow-engine.md`
+**Status**: **Accepted**（2026-08-26 查证通过）
+**Date**: 2026-08-22（查证 2026-08-26）
+**依据**: `.trellis/tasks/08-22-keel-architecture-framework/research/workflow-engine.md` + `.trellis/tasks/08-26-adr0003-verification/report.md`（查证报告）
 
 ## Context
 
@@ -74,8 +74,10 @@
 - 需要一个 timer 轮询循环，其自身的存活也需要监控
 - 阶段二重估触发条件见 `docs/09-roadmap.md`
 
-### 转 Accepted 前必须查证
+### 转 Accepted 前必须查证(2026-08-26 全部完成,详见查证报告)
 
-- [ ] Temporal 确定性约束的具体范围、signal 投递保证、自托管最小组件数
-- [ ] Inngest 自托管方案的成熟度与数据驻留边界
-- [ ] Postgres `SKIP LOCKED` 队列的已知坑（长事务、连接池饥饿）
+- [x] Temporal 确定性约束的具体范围、signal 投递保证、自托管最小组件数 —— **官方文档确认**:确定性约束与 Keel 硬约束同构(纯函数重放、时间/ timer/ 外部交互 Activity 化);dev server 单二进制、生产 compose 多组件;signal 记入 Event History 不丢
+- [x] Inngest 自托管方案的成熟度与数据驻留边界 —— **自托管 1.0 起官方支持,单二进制 + 本地 SQLite/PG/Redis**(数据驻留本地,与 Keel 数据流向无冲突);但「官方不保证直接支持自托管实例」
+- [x] Postgres `SKIP LOCKED` 队列的已知坑（长事务、连接池饥饿）—— **官方语法确认**;Keel 的 claim/收割均短事务 + SKIP LOCKED,符合最佳实践
+
+**结论(2026-08-26)**:硬约束(转移纯函数)已被自动化强制(C3 + dep-cruiser + 反例);Temporal 官方确认「迁移 = 换掉谁调用转移、谁持久化结果」可行 —— **自研最小状态机决策维持,迁移路径确证不是幻想**。剩余运维成本(dead letter/限流/优雅关闭)属阶段二重估,见 roadmap。
