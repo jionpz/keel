@@ -64,12 +64,24 @@
 | 项 | 状态 |
 |---|---|
 | 文档集 | ✅ 完成 |
-| Harness 接口调研 | ⚠️ **仅 Claude Code 完成**；其余因推理网关持续 429 未完成 |
+| Harness 接口调研 | ⚠️ **仅 Claude Code / OMP 完成**（ADR-0005 实测） |
 | `ADR-0002` 实现语言 | ✅ **Accepted — TypeScript / Node** |
-| `ADR-0003` Workflow engine | ⚠️ Proposed，待查证 |
-| `ADR-0005` Harness 分级 | ⚠️ Proposed，待调研补全 |
-| 仓库骨架 | ✅ 完成 —— 四条架构约束已机械化，见下 |
-| v0.1 实现 | ✅ 核心闭环已跑通；⚠️ 真实 GitHub PR/CI 集成待接入（需远程仓库与凭据） |
+| `ADR-0003` Workflow engine | ✅ **Accepted**（2026-08-26 查证:硬约束已自动化强制,迁移路径确证） |
+| `ADR-0005` Harness 分级 | ⚠️ OMP 接入时实测修订;其余 harness 未查证 |
+| 仓库骨架 | ✅ 完成 —— 四条架构约束已机械化 |
+| v0.1 实现 | ✅ **核心闭环 + 真实 GitHub PR/CI + durable timer + CLI** 已落地(`keel timer-worker/run-task/status`) |
+
+### CLI(2026-08-26 新增)
+
+```bash
+pnpm run build                 # 产 dist/,bin 指向 dist/cli/index.js
+keel --help                    # 三命令:
+keel timer-worker              # 到期 timer 单次收割(+ --interval 常驻)
+keel run-task <taskId>         # 驱动单 task 到终态(真实 OMP + worktree)
+keel status <taskId> [--events N]   # task/run/事件摘要
+```
+
+开发未 build:`pnpm tsx src/cli/index.ts <cmd>`。
 
 ### 文档与代码的一致性是被强制的，不是靠自觉
 
