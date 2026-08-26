@@ -161,6 +161,14 @@ describe('完整编排器合并验收(真实 OMP + 真实 GitHub)', () => {
           ),
         )
         console.log('merge-acc human_review, rfc body:', JSON.stringify(rfc.rows[0]?.body))
+        const pd = await asOwner((c) =>
+          c.query<{ body: { decision?: string; facts_snapshot?: Record<string, unknown> } }>(
+            `SELECT body FROM artifact WHERE task_id=$1 AND kind='policy_decision'
+             ORDER BY committed_at_seq DESC LIMIT 1`,
+            [taskId],
+          ),
+        )
+        console.log('merge-acc human_review, policy_decision:', JSON.stringify(pd.rows[0]?.body))
       }
       expect(TERMINAL_LEGIT, `应到合法终态,实际 ${result.value.finalStatus}`).toContain(
         result.value.finalStatus,

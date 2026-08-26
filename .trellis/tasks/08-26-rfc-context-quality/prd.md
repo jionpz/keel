@@ -52,3 +52,10 @@
 
 - 轻量任务,PRD 为主,重跑验收耗时 ~8min。
 - 与 `08-25-merge-acceptance` 的验收记录衔接。
+
+## 验收记录(2026-08-25)
+
+- **R1 达成**:prompt 聚焦后,rfc_draft 模型产出完全对应 feedback(「导出 Excel 支持按日期筛选」,goals 均为反馈内容),不再是项目级 RFC。
+- **policy_facts**:该轮落库 = `{risk:low, complexity:low, estimated_files_changed:1, security_related:false}`。
+- **裁决待查**:确定性验证 low/low/1/false → auto_develop(engine 纯函数)。但真实验收仍 S-HUMAN_REVIEW —— rfc_ready 求值时的 facts 与落库版不一致的可能性(求值时机/R-007 中间版),或验收进程清理时序导致 psql 残留非本轮。需要一次「不清理 DB」的干净单轮捕获归因。
+- **结论**:上下文质量修复达成(模型对反馈写 RFC);auto/human 裁决是 Policy 职责,且确定性下 low→auto 成立。
