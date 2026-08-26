@@ -65,7 +65,7 @@ export function promptFor(stage: Stage, runId: string): string {
 
     case 'rfc_draft':
       return [
-        '把方案写成 RFC。只输出一个 JSON 对象（用 ```json 围栏），形如：',
+        '把**用户反馈**写成 RFC。只输出一个 JSON 对象（用 ```json 围栏），形如：',
         '```json',
         '{"schema_version":"1.0","title":"<标题>","problem":"<问题>",',
         ' "goals":["<目标>"],"non_goals":["<不做什么>"],',
@@ -74,7 +74,9 @@ export function promptFor(stage: Stage, runId: string): string {
         ' "policy_facts":{"risk":"<low|medium|high>","complexity":"<low|medium|high>",',
         '  "estimated_files_changed":<整数>,"security_related":<true|false>}}',
         '```',
-        'policy_facts 必须按 RFC 的真实内容填写，不要套用固定取值。',
+        '**方案的全部依据**来自上下文里的「用户反馈(原文)」与「当前事实(A-State)」' +
+          '的候选方案(candidate_options):RFC 必须只解决这条反馈,不要给整个项目写。',
+        '若反馈不完整需要澄清,如实写 policy_facts 并按真实风险评估,不要硬凑 low。',
       ].join('\n')
 
     case 'develop':

@@ -27,8 +27,10 @@ describe('promptFor · rfc_draft 的 policy_facts', () => {
     expect(prompt).not.toContain('非安全相关')
   })
 
-  it('明确要求如实填写', () => {
-    expect(prompt).toContain('必须按 RFC 的真实内容填写')
+  it('明确要求如实填写(不套固定取值,不硬凑 low)', () => {
+    const rfcPrompt = promptFor('rfc_draft', 'run-1')
+    expect(rfcPrompt).toContain('不要硬凑 low')
+    expect(rfcPrompt).toContain('全部依据')
   })
 })
 
@@ -57,5 +59,20 @@ describe('promptFor · critic 的结构化评审(#1-15)', () => {
   it('要求覆盖所有候选方案并如实报置信度', () => {
     expect(prompt).toContain('必须覆盖被评审的每个候选方案')
     expect(prompt).toContain('confidence')
+  })
+})
+
+describe('promptFor · rfc_draft 的方案来源聚焦(issue #25)', () => {
+  const prompt = promptFor('rfc_draft', 'run-r1')
+
+  it('明确方案来自用户反馈 + A-State 候选,不是项目整体', () => {
+    expect(prompt).toContain('用户反馈')
+    expect(prompt).toContain('candidate_options')
+    expect(prompt).toContain('不要给整个项目写')
+  })
+
+  it('要求如实评估而不是硬凑 low', () => {
+    expect(prompt).toContain('不要硬凑 low')
+    expect(prompt).toContain('按真实风险评估')
   })
 })
