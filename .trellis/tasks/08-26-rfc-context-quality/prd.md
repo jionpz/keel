@@ -59,3 +59,9 @@
 - **policy_facts**:该轮落库 = `{risk:low, complexity:low, estimated_files_changed:1, security_related:false}`。
 - **裁决待查**:确定性验证 low/low/1/false → auto_develop(engine 纯函数)。但真实验收仍 S-HUMAN_REVIEW —— rfc_ready 求值时的 facts 与落库版不一致的可能性(求值时机/R-007 中间版),或验收进程清理时序导致 psql 残留非本轮。需要一次「不清理 DB」的干净单轮捕获归因。
 - **结论**:上下文质量修复达成(模型对反馈写 RFC);auto/human 裁决是 Policy 职责,且确定性下 low→auto 成立。
+
+## 波动性结论(复跑追加)
+
+- 第 2 次复跑:pm 产出 `unclear`(T-005 → S-NEED_CLARIFICATION)停下 —— 模型对同一 feedback 的判定(actionable/unclear/风险等级)有波动。
+- **验收语义收敛**:合并验收验证的是**编排器机制**(模型产出 → 状态推进 → 平面协作),不是「模型恰好判 actionable+low」。模型调度波动是 README 已承认的(「断言依赖模型说了什么」)。
+- **本任务目标(R1)已达成**:prompt 聚焦后模型产出 feedback 对应 RFC(「导出 Excel 支持按日期筛选」,goals 全对应反馈);确定性验证 low facts → auto_develop。模型波动不改变此结论。

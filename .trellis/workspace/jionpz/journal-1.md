@@ -99,3 +99,16 @@
   —— context state section 内容/workspace 干扰待查,不阻塞编排器验收。
 - 远程零残留(0 PR / 0 ai/* 分支);S-DONE 段由 github-pr.acceptance +
   ci-wiring 各自覆盖。
+
+## 2026-08-26 · rfc_draft 上下文质量(issue #25)
+
+任务:`.trellis/tasks/archive/2026-08/08-26-rfc-context-quality`(已归档)。
+
+- R1:promptFor('rfc_draft') 明确方案来源=用户反馈+A-State 候选,
+  「不要给整个项目写」+ 如实评估不硬凑 low。生效:模型产出 feedback
+  对应 RFC(「导出 Excel 支持按日期筛选」)而非项目级。
+- R3:builder.test 确定性钉住 rfc_draft context 含 feedback+A-State。
+- 波动性结论:模型对同一 feedback 判定(actionable/unclear/风险)有波动,
+  验收因此停在不同状态 —— 这不是 Keel 缺陷;编排器机制验证达成,
+  模型调度波动是 acceptance 的本质(README 已承认)。
+- 确定性:low/low/1/false facts → auto_develop(engine 纯函数)。
