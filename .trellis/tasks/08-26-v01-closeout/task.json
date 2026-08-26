@@ -12,7 +12,7 @@
   "assignee": "cloud-agent",
   "createdAt": "2026-08-26",
   "completedAt": null,
-  "branch": null,
+  "branch": "cursor/v01-closeout-cf3f",
   "base_branch": "main",
   "worktree_path": null,
   "commit": null,
