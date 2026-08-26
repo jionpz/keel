@@ -78,21 +78,27 @@
 - [x] `S1`–`S3` 安全：`OmpAdapter` 对 `untrusted` 无能力即拒绝（`CAPABILITY_UNSUPPORTED`，
   `omp.ts` + `adapters.test.ts` 契约拒绝层）；`RunSpec.workspace.untrusted` 是必填布尔、无默认值
   （类型层强制）；Human L0 路径同样显式传 `untrusted: true`（`human-harness.test.ts`）
-- [ ] `O1`–`O4` 可观测：**部分落地，缺口显式如下**
+- [x] `O1`–`O4` 可观测：**已落地**（O2 由 `08-26-v01-budget-fuse` 补齐，2026-08-26）
   - [x] `O1` 事件流完整：每次转移（`TaskStatusChanged`+transition ID）、每次 Proposal
     （`ProposalAccepted`/`ProposalRejected`）、每次 Policy 求值（`PolicyEvaluated`）都有事件
-  - [ ] `O2` ⚠️ **缺口**：`event.trace_id`/`span_id` 列与读写通道在（`appendEvent`/`readEvents`），
-    但编排路径写事件时**未贯穿填入** —— 当前所有事件的 `trace_id` 为 null。后续任务待建（未排期）
+  - [x] `O2` trace_id 贯穿：`ensureTraceId`（`src/fact/trace.ts`）在首条事件生成并固定，
+    driver / effects / pipeline / builder / fuse 的所有事件写入统一填入
+    （`budget-fuse.test.ts` 断言同一 Task 全部事件 trace_id 相同且非 null）。
+    `span_id` 按 PRD 约定 v0.1 保持 null，不强制
   - [x] `O3` `ContextBuilt` 记录 `source_ref` 与 `dropped`（`builder.ts`；`v01-criterion` 断言 §5）
   - [x] `O4` 一条命令导出完整时间线：`pnpm run timeline -- <task_id>`（`scripts/timeline.ts`）
-- [ ] `C1`–`C4` 成本：**部分落地，缺口显式如下**
-  - [ ] `C1` ⚠️ **部分**：`run` 表列齐全、Adapter 如实上报三态 `cost_basis`
-    （omp=estimated 实测 fixture、human=unavailable），但编排循环**未把 usage 写回 run 行**，
-    `cost_spent_usd` 恒为 0 → 归入 `v01-budget-fuse`
-  - [ ] `C2` ⚠️ **部分**：`task.budget_usd` 列在，无全局默认值 → 归入 `v01-budget-fuse`
-  - [ ] `C3` ⚠️ **缺口**：超预算触发 `C-002`（`control_mode → paused`）未实现，
-    是 `control_mode` 转移的首次实现、牵动转移表 → 后续任务 **`v01-budget-fuse`**（仅记录，未建）
-  - [x] `C4` 无 `CAP-COST` 的兜底上限：每 Run `wall_clock_s: 180` + `max_turns: 8`（`loop.ts`）
+- [x] `C1`–`C4` 成本：**已落地**（C1–C3 由 `08-26-v01-budget-fuse` 补齐，2026-08-26）
+  - [x] `C1` 编排循环把全部轮次累计的 usage 写回 run 行（`loop.ts` executeRun +
+    `pipeline.ts` PipelineOutcome.usage），三态 `cost_basis` 原样落库，
+    null 不用 0 冒充（`budget-fuse.test.ts` 断言写回值与桩上报一致）
+  - [x] `C2` 全局默认预算 `DEFAULT_TASK_BUDGET_USD = 10`（`src/control/budget/fuse.ts`），
+    `task.budget_usd` 为 null 时生效（`budget-fuse.test.ts` 断言 BudgetExceeded 携带默认值）
+  - [x] `C3` 超预算触发 `C-002`：`checkBudgetFuse` 在成本写回同一事务内核算，
+    `control_mode → paused` 且 **status 不变**，写 `ControlModeChanged`+`BudgetExceeded`，
+    后续 `driver.advance` 因 `control_mode_not_auto` 不再派发（`budget-fuse.test.ts` 全断言）。
+    实现落点是编排循环 post-run 而非转移表 —— C-* 与 T-* 是正交维度，转移表未动
+  - [x] `C4` 无 `CAP-COST` 的兜底上限：每 Run `wall_clock_s: 180` + `max_turns: 8`（`loop.ts`）；
+    `unavailable` 的 Run 不参与金额熔断（`budget-fuse.test.ts` 断言不误触发）
 - [ ] `N1`–`N4` 并发：**N1 落地，其余诚实标注**
   - [x] `N1` 每 Task 独立 worktree（`orchestrator-workspace.test.ts` 断言写入互不可见）
   - [ ] `N2` ⚠️ **缺口**：`task.status` 更新在事务内先读后写，但无 `WHERE status=期望值` 条件。
@@ -179,8 +185,9 @@
 
 ### 复核结论
 
-核心判据的三个部分都有真实证据；跨切面清单中 `O2`（trace_id 贯穿）、
-`C1`–`C3`（成本持久化与 `C-002` 熔断，→ `v01-budget-fuse`）、`N2`–`N4`
-（乐观锁/RUNNING 唯一索引/并发上限）为**显式缺口**，不假装完成。
+核心判据的三个部分都有真实证据；跨切面清单中 `O2`（trace_id 贯穿）与
+`C1`–`C3`（成本持久化与 `C-002` 熔断）已由 `08-26-v01-budget-fuse` 补齐
+（2026-08-26，确定性测试 `src/e2e/budget-fuse.test.ts`）；`N2`–`N4`
+（乐观锁/RUNNING 唯一索引/并发上限）仍为**显式缺口**，不假装完成。
 合并验收（一次真实运行同时证明三部分 + 真实 PR/CI）的执行记录见
 `08-26-v01-closeout/prd.md`。

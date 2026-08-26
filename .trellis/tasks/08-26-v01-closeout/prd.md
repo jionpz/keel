@@ -109,9 +109,9 @@
   6 条完整事件（`RunCreated → TaskStatusChanged(T-002) → ContextBuilt →
   ProposalAccepted → RunCreated → TaskStatusChanged(T-004)`）；
   缺参数 / 非 UUID / task 不存在 / 数据库不可用四条失败路径均已反例验证（exit 1 + 可操作信息）。
-- **合并验收 `v01-criterion-github.acceptance.test.ts` 代码已就绪但未在本环境执行**：
-  本环境无 omp CLI、无推理网关凭据，`gh` 为只读 token（不能建 PR），
-  按「明确失败优于假绿」不伪造记录。**待主会话 / 有凭据环境执行**：
+- **合并验收 `v01-criterion-github.acceptance.test.ts`**：
+  - 2026-08-26 云环境二次尝试：已安装 omp v18.0.6；GitHub 凭据与 DB 就绪；测试启动编排器后在 PM 阶段因 **缺少 DeepSeek API key** 失败（omp 报错 `No API key found for deepseek`）——非代码缺陷。
+  - **待有 API key 的环境执行**（命令同上）；通过后补 PR 链接。
 
   ```bash
   KEEL_GITHUB_TOKEN="$(gh auth token)" \

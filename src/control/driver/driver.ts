@@ -17,6 +17,7 @@ import type { PullRequestGateway } from '../../contracts/git-provider.js'
 import type { PolicyEngine } from '../../contracts/policy-engine.js'
 import { asRole } from '../../fact/db.js'
 import type { GitWorkspace } from '../../fact/git-workspace.js'
+import { ensureTraceId } from '../../fact/trace.js'
 import type { ControlMode, TaskStatus } from '../../shared/ids.js'
 import { transition } from '../transition/index.js'
 import type { TransitionEvent } from '../transition/types.js'
@@ -75,6 +76,9 @@ export class WorkflowDriver {
         return err<AdvanceOutcome>(makeError('NOT_FOUND', `找不到 task ${taskId}`))
       }
 
+      // O2：trace_id 贯穿。在同一事务内 ensure，本次 advance 写的所有事件共用
+      const traceId = await ensureTraceId(c, taskId)
+
       const facts = await loadTransitionFacts(c, taskId, event)
       const result = transition(task.status, task.control_mode, event, facts)
 
@@ -83,7 +87,8 @@ export class WorkflowDriver {
       // 但仍要如实记录，否则事件流会缺失「系统看到了这个事件但没动」这个事实。
       if (!result.matched) {
         await c.query(
-          `INSERT INTO event (task_id, type, payload) VALUES ($1,'NoTransition',$2::jsonb)`,
+          `INSERT INTO event (task_id, type, payload, trace_id)
+           VALUES ($1,'NoTransition',$2::jsonb,$3)`,
           [
             taskId,
             JSON.stringify({
@@ -93,6 +98,7 @@ export class WorkflowDriver {
               reason: result.reason,
               detail: result.detail,
             }),
+            traceId,
           ],
         )
         return ok<AdvanceOutcome>({
@@ -109,6 +115,7 @@ export class WorkflowDriver {
         c,
         {
           taskId,
+          traceId,
           event,
           transitionId: result.id,
           now,
@@ -131,7 +138,8 @@ export class WorkflowDriver {
       // 放在最后，让它记录最终的 to 状态。
       // payload 含 transition ID —— 使事件流可直接对照转移表核验
       await c.query(
-        `INSERT INTO event (task_id, type, payload) VALUES ($1,'TaskStatusChanged',$2::jsonb)`,
+        `INSERT INTO event (task_id, type, payload, trace_id)
+         VALUES ($1,'TaskStatusChanged',$2::jsonb,$3)`,
         [
           taskId,
           JSON.stringify({
@@ -140,6 +148,7 @@ export class WorkflowDriver {
             transition: result.id,
             event: event.type,
           }),
+          traceId,
         ],
       )
 
