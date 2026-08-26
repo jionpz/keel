@@ -1,0 +1,2 @@
+{"file": "docs/04-state-machine.md", "reason": "验证 T-008 澄清收割与 run 超时 T-030 语义在 worker 路径成立"}
+{"file": "docs/05-contracts/harness-adapter.md", "reason": "验证 TIMEOUT vs CANCELLED 分流在 worker 场景一致"}

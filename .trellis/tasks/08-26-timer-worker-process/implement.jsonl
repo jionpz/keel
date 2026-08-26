@@ -1,0 +1,4 @@
+{"file": "docs/04-state-machine.md", "reason": "R-009 TIMEOUT → T-030/T-031、T-008 澄清收割、run 状态机 RUNNING 判定"}
+{"file": "docs/05-contracts/harness-adapter.md", "reason": "InterruptReason timeout 分流 —— worker 收割与 loop 等值依据"}
+{"file": "docs/05-contracts/session-manager.md", "reason": "advance/R-007 循环 —— worker 直接调 driver.advance 的合法性"}
+{"file": "docs/05-contracts/artifact-store.md", "reason": "event/driver advance 事务语义、幂等"}
