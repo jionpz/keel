@@ -88,8 +88,9 @@ export interface RunOptions {
    * 注入外部事实（CI 结果）的回调。
    *
    * CI 是 Keel 的**外部事实源**（docs/09-roadmap.md §3）——
-   * 系统本身不产生它。v0.1 尚无真实 git/CI 接入（属子任务 7），
-   * 由调用方注入，且注入的事件会被明确标记来源。
+   * 系统本身不产生它。真实接入走 `ci`（GitHubProvider 实现 CiGateway）；
+   * 本回调保留给确定性测试与不依赖远程仓库/凭据的本地闭环
+   * （见 v01-criterion.acceptance.test.ts 的头注释），注入的事件会被明确标记来源。
    */
   readonly externalCi?: (taskId: string) => Promise<'passed' | 'failed'>
   /**
@@ -267,8 +268,15 @@ async function executeRun(
   )
   if (!outcome.ok) return err(outcome.error)
 
+  // 谁执行了这个 run 是事实，记在 run 行上（O 可观测 + ADR-0005）——
+  // Human L0 e2e 据此断言「L0 路径真的被执行过」，而不是靠桩自己声称。
+  const descriptor = deps.adapter.describe()
   await asRole('keel_control', (c) =>
-    c.query(`UPDATE run SET status='SUCCEEDED', ended_at=now() WHERE id=$1`, [pending.id]),
+    c.query(
+      `UPDATE run SET status='SUCCEEDED', ended_at=now(), harness_id=$2, harness_tier=$3
+       WHERE id=$1`,
+      [pending.id, descriptor.harness_id, descriptor.tier],
+    ),
   )
 
   // 把这一轮的改动提交到该 Task 的分支。

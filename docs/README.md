@@ -64,12 +64,12 @@
 | 项 | 状态 |
 |---|---|
 | 文档集 | ✅ 完成 |
-| Harness 接口调研 | ⚠️ **仅 Claude Code 完成**；其余因推理网关持续 429 未完成 |
+| Harness 接口调研 | ⚠️ **完成 Claude Code 与 OMP**（后者见 ADR-0005 修订）；其余属阶段二 |
 | `ADR-0002` 实现语言 | ✅ **Accepted — TypeScript / Node** |
 | `ADR-0003` Workflow engine | ⚠️ Proposed，待查证 |
-| `ADR-0005` Harness 分级 | ⚠️ Proposed，待调研补全 |
+| `ADR-0005` Harness 分级 | ✅ **Accepted — Claude Code + OMP 首批**（2026-08-23 修订） |
 | 仓库骨架 | ✅ 完成 —— 四条架构约束已机械化，见下 |
-| v0.1 实现 | ✅ 核心闭环已跑通；⚠️ 真实 GitHub PR/CI 集成待接入（需远程仓库与凭据） |
+| v0.1 实现 | ✅ 核心闭环已跑通；✅ 真实 GitHub PR/CI 已接入（`GitHubProvider` 实现 PR 网关与 CI 网关，编排器经 `opts.ci` 消费） |
 
 ### 文档与代码的一致性是被强制的，不是靠自觉
 

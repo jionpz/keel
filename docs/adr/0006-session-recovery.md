@@ -1,7 +1,19 @@
 # ADR-0006 · Session 恢复策略
 
-**Status**: Proposed
+**Status**: Proposed（2026-08-26 复核后**保持** Proposed，理由见下）
 **Date**: 2026-08-22
+
+> 2026-08-26 复核：v0.1 交付了本 ADR 的**前置能力**，但没有交付**决策本体**，
+> 按「未实现的决策不得标 Accepted」的纪律保持 Proposed：
+>
+> - 已交付：`session_ref` 的采集与保留（OmpAdapter 的 `dispose` 不销毁会话，
+>   `--resume` 实测有效，见下方 2026-08-23 补充）；
+> - 未交付：由 `A-Checkpoint.resume_hint.mode` 分派的 restore 双路径，
+>   以及 `session_ref` 失效时自动回退 `rematerialize` 并记 Event。
+>   `HarnessSessionManager` 尚无 `restore()`（v0.1 每轮都是完整的 Adapter 调用，
+>   见 `src/execution/session/manager.ts` 的注释）。
+>
+> 待恢复路径真实落地并经反例验证（故意作废 session_ref 观察回退）后转 Accepted。
 
 ## Context
 

@@ -68,17 +68,44 @@
 
 ## 跨子任务验收标准
 
-以下由**父任务**负责，不属于任何单个子任务：
+以下由**父任务**负责，不属于任何单个子任务（勾选与缺口标注：2026-08-26 集成复核，证据见文末）：
 
-- [ ] 端到端判据达成（见 Goal）
-- [ ] `docs/08-cross-cutting.md` 的 v0.1 最低要求全部落地：
-  - [ ] `S1`–`S3` 安全：Adapter 强制 `CAP-UNTRUSTED_WORKSPACE`；`workspace.untrusted` 无默认值
-  - [ ] `O1`–`O4` 可观测：事件流完整、`trace_id` 贯穿、`ContextBuilt` 记录 `source_ref` 与 `dropped`
-  - [ ] `C1`–`C4` 成本：`cost_basis` 三态、超预算触发 `C-002`
-  - [ ] `N1`–`N4` 并发：每 Task 独立 worktree、乐观锁、单 Task 至多一个 `RUNNING` Run
-- [ ] `ADR-0003` 硬约束保持：转移函数仍是纯函数（骨架的 `C3` 检查持续为绿）
-- [ ] 骨架建立的四条约束检查**没有被放宽**（改约束要走 ADR）
-- [ ] `docs/` 与实现的出入已同步（同步文档，不让代码将就）
+- [x] 端到端判据达成（见 Goal）——
+  本地闭环 `v01-criterion` 已实测通过（真实 OMP session 驱动全程，CI 由测试注入并显式标记）；
+  真实 push / PR / CI 回读由 `github-pr` 实测通过（2026-08-23，见 `github-provider.ts` 中的实测注记）。
+  **合并为一次运行**的 `v01-criterion-github.acceptance.test.ts` 代码已就绪，
+  执行记录见 `08-26-v01-closeout` 任务 `prd.md`
+- [x] `S1`–`S3` 安全：`OmpAdapter` 对 `untrusted` 无能力即拒绝（`CAPABILITY_UNSUPPORTED`，
+  `omp.ts` + `adapters.test.ts` 契约拒绝层）；`RunSpec.workspace.untrusted` 是必填布尔、无默认值
+  （类型层强制）；Human L0 路径同样显式传 `untrusted: true`（`human-harness.test.ts`）
+- [ ] `O1`–`O4` 可观测：**部分落地，缺口显式如下**
+  - [x] `O1` 事件流完整：每次转移（`TaskStatusChanged`+transition ID）、每次 Proposal
+    （`ProposalAccepted`/`ProposalRejected`）、每次 Policy 求值（`PolicyEvaluated`）都有事件
+  - [ ] `O2` ⚠️ **缺口**：`event.trace_id`/`span_id` 列与读写通道在（`appendEvent`/`readEvents`），
+    但编排路径写事件时**未贯穿填入** —— 当前所有事件的 `trace_id` 为 null。后续任务待建（未排期）
+  - [x] `O3` `ContextBuilt` 记录 `source_ref` 与 `dropped`（`builder.ts`；`v01-criterion` 断言 §5）
+  - [x] `O4` 一条命令导出完整时间线：`pnpm run timeline -- <task_id>`（`scripts/timeline.ts`）
+- [ ] `C1`–`C4` 成本：**部分落地，缺口显式如下**
+  - [ ] `C1` ⚠️ **部分**：`run` 表列齐全、Adapter 如实上报三态 `cost_basis`
+    （omp=estimated 实测 fixture、human=unavailable），但编排循环**未把 usage 写回 run 行**，
+    `cost_spent_usd` 恒为 0 → 归入 `v01-budget-fuse`
+  - [ ] `C2` ⚠️ **部分**：`task.budget_usd` 列在，无全局默认值 → 归入 `v01-budget-fuse`
+  - [ ] `C3` ⚠️ **缺口**：超预算触发 `C-002`（`control_mode → paused`）未实现，
+    是 `control_mode` 转移的首次实现、牵动转移表 → 后续任务 **`v01-budget-fuse`**（仅记录，未建）
+  - [x] `C4` 无 `CAP-COST` 的兜底上限：每 Run `wall_clock_s: 180` + `max_turns: 8`（`loop.ts`）
+- [ ] `N1`–`N4` 并发：**N1 落地，其余诚实标注**
+  - [x] `N1` 每 Task 独立 worktree（`orchestrator-workspace.test.ts` 断言写入互不可见）
+  - [ ] `N2` ⚠️ **缺口**：`task.status` 更新在事务内先读后写，但无 `WHERE status=期望值` 条件。
+    v0.1 编排是单进程同步、无并发写者，风险受控但未按 §4.2 机械强制
+  - [ ] `N3` ⚠️ **部分**：无 `(task_id) WHERE status='RUNNING'` 部分唯一索引；
+    行为上由同步循环保证一次只跑一个 run
+  - [ ] `N4` ⚠️ **缺口**：并发上限未实现 —— v0.1 无调度器（durable timer / work queue 刻意切出）
+- [x] `ADR-0003` 硬约束保持：转移函数仍是纯函数（`check:purity` + dependency-cruiser
+  `transition-must-be-pure` 持续为绿；副作用只作为返回值中的描述）
+- [x] 骨架建立的四条约束检查**没有被放宽**（`biome.json`/`.dependency-cruiser.cjs`/
+  `check:generated`/`check:transitions`/`check:purity` 均未动；`pnpm run check` 全绿）
+- [x] `docs/` 与实现的出入已同步（GitHub 集成状态、ADR-0004 → Accepted、
+  ADR-0006 保持 Proposed 并写明理由、过时的「子任务 7 未完成」注释 —— 见 `08-26-v01-closeout`）
 
 ### 集成复核时必须回答的问题
 
@@ -100,3 +127,60 @@
 
 - 各子任务独立规划、实现、检查、归档
 - 本任务在全部子任务完成后做集成复核，然后才算完成
+
+---
+
+## 集成复核（2026-08-26，由 `08-26-v01-closeout` 执行）
+
+### 问题 1：事件流能否独立回答 `docs/08-cross-cutting.md` §2.2 的四个问题？
+
+**能，四问都有确定答案，且全部来自 Fact Plane（不依赖日志检索）：**
+
+| 问题 | 答案来源 | 证据 |
+|---|---|---|
+| 发生了什么 | `readEvents(task_id, 0)` | `v01-criterion` §4：`TaskStatusChanged` 序列与编排器 steps **逐条相等**；payload 含 `{from, to, transition, event}`，可直接对照转移表核验（如 `{"from":"S-NEW","to":"S-PM_ANALYZING","transition":"T-002","event":"Dispatch"}`）。`pnpm run timeline -- <task_id>` 一条命令导出 |
+| 当时看到了什么 | `ContextBuilt` 事件 | payload 含 `context_id`、`sections[].source_ref`（如 `artifact:rfc@1`、`fixed:role/PM`）与必填 `dropped[]`；`v01-criterion` §5 对每个 session 断言 |
+| 为什么这么判 | `A-PolicyDecision` | body 含 `facts_snapshot`（求值时的事实快照）与 `matched_rules`（命中规则与严格性偏序结果），`engine.ts` 落库、`v01-criterion` §6 断言 `auto_develop` |
+| 按哪版 RFC 做的 | `history(task_id,'rfc','')` | RFC 冻结（`FreezeRfc`）+ 版本链 + `ContextBuilt.sections[].source_ref` 里的 `artifact:rfc@<version>` 指明 Developer/Reviewer 实际看到的版本 |
+
+### 问题 2：有没有哪个副作用不幂等？（重放验证）
+
+**未发现会产生重复外部动作的副作用。** 不是靠推断 —— `effects.test.ts` 的
+「幂等重放」describe 块真的重放了一次（确定性单测，在默认 check 中）：
+
+- **提交前崩溃后的重投**（状态拨回事件发生前）：转移再次命中，`CreatePullRequest`
+  再次执行但 gateway 幂等复用已有 PR → 事件流恰好 1 条 `SideEffectApplied` +
+  1 条 `SideEffectSkipped`，两者指向同一个 `pr_number`，**无第二个 PR**；
+- **提交后的重复投递**：转移不命中 → `NoTransition` 事件如实记录「看到了但没动」，
+  gateway 零调用。
+
+逐类机制：`CreateRun` 靠 `UNIQUE(idempotency_key)` + `ON CONFLICT DO NOTHING`；
+`NotifyHuman`/`AskUser`/`FreezeRfc` 靠事件流判重（`alreadyApplied`）；
+`CreateBranch`/`CleanWorkspace` 靠 git 操作本身幂等（分支名 = `f(task_id)`）；
+`CreatePullRequest` 靠 push 幂等 + gateway 按 head 分支查已有 PR。
+
+**诚实注记**：v0.1 仅记意图的副作用（`StartTimer`/`CreateTask` 等）重放时会重复写
+`SideEffectIntent` 事件 —— 不产生外部动作，只是事件流冗余；真实落地时必须套用同一套判重。
+
+### 问题 3：`HumanAdapter`（L0）路径是否真的被执行过？
+
+**是，且证据在 Fact Plane 而不在测试桩的自述里。** `src/e2e/human-harness.test.ts`
+（确定性，在默认 check 中）把 `HumanAdapter` + 同步 `HumanInbox` 放进
+`runTaskToCompletion` 跑通 PM 阶段：
+
+- `run` 行记账 `harness_id='human'`、`harness_tier='L0'`、`status='SUCCEEDED'`；
+- 人工提交的结论走**与 AI 完全相同**的五步校验落成 `A-StageOutcome`，
+  `produced_by_run` 非空，verdict 驱动 `T-004`；
+- `ContextBuilt` / `ProposalAccepted` 事件与 AI 路径同构；`workspace.untrusted` 同样显式传入。
+
+**诚实边界**：L0 降级矩阵中「无 `CAP-RESUME` 则每轮重物化」这一条在 v0.1 是**平凡成立**的 ——
+编排循环本来就每轮重建上下文，`restore()` 双路径尚未实现（ADR-0006 因此保持 Proposed）。
+真正区分 L0/L1 的恢复路径要到 restore 落地后才被执行。
+
+### 复核结论
+
+核心判据的三个部分都有真实证据；跨切面清单中 `O2`（trace_id 贯穿）、
+`C1`–`C3`（成本持久化与 `C-002` 熔断，→ `v01-budget-fuse`）、`N2`–`N4`
+（乐观锁/RUNNING 唯一索引/并发上限）为**显式缺口**，不假装完成。
+合并验收（一次真实运行同时证明三部分 + 真实 PR/CI）的执行记录见
+`08-26-v01-closeout/prd.md`。
