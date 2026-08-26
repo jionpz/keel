@@ -67,6 +67,10 @@ export interface OrchestratorDeps {
   readonly workspace: OrchestratorWorkspace
   /** 时间由外部注入 —— Control Plane 不读时钟 */
   readonly now: () => string
+  /**
+   * run 级墙钟上限秒(R-009,方案 B)。缺省 180;测试注入短值验证收割。
+   */
+  readonly wallClockS?: number
 }
 
 export interface StepRecord {
@@ -307,7 +311,7 @@ async function executeRun(
   if (!place.ok) return err(place.error)
 
   // 方案 B(issue #26):run 级墙钟 timer —— Keel 侧强制收割,不只靠 harness --max-time
-  const wallClockS = 180 // v0.1 写死的 run 墙钟上限(R-009)
+  const wallClockS = deps.wallClockS ?? 180 // run 级墙钟上限(R-009,方案 B;测试可注入)
   await createRunWallClockTimer(taskId, pending.id, wallClockS, deps.now())
 
   const outcome = await runSessionUntilValid(
