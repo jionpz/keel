@@ -12,7 +12,12 @@
 
 import { randomUUID } from 'node:crypto'
 import { type ErrorKind, err, makeError, ok, type Result } from '../../contracts/errors.js'
-import type { HarnessAdapter, RunResult, RunSpec } from '../../contracts/harness-adapter.js'
+import type {
+  HarnessAdapter,
+  InterruptReason,
+  RunResult,
+  RunSpec,
+} from '../../contracts/harness-adapter.js'
 import type { Proposal, ProposalKind, Usage } from '../../contracts/types.js'
 import { extractJson } from './extract.js'
 
@@ -151,6 +156,19 @@ export class HarnessSessionManager {
       raw,
       extract_error: null,
     })
+  }
+
+  /**
+   * 中断会话(方案 B):透传给 adapter.interrupt。
+   * reason='timeout' → adapter 收敛为 TIMEOUT(R-009,可重试);
+   * 其他 → CANCELLED(R-010)。
+   */
+  async interrupt(handle: SessionHandle, reason: InterruptReason): Promise<Result<void>> {
+    const spec = this.sessions.get(handle.session_id)
+    if (spec === undefined) {
+      return err(makeError('NOT_FOUND', `未知 session ${handle.session_id}`))
+    }
+    return spec.adapter.interrupt({ run_id: handle.run_id, harness_id: handle.harness_id }, reason)
   }
 
   async close(handle: SessionHandle): Promise<Result<void>> {

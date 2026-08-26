@@ -34,6 +34,11 @@ export interface PipelineOptions {
    * 缺失时 requireNow 抛错,不静默回落 DB now()。
    */
   readonly now?: string
+  /**
+   * 墙钟超时(方案 B,issue #26):会话总时长上限,到期 interrupt(handle,'timeout')
+   * → adapter 收敛 TIMEOUT(R-009)。可选;缺省不打断(R-007 行为不变)。
+   */
+  readonly wallClockMs?: number
 }
 
 /** now 缺失即编程错误:事件时间是重放依据,不能由 DB 时钟决定 */
@@ -76,6 +81,16 @@ export async function runSessionUntilValid(
   const opened = await sessions.open(spec)
   if (!opened.ok) return err(opened.error)
   const handle: SessionHandle = opened.value
+
+  // 方案 B(issue #26):墙钟 watchdog —— 会话总时长上限,到期 interrupt('timeout')。
+  // fire-and-forget:打断由 adapter 收敛(awaitResult 返 TIMEOUT → advance 返
+  // RUN_TIMEOUT err → 循环退出),不在这里 await。声明在函数顶层,finally 可见。
+  const watchdog: ReturnType<typeof setTimeout> | undefined =
+    opts.wallClockMs !== undefined && opts.wallClockMs > 0
+      ? setTimeout(() => {
+          void sessions.interrupt(handle, 'timeout')
+        }, opts.wallClockMs)
+      : undefined
 
   try {
     let feedback: string[] = []
@@ -171,6 +186,7 @@ export async function runSessionUntilValid(
       ),
     )
   } finally {
+    clearTimeout(watchdog)
     await sessions.close(handle)
   }
 }
