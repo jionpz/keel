@@ -345,6 +345,14 @@ idempotency_key = hash(task_id, stage, attempt)
 > `human_review_ttl` 刻意**不触发状态转移**。等人这件事没有超时兜底 ——
 > 自动放弃一个等人审的 Task，比让它一直等着更糟。
 
+> **独立 timer worker(issue #26)**：方案 A/B 的收割由编排进程内执行
+> （澄清 branch / watchdog setTimeout）；进程崩溃后到期无人收割。
+> `src/timer/worker.ts` 的 `drainAllDueTimers` 由独立进程定期跑 ——
+> 澄清 TTL → `T-008`；run 墙钟 → `reapTimeoutRun`（仅 `RUNNING` 标
+> `TIMEOUT`，带 `RUNNING` guard）→ `T-030`/`T-031`。并发安全：
+> `SKIP LOCKED` + `WHERE status='RUNNING'`，双 worker 不双投。
+> 启动示例：`scripts/timer-worker.ts`。
+
 ---
 
 **下一篇**：[`06-artifacts.md`](./06-artifacts.md) —— 转移表中出现的 `A-*` 产物的具体 schema。
