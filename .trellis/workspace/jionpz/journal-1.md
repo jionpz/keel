@@ -136,3 +136,15 @@
 
 方案 B 局限(进程崩溃收割)解债:到期收割由独立进程承载,不依赖 loop。
 验证:243 tests 全绿。
+
+## 2026-08-26 · ADR-0003 正式查证(转 Accepted)
+
+任务:`.trellis/tasks/archive/2026-08/08-26-adr0003-verification`(已归档)。
+
+- H1 转移纯度:三层强制(dep-cruiser error + check-purity 8 类 + 纯函数签名)成立
+- H2 可重放:I1/时间注入/getAsOf seq/Facts-Only 四要件齐
+- H3 Temporal 官方:确定性约束与 Keel 同构;dev server 单二进制;迁移=换承载
+- H4 Inngest:自托管成熟(单二进制本地驻留),官方不保证支持
+- H5 SKIP LOCKED:官方语法确认,实现符合短事务姿势
+
+ADR-0003 Proposed → Accepted(自研决策维持,迁移路径确证)。
