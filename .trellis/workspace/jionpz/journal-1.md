@@ -112,3 +112,15 @@
   验收因此停在不同状态 —— 这不是 Keel 缺陷;编排器机制验证达成,
   模型调度波动是 acceptance 的本质(README 已承认)。
 - 确定性:low/low/1/false facts → auto_develop(engine 纯函数)。
+
+## 2026-08-26 · durable timer 方案 B:in-flight 会话收割(issue #26)
+
+任务:`.trellis/tasks/archive/2026-08/08-26-timer-planb-infight`(已归档)。
+
+- B1 InterruptReason 加 timeout;OMP 按 reason 分流 TIMEOUT/CANCELLED
+- B2 pipeline wallClockMs watchdog(fire-and-forget interrupt)
+- B3 executeRun 产/消费 run 级 wall_clock timer(+migration 索引,成功/失败都取消)
+- B4 e2e:挂起 run1→TIMEOUT→T-030 重试 run2 成功;生命周期;幂等
+- B5 文档
+
+验证:235 tests 全绿。Keel 侧强制收割 run 超时(不再只靠 harness --max-time)。
