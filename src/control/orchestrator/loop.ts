@@ -21,7 +21,8 @@ import type { HarnessAdapter } from '../../contracts/harness-adapter.js'
 import type { HarnessSessionManager } from '../../execution/session/manager.js'
 import { asRole } from '../../fact/db.js'
 import type { GitWorkspace } from '../../fact/git-workspace.js'
-import type { RoleId, Stage, TaskStatus } from '../../shared/ids.js'
+import type { ControlMode, RoleId, Stage, TaskStatus } from '../../shared/ids.js'
+import { checkBudgetFuse } from '../budget/fuse.js'
 import { FactPlaneContextBuilder } from '../context/builder.js'
 import type { WorkflowDriver } from '../driver/driver.js'
 import { runSessionUntilValid } from '../proposal/pipeline.js'
@@ -112,6 +113,15 @@ export async function runTaskToCompletion(
     const state = await readState(taskId)
     if (state === null) return err(makeError('NOT_FOUND', `找不到 task ${taskId}`))
     if (TERMINAL.includes(state.status)) {
+      return ok({ finalStatus: state.status, steps })
+    }
+
+    // ── control_mode ≠ auto：不派发新 run，正常停止 ──
+    //
+    // 预算熔断（C-002）与人工暂停/接管走的都是这个维度。
+    // 停止是**正常返回而非 error**：status 未变、事实完整，
+    // 恢复（C-005）后可从当前 status 继续 —— 把它当错误会掩盖这一点。
+    if (state.control_mode !== 'auto') {
       return ok({ finalStatus: state.status, steps })
     }
 
@@ -270,14 +280,31 @@ async function executeRun(
 
   // 谁执行了这个 run 是事实，记在 run 行上（O 可观测 + ADR-0005）——
   // Human L0 e2e 据此断言「L0 路径真的被执行过」，而不是靠桩自己声称。
+  //
+  // 成本一并写回（C1）：usage 是全部轮次的累计值，三态 cost_basis 原样落库 ——
+  // 没上报就是 null + 'unavailable'，禁止用 0 冒充（docs/08-cross-cutting.md §3.1）。
+  //
+  // 熔断检查在**同一事务**内：写回与核算之间不留窗口，
+  // 崩溃重启后不会出现「成本已入账但该暂停的 Task 还在跑」。
   const descriptor = deps.adapter.describe()
-  await asRole('keel_control', (c) =>
-    c.query(
-      `UPDATE run SET status='SUCCEEDED', ended_at=now(), harness_id=$2, harness_tier=$3
+  const usage = outcome.value.usage
+  await asRole('keel_control', async (c) => {
+    await c.query(
+      `UPDATE run SET status='SUCCEEDED', ended_at=now(), harness_id=$2, harness_tier=$3,
+              tokens_in=$4, tokens_out=$5, cost_usd=$6, cost_basis=$7
        WHERE id=$1`,
-      [pending.id, descriptor.harness_id, descriptor.tier],
-    ),
-  )
+      [
+        pending.id,
+        descriptor.harness_id,
+        descriptor.tier,
+        usage.tokens_in,
+        usage.tokens_out,
+        usage.cost_usd,
+        usage.cost_basis,
+      ],
+    )
+    await checkBudgetFuse(c, taskId, deps.now())
+  })
 
   // 把这一轮的改动提交到该 Task 的分支。
   //
@@ -339,9 +366,14 @@ async function readRemoteUrl(repoId: string): Promise<Result<string>> {
   return ok(row.remote_url)
 }
 
-async function readState(taskId: string): Promise<{ status: TaskStatus } | null> {
+async function readState(
+  taskId: string,
+): Promise<{ status: TaskStatus; control_mode: ControlMode } | null> {
   const r = await asRole('keel_control', (c) =>
-    c.query<{ status: TaskStatus }>('SELECT status FROM task WHERE id=$1', [taskId]),
+    c.query<{ status: TaskStatus; control_mode: ControlMode }>(
+      'SELECT status, control_mode FROM task WHERE id=$1',
+      [taskId],
+    ),
   )
   return r.rows[0] ?? null
 }
