@@ -124,3 +124,15 @@
 - B5 文档
 
 验证:235 tests 全绿。Keel 侧强制收割 run 超时(不再只靠 harness --max-time)。
+
+## 2026-08-26 · 独立 timer worker 进程(issue #26)
+
+任务:`.trellis/tasks/archive/2026-08/08-26-timer-worker-process`(已归档)。
+
+- W1 reapTimeoutRun(RUNNING guard 标 TIMEOUT + cancel timer + RunTimeout→T-030)
+  + drainAllDueTimers(澄清 claim→T-008 + run 墙钟 reap)
+- W2 e2e 4 例(崩溃恢复/澄清/幂等/终态仅取消)
+- W3 脚本示例 + §6 文档
+
+方案 B 局限(进程崩溃收割)解债:到期收割由独立进程承载,不依赖 loop。
+验证:243 tests 全绿。
