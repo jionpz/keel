@@ -148,3 +148,13 @@
 - H5 SKIP LOCKED:官方语法确认,实现符合短事务姿势
 
 ADR-0003 Proposed → Accepted(自研决策维持,迁移路径确证)。
+
+## 2026-08-26 · CLI 入口(issue #27)
+
+任务:`.trellis/tasks/archive/2026-08/08-26-cli-entry`(已归档)。
+
+- src/cli/:argv 解析(零依赖)、index(bin)、timer-worker/run-task/status
+- package.json bin keel;删 scripts/timer-worker.ts(并入)
+- 241/248 tests 全绿;build 产 dist;实测 status/timer-worker 命令通过
+
+v0.1 可用命令行入口:收割/驱动任务/状态查询。
