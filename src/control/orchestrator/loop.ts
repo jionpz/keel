@@ -306,6 +306,10 @@ async function executeRun(
   const place = await resolveWorkspace(taskId, deps.workspace)
   if (!place.ok) return err(place.error)
 
+  // 方案 B(issue #26):run 级墙钟 timer —— Keel 侧强制收割,不只靠 harness --max-time
+  const wallClockS = 180 // v0.1 写死的 run 墙钟上限(R-009)
+  await createRunWallClockTimer(taskId, pending.id, wallClockS, deps.now())
+
   const outcome = await runSessionUntilValid(
     deps.sessions,
     {
@@ -347,6 +351,8 @@ async function executeRun(
       // #1-02:capability_request 等需要授权的 Proposal 由同一 Policy 实例裁决
       policy: deps.driver.policyEngine,
       now: deps.now(),
+      // 方案 B:墙钟 watchdog(R-009 Keel 侧收割)
+      wallClockMs: wallClockS * 1000,
     },
   )
   if (!outcome.ok) return err(outcome.error)
@@ -354,6 +360,8 @@ async function executeRun(
   await asRole('keel_control', (c) =>
     c.query(`UPDATE run SET status='SUCCEEDED', ended_at=$2 WHERE id=$1`, [pending.id, deps.now()]),
   )
+  // run 已终态:墙钟 timer 不再需要 —— 置 cancelled 防残留误触发
+  await cancelRunWallClockTimer(pending.id)
 
   // 把这一轮的改动提交到该 Task 的分支。
   //
@@ -436,6 +444,42 @@ async function readPendingRun(
 }
 
 /**
+ * 方案 B(issue #26):run 级墙钟 timer —— Keel 侧强制收割 R-009。
+ * due = 注入 now + wallClockS;幂等:同 (run_id, kind) 至多一个 pending。
+ * 成功后由 cancelRunWallClockTimer 置 cancelled(生命周期闭环)。
+ */
+async function createRunWallClockTimer(
+  taskId: string,
+  runId: string,
+  wallClockS: number,
+  now: string,
+): Promise<void> {
+  await asRole('keel_control', (c) =>
+    c.query(
+      `INSERT INTO timer (id, task_id, run_id, kind, due_at, state)
+       VALUES ($1,$2,$3,'wall_clock',$4,'pending')
+       ON CONFLICT (run_id, kind) WHERE state = 'pending' AND run_id IS NOT NULL DO NOTHING`,
+      [
+        randomUUID(),
+        taskId,
+        runId,
+        new Date(new Date(now).getTime() + wallClockS * 1000).toISOString(),
+      ],
+    ),
+  )
+}
+
+/** 方案 B:run 已终态,墙钟 timer 置 cancelled(防残留误触发) */
+async function cancelRunWallClockTimer(runId: string): Promise<void> {
+  await asRole('keel_control', (c) =>
+    c.query(
+      `UPDATE timer SET state='cancelled' WHERE run_id=$1 AND kind='wall_clock' AND state='pending'`,
+      [runId],
+    ),
+  )
+}
+
+/**
  * R1(issue #23):run 失败的处理 —— 标状态 + 交给转移表,不中止编排。
  *
  * 失败是**正常状态流转**:T-030(重试)/T-031(升人工)已经在转移表里,
@@ -472,6 +516,8 @@ async function failRunAndAdvance(
       runErr.detail,
     ]),
   )
+  // run 已终态:墙钟 timer 不再需要(方案 B,防残留误触发)
+  await cancelRunWallClockTimer(pending.id)
 
   // 人工撤回:不重试(R-010)。run 已脱离 PENDING,下一轮无 PENDING → 停。
   if (status === 'CANCELLED') {
