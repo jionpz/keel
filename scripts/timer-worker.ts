@@ -11,9 +11,9 @@
  * 接入层(未来 daemon/CLI)负责监督重启。
  */
 
+import { WorkflowDriver } from '../src/control/driver/driver.js'
 import { RuleBasedPolicyEngine } from '../src/control/policy/engine.js'
 import { DEFAULT_RULESET } from '../src/control/policy/ruleset.js'
-import { WorkflowDriver } from '../src/control/driver/driver.js'
 import { drainAllDueTimers, runForever } from '../src/timer/worker.js'
 
 const args = process.argv.slice(2)
@@ -32,7 +32,9 @@ async function main(): Promise<void> {
   if (intervalMs === undefined || Number.isNaN(intervalMs)) {
     // 单次 drain(供 cron / 手动触发)
     const stats = await drainAllDueTimers(deps)
-    console.log(`timer-worker: clarificationFired=${stats.clarificationFired} runTimeout=${stats.runTimeout} skipped=${stats.skipped}`)
+    console.log(
+      `timer-worker: clarificationFired=${stats.clarificationFired} runTimeout=${stats.runTimeout} skipped=${stats.skipped}`,
+    )
     return
   }
   console.log(`timer-worker: 常驻循环, interval=${intervalMs}ms (SIGTERM 退出)`)
