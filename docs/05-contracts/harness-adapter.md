@@ -259,10 +259,16 @@ Adapter 的职责是**把这种差异吸收掉**，向上统一成 `WorkspaceDif
 ### 3.5 `interrupt()` `[v0.1 必须]`
 
 ```
-interrupt(handle: RunHandle, reason: "cancelled" | "budget" | "takeover") -> void | Error
+interrupt(handle: RunHandle, reason: "cancelled" | "budget" | "takeover" | "timeout") -> void | Error
 ```
 
 无 `CAP-INTERRUPT` 时降级为强杀进程 —— 该次 Run 作废（`R-010`）。
+
+> **reason 的分流（issue #26 方案 B）**：`timeout`（run 级墙钟超时 `R-009`）
+> 收敛为 `RunResult.status='TIMEOUT'` → `RUN_TIMEOUT`（可重试，`T-030`）；
+> `cancelled` / `budget` / `takeover`（人工 / 预算 / 接管）收敛为
+> `CANCELLED` → `RUN_CANCELLED`（不重试，`R-010`）。
+> 区分是 R-009 与 R-010 的语义要求：墙钟超时该重试，人工撤销不该。
 
 ### 3.6 `dispose()` `[v0.1 必须]`
 

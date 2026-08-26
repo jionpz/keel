@@ -338,7 +338,7 @@ idempotency_key = hash(task_id, stage, attempt)
 
 | 计时器 | 作用域 | 到期事件 | 默认值 |
 |---|---|---|---|
-| `wall_clock(stage)` | Run | `RunTimeout` → `R-009` | 按 stage 配置(**由 harness `--max-time` 产生**,`src/shared/timers.ts` 无此常量) |
+| `wall_clock(stage)` | Run | `RunTimeout` → `R-009` | 按 stage 配置（180s v0.1；**Keel 侧 watchdog interrupt('timeout') 收割(方案 B)**,harness `--max-time` 作双保险） |
 | `clarification_ttl` | Task | `TimerFired` → `T-008` | **24h**(issue #24,`src/shared/timers.ts`) |
 | `human_review_ttl` | Task | 仅通知升级，**不自动转移** | 待定 |
 
