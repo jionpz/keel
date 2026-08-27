@@ -70,11 +70,13 @@
 
 以下由**父任务**负责，不属于任何单个子任务（勾选与缺口标注：2026-08-26 集成复核，证据见文末）：
 
-- [x] 端到端判据达成（见 Goal）——
-  本地闭环 `v01-criterion` 已实测通过（真实 OMP session 驱动全程，CI 由测试注入并显式标记）；
-  真实 push / PR / CI 回读由 `github-pr` 实测通过（2026-08-23，见 `github-provider.ts` 中的实测注记）。
-  **合并为一次运行**的 `v01-criterion-github.acceptance.test.ts` 代码已就绪，
-  执行记录见 `08-26-v01-closeout` 任务 `prd.md`
+- [ ] 端到端判据达成（见 Goal）——**部分：合并验收尚未一次跑通到 S-DONE**
+  - 本地闭环 `v01-criterion`：修复上下文丢失后（2026-08-27，`withPrompt` 改为 append）重新实测通过
+  - 真实 push / PR / CI 原子能力：`github-pr` 2026-08-24 通过
+  - **合并为一次运行**（`v01-criterion-github`）：2026-08-27 Opus 第二轮走到真实 push，
+    在 `CreatePullRequest` 被 Cloud Agent token **403**（无 `pull-requests:write`）挡住。
+    同轮发现并修复判据级缺陷：Agent 此前收不到 ContextBuilder 内容（见 closeout prd）。
+    待注入带 PR 写权限的 `KEEL_GITHUB_TOKEN` 后重跑
 - [x] `S1`–`S3` 安全：`OmpAdapter` 对 `untrusted` 无能力即拒绝（`CAPABILITY_UNSUPPORTED`，
   `omp.ts` + `adapters.test.ts` 契约拒绝层）；`RunSpec.workspace.untrusted` 是必填布尔、无默认值
   （类型层强制）；Human L0 路径同样显式传 `untrusted: true`（`human-harness.test.ts`）
