@@ -29,7 +29,8 @@
     "08-23-split-acceptance-tests",
     "08-23-github-pr-ci",
     "08-26-v01-closeout",
-    "08-26-v01-budget-fuse"
+    "08-26-v01-budget-fuse",
+    "08-27-v01-concurrency-guards"
   ],
   "parent": null,
   "relatedFiles": [],

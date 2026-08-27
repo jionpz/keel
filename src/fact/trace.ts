@@ -20,8 +20,9 @@ import type { PoolClient } from 'pg'
  * 事件流里本来就缺这条创建事件，在首次派发时补上是对事件流的修复而非污染。
  *
  * 并发注记：两个事务同时首次生成会产生两个 trace_id（无唯一约束兜底）。
- * v0.1 单 Task 严格串行（docs/08-cross-cutting.md §4.3 N3），且首次生成发生在
- * Dispatch 的事务里 —— 早于任何并行工作。N2 乐观锁落地时一并收紧。
+ * N2 乐观锁落地后已收紧：driver.advance 的首次生成发生在**赢得 task 行锁之后**
+ * （`UPDATE ... WHERE status=期望值` 命中才继续），并发 Dispatch 的败者
+ * 会阻塞到胜者提交，随后从事件流读回同一个 trace_id，不会分裂出第二条 trace。
  */
 export async function ensureTraceId(c: PoolClient, taskId: string): Promise<string> {
   const existing = await c.query<{ trace_id: string }>(

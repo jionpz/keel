@@ -3,10 +3,11 @@
  *
  * ```
  * 取一个 PENDING 的 run
+ *   → 认领为 RUNNING（N3/N4 并发守卫，src/control/concurrency/limits.ts）
  *   → 造 Context（Fact Plane）
  *   → 跑真实 session（Execution Plane）
  *   → 五步校验 + 落库（Control Plane）
- *   → 标记 run SUCCEEDED
+ *   → 标记 run SUCCEEDED（失败则 FAILED —— 不滞留在 RUNNING）
  *   → driver.advance → 下一状态可能又建一个 run
  * ```
  *
@@ -16,13 +17,14 @@
  */
 
 import type { CiGateway } from '../../contracts/ci-gateway.js'
-import { err, makeError, ok, type Result } from '../../contracts/errors.js'
+import { err, type KeelError, makeError, ok, type Result } from '../../contracts/errors.js'
 import type { HarnessAdapter } from '../../contracts/harness-adapter.js'
 import type { HarnessSessionManager } from '../../execution/session/manager.js'
 import { asRole } from '../../fact/db.js'
 import type { GitWorkspace } from '../../fact/git-workspace.js'
 import type { ControlMode, RoleId, Stage, TaskStatus } from '../../shared/ids.js'
 import { checkBudgetFuse } from '../budget/fuse.js'
+import { claimRunForExecution } from '../concurrency/limits.js'
 import { FactPlaneContextBuilder } from '../context/builder.js'
 import type { WorkflowDriver } from '../driver/driver.js'
 import { runSessionUntilValid } from '../proposal/pipeline.js'
@@ -218,8 +220,44 @@ export async function runTaskToCompletion(
   )
 }
 
-/** 跑一个 run：造 Context → 真实 session → 校验落库 → 标记 SUCCEEDED */
+/** 跑一个 run：认领（PENDING→RUNNING）→ 造 Context → 真实 session → 校验落库 → 终态 */
 async function executeRun(
+  taskId: string,
+  pending: { id: string; stage: Stage; role: RoleId },
+  deps: OrchestratorDeps,
+  ctxBuilder: FactPlaneContextBuilder,
+): Promise<Result<void>> {
+  // ── N3/N4：开始执行前先认领 ──
+  //
+  // PENDING→RUNNING 乐观锁与全局 RUNNING 上限检查在**同一事务**内
+  // （claimRunForExecution）。认领失败返回可重试 CONFLICT 并向上传播 ——
+  // 编排器因此停下而不是静默吞掉（docs/08-cross-cutting.md §4.4 N4）。
+  const claimed = await asRole('keel_control', (c) => claimRunForExecution(c, pending.id))
+  if (!claimed.ok) return err(claimed.error)
+
+  const executed = await executeClaimedRun(taskId, pending, deps, ctxBuilder)
+  if (!executed.ok) {
+    // N3 失败路径：失败也要**离开 RUNNING**。滞留会让部分唯一索引
+    // run_one_running_per_task 卡死该 Task 的后续 Run，
+    // 且「还在跑」与「已失败」在事实层是两个不同的事实。
+    await markRunFailed(pending.id, executed.error)
+  }
+  return executed
+}
+
+/** 失败的 run 如实落 FAILED —— error_kind/error_detail 是 T-030/T-031 守卫的输入来源 */
+async function markRunFailed(runId: string, error: KeelError): Promise<void> {
+  await asRole('keel_control', (c) =>
+    c.query(
+      `UPDATE run SET status='FAILED', ended_at=now(), error_kind=$2, error_detail=$3
+       WHERE id=$1 AND status='RUNNING'`,
+      [runId, error.kind, error.detail],
+    ),
+  )
+}
+
+/** 认领之后的执行主体。任何 err 返回都会由 executeRun 落成 run.status='FAILED' */
+async function executeClaimedRun(
   taskId: string,
   pending: { id: string; stage: Stage; role: RoleId },
   deps: OrchestratorDeps,
