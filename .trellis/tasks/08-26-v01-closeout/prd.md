@@ -69,12 +69,14 @@
 
 ## Acceptance Criteria
 
-- [ ] `v01-criterion-github.acceptance.test.ts` 在凭据齐全时一次跑通 `S-NEW → S-DONE`（真实 PR + CI）
-  —— 2026-08-27 实测推进到 `S-REVIEW` + **真实 push 成功**，卡在 PR 创建（环境 token 无
-  `pull-requests:write`，HTTP 403 → `AUTH_FAILED`，系统行为符合规范）。
-  同一轮抓出并修复了**判据级缺陷**：Agent 从未收到 ContextBuilder 的产出（详见验收记录第二轮 §1）。
-  待有 PR 创建权限的 token 重跑最后一步
-- [x] 验收记录写入本任务 `prd.md`（实现阶段记录已写；合并验收通过后补 PR 链接）
+- [x] `v01-criterion-github.acceptance.test.ts` 在凭据齐全时一次跑通 `S-NEW → S-DONE`（真实 PR + CI）
+  —— **2026-08-27 第四轮通过**：单次运行 93.96s，PR
+  [#28](https://github.com/jionpz/keel/pull/28)，CI 两次真实通过，`T-024` 由真实
+  `waitForCi='passed'` 驱动（详见验收记录第四轮）。
+  历史：第二轮推进到 `S-REVIEW` + 真实 push 成功后卡在 PR 创建（环境 token 无
+  `pull-requests:write`，HTTP 403 → `AUTH_FAILED`，系统行为符合规范），
+  同轮抓出并修复了**判据级缺陷**：Agent 从未收到 ContextBuilder 的产出（第二轮 §1）
+- [x] 验收记录写入本任务 `prd.md`（含 PR 链接，见第四轮）
 - [x] 父任务集成复核三问有书面答案；checklist 勾选或显式缺口（C3 → `v01-budget-fuse`）
 - [x] 幂等重放确定性单测在 check 中为绿
 - [x] `pnpm run timeline -- <task_id>` 输出完整事件序列
@@ -400,3 +402,89 @@ POST 探针利用 GitHub「先查授权、再做校验」的顺序：head 不存
   - 本文件（第三轮验收记录）
 - 合并验收最后一步的重跑命令不变（见第二轮 §6）；现在重跑前 preflight
   会先替你确认 token 权限，不够就秒级失败。
+
+### 2026-08-27（第四轮）· 验收子代理（Opus）：合并验收 **PASSED**
+
+**结论：v0.1 完成判据在一次真实运行里被完整证明。合并验收通过，无阻塞项。**
+
+解除阻塞的唯一变量是凭据：本轮 `KEEL_GITHUB_TOKEN` 换成了对 `jionpz/keel`
+有 admin 的 token（预检 `GET /repos` 返回 `admin:true`，`POST /pulls` 对不存在的
+head 返回 **422** = 有 PR 写权限）。代码未因本轮再做任何修改。
+
+#### 1）运行结果
+
+| | |
+|---|---|
+| 命令 | `pnpm run test:acceptance src/acceptance/v01-criterion-github.acceptance.test.ts` |
+| 结果 | **1 passed**，exit 0 |
+| 耗时 | **93.96s**（03:31:00 → 03:32:33） |
+| task_id | `919cb43f-deb3-4a9c-b4fc-7e37fde010b4`（终态 `S-DONE`） |
+| PR | [#28](https://github.com/jionpz/keel/pull/28) `ai/task-919cb43f → main` |
+
+走过的路径（**无人干预**，8 次转移）：
+
+```
+T-002(派发) → T-004(pm 完成) → T-011(rfc_draft 完成) → T-012(Policy 裁决 auto_develop)
+→ T-017(develop 完成) → T-018(qa 完成) → T-021(review 完成) → T-024(外部 CI：passed)
+```
+
+#### 2）判据三部分的独立证据
+
+不采信测试自述，逐条在 Fact Plane 与 GitHub 侧复核：
+
+| 判据部分 | 证据 | 复核手段 |
+|---|---|---|
+| 走完 `S-NEW → S-DONE` | `task.status = S-DONE`；8 条 `TaskStatusChanged` 与编排器 steps 逐条相等 | 直接查库 + `readEvents` |
+| **无人干预** | 测试只 seed 输入（repo/feedback/task），此后零写入；5 个 run 全 `SUCCEEDED`、`harness_id=omp`、`harness_tier=L2`；`policy_decision` 为 `auto_develop` 且 `default_applied:false`（命中 P4，非兜底） | 查 `run` / `artifact` 表 |
+| 事件流能完整重建 | `pnpm run timeline -- <task_id>` 输出 **29 条**事件，覆盖每次转移 / 每次 Proposal / 每次 Policy 求值 / 每个副作用 | 时间线导出 |
+| 「产出一个通过 CI 的 PR」 | `SideEffectApplied(CreatePullRequest)` 携带真实 `pr_url`；`gh pr view 28` 确认真实存在（author `jionpz`，README.md **+11/-0**）；该分支 **两次** CI 均 success（push 触发 60s、pull_request 触发 58s） | GitHub API 侧独立核对 |
+
+`T-024` 确由**真实** CI 驱动：steps note 为「外部 CI：passed」，
+且测试用的是 `opts.ci = GitHubProvider`（读真实 Checks），**没有** `externalCi` 注入。
+
+#### 3）上下文下行桥在真实运行中被证明有效（第二轮修复的回归验证）
+
+这是本轮最值得记录的一点 —— 第二轮修好的 `withPrompt` 追加语义，
+在真实运行里产生了**只有真看见仓库才写得出**的输出：
+
+- RFC 的 `problem` 写着「…… `vitest.globalSetup.ts` 会对默认连接
+  `postgres://localhost/keel_test`（可用 `KEEL_DATABASE_URL` 覆盖）执行迁移 ……
+  与『CI 跑的就是这一条 —— 与本地完全一致』的说明矛盾」——
+  同时引用了注入的反馈、仓库里的 `vitest.globalSetup.ts` 与 README 原文。
+- 更强的证据：Agent **纠正了反馈里的错误前提**。用户说「还得先跑
+  `pnpm run db:migrate`」，而 Agent 查证后在 README 里写的是
+  「迁移会自动发生 …… **直接 `pnpm run check` 即可，无需手动 `db:migrate`**」，
+  只把手动迁移留给开发库。照抄反馈会写出错的文档；它没有。
+
+对照第二轮修复前的同一夹具：Agent 收不到任何 Fact Plane 内容，
+PM 直接答「不存在任何用户反馈原文」。**判据的绿这次是有内容支撑的。**
+
+#### 4）跨切面顺带复核（同一次运行的实测数据）
+
+| | 实测 |
+|---|---|
+| `O2` trace_id 贯穿 | 29 条事件、`count(DISTINCT trace_id)=1`、`NULL` 0 条 |
+| `O3` ContextBuilt | 每个 session 一条，`sections[].source_ref` 含 `artifact:rfc@1`、`artifact:feedback/…`、`fixed:role/…`，`dropped` 均为 `[]` |
+| `C1` 成本三态 | 5 个 run 全部 `cost_basis='estimated'`（omp 的 `total_cost_usd` 属估算），**未用 0 冒充**；合计约 $0.0034 |
+| `N3` 单 Task 至多一个 RUNNING | 运行结束后 `RUNNING` 计数为 0，5 个 run 全部终态 |
+| 副作用 | `CreatePullRequest` 为 `SideEffectApplied`（真实落地），无同类 `SideEffectIntent`；`MaybeAutoMerge` 仅记 `SideEffectIntent` —— 与「v0.1 不自动合并」一致 |
+
+#### 5）远程清洁
+
+测试的 `finally` 清理生效并经独立核对：PR #28 已 `CLOSED`，
+`git ls-remote 'refs/heads/ai/*'` 为空，无遗留分支（仅本任务自身的 PR #27 仍开着）。
+
+#### 6）验证结果
+
+- `pnpm run check` **全绿**（exit 0）：lint / typecheck / boundaries（92 模块 384 依赖，0 违规）/
+  check:generated / check:transitions（31 条）/ check:purity（9 文件 8 类）/
+  **16 个测试文件 185 passed | 4 skipped**。
+  本轮用**环境默认 git 配置**跑（不加 `GIT_CONFIG_GLOBAL=/dev/null`），
+  即第二轮 `commit.gpgsign=false` 的代码级修复在真实全局配置（`commit.gpgsign=true`
+  + ssh 签名程序）下确实生效。
+- 四条架构约束未放宽，转移表未动，`C-002` 未触碰。
+
+#### 7）待办（需主会话执行）
+
+- 本轮**无代码改动**，仅文档：本文件（第四轮记录 + AC 勾选）与父任务
+  `08-23-v01-closed-loop/prd.md`（首条端到端判据改为已达成）。尚未提交（子代理纪律）。
