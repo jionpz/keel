@@ -47,11 +47,16 @@ R-007 的重试仍可能连续三次不合格。
 | 文件 | 验的是什么 | 额外前置 |
 |---|---|---|
 | `v01-criterion.acceptance.test.ts` | seed 的 S-NEW task 在无人干预下走到 S-DONE(CI 由测试注入) | 无 |
-| `v01-criterion-github.acceptance.test.ts` | 编排器 + 真实 GitHub PR/CI 走完 S-NEW→S-DONE（合并验收；含 fail-fast 权限探针） | `KEEL_GITHUB_TOKEN`、`KEEL_TEST_REMOTE_REPO` |
+| `v01-criterion-github.acceptance.test.ts` | **合并验收**：编排器 + 真实 OMP + 真实 GitHub PR/CI 走完 S-NEW→S-DONE（含 fail-fast 权限探针、事件流完整重建断言） | `KEEL_GITHUB_TOKEN`、`KEEL_TEST_REMOTE_REPO` |
 | `github-pr.acceptance.test.ts` | push → 真实建 PR → 幂等复用 → 真实 CI 回读（不经编排器） | 同上 |
-| `merge.acceptance.test.ts` | 编排器 + 真实 OMP/GitHub 的早期合并验收（与 `v01-criterion-github` 重叠，保留作对照） | 同上 |
 | `session-milestone.acceptance.test.ts` | Session 里程碑路径 | 视用例而定 |
 | `issue-e2e.acceptance.test.ts` | **真实 GitHub Issue** → S-DONE + 通过 CI 的真实 PR,事件流 T-001 起 T-024 终 | 上述两项 + 已登录的 `gh` CLI(创建/关闭验收用 Issue) |
+
+早期的 `merge.acceptance.test.ts`（任务 `08-25-merge-acceptance`）与 `v01-criterion-github`
+跑的是同一条昂贵链路，已删除，不再「保留作对照」：它的终态断言更宽松（容忍
+S-HUMAN_REVIEW 等），夹具反馈对目标仓库并不成立（正是 `v01-criterion-github`
+FEEDBACK 注释里分析过的那类夹具错误）；其唯一独特断言 ——「已有 PR 时
+`createPullRequest` 幂等复用」—— 由 `github-pr.acceptance` 在工具层覆盖。
 
 `issue-e2e` 与 `v01-criterion` 的差别只有一处,却正是 v0.1 判据里最后补上的那一环：
 **「一条真实反馈进入系统」的「进入」**。前者事件流从 `T-001` 开始，后者从 `T-002`
