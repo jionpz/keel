@@ -70,13 +70,26 @@
 
 以下由**父任务**负责，不属于任何单个子任务（勾选与缺口标注：2026-08-26 集成复核，证据见文末）：
 
-- [ ] 端到端判据达成（见 Goal）——**部分：合并验收尚未一次跑通到 S-DONE**
-  - 本地闭环 `v01-criterion`：修复上下文丢失后（2026-08-27，`withPrompt` 改为 append）重新实测通过
-  - 真实 push / PR / CI 原子能力：`github-pr` 2026-08-24 通过
-  - **合并为一次运行**（`v01-criterion-github`）：2026-08-27 Opus 第二轮走到真实 push，
-    在 `CreatePullRequest` 被 Cloud Agent token **403**（无 `pull-requests:write`）挡住。
-    同轮发现并修复判据级缺陷：Agent 此前收不到 ContextBuilder 内容（见 closeout prd）。
-    待注入带 PR 写权限的 `KEEL_GITHUB_TOKEN` 后重跑
+- [x] 端到端判据达成（见 Goal）——**已由一次真实运行完整证明**（2026-08-27，
+  `v01-criterion-github`，见 `08-26-v01-closeout/prd.md` 第四轮验收记录）
+  - **合并为一次运行**：task `919cb43f-deb3-4a9c-b4fc-7e37fde010b4` 单次 93.96s 无人干预
+    走完 `S-NEW → S-DONE`，8 次转移
+    `T-002 → T-004 → T-011 → T-012 → T-017 → T-018 → T-021 → T-024`；
+    产出真实 PR [#28](https://github.com/jionpz/keel/pull/28)（`ai/task-919cb43f → main`，
+    README.md +11/-0），该分支两次 CI 均 success，`T-024` 由真实 `waitForCi='passed'`
+    驱动（`opts.ci = GitHubProvider` 读真实 Checks，**未用** `externalCi`）；
+    `readEvents(task_id, 0)` 返回 29 条事件，`TaskStatusChanged` 序列与编排器 steps 逐条相等
+  - 三部分逐一有独立证据（不采信测试自述，已在 Fact Plane 与 GitHub 侧分别复核）：
+    终态 `S-DONE` 查库确认；「无人干预」由「测试只 seed 输入 + 5 个 run 全 `harness_id=omp`
+    + Policy `auto_develop` 且 `default_applied:false`」确认；事件流重建由 `pnpm run timeline` 确认
+  - **证据来源已更新**：此条早前曾据本地闭环 `v01-criterion` 的一次通过勾选，
+    而那次运行发生在上下文缺陷（`withPrompt` 替换掉 ContextBuilder 产出）修复**之前** ——
+    当时 Agent 收不到任何 Fact Plane 内容，靠阶段提示词里的暗示蒙对，**不构成判据的证明**。
+    修复后本地版已重新通过，且本条现以上述合并运行为准：其 RFC 引用了仓库里的
+    `vitest.globalSetup.ts` 与 README 原文，并纠正了反馈中的错误前提，
+    证明下行桥真的通了
+  - 原子能力（历史记录）：本地闭环 `v01-criterion` 2026-08-27 修复后重测通过；
+    真实 push / PR / CI `github-pr` 2026-08-24 通过
 - [x] `S1`–`S3` 安全：`OmpAdapter` 对 `untrusted` 无能力即拒绝（`CAPABILITY_UNSUPPORTED`，
   `omp.ts` + `adapters.test.ts` 契约拒绝层）；`RunSpec.workspace.untrusted` 是必填布尔、无默认值
   （类型层强制）；Human L0 路径同样显式传 `untrusted: true`（`human-harness.test.ts`）
@@ -201,5 +214,19 @@
 （乐观锁/RUNNING 唯一索引/并发上限）复核当时为**显式缺口**，
 后由 `08-27-v01-concurrency-guards` 补齐（2026-08-27，确定性测试
 `src/e2e/concurrency-guards.test.ts` + `src/control/concurrency/limits.test.ts`）。
-合并验收（一次真实运行同时证明三部分 + 真实 PR/CI）的执行记录见
-`08-26-v01-closeout/prd.md`。
+合并验收（一次真实运行同时证明三部分 + 真实 PR/CI）**已于 2026-08-27 通过** ——
+task `919cb43f`，93.96s，PR [#28](https://github.com/jionpz/keel/pull/28)，
+CI 真实通过；执行记录见 `08-26-v01-closeout/prd.md` 第四轮。
+至此跨子任务验收清单**全部勾选，无遗留缺口**。
+
+**一条必须留下的教训**：本条清单的首项曾在上下文下行桥缺陷
+（Session Manager 的 `withPrompt` 把 ContextBuilder 造的 section 整个替换掉）
+修复**之前**被勾选过。那次「通过」时 Agent 收不到任何 Fact Plane 内容，
+是靠阶段提示词里的暗示蒙对的 —— 而 `ContextBuilt` 事件照样记录着
+「Agent 看到了这些 section」，即 `O3` 记的是假话。
+整条链路上当时没有任何一处断言「ContextBuilder 造的东西真的到达了 Adapter」。
+这是「**未经反例验证的检查，等同于没有检查**」在本项目的第二次应验
+（第一次是 `check:generated` 的比较基准写错）。
+现已由两条反例验证测试守住（`session-pipeline.test.ts` 的「阶段指令是追加而非替换」
+与 `adapters.test.ts` 的「renderPrompt —— 每个 section 都要真的进提示词」，
+后者直接断言模型收到的 argv 字节）。
