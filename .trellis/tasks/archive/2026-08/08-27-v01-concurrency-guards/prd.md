@@ -54,11 +54,17 @@ UPDATE task SET status=$next, ... WHERE id=$1 AND status=$from
 
 ## Acceptance Criteria
 
-- [ ] N2：`UPDATE task ... WHERE status=from` + CONFLICT 路径有测试
-- [ ] N3：migration 部分唯一索引 + executeRun 置 RUNNING + 测试
-- [ ] N4：全局上限常量 + 检查 + 测试
-- [ ] 父任务 prd N2–N4 更新勾选/标注
-- [ ] `pnpm run check` 全绿
+- [x] N2：`UPDATE task ... WHERE status=from` + CONFLICT 路径有测试
+- [x] N3：migration 部分唯一索引 + executeRun 置 RUNNING + 测试
+- [x] N4：全局上限常量 + 检查 + 测试
+- [x] 父任务 prd N2–N4 更新勾选/标注
+- [x] `pnpm run check` 全绿
+
+## 验收记录（2026-08-27，确定性验收）
+
+- `pnpm run check`：**181 passed** | 4 skipped（16 files）
+- 新增 `limits.test.ts`（7）+ `concurrency-guards.test.ts`（4）
+- AI 合并验收 deferred（用户自行执行）
 
 ## Notes
 
