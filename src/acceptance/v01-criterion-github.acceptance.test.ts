@@ -9,10 +9,17 @@
  * `CreatePullRequest` 副作用真实开 PR，`T-024` 由真实 `waitForCi='passed'` 驱动。
  *
  * **不在默认 `pnpm run check` 中**（见 src/acceptance/README.md）。前置条件：
- *   1. `KEEL_GITHUB_TOKEN`（或 `GITHUB_TOKEN`）—— PR 创建与 CI 回读的凭据；
+ *   1. `KEEL_GITHUB_TOKEN`（或 `GITHUB_TOKEN`）—— PR 创建与 CI 回读的凭据。
+ *      **注意 token 的能力边界**（2026-08-27 实测）：Cursor Cloud Agent 的
+ *      GitHub App 安装 token（`ghs_` 前缀）可以 git push，但**不能创建 PR**
+ *      （REST 返回 403 Resource not accessible by integration）。
+ *      需要 fine-grained PAT：Contents Read+Write 且 Pull requests Read+Write。
  *   2. `KEEL_TEST_REMOTE_REPO`（如 `https://github.com/jionpz/keel`）——
  *      有 push 权限的远程仓库；push 鉴权靠环境 git credential（如 `gh auth setup-git`）；
- *   3. 本机可用的 omp CLI 与推理网关。
+ *   3. 本机可用的 omp CLI 与推理网关（`OPENCODE_API_KEY` 或 `DEEPSEEK_API_KEY`）。
+ *
+ * beforeEach 里有两个**预检探针**（都不改变远程状态）：token 有效性与 PR 写权限。
+ * 权限不够时在起编排器（分钟级、花钱）**之前**就失败，并打印怎么补。
  *
  * 与项目纪律一致：**条件不满足时明确失败，绝不静默跳过**。
  */
@@ -72,6 +79,98 @@ function requireToken(): string {
   return token
 }
 
+/** 探针专用的最小 GitHub 调用。token 只进 Authorization 头，不进 URL / 错误信息 */
+async function ghProbe(
+  path: string,
+  init: { method?: string; body?: unknown } = {},
+): Promise<number> {
+  const res = await fetch(
+    `https://api.github.com${path}`,
+    init.body === undefined
+      ? {
+          method: init.method ?? 'GET',
+          headers: {
+            Authorization: `Bearer ${requireToken()}`,
+            Accept: 'application/vnd.github+json',
+            'X-GitHub-Api-Version': '2022-11-28',
+          },
+        }
+      : {
+          method: init.method ?? 'GET',
+          headers: {
+            Authorization: `Bearer ${requireToken()}`,
+            Accept: 'application/vnd.github+json',
+            'X-GitHub-Api-Version': '2022-11-28',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(init.body),
+        },
+  )
+  await res.text() // 读掉 body，释放连接
+  return res.status
+}
+
+/**
+ * 预检（fail-fast）：在起编排器（分钟级、花钱）**之前**，先确认凭据真的够用。
+ * 两个探针都不改变远程状态。
+ *
+ * 为什么需要它（2026-08-27 第二轮验收的教训）：完整编排无人干预跑了 2 分钟、
+ * 真实 push 成功之后，才在 CreatePullRequest 上撞出 HTTP 403 ——
+ * 环境 token 能 push 却不能开 PR。这类失败应该在第 0 秒暴露，而不是第 120 秒。
+ */
+async function preflight(remoteUrl: string): Promise<void> {
+  const slug = ownerRepoSlug(remoteUrl)
+
+  // ── 探针 1：token 是否有效、能否读到目标仓库 ──
+  const repoStatus = await ghProbe(`/repos/${slug}`)
+  if (repoStatus === 401) {
+    throw new Error(
+      [
+        `GitHub token 无效或已过期（GET /repos/${slug} → 401）。`,
+        '若环境里残留过期的 KEEL_GITHUB_TOKEN，它会覆盖 gh 的有效凭据：',
+        '  unset KEEL_GITHUB_TOKEN',
+        '  export KEEL_GITHUB_TOKEN="$(gh auth token)"   # 或换有效的 fine-grained PAT',
+      ].join('\n'),
+    )
+  }
+  if (repoStatus !== 200) {
+    throw new Error(
+      `token 读不到 ${slug}（GET /repos → HTTP ${repoStatus}）。` +
+        'fine-grained PAT 需要把该仓库加进 Repository access。',
+    )
+  }
+
+  // ── 探针 2：能否创建 PR ──
+  // 对一个**不存在的** head 分支发起创建：GitHub 先查授权再做校验，
+  //   403 → 没有 PR 写权限；422 → 授权通过、head 校验失败（即权限 OK）。
+  // 因为 head 不存在，绝不会真的建出 PR。
+  const prStatus = await ghProbe(`/repos/${slug}/pulls`, {
+    method: 'POST',
+    body: {
+      title: '[keel-preflight] permission probe',
+      head: `ai/keel-preflight-${randomUUID().slice(0, 8)}`,
+      base: 'main',
+    },
+  })
+  if (prStatus === 403) {
+    throw new Error(
+      [
+        `token 没有创建 PR 的权限（POST /repos/${slug}/pulls → 403）。`,
+        '已知边界：Cursor Cloud Agent 的 GitHub App token（ghs_ 前缀）可以 git push，',
+        '但不能开 PR（Resource not accessible by integration）。',
+        '需要 fine-grained PAT：Contents Read+Write 且 Pull requests Read+Write，',
+        '设为 KEEL_GITHUB_TOKEN 后重跑。',
+      ].join('\n'),
+    )
+  }
+  if (prStatus !== 422) {
+    throw new Error(
+      `PR 写权限探针返回非预期状态（POST /repos/${slug}/pulls → HTTP ${prStatus}）。` +
+        '拒绝在权限不明的情况下起编排 —— 请人工核查 token 权限后重跑。',
+    )
+  }
+}
+
 /**
  * 前置检查放 beforeEach：缺任何一项就让测试**失败**并打印怎么补，
  * 而不是 skip —— 假绿的输出和通过看起来一样。
@@ -87,12 +186,13 @@ beforeEach(async () => {
       '缺少 KEEL_TEST_REMOTE_REPO，例如：`export KEEL_TEST_REMOTE_REPO=https://github.com/jionpz/keel`',
     )
   }
+  await preflight(remote)
   await asOwner((c) =>
     c.query(
       'TRUNCATE artifact, event, task_feedback, run, task, feedback, repo RESTART IDENTITY CASCADE',
     ),
   )
-})
+}, 60_000)
 
 afterAll(closePool)
 
