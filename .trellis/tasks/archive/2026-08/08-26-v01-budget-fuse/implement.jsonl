@@ -1,0 +1,5 @@
+{"path": ".trellis/spec/backend/error-handling.md", "reason": "Result 与明确失败"}
+{"path": "docs/08-cross-cutting.md", "reason": "C1-C4 O2 要求"}
+{"path": "docs/04-state-machine.md", "reason": "C-002 control_mode 语义"}
+{"path": "src/control/driver/facts.ts", "reason": "costSpent 聚合"}
+{"path": "src/control/orchestrator/loop.ts", "reason": "executeRun 写回点"}

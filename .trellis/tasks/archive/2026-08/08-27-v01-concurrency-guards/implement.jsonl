@@ -1,0 +1,4 @@
+{"path": "docs/08-cross-cutting.md", "reason": "N2-N4 要求"}
+{"path": "src/control/driver/driver.ts", "reason": "N2 乐观锁落点"}
+{"path": "src/control/orchestrator/loop.ts", "reason": "RUNNING 生命周期"}
+{"path": "migrations/1000000000000_initial-schema.sql", "reason": "现有 run 索引"}

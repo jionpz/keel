@@ -23,6 +23,8 @@ beforeEach(() => {
   execFileSync('git', ['init', '-q', '-b', 'main', '.'], { cwd: origin })
   execFileSync('git', ['config', 'user.email', 'o@test'], { cwd: origin })
   execFileSync('git', ['config', 'user.name', 'o'], { cwd: origin })
+  // 夹具不继承操作者的全局签名配置：签名程序在无人值守环境里可能提示或变慢
+  execFileSync('git', ['config', 'commit.gpgsign', 'false'], { cwd: origin })
   writeFileSync(join(origin, 'README.md'), '# base\n')
   execFileSync('git', ['add', '.'], { cwd: origin })
   execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: origin })
@@ -129,6 +131,43 @@ describe('真实提交', () => {
     await g.ensureWorktree(repoId, taskId, 'main')
     const r = await g.commitAll(taskId, 'noop')
     expect(r.ok && r.value).toBeNull()
+  })
+
+  /**
+   * 反例验证：把全局 git 配置换成「强制签名 + 必然失败的签名程序」。
+   * 若 commitAll 继承了这份配置，提交会直接失败（无人干预的编排循环里，
+   * 真实环境更常见的是签名程序交互提示 → 挂起）。
+   */
+  it('不继承全局签名配置 —— 操作者的 commit.gpgsign 不该签到 Agent 的提交上', async () => {
+    const cfg = join(origin, '..', `keel-gitconfig-${randomUUID()}`)
+    writeFileSync(
+      cfg,
+      '[commit]\n\tgpgsign = true\n[gpg]\n\tformat = ssh\n[gpg "ssh"]\n\tprogram = /nonexistent/signer\n[user]\n\tsigningkey = ssh-ed25519 AAAAfake\n',
+    )
+    const saved = process.env.GIT_CONFIG_GLOBAL
+    process.env.GIT_CONFIG_GLOBAL = cfg
+
+    try {
+      const g = ws()
+      const taskId = randomUUID()
+      await g.ensureBareRepo(repoId, `file://${origin}`)
+      const wt = await g.ensureWorktree(repoId, taskId, 'main')
+      if (!wt.ok) return
+
+      writeFileSync(join(wt.value.path, 'signed.txt'), 'x\n')
+      const sha = await g.commitAll(taskId, 'feat: unsigned')
+      expect(sha.ok).toBe(true)
+
+      // 提交确实没有签名：%G? 为 'N' = no signature
+      const sig = execFileSync('git', ['-C', wt.value.path, 'log', '-1', '--format=%G?'], {
+        encoding: 'utf8',
+      }).trim()
+      expect(sig).toBe('N')
+    } finally {
+      if (saved === undefined) delete process.env.GIT_CONFIG_GLOBAL
+      else process.env.GIT_CONFIG_GLOBAL = saved
+      rmSync(cfg, { force: true })
+    }
   })
 })
 
