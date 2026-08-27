@@ -129,6 +129,11 @@ export class GitWorkspace {
    *
    * 无改动时返回 null 而非报错 —— 「这一轮没改东西」是正常情况，
    * 不该被当作故障。
+   *
+   * 身份与签名都由 `-c` 显式钉死，不继承调用者的全局 git 配置：
+   * 提交是机器署名（`Keel <keel@localhost>`），用操作者的密钥签名会把
+   * 人的身份加到 Agent 产物上；且签名程序可能交互提示或变慢，
+   * 在无人干预的编排循环里等同于挂起。
    */
   async commitAll(taskId: string, message: string): Promise<Result<string | null>> {
     const wt = this.worktreePath(taskId)
@@ -147,6 +152,8 @@ export class GitWorkspace {
         'user.email=keel@localhost',
         '-c',
         'user.name=Keel',
+        '-c',
+        'commit.gpgsign=false',
         'commit',
         '-m',
         message,
