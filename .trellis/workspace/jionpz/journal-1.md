@@ -194,3 +194,18 @@ v0.1 可用命令行入口:收割/驱动任务/状态查询。
 ### Next Steps
 
 - AC3: keel run-issue --ci real(需 KEEL_GITHUB_TOKEN, 创建真实 PR)
+
+
+## Session 2: merge-crosscut-fixes 收尾(PR #35)
+
+**Date**: 2026-08-27
+**Branch**: `cursor/merge-crosscut-fixes-365e`
+
+### Summary
+
+三份审查的明确缺陷分三批落地(`ee726c3` O2/ADR-0003 交叉补齐、`9ce98a3` 失败/超时 run 成本入账 + 同事务熔断、`68ce401` 删除重叠的 merge.acceptance)。复验 `pnpm run check` 全绿(326 passed / 4 skipped),CI 对三个 commit 均 success,PR #35 已转 ready for review。
+刻意 deferred:`ContextBuilt` / `artifact-store.commit` 的 occurred_at(需扩契约)、`ensureTraceId` 无 now 的回落分支、归档快照里 merge.acceptance 的历史引用。
+
+### Status
+
+[OK] **Completed** —— 待 human merge(收尾代理不合并)
