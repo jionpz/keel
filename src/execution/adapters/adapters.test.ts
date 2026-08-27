@@ -18,11 +18,13 @@
  * （vitest.acceptance.config.ts 已含 `*.test.ts` 之外的真实集成）。
  */
 
-import { execFileSync } from 'node:child_process'
+import { execFileSync, type spawn } from 'node:child_process'
+import { EventEmitter } from 'node:events'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Readable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import type { RunSpec } from '../../contracts/harness-adapter.js'
@@ -161,6 +163,104 @@ describe('buildArgv', () => {
   it('固定使用 -p --mode=json', () => {
     const argv = buildArgv(spec(), 'm')
     expect(argv.slice(0, 2)).toEqual(['-p', '--mode=json'])
+  })
+})
+
+/**
+ * 提示词渲染 —— **模型实际收到的字节**，不是我们以为它收到的。
+ *
+ * 这一层此前是空的，于是 Session Manager 把 ContextBuilder 造好的
+ * role / feedback / rfc 全部丢掉、只留阶段指令这件事，
+ * 一路穿过所有确定性测试，直到真实运行里 PM 回答
+ * 「本次对话中不存在任何用户反馈原文」才暴露。
+ *
+ * 用注入的 spawnFn 抓 argv 末位（真实的提示词），不起进程、不花钱。
+ */
+describe('renderPrompt —— context 的每个 section 都要真的进提示词', () => {
+  /** 最小可解析的 omp 输出：一条 agent_end 即可让 exec 走成功路径 */
+  const OK_STREAM = `{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"ok"}]}]}\n`
+
+  function recordingSpawn(): { spawnFn: typeof spawn; calls: string[][] } {
+    const calls: string[][] = []
+    const spawnFn = ((_bin: string, args: readonly string[]) => {
+      calls.push([...args])
+      const p = new EventEmitter() as EventEmitter & {
+        stdout: Readable
+        stderr: Readable
+      }
+      p.stdout = Readable.from([OK_STREAM])
+      p.stderr = Readable.from([])
+      // 等 stdout 读完再报 close —— 否则会丢输出，正是真实实现刻意避开的坑
+      p.stdout.on('end', () => p.emit('close', 0))
+      return p
+    }) as unknown as typeof spawn
+    return { spawnFn, calls }
+  }
+
+  /** 多个 section 的 spec：模拟 ContextBuilder 的真实产出 */
+  function multiSectionSpec(): RunSpec {
+    return spec({
+      context: {
+        context_id: 'c1',
+        recipe_id: 'PM',
+        recipe_version: '1',
+        sections: [
+          {
+            id: 'role',
+            source_ref: 'fixed:role/PM',
+            source_kind: 'fixed',
+            priority: 'required',
+            content: '你是 PM。',
+            tokens: 3,
+          },
+          {
+            id: 'feedback',
+            source_ref: 'artifact:feedback/t1',
+            source_kind: 'artifact',
+            priority: 'required',
+            content: '## 用户反馈\n\nKEEL_MARKER_FEEDBACK',
+            tokens: 8,
+          },
+          {
+            id: 'prompt',
+            source_ref: 'derived:session-manager',
+            source_kind: 'derived',
+            priority: 'required',
+            content: '判断上面的用户反馈是否值得做。',
+            tokens: 6,
+          },
+        ],
+        total_tokens: 17,
+        dropped: [],
+      },
+    })
+  }
+
+  it('全部 section 按顺序进入提示词，且阶段指令在最后', async () => {
+    const { spawnFn, calls } = recordingSpawn()
+    const a = new OmpAdapter({ spawnFn })
+
+    const started = await a.startRun(multiSectionSpec())
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+    expect((await a.awaitResult(started.value)).ok).toBe(true)
+
+    const prompt = calls[0]?.at(-1) ?? ''
+    // 只断言「含阶段指令」是不够的 —— 那正是缺陷发生时仍然成立的部分
+    expect(prompt).toContain('你是 PM。')
+    expect(prompt).toContain('KEEL_MARKER_FEEDBACK')
+    // 「上面的」是语义的一部分：指令必须在被引用的内容之后
+    expect(prompt.indexOf('KEEL_MARKER_FEEDBACK')).toBeLessThan(prompt.indexOf('判断上面的'))
+  })
+
+  it('反例：只渲染首个 section 时，反馈就消失了', async () => {
+    const s = multiSectionSpec()
+    const onlyFirst = s.context.sections
+      .slice(0, 1)
+      .map((x) => x.content)
+      .join('\n\n')
+    // 这就是缺陷当时的形态 —— 它「看起来在工作」，因为指令还在
+    expect(onlyFirst).not.toContain('KEEL_MARKER_FEEDBACK')
   })
 })
 
