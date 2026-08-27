@@ -23,3 +23,6 @@ venv/
 # 本机 harness 状态（OMP / OMC），不属于项目
 .omo/
 .omc/
+
+# WorkBuddy 会话数据/工作日志（2026-08-27 加入）
+.workbuddy/
