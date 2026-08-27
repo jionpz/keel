@@ -60,6 +60,8 @@ async function seed(): Promise<Seeded> {
   execFileSync('git', ['init', '-q', '-b', 'main', '.'], { cwd: ws })
   execFileSync('git', ['config', 'user.email', 'keel@test'], { cwd: ws })
   execFileSync('git', ['config', 'user.name', 'keel'], { cwd: ws })
+  // 夹具不继承操作者的全局签名配置：签名程序在无人值守环境里可能提示或变慢
+  execFileSync('git', ['config', 'commit.gpgsign', 'false'], { cwd: ws })
   writeFileSync(
     join(ws, 'README.md'),
     ['# 导出模块', '', '当前导出接口没有任何筛选参数。', ''].join('\n'),
