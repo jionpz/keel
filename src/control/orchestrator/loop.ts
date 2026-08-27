@@ -3,10 +3,11 @@
  *
  * ```
  * 取一个 PENDING 的 run
+ *   → 认领为 RUNNING（N3/N4 并发守卫，src/control/concurrency/limits.ts）
  *   → 造 Context（Fact Plane）
  *   → 跑真实 session（Execution Plane）
  *   → 五步校验 + 落库（Control Plane）
- *   → 标记 run SUCCEEDED
+ *   → 标记 run SUCCEEDED（失败则 FAILED —— 不滞留在 RUNNING）
  *   → driver.advance → 下一状态可能又建一个 run
  * ```
  *
@@ -16,12 +17,14 @@
  */
 
 import type { CiGateway } from '../../contracts/ci-gateway.js'
-import { err, makeError, ok, type Result } from '../../contracts/errors.js'
+import { err, type KeelError, makeError, ok, type Result } from '../../contracts/errors.js'
 import type { HarnessAdapter } from '../../contracts/harness-adapter.js'
 import type { HarnessSessionManager } from '../../execution/session/manager.js'
 import { asRole } from '../../fact/db.js'
 import type { GitWorkspace } from '../../fact/git-workspace.js'
-import type { RoleId, Stage, TaskStatus } from '../../shared/ids.js'
+import type { ControlMode, RoleId, Stage, TaskStatus } from '../../shared/ids.js'
+import { checkBudgetFuse } from '../budget/fuse.js'
+import { claimRunForExecution } from '../concurrency/limits.js'
 import { FactPlaneContextBuilder } from '../context/builder.js'
 import type { WorkflowDriver } from '../driver/driver.js'
 import { runSessionUntilValid } from '../proposal/pipeline.js'
@@ -88,8 +91,9 @@ export interface RunOptions {
    * 注入外部事实（CI 结果）的回调。
    *
    * CI 是 Keel 的**外部事实源**（docs/09-roadmap.md §3）——
-   * 系统本身不产生它。v0.1 尚无真实 git/CI 接入（属子任务 7），
-   * 由调用方注入，且注入的事件会被明确标记来源。
+   * 系统本身不产生它。真实接入走 `ci`（GitHubProvider 实现 CiGateway）；
+   * 本回调保留给确定性测试与不依赖远程仓库/凭据的本地闭环
+   * （见 v01-criterion.acceptance.test.ts 的头注释），注入的事件会被明确标记来源。
    */
   readonly externalCi?: (taskId: string) => Promise<'passed' | 'failed'>
   /**
@@ -111,6 +115,15 @@ export async function runTaskToCompletion(
     const state = await readState(taskId)
     if (state === null) return err(makeError('NOT_FOUND', `找不到 task ${taskId}`))
     if (TERMINAL.includes(state.status)) {
+      return ok({ finalStatus: state.status, steps })
+    }
+
+    // ── control_mode ≠ auto：不派发新 run，正常停止 ──
+    //
+    // 预算熔断（C-002）与人工暂停/接管走的都是这个维度。
+    // 停止是**正常返回而非 error**：status 未变、事实完整，
+    // 恢复（C-005）后可从当前 status 继续 —— 把它当错误会掩盖这一点。
+    if (state.control_mode !== 'auto') {
       return ok({ finalStatus: state.status, steps })
     }
 
@@ -207,8 +220,44 @@ export async function runTaskToCompletion(
   )
 }
 
-/** 跑一个 run：造 Context → 真实 session → 校验落库 → 标记 SUCCEEDED */
+/** 跑一个 run：认领（PENDING→RUNNING）→ 造 Context → 真实 session → 校验落库 → 终态 */
 async function executeRun(
+  taskId: string,
+  pending: { id: string; stage: Stage; role: RoleId },
+  deps: OrchestratorDeps,
+  ctxBuilder: FactPlaneContextBuilder,
+): Promise<Result<void>> {
+  // ── N3/N4：开始执行前先认领 ──
+  //
+  // PENDING→RUNNING 乐观锁与全局 RUNNING 上限检查在**同一事务**内
+  // （claimRunForExecution）。认领失败返回可重试 CONFLICT 并向上传播 ——
+  // 编排器因此停下而不是静默吞掉（docs/08-cross-cutting.md §4.4 N4）。
+  const claimed = await asRole('keel_control', (c) => claimRunForExecution(c, pending.id))
+  if (!claimed.ok) return err(claimed.error)
+
+  const executed = await executeClaimedRun(taskId, pending, deps, ctxBuilder)
+  if (!executed.ok) {
+    // N3 失败路径：失败也要**离开 RUNNING**。滞留会让部分唯一索引
+    // run_one_running_per_task 卡死该 Task 的后续 Run，
+    // 且「还在跑」与「已失败」在事实层是两个不同的事实。
+    await markRunFailed(pending.id, executed.error)
+  }
+  return executed
+}
+
+/** 失败的 run 如实落 FAILED —— error_kind/error_detail 是 T-030/T-031 守卫的输入来源 */
+async function markRunFailed(runId: string, error: KeelError): Promise<void> {
+  await asRole('keel_control', (c) =>
+    c.query(
+      `UPDATE run SET status='FAILED', ended_at=now(), error_kind=$2, error_detail=$3
+       WHERE id=$1 AND status='RUNNING'`,
+      [runId, error.kind, error.detail],
+    ),
+  )
+}
+
+/** 认领之后的执行主体。任何 err 返回都会由 executeRun 落成 run.status='FAILED' */
+async function executeClaimedRun(
   taskId: string,
   pending: { id: string; stage: Stage; role: RoleId },
   deps: OrchestratorDeps,
@@ -267,9 +316,33 @@ async function executeRun(
   )
   if (!outcome.ok) return err(outcome.error)
 
-  await asRole('keel_control', (c) =>
-    c.query(`UPDATE run SET status='SUCCEEDED', ended_at=now() WHERE id=$1`, [pending.id]),
-  )
+  // 谁执行了这个 run 是事实，记在 run 行上（O 可观测 + ADR-0005）——
+  // Human L0 e2e 据此断言「L0 路径真的被执行过」，而不是靠桩自己声称。
+  //
+  // 成本一并写回（C1）：usage 是全部轮次的累计值，三态 cost_basis 原样落库 ——
+  // 没上报就是 null + 'unavailable'，禁止用 0 冒充（docs/08-cross-cutting.md §3.1）。
+  //
+  // 熔断检查在**同一事务**内：写回与核算之间不留窗口，
+  // 崩溃重启后不会出现「成本已入账但该暂停的 Task 还在跑」。
+  const descriptor = deps.adapter.describe()
+  const usage = outcome.value.usage
+  await asRole('keel_control', async (c) => {
+    await c.query(
+      `UPDATE run SET status='SUCCEEDED', ended_at=now(), harness_id=$2, harness_tier=$3,
+              tokens_in=$4, tokens_out=$5, cost_usd=$6, cost_basis=$7
+       WHERE id=$1`,
+      [
+        pending.id,
+        descriptor.harness_id,
+        descriptor.tier,
+        usage.tokens_in,
+        usage.tokens_out,
+        usage.cost_usd,
+        usage.cost_basis,
+      ],
+    )
+    await checkBudgetFuse(c, taskId, deps.now())
+  })
 
   // 把这一轮的改动提交到该 Task 的分支。
   //
@@ -331,9 +404,14 @@ async function readRemoteUrl(repoId: string): Promise<Result<string>> {
   return ok(row.remote_url)
 }
 
-async function readState(taskId: string): Promise<{ status: TaskStatus } | null> {
+async function readState(
+  taskId: string,
+): Promise<{ status: TaskStatus; control_mode: ControlMode } | null> {
   const r = await asRole('keel_control', (c) =>
-    c.query<{ status: TaskStatus }>('SELECT status FROM task WHERE id=$1', [taskId]),
+    c.query<{ status: TaskStatus; control_mode: ControlMode }>(
+      'SELECT status, control_mode FROM task WHERE id=$1',
+      [taskId],
+    ),
   )
   return r.rows[0] ?? null
 }

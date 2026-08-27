@@ -1,7 +1,12 @@
 # ADR-0004 · 持久化与 Artifact 存储
 
-**Status**: Proposed
+**Status**: **Accepted**（2026-08-26 复核）
 **Date**: 2026-08-22
+
+> 2026-08-26 复核：本 ADR 的决策已按原样落地并被测试与授权约束持续验证 ——
+> `src/fact/artifact-store.ts`（单表多态 + `keel_commit_artifact`）、
+> `src/fact/blob.ts`（256 KB 阈值、内容寻址、**先 blob 后 artifact** 的写序）。
+> 实现与推荐方案无出入，故转为 Accepted。
 
 ## Context
 
@@ -28,7 +33,7 @@
 | B. Postgres + 外部对象存储，`artifact` 只存引用 | 热路径干净，多一个组件 |
 | C. Postgres + **本地文件系统**（v0.1），预留对象存储接口 | 无新组件，路径可平滑替换 |
 
-## Decision（推荐）
+## Decision
 
 **C**，阈值切分：
 

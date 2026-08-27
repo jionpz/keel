@@ -1,0 +1,6 @@
+{"path": ".trellis/spec/backend/error-handling.md", "reason": "acceptance 缺凭据明确失败、禁止假绿"}
+{"path": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试分层：acceptance vs check"}
+{"path": "docs/09-roadmap.md", "reason": "v0.1 判据原文"}
+{"path": "src/acceptance/github-pr.acceptance.test.ts", "reason": "真实 GitHub 验收先例"}
+{"path": "src/acceptance/v01-criterion.acceptance.test.ts", "reason": "本地闭环验收模板"}
+{"path": "src/control/orchestrator/ci-wiring.test.ts", "reason": "opts.ci 接线确定性单测"}

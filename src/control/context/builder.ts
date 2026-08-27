@@ -17,6 +17,7 @@ import { randomUUID } from 'node:crypto'
 import type { PoolClient } from 'pg'
 import { err, makeError, ok, type Result } from '../../contracts/errors.js'
 import type { Context, ContextSection, DroppedSection } from '../../contracts/types.js'
+import { ensureTraceId } from '../../fact/trace.js'
 import type { RoleId, Stage } from '../../shared/ids.js'
 
 export interface ContextRequest {
@@ -117,8 +118,10 @@ export class FactPlaneContextBuilder {
 
     // 这条事件是「这个 Agent 当时到底看到了什么」的唯一可靠答案。
     // 不记录 content 本身（体积过大），但 source_ref 足以重新取回。
+    const traceId = await ensureTraceId(c, req.task_id)
     await c.query(
-      `INSERT INTO event (task_id, run_id, type, payload) VALUES ($1,$2,'ContextBuilt',$3::jsonb)`,
+      `INSERT INTO event (task_id, run_id, type, payload, trace_id)
+       VALUES ($1,$2,'ContextBuilt',$3::jsonb,$4)`,
       [
         req.task_id,
         req.run_id,
@@ -136,6 +139,7 @@ export class FactPlaneContextBuilder {
           total_tokens: used,
           budget_tokens: req.budget_tokens,
         }),
+        traceId,
       ],
     )
 

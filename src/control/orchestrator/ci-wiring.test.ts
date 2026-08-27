@@ -54,6 +54,8 @@ beforeEach(async () => {
   execFileSync('git', ['init', '-q', '-b', 'main', '.'], { cwd: origin })
   execFileSync('git', ['config', 'user.email', 'o@test'], { cwd: origin })
   execFileSync('git', ['config', 'user.name', 'o'], { cwd: origin })
+  // 夹具不继承操作者的全局签名配置：签名程序在无人值守环境里可能提示或变慢
+  execFileSync('git', ['config', 'commit.gpgsign', 'false'], { cwd: origin })
   writeFileSync(join(origin, 'README.md'), '# base\n')
   execFileSync('git', ['add', '.'], { cwd: origin })
   execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: origin })
