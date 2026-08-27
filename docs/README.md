@@ -64,12 +64,12 @@
 | 项 | 状态 |
 |---|---|
 | 文档集 | ✅ 完成 |
-| Harness 接口调研 | ⚠️ **仅 Claude Code / OMP 完成**（ADR-0005 实测） |
+| Harness 接口调研 | ⚠️ **完成 Claude Code 与 OMP**（后者见 ADR-0005 修订）；其余属阶段二 |
 | `ADR-0002` 实现语言 | ✅ **Accepted — TypeScript / Node** |
 | `ADR-0003` Workflow engine | ✅ **Accepted**（2026-08-26 查证:硬约束已自动化强制,迁移路径确证） |
-| `ADR-0005` Harness 分级 | ⚠️ OMP 接入时实测修订;其余 harness 未查证 |
-| 仓库骨架 | ✅ 完成 —— 四条架构约束已机械化 |
-| v0.1 实现 | ✅ **核心闭环 + 真实 GitHub PR/CI + durable timer + CLI** 已落地(`keel timer-worker/run-task/status`) |
+| `ADR-0005` Harness 分级 | ✅ **Accepted — Claude Code + OMP 首批**（2026-08-23 修订;OMP 接入时实测,其余 harness 未查证） |
+| 仓库骨架 | ✅ 完成 —— 四条架构约束已机械化，见下 |
+| v0.1 实现 | ✅ 核心闭环 + 真实 GitHub PR/CI + durable timer + CLI 已落地（`GitHubProvider` 实现 PR 网关与 CI 网关，编排器经 `opts.ci` 消费；CLI 见下） |
 
 ### CLI(2026-08-26 新增)
 

@@ -93,9 +93,9 @@
 - [ ] AC5（全真实，Phase 2）：`keel run-issue <url> --ci real` 在测试仓库上到达 S-DONE，
   存在真实 PR 且 CI passed，命令输出 PR URL；`readEvents` 重建的 transitions 以 T-001 起、
   T-024 终。
-  当前阻塞点在**模型**而非代码：两次真实运行的入口段（T-001）都成立，但 rfc_draft
-  产出的 `policy_facts` 自报 risk/complexity=high，被 P1 正当拦到 S-HUMAN_REVIEW。
-  见下方验收记录。
+  提示词「原样采用」+ 校验 4b（`feedback-constraints`）+ `wallClockS` 透传已落地
+  （见 commits `c759eb5` / `6954c52`）。第三次真实跑（墙钟 600s）仍未到 S-DONE：
+  rfc_draft 两次超时后 **T-031 升人工**。AC5 仍未关。见下方验收记录。
 - [x] AC6（人工闸门如实）：Policy 判高风险的 Issue 停在 S-HUMAN_REVIEW，run-issue 如实
   报告该状态（不伪造成功，不无限等待）。
 - [x] AC7（质量门）：`pnpm run check` 全绿（含既有 248 测试 + 新增单测/集成测试）；
@@ -107,6 +107,7 @@
 |---|---|---|
 | 2026-08-27 | `test:acceptance` + `KEEL_TEST_REMOTE_REPO=jionpz/keel` | **入口 OK**：T-001 + github feedback；终态 **S-HUMAN_REVIEW**（Policy，~472s）。github-pr / session-milestone 绿。v01/merge 亦因模型波动未到 S-DONE。AC5 未关。 |
 | 2026-08-27（第二次，仅 `issue-e2e`） | `pnpm vitest run --config vitest.acceptance.config.ts src/acceptance/issue-e2e.acceptance.test.ts` | **入口再次 OK**，终态仍 **S-HUMAN_REVIEW**（580s）。路径：`T-001 → T-002 → T-004 → T-030 → T-030 → T-011 → T-013`。归因已查明**不是 Policy 缺陷**：`PolicyEvaluated{decision:'human_review', default_applied:false}`，命中 P1（`risk=='high'`）—— 模型自己写的 `rfc.policy_facts` 是 `{risk:'high', complexity:'high', estimated_files_changed:0}`，而 Issue 正文明确要求 low/low/1 且只改 README 一行。即模型未遵循约束，**非规则集问题**（故未按纪律放宽 Policy）。另有 rfc_draft 阶段 **2 次 RunTimeout**（T-030 自环重试），第 3 次才产出 RFC。收尾干净：Issue 已关、无 PR、未推分支。AC5 仍未关；本次作为 AC6 证据。 |
+| 2026-08-27（第三次，`wallClockS=600`） | 同上 + 提示词/4b 已合入 | 测试用例**绿**，但走的是 **AC6 早退**：路径 `T-001 → T-002 → T-004 → T-030 → T-030 → T-031`（rfc 两次超时后重试耗尽升人工）。**未产出 PR，AC5 仍未关**。 |
 
 ## Out of Scope
 

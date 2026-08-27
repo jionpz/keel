@@ -28,6 +28,7 @@ import type { AEvent } from '../generated/artifacts.js'
 import type { ArtifactRef } from '../shared/ids.js'
 import { externalizeIfLarge, materialize } from './blob.js'
 import { asRole } from './db.js'
+import { ensureTraceId } from './trace.js'
 
 /** Postgres 错误码 */
 const PG_UNIQUE_VIOLATION = '23505'
@@ -93,13 +94,18 @@ export class PgArtifactStore implements ArtifactStore {
 
         // I4：状态变更必然伴随事件，且同一事务。
         // 顺序不能反 —— artifact.committed_at_seq 需要这条事件的 seq
+        //
+        // trace_id 同样必填（O2）：这是编排循环之外唯一的事件写入口，
+        // 漏掉它会让直接走 store.commit 的事件成为 trace 的盲区
+        const traceId = await ensureTraceId(c, proposal.task_id)
         const ev = await c.query<{ seq: string }>(
-          `INSERT INTO event (task_id, run_id, type, payload)
-           VALUES ($1, $2, 'ArtifactCommitted', $3::jsonb) RETURNING seq`,
+          `INSERT INTO event (task_id, run_id, type, payload, trace_id)
+           VALUES ($1, $2, 'ArtifactCommitted', $3::jsonb, $4) RETURNING seq`,
           [
             proposal.task_id,
             ctx.run_id,
             JSON.stringify({ kind: proposal.kind, key: proposal.key, version }),
+            traceId,
           ],
         )
         const seq = Number(ev.rows[0]?.seq)

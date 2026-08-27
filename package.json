@@ -11,6 +11,7 @@
   },
   "scripts": {
     "generate": "tsx scripts/generate-types.ts",
+    "timeline": "tsx scripts/timeline.ts",
     "db:migrate": "node-pg-migrate up",
     "db:reset": "node-pg-migrate down 0 && node-pg-migrate up",
     "typecheck": "tsc --noEmit",

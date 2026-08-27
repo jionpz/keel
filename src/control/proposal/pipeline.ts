@@ -15,6 +15,7 @@ import { randomUUID } from 'node:crypto'
 import type { PersistedArtifactKind } from '../../contracts/artifact-store.js'
 import { err, makeError, ok, type Result } from '../../contracts/errors.js'
 import type { PolicyEngine } from '../../contracts/policy-engine.js'
+import type { Usage } from '../../contracts/types.js'
 import type {
   HarnessSessionManager,
   SessionHandle,
@@ -22,6 +23,7 @@ import type {
 } from '../../execution/session/manager.js'
 import { commitArtifactOn } from '../../fact/artifact-store.js'
 import { asRole } from '../../fact/db.js'
+import { ensureTraceId } from '../../fact/trace.js'
 import { validateProposal, violationsToFeedback } from './validate.js'
 
 export interface PipelineOptions {
@@ -57,6 +59,47 @@ export interface PipelineOutcome {
   readonly attempts: number
   /** 每轮被拒的理由，供诊断 */
   readonly rejections: readonly (readonly string[])[]
+  /**
+   * 全部轮次累计的用量 —— R-007 回灌的每一轮都是一次真实的 Adapter 调用，
+   * 都花了钱。只报最后一轮会系统性低估成本（C1，docs/08-cross-cutting.md §3）。
+   */
+  readonly usage: Usage
+}
+
+/** 初始累计值：什么都还没上报。null 而非 0 —— 两者在核算里是不同的事实 */
+const ZERO_USAGE: Usage = {
+  tokens_in: null,
+  tokens_out: null,
+  cost_usd: null,
+  cost_basis: 'unavailable',
+}
+
+function addNullable(a: number | null, b: number | null): number | null {
+  if (a === null && b === null) return null
+  return (a ?? 0) + (b ?? 0)
+}
+
+/**
+ * 合并两轮的成本口径。
+ *
+ * 同一个 Run 的所有轮次走同一个 Adapter，口径本应同质；
+ * 这里的规则只处理「初始 unavailable 累计值 + 首个真实上报」与
+ * 万一混入的异质口径：billed 只有在全程 billed 时才成立，
+ * 掺入任何 estimated 都会让总额降级为 estimated（不夸大精确度）。
+ */
+function mergeBasis(a: Usage['cost_basis'], b: Usage['cost_basis']): Usage['cost_basis'] {
+  if (a === 'unavailable') return b
+  if (b === 'unavailable') return a
+  return a === 'billed' && b === 'billed' ? 'billed' : 'estimated'
+}
+
+function addUsage(a: Usage, b: Usage): Usage {
+  return {
+    tokens_in: addNullable(a.tokens_in, b.tokens_in),
+    tokens_out: addNullable(a.tokens_out, b.tokens_out),
+    cost_usd: addNullable(a.cost_usd, b.cost_usd),
+    cost_basis: mergeBasis(a.cost_basis, b.cost_basis),
+  }
 }
 
 /**
@@ -77,6 +120,7 @@ export async function runSessionUntilValid(
 ): Promise<Result<PipelineOutcome>> {
   const maxRetries = opts.maxProposalRetries ?? 3
   const rejections: string[][] = []
+  let usage: Usage = ZERO_USAGE
 
   const opened = await sessions.open(spec)
   if (!opened.ok) return err(opened.error)
@@ -101,6 +145,7 @@ export async function runSessionUntilValid(
         ...(feedback.length > 0 ? { rejected_violations: feedback } : {}),
       })
       if (!turn.ok) return err(turn.error)
+      usage = addUsage(usage, turn.value.usage)
 
       // 提取失败也走回灌 —— 它和 schema 不合格是同一类问题：
       // 模型输出的形状不对，让它改比重跑整个阶段便宜
@@ -127,13 +172,15 @@ export async function runSessionUntilValid(
         if (!verdict.accepted) return { ok: false as const, verdict }
 
         // 校验通过 → 落库。写 event 拿 seq，再提交 artifact（同事务）
+        const traceId = await ensureTraceId(c, proposal.task_id)
         const ev = await c.query<{ seq: string }>(
-          `INSERT INTO event (task_id, run_id, type, payload, occurred_at)
-           VALUES ($1,$2,'ProposalAccepted',$3::jsonb,$4) RETURNING seq`,
+          `INSERT INTO event (task_id, run_id, type, payload, trace_id, occurred_at)
+           VALUES ($1,$2,'ProposalAccepted',$3::jsonb,$4,$5) RETURNING seq`,
           [
             proposal.task_id,
             proposal.produced_by_run,
             JSON.stringify({ kind: proposal.kind, key: proposal.key, attempt }),
+            traceId,
             requireNow(opts),
           ],
         )
@@ -157,6 +204,7 @@ export async function runSessionUntilValid(
           artifactRef: committed.id,
           attempts: attempt,
           rejections,
+          usage,
         })
       }
 
@@ -164,18 +212,20 @@ export async function runSessionUntilValid(
       feedback = violationsToFeedback(committed.verdict.violations)
       rejections.push(feedback)
 
-      await asRole('keel_control', (c) =>
-        c.query(
-          `INSERT INTO event (task_id, run_id, type, payload, occurred_at)
-           VALUES ($1,$2,'ProposalRejected',$3::jsonb,$4)`,
+      await asRole('keel_control', async (c) => {
+        const traceId = await ensureTraceId(c, proposal.task_id)
+        await c.query(
+          `INSERT INTO event (task_id, run_id, type, payload, trace_id, occurred_at)
+           VALUES ($1,$2,'ProposalRejected',$3::jsonb,$4,$5)`,
           [
             proposal.task_id,
             proposal.produced_by_run,
             JSON.stringify({ attempt, violations: committed.verdict.violations }),
+            traceId,
             requireNow(opts),
           ],
-        ),
-      )
+        )
+      })
     }
 
     // R-006：连续失败到上限，判 Run 失败

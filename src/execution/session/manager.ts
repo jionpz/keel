@@ -18,7 +18,7 @@ import type {
   RunResult,
   RunSpec,
 } from '../../contracts/harness-adapter.js'
-import type { Proposal, ProposalKind, Usage } from '../../contracts/types.js'
+import type { ContextSection, Proposal, ProposalKind, Usage } from '../../contracts/types.js'
 import { extractJson } from './extract.js'
 
 export interface SessionHandle {
@@ -213,22 +213,35 @@ function buildPrompt(input: TurnInput, spec: SessionSpec): string {
   return parts.join('\n')
 }
 
-/** 把提示词塞回 RunSpec 的 context —— v0.1 简单替换单个 section */
+/**
+ * 把本轮指令**追加**到 ContextBuilder 造好的 context 之后。
+ *
+ * ⚠️ 早先这里是**替换**整个 sections —— 于是 role / feedback / rfc / state
+ * 全被丢掉，模型只收到阶段指令。而阶段指令写的是「判断**上面的**用户反馈」，
+ * 上面什么都没有。真实运行里 PM 直接答「本次对话中不存在任何用户反馈原文」。
+ *
+ * 这不只是少给了点信息：`ContextBuilt` 事件是「这个 Agent 当时到底看到了什么」的
+ * 唯一答案（docs/08-cross-cutting.md §2.2、`O3`），替换让那条事件**变成假话** ——
+ * 它记录的 section 根本没进提示词。
+ *
+ * 追加而非前插，是因为阶段指令引用「上面的」内容，顺序本身是语义的一部分。
+ */
 function withPrompt(spec: RunSpec, prompt: string): RunSpec {
+  const promptSection: ContextSection = {
+    id: 'prompt',
+    source_ref: 'derived:session-manager',
+    source_kind: 'derived',
+    priority: 'required',
+    content: prompt,
+    tokens: Math.ceil(prompt.length / 4),
+  }
+  const sections = [...spec.context.sections, promptSection]
   return {
     ...spec,
     context: {
       ...spec.context,
-      sections: [
-        {
-          id: 'prompt',
-          source_ref: 'derived:session-manager',
-          source_kind: 'derived',
-          priority: 'required',
-          content: prompt,
-          tokens: Math.ceil(prompt.length / 4),
-        },
-      ],
+      sections,
+      total_tokens: sections.reduce((n, s) => n + s.tokens, 0),
     },
   }
 }

@@ -54,6 +54,24 @@ R-007 的重试仍可能连续三次不合格。
 **「一条真实反馈进入系统」的「进入」**。前者事件流从 `T-001` 开始，后者从 `T-002`
 开始（它的 S-NEW task 是 seed SQL 直插的）。
 
+### 凭据
+
+详细矩阵见 `.trellis/spec/backend/quality-guidelines.md` §验收测试的凭据。要点：
+
+| 环境变量 | 用途 | 要求 |
+|---|---|---|
+| `OPENCODE_API_KEY`（或 `DEEPSEEK_API_KEY`） | omp 推理网关 | 任一即可 |
+| `KEEL_GITHUB_TOKEN`（或 `GITHUB_TOKEN`） | PR 创建 + CI 回读（REST API） | fine-grained PAT：Contents RW + Pull requests RW |
+| `KEEL_TEST_REMOTE_REPO` | 真实远程仓库 | 对上述 token 可写 |
+
+两个已实测的陷阱：
+
+- **Cloud Agent 的 `ghs_` token 能 push 不能开 PR**（403）——
+  `v01-criterion-github` 的 beforeEach 预检会在起编排器之前失败并打印此信息；
+- **不要**在跑验收时设 `GIT_CONFIG_GLOBAL=/dev/null`：
+  那会一并屏蔽 `gh` 的 credential helper，push 失去鉴权。
+  该变量只用于 `pnpm run check`（隔离操作者的签名等全局配置）。
+
 跑法：
 
 ```bash
