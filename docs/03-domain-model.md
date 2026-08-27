@@ -66,7 +66,7 @@ Task 作用的目标仓库。
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `id` | `uuid` | PK |
-| `source` | `text` | `web` \| `email` \| `api` \| `manual` |
+| `source` | `text` | `web` \| `email` \| `api` \| `manual` \| `github` |
 | `external_ref` | `text` | 外部系统 id，用于去重 |
 | `body` | `text` | **原文，不可信输入** |
 | `received_at` | `timestamptz` | |
@@ -283,11 +283,11 @@ Event log 一表四用：
 
 ## 4. 写权限矩阵 · 中心不变量的强制形式
 
-对应两个数据库角色：`keel_control` 与 `keel_execution`。
+对应三个数据库角色：`keel_control`、`keel_execution` 与 `keel_ingress`（外部 Ingress）。
 
-| 实体 | Control Plane<br>`keel_control` | Execution Plane<br>`keel_execution` | 外部 Ingress |
+| 实体 | Control Plane<br>`keel_control` | Execution Plane<br>`keel_execution` | 外部 Ingress<br>`keel_ingress` |
 |---|---|---|---|
-| `repo` | `SELECT` | `SELECT` | 管理员 |
+| `repo` | `SELECT` | `SELECT` | ⛔ |
 | `feedback` | `SELECT` | ⛔ **无直接访问**（经 Context） | `INSERT` `SELECT` |
 | `task` | `SELECT` `INSERT` `UPDATE` | ⛔ **无直接访问**（经 Context） | ⛔ |
 | `task_feedback` | `SELECT` `INSERT` | ⛔ | ⛔ |
@@ -295,6 +295,10 @@ Event log 一表四用：
 | `artifact` | `SELECT` `INSERT` | ⛔ **禁止** | ⛔ |
 | `event` | `SELECT` `INSERT` | ⛔ **禁止** | ⛔ |
 | `timer` | `SELECT` `INSERT` `UPDATE` | ⛔ **禁止** | ⛔ |
+
+`repo` 全列皆为只读：仓库注册是**管理操作**，由迁移或以属主身份运行的
+`keel register-repo` 完成，不属于任何运行时角色。给 Ingress 授 `repo` 写权限
+就等于让外部输入自己决定往哪个仓库提交代码。
 
 **矩阵中不存在"Execution Plane 可写 Fact Plane"的格子** —— 这不是疏漏，是本架构的定义性约束。
 

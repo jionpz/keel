@@ -89,6 +89,17 @@ if (files.length === 0) {
 > 是 Stage 8 的反例验证抓出来的。
 > **未经反例验证的检查，等同于没有检查。**
 
+### CLI 真实模式：凭据闸门必须先于副作用
+
+`keel run-task --ci real` / `keel run-issue --ci real`：缺 `KEEL_GITHUB_TOKEN` 时
+立刻返回 `AUTH_FAILED`，**不得**先 ingest / 克隆 / 跑模型。否则会留下
+「已建 task 却永远建不了 PR」的半成品，且浪费 token。
+
+`run-issue` 组合命令若 ingest 成功、驱动失败：错误 detail 必须带上已 ingest 的
+`taskId`（可继续 `keel status`），不能只丢 `run` 侧错误。
+
+缺省 `--ci` 仍是 `passed`（模拟）—— 默认路径禁止悄悄打真实 GitHub API。
+
 ### 第二层：skip 之后仍要防假绿（2026-08-24，issue #21）
 
 「扫描到 0 个文件即失败」只防住了目录为空。如果扫描器**搜集了全部文件、

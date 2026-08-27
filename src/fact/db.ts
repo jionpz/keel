@@ -2,7 +2,7 @@
  * 数据库连接与角色切换。
  *
  * 角色模型（docs/03-domain-model.md §4）：
- *   应用以实际用户连接，然后 SET ROLE 到 keel_control 或 keel_execution。
+ *   应用以实际用户连接，然后 SET ROLE 到 keel_control、keel_execution 或 keel_ingress。
  *   两个角色都是 NOLOGIN —— 不需要为它们管理密码。
  *
  * ⚠️ SET ROLE 确实会降权，即使连接用户是 superuser：
@@ -12,7 +12,7 @@
 
 import { Pool, type PoolClient } from 'pg'
 
-export type KeelRole = 'keel_control' | 'keel_execution'
+export type KeelRole = 'keel_control' | 'keel_execution' | 'keel_ingress'
 
 export function connectionString(): string {
   return (

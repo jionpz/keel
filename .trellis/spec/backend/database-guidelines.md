@@ -32,16 +32,32 @@ await asRole('keel_control', async (c) => { /* ... */ })
 
 `asRole` 用 `SET LOCAL ROLE` + 事务包裹，角色不会泄漏到连接池的下一个使用者。
 
-### 两个角色的边界
+### 三个角色的边界
 
-| | `keel_control` | `keel_execution` |
-|---|---|---|
-| `artifact` / `event` | SELECT + INSERT | **无任何权限** |
-| `task` / `feedback` | 按矩阵 | **无任何权限**（含 SELECT） |
-| `run` | SELECT INSERT UPDATE | SELECT |
+| | `keel_control` | `keel_execution` | `keel_ingress` |
+|---|---|---|---|
+| `artifact` / `event` | SELECT + INSERT | **无任何权限** | **无** |
+| `task` | 按矩阵 | **无任何权限**（含 SELECT） | **无** |
+| `feedback` | SELECT only | **无** | **SELECT + INSERT** |
+| `run` | SELECT INSERT UPDATE | SELECT | **无** |
+| `repo` | SELECT | SELECT | SELECT |
 
 `keel_execution` 连 `task` 的 SELECT 都没有 —— 它看到的一切都应经由 Context Builder。
 这既是 token 控制，也是防止 Agent 绕过上下文预算去「自己翻库」。
+
+`keel_ingress` 是 docs/03 §4「外部 Ingress」列的落地角色（`migrations/1000000000003_github_ingress.sql`）：
+**只**能往 `feedback` INSERT，不能建 task。task 创建必须经 `WorkflowDriver.intake()`
+（`keel_control` 事务内真实化 T-001）。不要用 `asOwner` / `keel_control` 写 feedback ——
+control 对 feedback 刻意只读，这是矩阵约束。
+
+`repo` INSERT 不属于任何运行时角色：`keel register-repo` 用 `asOwner` 是管理员操作，
+与「运行时角色不写 repo」一致；不要为便利给 `keel_ingress`/`keel_control` 加 repo INSERT。
+
+### T-001 / intake 入口（from:null 转移）
+
+`transition()` **故意**不匹配 `from: null`。创建 Task 走平行入口
+`WorkflowDriver.intake()`，不走 `advance()`。`CreateTask` 在 `applyEffects` 里抛错
+（只能经 intake）；`LinkFeedback` 仍可 `recordIntent`（T-007 澄清回流也发它）。
 
 ---
 

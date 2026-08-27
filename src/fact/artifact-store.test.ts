@@ -307,6 +307,22 @@ describe('schema 与代码的一致性', () => {
     return [...(def ?? '').matchAll(/'([^']+)'/g)].map((m) => m[1] as string).sort()
   }
 
+  it('feedback.source 的 CHECK 取值含 github(issue intake)', async () => {
+    const dbValues = await checkValues('feedback', 'source')
+    expect(dbValues).toEqual(['api', 'email', 'github', 'manual', 'web'].sort())
+  })
+
+  it('keel_ingress 对 feedback 有 INSERT+SELECT', async () => {
+    const r = await asOwner((c) =>
+      c.query<{ privilege_type: string }>(
+        `SELECT privilege_type FROM information_schema.role_table_grants
+         WHERE grantee='keel_ingress' AND table_name='feedback'`,
+      ),
+    )
+    const privs = r.rows.map((x) => x.privilege_type).sort()
+    expect(privs).toEqual(['INSERT', 'SELECT'].sort())
+  })
+
   it('task.status 的 CHECK 取值与 src/shared/ids.ts 的 15 个状态一致', async () => {
     const dbValues = await checkValues('task', 'status')
     expect(dbValues).toEqual([...TASK_STATUSES].sort())

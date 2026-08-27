@@ -8,7 +8,12 @@
  * 结构性保证由 .dependency-cruiser.cjs 的 driver-must-not-touch-execution 提供。
  */
 
-export { type AdvanceOutcome, WorkflowDriver } from './driver.js'
+export {
+  type AdvanceOutcome,
+  type IntakeInput,
+  type IntakeOutcome,
+  WorkflowDriver,
+} from './driver.js'
 export { type AppliedEffect, applyEffects, type EffectContext } from './effects.js'
 export {
   loadPolicyFacts,

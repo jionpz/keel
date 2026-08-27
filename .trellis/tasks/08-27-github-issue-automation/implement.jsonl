@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend spec 入口：Pre-Development Checklist 与各 guideline 索引"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "本任务新增 keel_ingress 角色与迁移，必须遵循角色身份写入 / SECURITY DEFINER / 测试隔离纪律"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "getIssue / intake / CLI 新代码需遵循 Result<T> / ErrorKind 注册表 / 防假绿纪律"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "三平面边界：intake 属 Control Plane，getIssue 属 Fact Plane，新 CLI 文件的落位与 import 规则"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "ownerRepo/branchFor/parseArgs 复用与 ingest/run-issue 共享主体的抽取判断"}
+{"file": ".trellis/tasks/08-27-github-issue-automation/research/evidence-audit.md", "reason": "已核验的代码事实与 file:line 锚点：T-001 死路径的三处证据、授权缺口、CLI 未接线真实 PR/CI"}

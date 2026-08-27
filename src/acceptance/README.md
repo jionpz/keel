@@ -42,6 +42,28 @@ R-007 的重试仍可能连续三次不合格。
 **禁止**为了让这些测试稳定而放宽 schema 或降低断言强度 ——
 那是用假绿换稳定，正是本项目一路在避免的事。
 
+## 本目录有什么
+
+| 文件 | 验的是什么 | 额外前置 |
+|---|---|---|
+| `v01-criterion.acceptance.test.ts` | seed 的 S-NEW task 在无人干预下走到 S-DONE(CI 由测试注入) | 无 |
+| `github-pr.acceptance.test.ts` | push → 真实建 PR → 幂等复用 → 真实 CI 回读 | `KEEL_GITHUB_TOKEN`、`KEEL_TEST_REMOTE_REPO` |
+| `issue-e2e.acceptance.test.ts` | **真实 GitHub Issue** → S-DONE + 通过 CI 的真实 PR,事件流 T-001 起 T-024 终 | 上述两项 + 已登录的 `gh` CLI(创建/关闭验收用 Issue) |
+
+`issue-e2e` 与 `v01-criterion` 的差别只有一处,却正是 v0.1 判据里最后补上的那一环：
+**「一条真实反馈进入系统」的「进入」**。前者事件流从 `T-001` 开始，后者从 `T-002`
+开始（它的 S-NEW task 是 seed SQL 直插的）。
+
+跑法：
+
+```bash
+export KEEL_GITHUB_TOKEN="$(gh auth token)"
+export KEEL_TEST_REMOTE_REPO=https://github.com/<owner>/<repo>
+pnpm run test:acceptance
+```
+
+缺任一前置时 `issue-e2e` **明确失败并打印怎么补**，不跳过。
+
 ## 验收记录
 
 每次验收通过后，把结果记入对应任务的 `prd.md`：日期、走过的路径、耗时。

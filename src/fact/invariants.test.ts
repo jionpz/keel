@@ -265,6 +265,73 @@ describe('I6 · feedback 不可变', () => {
     )
     expect(msg).toMatch(/permission denied/i)
   })
+
+  it('keel_control 不能 INSERT feedback', async () => {
+    const msg = await expectRejected(() =>
+      asRole('keel_control', (c) =>
+        c.query(
+          `INSERT INTO feedback (id, source, external_ref, body)
+           VALUES ($1, 'manual', $2, 'x')`,
+          [randomUUID(), `ref-${randomUUID()}`],
+        ),
+      ),
+    )
+    expect(msg).toMatch(/permission denied/i)
+  })
+})
+
+// ───────────────────────── keel_ingress 授权边界 ─────────────────────────
+
+describe('keel_ingress · 外部 Ingress 只能写 feedback', () => {
+  it('keel_ingress 可以 INSERT feedback', async () => {
+    const id = randomUUID()
+    const r = await asRole('keel_ingress', (c) =>
+      c.query(
+        `INSERT INTO feedback (id, source, external_ref, body)
+         VALUES ($1, 'github', $2, 'issue body') RETURNING id`,
+        [id, `owner/repo#${id.slice(0, 8)}`],
+      ),
+    )
+    expect(r.rowCount).toBe(1)
+  })
+
+  it('keel_ingress 不能 INSERT task', async () => {
+    const f = await seed()
+    const msg = await expectRejected(() =>
+      asRole('keel_ingress', (c) =>
+        c.query(
+          `INSERT INTO task (id, status, title, repo_id, base_branch, work_branch)
+           VALUES ($1, 'S-NEW', 'x', $2, 'main', 'ai/x')`,
+          [randomUUID(), f.repoId],
+        ),
+      ),
+    )
+    expect(msg).toMatch(/permission denied/i)
+  })
+
+  it('keel_ingress 不能 INSERT event', async () => {
+    const f = await seed()
+    const msg = await expectRejected(() =>
+      asRole('keel_ingress', (c) =>
+        c.query(`INSERT INTO event (task_id, type) VALUES ($1, 'Forged')`, [f.taskId]),
+      ),
+    )
+    expect(msg).toMatch(/permission denied/i)
+  })
+
+  it('keel_ingress 不能 INSERT artifact', async () => {
+    const f = await seed()
+    const msg = await expectRejected(() =>
+      asRole('keel_ingress', (c) =>
+        c.query(
+          `INSERT INTO artifact (id, task_id, kind, key, version, schema_version, body, committed_at_seq)
+           VALUES ($1, $2, 'state', '', 1, '1.0', '{}'::jsonb, $3)`,
+          [randomUUID(), f.taskId, f.eventSeq],
+        ),
+      ),
+    )
+    expect(msg).toMatch(/permission denied/i)
+  })
 })
 
 // ───────────────────────── I3 · 幂等键 ─────────────────────────

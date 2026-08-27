@@ -56,6 +56,30 @@ export function ownerRepo(remoteUrl: string): Result<string> {
   return ok(`${m[1]}/${m[2]}`)
 }
 
+export interface IssueInfo {
+  readonly number: number
+  readonly title: string
+  readonly body: string
+  readonly labels: readonly string[]
+  readonly state: 'open' | 'closed'
+  readonly isPullRequest: boolean
+}
+
+export interface ParsedIssueUrl {
+  readonly remoteUrl: string
+  readonly number: number
+}
+
+/** 从 GitHub Issue URL 解析 remoteUrl 与 issue 编号 */
+export function parseIssueUrl(url: string): Result<ParsedIssueUrl> {
+  const m = url.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/issues\/(\d+)\/?$/)
+  if (m === null || m[1] === undefined || m[2] === undefined || m[3] === undefined) {
+    return err(makeError('WORKSPACE_ERROR', `无法解析 Issue URL:${url}`))
+  }
+  const remoteUrl = `https://github.com/${m[1]}/${m[2]}.git`
+  return ok({ remoteUrl, number: Number(m[3]) })
+}
+
 export class GitHubProvider implements PullRequestGateway, CiGateway {
   private readonly root: string
   private readonly token: string | undefined
@@ -244,6 +268,41 @@ export class GitHubProvider implements PullRequestGateway, CiGateway {
 
     // 无任何 check/status:视为通过 —— 没有配置 CI 的仓库不该永远卡死
     return ok('passed')
+  }
+
+  async getIssue(remoteUrl: string, issueNumber: number): Promise<Result<IssueInfo>> {
+    const slug = ownerRepo(remoteUrl)
+    if (!slug.ok) return slug
+
+    const r = await this.request(`/repos/${slug.value}/issues/${issueNumber}`)
+    if (!r.ok) return r
+    if (r.value.status !== 200) {
+      return err(makeError('WORKSPACE_ERROR', `读取 Issue 返回非预期状态 HTTP ${r.value.status}`))
+    }
+
+    const raw = r.value.json as {
+      number?: number
+      title?: string
+      body?: string | null
+      state?: string
+      labels?: { name: string }[]
+      pull_request?: unknown
+    } | null
+
+    // 200 但形状不对 = 契约被破坏,不是「没有这个 Issue」。
+    // 不做乐观解构:labels 缺失时 .map 会以 TypeError 冒泡,吞掉真实原因。
+    if (raw === null || typeof raw.number !== 'number' || typeof raw.title !== 'string') {
+      return err(makeError('PROTOCOL_ERROR', `Issue 响应缺少 number/title:${slug.value}`))
+    }
+
+    return ok({
+      number: raw.number,
+      title: raw.title,
+      body: raw.body ?? '',
+      labels: Array.isArray(raw.labels) ? raw.labels.map((l) => l.name) : [],
+      state: raw.state === 'closed' ? 'closed' : 'open',
+      isPullRequest: raw.pull_request !== undefined,
+    })
   }
 }
 

@@ -12,16 +12,55 @@
  * facts 只来自 Fact Plane。
  */
 
+import { randomUUID } from 'node:crypto'
 import { err, makeError, ok, type Result } from '../../contracts/errors.js'
 import type { PullRequestGateway } from '../../contracts/git-provider.js'
 import type { PolicyEngine } from '../../contracts/policy-engine.js'
 import { asRole } from '../../fact/db.js'
-import type { GitWorkspace } from '../../fact/git-workspace.js'
+import { branchFor, type GitWorkspace } from '../../fact/git-workspace.js'
 import type { ControlMode, TaskStatus } from '../../shared/ids.js'
 import { transition } from '../transition/index.js'
+import { TASK_TRANSITIONS } from '../transition/table.js'
 import type { TransitionEvent } from '../transition/types.js'
 import { type AppliedEffect, applyEffects } from './effects.js'
 import { loadTransitionFacts } from './facts.js'
+
+const TITLE_MAX_LEN = 500
+
+/**
+ * T-001 的事实来源仍是转移表；intake 是它唯一的执行路径。
+ *
+ * intake 里写的是字面量（SQL 与事件 payload 都要），所以这里断言表行与之一致 ——
+ * 否则改了表却没改 intake，行为会静默沿用旧字面量。表漂移就在 import 期炸掉。
+ */
+const T001 = TASK_TRANSITIONS.find((r) => r.id === 'T-001')
+if (
+  T001 === undefined ||
+  T001.from !== null ||
+  T001.to !== 'S-NEW' ||
+  T001.on.length !== 1 ||
+  T001.on[0] !== 'FeedbackTriaged' ||
+  T001.effects.length !== 2 ||
+  T001.effects[0]?.kind !== 'CreateTask' ||
+  T001.effects[1]?.kind !== 'LinkFeedback'
+) {
+  throw new Error(
+    '转移表 T-001 与 intake 实现不一致：期望 ∅ --FeedbackTriaged--> S-NEW [CreateTask, LinkFeedback]',
+  )
+}
+
+export interface IntakeInput {
+  readonly feedbackId: string
+  readonly title: string
+  readonly repoId: string
+  readonly baseBranch: string
+}
+
+export interface IntakeOutcome {
+  readonly taskId: string
+  readonly created: boolean
+  readonly effects: readonly AppliedEffect[]
+}
 
 export interface AdvanceOutcome {
   readonly advanced: boolean
@@ -55,6 +94,100 @@ export class WorkflowDriver {
   /** 编排器校验 Proposal 时用同一个 Policy 实例 —— 裁决必须一致 */
   get policyEngine(): PolicyEngine {
     return this.policy
+  }
+
+  /**
+   * T-001 的真实入口 —— 从 feedback 建 S-NEW task。
+   *
+   * 不走 transition()（from:null 刻意不参与已有 task 的转移）也不走 advance()（要求 task 已存在）。
+   * 单事务内完成 CreateTask + LinkFeedback + TaskStatusChanged(I4)。
+   */
+  async intake(input: IntakeInput, now: string): Promise<Result<IntakeOutcome>> {
+    return asRole('keel_control', async (c) => {
+      const existing = await c.query<{ task_id: string }>(
+        'SELECT task_id FROM task_feedback WHERE feedback_id = $1',
+        [input.feedbackId],
+      )
+      const linked = existing.rows[0]
+      if (linked !== undefined) {
+        await c.query(
+          `INSERT INTO event (task_id, type, payload, occurred_at) VALUES ($1,'SideEffectSkipped',$2::jsonb,$3)`,
+          [
+            linked.task_id,
+            JSON.stringify({ kind: 'CreateTask', dedupe_key: input.feedbackId }),
+            now,
+          ],
+        )
+        return ok<IntakeOutcome>({
+          taskId: linked.task_id,
+          created: false,
+          effects: [{ kind: 'CreateTask', outcome: 'skipped', detail: input.feedbackId }],
+        })
+      }
+
+      const taskId = randomUUID()
+      const title =
+        input.title.length > TITLE_MAX_LEN ? input.title.slice(0, TITLE_MAX_LEN) : input.title
+      const workBranch = branchFor(taskId)
+
+      await c.query(
+        `INSERT INTO task (id, status, title, repo_id, base_branch, work_branch)
+         VALUES ($1, 'S-NEW', $2, $3, $4, $5)`,
+        [taskId, title, input.repoId, input.baseBranch, workBranch],
+      )
+
+      await c.query(
+        `INSERT INTO task_feedback (task_id, feedback_id) VALUES ($1, $2)
+         ON CONFLICT DO NOTHING`,
+        [taskId, input.feedbackId],
+      )
+
+      const effects: AppliedEffect[] = [
+        { kind: 'CreateTask', outcome: 'applied', detail: taskId },
+        { kind: 'LinkFeedback', outcome: 'applied', detail: input.feedbackId },
+      ]
+
+      await c.query(
+        `INSERT INTO event (task_id, type, payload, occurred_at) VALUES ($1,'SideEffectApplied',$2::jsonb,$3)`,
+        [
+          taskId,
+          JSON.stringify({
+            kind: 'CreateTask',
+            dedupe_key: input.feedbackId,
+            task_id: taskId,
+            work_branch: workBranch,
+          }),
+          now,
+        ],
+      )
+      await c.query(
+        `INSERT INTO event (task_id, type, payload, occurred_at) VALUES ($1,'SideEffectApplied',$2::jsonb,$3)`,
+        [
+          taskId,
+          JSON.stringify({
+            kind: 'LinkFeedback',
+            dedupe_key: input.feedbackId,
+            feedback_id: input.feedbackId,
+          }),
+          now,
+        ],
+      )
+      await c.query(
+        `INSERT INTO event (task_id, type, payload, occurred_at) VALUES ($1,'TaskStatusChanged',$2::jsonb,$3)`,
+        [
+          taskId,
+          JSON.stringify({
+            from: null,
+            to: 'S-NEW',
+            transition: 'T-001',
+            event: 'FeedbackTriaged',
+          }),
+          now,
+        ],
+      )
+
+      return ok<IntakeOutcome>({ taskId, created: true, effects })
+    })
   }
 
   /**

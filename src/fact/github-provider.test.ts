@@ -14,7 +14,7 @@
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { GitHubProvider, ownerRepo } from './github-provider.js'
+import { GitHubProvider, ownerRepo, parseIssueUrl } from './github-provider.js'
 
 let server: Server
 let baseUrl: string
@@ -330,5 +330,87 @@ describe('ownerRepo —— 从远程 URL 解析 owner/repo(#1-11)', () => {
     expect(r.ok).toBe(false)
     if (r.ok) return
     expect(r.error.kind).toBe('WORKSPACE_ERROR')
+  })
+})
+
+describe('parseIssueUrl', () => {
+  it('标准 Issue URL', () => {
+    const r = parseIssueUrl('https://github.com/acme/widget/issues/42')
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value.remoteUrl).toBe('https://github.com/acme/widget.git')
+    expect(r.value.number).toBe(42)
+  })
+
+  it('带尾部斜杠', () => {
+    const r = parseIssueUrl('https://github.com/acme/widget/issues/7/')
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value.number).toBe(7)
+  })
+
+  it('非法 URL → WORKSPACE_ERROR', () => {
+    const r = parseIssueUrl('https://github.com/acme/widget/pull/1')
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('WORKSPACE_ERROR')
+  })
+})
+
+describe('getIssue', () => {
+  it('提取 label、排除 PR、body=null → 空串', async () => {
+    routes.set(routeKey('GET', '/repos/acme/widget/issues/5'), () => ({
+      status: 200,
+      json: {
+        number: 5,
+        title: 'Bug report',
+        body: null,
+        state: 'open',
+        labels: [{ name: 'keel' }, { name: 'bug' }],
+      },
+    }))
+
+    const r = await provider().getIssue(REMOTE, 5)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value).toEqual({
+      number: 5,
+      title: 'Bug report',
+      body: '',
+      labels: ['keel', 'bug'],
+      state: 'open',
+      isPullRequest: false,
+    })
+  })
+
+  it('含 pull_request 字段 → isPullRequest=true', async () => {
+    routes.set(routeKey('GET', '/repos/acme/widget/issues/9'), () => ({
+      status: 200,
+      json: {
+        number: 9,
+        title: 'PR disguised',
+        body: 'x',
+        state: 'open',
+        labels: [],
+        pull_request: { url: 'https://api.github.com/repos/acme/widget/pulls/9' },
+      },
+    }))
+
+    const r = await provider().getIssue(REMOTE, 9)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value.isPullRequest).toBe(true)
+  })
+
+  it('404 → NOT_FOUND', async () => {
+    routes.set(routeKey('GET', '/repos/acme/widget/issues/99'), () => ({
+      status: 404,
+      json: { message: 'Not Found' },
+    }))
+
+    const r = await provider().getIssue(REMOTE, 99)
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('NOT_FOUND')
   })
 })

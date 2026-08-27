@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "keel_ingress 角色与迁移纪律"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Result<T> / ErrorKind 新代码"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "三平面落位"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "ownerRepo/branchFor/parseArgs 复用"}
+{"file": ".trellis/tasks/08-27-github-issue-automation/research/evidence-audit.md", "reason": "T-001 证据链与授权缺口"}
+{"file": ".trellis/tasks/08-27-github-issue-automation/design.md", "reason": "intake 完整技术方案"}

@@ -13,6 +13,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import type { Proposal } from '../../contracts/types.js'
 import { PgArtifactStore } from '../../fact/artifact-store.js'
 import { asOwner, closePool } from '../../fact/db.js'
+import { branchFor } from '../../fact/git-workspace.js'
 import { RuleBasedPolicyEngine } from '../policy/engine.js'
 import { DEFAULT_RULESET } from '../policy/ruleset.js'
 import { WorkflowDriver } from './driver.js'
@@ -113,6 +114,92 @@ beforeEach(async () => {
 })
 
 afterAll(closePool)
+
+// ────────────────────────── T-001 intake ──────────────────────────
+
+describe('intake · T-001 真实化', () => {
+  async function seedRepoAndFeedback(): Promise<{ repoId: string; feedbackId: string }> {
+    const repoId = randomUUID()
+    const feedbackId = randomUUID()
+    await asOwner(async (c) => {
+      await c.query(
+        `INSERT INTO repo (id, provider, remote_url, default_branch)
+         VALUES ($1, 'github', 'https://github.com/acme/widget.git', 'main')`,
+        [repoId],
+      )
+      await c.query(
+        `INSERT INTO feedback (id, source, external_ref, body)
+         VALUES ($1, 'github', 'acme/widget#42', 'Fix the bug')`,
+        [feedbackId],
+      )
+    })
+    return { repoId, feedbackId }
+  }
+
+  it('首次 intake 建 S-NEW task + T-001 事件 + SideEffectApplied', async () => {
+    const { repoId, feedbackId } = await seedRepoAndFeedback()
+    const r = await driver.intake(
+      { feedbackId, title: 'Fix the bug', repoId, baseBranch: 'main' },
+      NOW,
+    )
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value.created).toBe(true)
+
+    const task = await asOwner((c) =>
+      c.query<{ status: string; work_branch: string; title: string }>(
+        'SELECT status, work_branch, title FROM task WHERE id = $1',
+        [r.value.taskId],
+      ),
+    )
+    expect(task.rows[0]?.status).toBe('S-NEW')
+    expect(task.rows[0]?.work_branch).toBe(branchFor(r.value.taskId))
+    expect(task.rows[0]?.title).toBe('Fix the bug')
+
+    const link = await asOwner((c) =>
+      c.query('SELECT 1 FROM task_feedback WHERE task_id = $1 AND feedback_id = $2', [
+        r.value.taskId,
+        feedbackId,
+      ]),
+    )
+    expect(link.rowCount).toBe(1)
+
+    const evs = await store.readEvents(r.value.taskId, 0, 50)
+    expect(evs.ok).toBe(true)
+    if (!evs.ok) return
+    const types = evs.value.map((e) => e.type)
+    expect(types).toContain('TaskStatusChanged')
+    expect(types.filter((t) => t === 'SideEffectApplied').length).toBe(2)
+    expect(types).not.toContain('SideEffectIntent')
+
+    const statusChange = evs.value.find((e) => e.type === 'TaskStatusChanged')
+    expect(statusChange).toBeDefined()
+    if (statusChange === undefined) return
+    expect((statusChange.payload as { transition: string }).transition).toBe('T-001')
+  })
+
+  it('重复 intake 同一 feedback 返回既有 taskId', async () => {
+    const { repoId, feedbackId } = await seedRepoAndFeedback()
+    const first = await driver.intake(
+      { feedbackId, title: 'Fix the bug', repoId, baseBranch: 'main' },
+      NOW,
+    )
+    expect(first.ok).toBe(true)
+    if (!first.ok) return
+
+    const second = await driver.intake(
+      { feedbackId, title: 'Fix the bug', repoId, baseBranch: 'main' },
+      NOW,
+    )
+    expect(second.ok).toBe(true)
+    if (!second.ok) return
+    expect(second.value.created).toBe(false)
+    expect(second.value.taskId).toBe(first.value.taskId)
+
+    const tasks = await asOwner((c) => c.query<{ n: string }>('SELECT count(*) AS n FROM task'))
+    expect(Number(tasks.rows[0]?.n)).toBe(1)
+  })
+})
 
 // ────────────────────────── 里程碑：走通闭环 ──────────────────────────
 

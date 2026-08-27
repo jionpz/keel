@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量门槛与测试分层"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移与授权复核"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Fact/Control/CLI 跨层一致性"}
+{"file": ".trellis/tasks/08-27-github-issue-automation/research/evidence-audit.md", "reason": "AC 对照证据"}

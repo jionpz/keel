@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量门槛、测试分层、mock 纪律、禁用模式 —— check 阶段的评审基准"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "复核迁移与 keel_ingress 授权是否符合角色纪律，invariants 反例是否补齐"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "改动横跨 Fact Plane（provider/迁移）、Control Plane（driver/effects）、CLI，需做跨层数据流一致性检查"}
+{"file": ".trellis/tasks/08-27-github-issue-automation/research/evidence-audit.md", "reason": "验收对照：AC 断言应与此处核验事实一致（T-001 事件形态、幂等键、grant 矩阵）"}

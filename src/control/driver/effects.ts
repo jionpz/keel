@@ -529,8 +529,13 @@ export async function applyEffects(
       case 'ConsumeTimer':
         applied.push(await consumeTimer(c, ctx, e))
         break
-      // 以下 v0.1 只记录意图：真实 git / 会话取消属后续子任务
+      // CreateTask 只出现在 T-001，而 T-001 不经 applyEffects（见 driver.intake）。
+      // 走到这里说明有人把它加进了别的转移 —— 编程错误，不是可预期失败。
       case 'CreateTask':
+        throw new Error('CreateTask 只能经 driver.intake 执行')
+      // 以下 v0.1 只记录意图：真实 git / 会话取消属后续子任务。
+      // LinkFeedback 留在这里是因为 T-007（澄清回灌）也发它，那条路径本轮不改；
+      // T-001 的 LinkFeedback 由 intake 直接落 SideEffectApplied。
       case 'LinkFeedback':
       case 'CancelRun':
       case 'RecordReason':

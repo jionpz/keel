@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "验收分层与防假绿"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "CLI→driver→GitHub gateway 跨层一致性"}
+{"file": ".trellis/tasks/08-27-github-issue-automation/prd.md", "reason": "AC5–AC7 验收对照"}
+{"file": "src/acceptance/README.md", "reason": "opt-in 验收运行纪律"}
