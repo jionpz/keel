@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "验收与 check 分层；不放宽断言换绿"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "回灌 vs 失败；Result 纪律"}
+{"file": "src/control/orchestrator/prompts.ts", "reason": "rfc_draft 提示词事实源"}
+{"file": ".trellis/tasks/08-27-github-issue-automation/prd.md", "reason": "AC5 阻塞证据与验收记录"}
+{"file": "src/control/policy/ruleset.ts", "reason": "P1/P4 不得改动的对照"}
