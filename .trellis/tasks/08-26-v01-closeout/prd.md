@@ -123,3 +123,75 @@
   透传参数而跑全部验收文件。缺凭据时本文件已实测**明确失败**而非 skip。）
 
   通过后在此补记：日期 / 走过的路径 / 耗时 / PR 链接。
+
+### 2026-08-27 · Opus 验收子代理：合并验收仍**阻塞**，但顺带修掉一个真实缺陷
+
+**结论：合并验收 = blocked（`DEEPSEEK_API_KEY` 缺失），未通过、也未伪造通过。**
+
+**1）阻塞点（与 08-26 同一处，本次为一手复现）**
+
+- 环境：omp v18.0.6 就绪、`KEEL_GITHUB_TOKEN` 就绪、`KEEL_TEST_REMOTE_REPO=https://github.com/jionpz/keel`
+  就绪、Postgres 就绪；**唯独 `DEEPSEEK_API_KEY` 未注入**，且 omp 侧无其它可用 provider
+  （`~/.omp/agent/agent.db` 无凭据，env 中除 GitHub token 外无任何 API key）。
+- 直接探针：`omp -p --mode=json --model deepseek-v4-flash "say ok"`
+  → `error: No API key found for deepseek.`
+- 走真实路径复现：合并验收在 **2.25s** 内于 PM 阶段失败，
+  断言输出 `编排失败：omp 退出码 1：… No API key found for deepseek`。
+  失败发生在任何 push / PR 之前，**远程零污染**（已核对：远端无 `ai/*` 分支、无遗留验收 PR）。
+- `OmpAdapter` 默认模型为 `deepseek-v4-flash`（`src/execution/adapters/omp.ts`），
+  故解除阻塞只需注入 `DEEPSEEK_API_KEY`（或改用已授权的其它模型）。
+
+**2）本次修掉的真实缺陷：Agent 提交继承了操作者的全局签名配置**
+
+在本机跑 `pnpm run check` 时 `git-workspace.test.ts` / `effects.test.ts` 挂在
+`Hook timed out in 10000ms`。逐项二分全局 git 配置（fsmonitor / untrackedcache /
+push.autosetupremote / credential helper / 签名）后定位到**唯一**变量是
+`commit.gpgsign=true` + `gpg.ssh.program`：
+
+| 配置 | 结果 |
+|---|---|
+| neutral（`GIT_CONFIG_GLOBAL=/dev/null`） | 13 passed |
+| **signing** | **1 failed** |
+| fsmonitor+untrackedcache | 13 passed |
+| push.autosetupremote | 13 passed |
+| credential helpers | 13 passed |
+
+这不只是测试环境问题，是**产品缺陷**：`GitWorkspace.commitAll` 已经用 `-c` 把身份钉成
+`Keel <keel@localhost>`，却没钉签名 —— 于是机器署名的提交会被**操作者的密钥**签上人的身份；
+且签名程序一旦交互提示或变慢，在无人干预的编排循环里等同于挂起
+（正是本次观察到的 5s → 24s → 超时）。
+
+修复：`src/fact/git-workspace.ts` 的 `commitAll` 增加 `-c commit.gpgsign=false`；
+5 个夹具的 seed 提交同样显式关闭签名（`git-workspace` / `effects` /
+`orchestrator-workspace` / `ci-wiring` / `v01-criterion`）。
+
+**反例验证**（遵循「未经反例验证的检查，等同于没有检查」）：新增测试
+`真实提交 > 不继承全局签名配置`——把全局配置换成「强制签名 + 必然失败的签名程序」，
+断言 `commitAll` 仍成功且 `%G?` 为 `N`（无签名）。
+去掉 `-c commit.gpgsign=false` 后该测试**确实失败**，恢复后通过。
+
+**3）验证结果**
+
+- `pnpm run check` **全绿**（exit 0）：lint / typecheck / boundaries（90 模块 382 依赖，0 违规）/
+  check:generated / check:transitions（31 条）/ check:purity（9 文件 8 类）/
+  **16 个测试文件 182 passed | 4 skipped**。
+- 附带收益：测试总时长由 **32.0s 降到 2.9s** —— 此前每个 git 提交都在等签名程序。
+- 四条架构约束未放宽，转移表未动，`C-002` 未触碰。
+
+**4）待办（需主会话执行）**
+
+- 上述代码修复**尚未提交**（子代理纪律：禁止 `git commit`）。变更文件：
+  `src/fact/git-workspace.ts`、`src/fact/git-workspace.test.ts`、
+  `src/control/driver/effects.test.ts`、`src/e2e/orchestrator-workspace.test.ts`、
+  `src/control/orchestrator/ci-wiring.test.ts`、`src/acceptance/v01-criterion.acceptance.test.ts`。
+- 合并验收待注入 `DEEPSEEK_API_KEY` 后重跑。**注意不要**按早前建议加
+  `GIT_CONFIG_GLOBAL=/dev/null`：那会同时屏蔽 `gh` 的 credential helper 而使 push 失去鉴权；
+  签名干扰已在代码里根治，直接用环境默认配置即可：
+
+  ```bash
+  export KEEL_GITHUB_TOKEN="$(gh auth token)"
+  export KEEL_TEST_REMOTE_REPO=https://github.com/jionpz/keel
+  export DEEPSEEK_API_KEY=...          # 当前缺失，阻塞点
+  gh auth setup-git
+  pnpm run test:acceptance src/acceptance/v01-criterion-github.acceptance.test.ts
+  ```
