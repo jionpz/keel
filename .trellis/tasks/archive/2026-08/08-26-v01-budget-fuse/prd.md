@@ -55,12 +55,12 @@ run 成功结束后，把 `RunResult.usage` 写入 `run` 行：`tokens_in`、`to
 
 ## Acceptance Criteria
 
-- [ ] run 成功后 `run.cost_usd` / `cost_basis` 与 Harness 上报一致（单测或 e2e）
-- [ ] 超预算后 `control_mode='paused'`，`status` 不变；事件含 `ControlModeChanged`+`BudgetExceeded`
-- [ ] 熔断后编排不再派发新 run（确定性测试）
-- [ ] 同一 Task 所有新事件的 `trace_id` 相同且非 null
-- [ ] 父任务 prd 中 C1–C3、O2 可勾选（或更新 closeout 父任务引用）
-- [ ] `pnpm run check` 全绿
+- [x] run 成功后 `run.cost_usd` / `cost_basis` 与 Harness 上报一致（单测或 e2e）
+- [x] 超预算后 `control_mode='paused'`，`status` 不变；事件含 `ControlModeChanged`+`BudgetExceeded`
+- [x] 熔断后编排不再派发新 run（确定性测试）
+- [x] 同一 Task 所有新事件的 `trace_id` 相同且非 null
+- [x] 父任务 prd 中 C1–C3、O2 可勾选（或更新 closeout 父任务引用）
+- [x] `pnpm run check` 全绿
 
 ## Key Decisions
 
@@ -69,3 +69,29 @@ run 成功结束后，把 `RunResult.usage` 写入 `run` 行：`tokens_in`、`to
 | C-002 落点 | 编排循环 post-run（非纯 transition 表） |
 | 默认预算 | 常量 10 USD，可测 |
 | unavailable 成本 | 不参与金额熔断 |
+
+---
+
+## 验收记录（2026-08-27，确定性验收）
+
+`GIT_CONFIG_GLOBAL=/dev/null pnpm run check` **全绿**：lint / typecheck / boundaries /
+check:generated / check:transitions（31 条）/ check:purity 全部通过，
+**Tests 170 passed | 4 skipped（14 个文件）**。4 个 skipped 均为
+`KEEL_REQUIRE_OMP=1` 门控的真实 OMP 集成层（`adapters.test.ts` 第 3 层），
+属 AI 验收范畴 —— **AI / acceptance 验收 deferred，由用户稍后用真实 LLM 自行执行**
+（含 `test:acceptance` 入口的 `v01-criterion-github.acceptance.test.ts` 合并验收）。
+
+逐条证据（全部来自确定性测试 `src/e2e/budget-fuse.test.ts`，在默认 check 中）：
+
+| AC | 证据 |
+|---|---|
+| C1 写回一致 | `loop.ts` executeRun 在 `UPDATE run SET ... tokens_in/tokens_out/cost_usd/cost_basis` 后同事务调 `checkBudgetFuse`；测试断言写回值与桩上报逐项相等（120/80/5/`estimated`），`unavailable` 时 `cost_usd` 保持 null（「禁止用 0 冒充」有专门断言） |
+| C-002 语义 | `fuse.ts` 只 `UPDATE control_mode='paused'` 不触 status；测试断言 `control_mode='paused'` 且 `status='S-PM_ANALYZING'` 不变，事件对 `ControlModeChanged{transition:'C-002',from:'auto',to:'paused'}` + `BudgetExceeded{cost_spent_usd:5,budget_usd:1}` 齐备 |
+| 熔断后不派发 | 测试断言 `NoTransition{reason:'control_mode_not_auto'}` 事件存在、全 Task 恰 1 个 run、0 个 PENDING；`runTaskToCompletion` 返回 ok（正常停止而非 error） |
+| trace_id 贯穿 | `ensureTraceId`（`src/fact/trace.ts`）首条事件生成并固定；测试断言该 Task 全部事件（>3 条）trace_id 去重后恰 1 个且非 null |
+| 父任务勾选 | `08-23-v01-closed-loop/prd.md` C1–C4、O1–O4 已勾选并注明由本任务补齐（2026-08-26） |
+| check 全绿 | 见上，2026-08-27 实测 exit 0 |
+
+另核对：C2 默认预算测试断言 `BudgetExceeded.budget_usd === DEFAULT_TASK_BUDGET_USD`
+（task 行 `budget_usd` 为 null 时）；熔断与成本写回在**同一事务**内
+（`asRole('keel_control')` 块，崩溃不留「已入账未熔断」窗口）。
