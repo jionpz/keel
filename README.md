@@ -73,6 +73,17 @@ Proposed，待查证）。
 
 ## 开发
 
+### 前置条件
+
+运行 `check` 需要**本地 Postgres**：
+
+1. 启动 Postgres（未启动时测试阶段直接失败）。
+2. 准备测试库。测试默认连接 `postgres://localhost/keel_test`；若该库不存在或连不上，测试阶段直接失败。
+   连接串可用环境变量 `KEEL_DATABASE_URL` 覆盖（例如指向本地其他库或远端库）。
+3. 迁移会自动发生：`check` 的测试阶段启动时，`vitest.globalSetup.ts` 会先对测试库执行迁移
+   （`node-pg-migrate up`）。因此**直接 `pnpm run check` 即可，无需手动 `db:migrate`**。
+4. 手动迁移**开发库**（而非测试库）时，运行 `pnpm run db:migrate`。
+
 ```bash
 pnpm install
 pnpm run check     # CI 跑的就是这一条 —— 与本地完全一致
