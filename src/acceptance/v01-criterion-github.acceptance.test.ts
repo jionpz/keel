@@ -37,7 +37,34 @@ import { GitHubProvider, readTokenFromEnv } from '../fact/github-provider.js'
 const store = new PgArtifactStore()
 const token: string | undefined = readTokenFromEnv()
 const remote = process.env.KEEL_TEST_REMOTE_REPO
-const FEEDBACK = '导出的 Excel 希望能够按照日期筛选'
+/**
+ * 反馈必须对**目标仓库**成立。
+ *
+ * 本文件克隆的是 `KEEL_TEST_REMOTE_REPO`（即 Keel 自己），
+ * 而本地版 `v01-criterion` 铺的是一个写着「导出模块」的合成仓库 ——
+ * 两者能用的反馈不是同一条。此前这里照抄了本地版的「Excel 按日期筛选」，
+ * Keel 仓库里根本没有导出功能。
+ *
+ * 那条反馈曾「通过」，只是因为当时 Session Manager 把 ContextBuilder 造的
+ * context 整个丢掉了（见 `src/execution/session/manager.ts` 的 withPrompt）：
+ * Agent 既看不到反馈也看不到 RFC，于是照着阶段指令里的暗示答 actionable/pass。
+ * 修好之后 Developer 与 QA 立刻如实报告「全仓不存在任何 Excel 导出代码」——
+ * **它们是对的**，错的是夹具。
+ *
+ * 现在这条是**目标仓库 main 分支上真实存在**的缺口：README 的「开发」一节
+ * 只写了 `pnpm install` + `pnpm run check`，而 check 里的不变量测试需要真实
+ * Postgres（CI 的 workflow 专门起了 postgres service 并设 `KEEL_DATABASE_URL`），
+ * 本地还得先 `pnpm run db:migrate`。照 README 做的新人必然失败。
+ *
+ * 选它有两个刻意的理由：
+ *   1. **只依赖 main 上已有的东西**。夹具若引用尚未合并的产物（例如本任务才加的
+ *      `pnpm run timeline`），PM 会如实报「前提不成立」—— 而它是对的。
+ *   2. **纯文档改动**。PR 要过的 CI 就是 `pnpm run check`，
+ *      让模型去改被四条架构约束盯着的源码，验证的就不再是编排闭环了。
+ */
+const FEEDBACK =
+  '照 README 的开发一节做，pnpm install 之后直接 pnpm run check 就失败了——' +
+  '原来还得先起 Postgres 再跑 pnpm run db:migrate。希望 README 把这个前置条件写清楚'
 
 /** beforeEach 已保证非空；此处收窄类型，exactOptionalPropertyTypes 不收 undefined */
 function requireToken(): string {

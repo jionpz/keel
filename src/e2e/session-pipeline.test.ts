@@ -276,6 +276,66 @@ describe('R-007 · 校验失败不等于 Run 失败', () => {
     expect(got.ok && (got.value.body as { verdict: string }).verdict).toBe('actionable')
   })
 
+  /**
+   * ContextBuilder 是 Fact → Execution 的**唯一下行桥**，
+   * 而 `ContextBuilt` 事件是「这个 Agent 当时到底看到了什么」的唯一答案
+   * （docs/08-cross-cutting.md §2.2、`O3`）。
+   *
+   * Session Manager 曾在追加阶段指令时**替换掉**整个 sections ——
+   * 于是那条事件记录的 section 根本没进提示词，`O3` 记的是假话。
+   * 这条测试把「事件里写了什么」与「Adapter 收到了什么」绑在一起。
+   */
+  it('阶段指令是追加而非替换 —— ContextBuilder 造的 section 必须原样到达 Adapter', async () => {
+    const { taskId, runId } = await seedTask()
+    const { adapter } = flakyAdapter(0)
+    const seen: RunSpec[] = []
+    // biome-ignore lint/suspicious/noExplicitAny: 测试桩
+    ;(adapter as any).startRun = async (s: RunSpec) => {
+      seen.push(s)
+      return { ok: true, value: { run_id: s.run.run_id, harness_id: 'omp' } }
+    }
+
+    const base = specFor(taskId, runId, '/tmp')
+    const built: RunSpec = {
+      ...base,
+      context: {
+        ...base.context,
+        sections: [
+          {
+            id: 'feedback',
+            source_ref: `artifact:feedback/${taskId}`,
+            source_kind: 'artifact',
+            priority: 'required',
+            content: '## 用户反馈\n\nKEEL_MARKER_FEEDBACK',
+            tokens: 8,
+          },
+        ],
+        total_tokens: 8,
+      },
+    }
+
+    const r = await runSessionUntilValid(
+      new HarnessSessionManager(),
+      { runSpec: built, adapter, expect: { kind: 'stage_outcome', key: 'pm' } },
+      '判断上面的用户反馈是否值得做。',
+    )
+    expect(r.ok, r.ok ? '' : r.error.detail).toBe(true)
+
+    const delivered = seen[0]
+    expect(delivered, 'Adapter 应被调用过').toBeDefined()
+    const ids = delivered?.context.sections.map((s) => s.id) ?? []
+    // 追加：原 section 保留在前，指令在后
+    expect(ids).toEqual(['feedback', 'prompt'])
+
+    const rendered = (delivered?.context.sections ?? []).map((s) => s.content).join('\n\n')
+    expect(rendered).toContain('KEEL_MARKER_FEEDBACK')
+    expect(rendered).toContain('判断上面的用户反馈')
+    // total_tokens 要跟着变 —— 记账与内容不一致会让预算判断建立在假数上
+    expect(delivered?.context.total_tokens).toBe(
+      (delivered?.context.sections ?? []).reduce((n, s) => n + s.tokens, 0),
+    )
+  })
+
   it('连续失败到上限 → 判 Run 失败，且什么都没落库', async () => {
     const { taskId, runId } = await seedTask()
     const { adapter } = flakyAdapter(99)
