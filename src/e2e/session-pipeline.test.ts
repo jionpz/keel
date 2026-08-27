@@ -333,6 +333,7 @@ describe('R-007 · 校验失败不等于 Run 失败', () => {
       new HarnessSessionManager(),
       { runSpec: built, adapter, expect: { kind: 'stage_outcome', key: 'pm' } },
       '判断上面的用户反馈是否值得做。',
+      { now: NOW },
     )
     expect(r.ok, r.ok ? '' : r.error.detail).toBe(true)
 

@@ -269,14 +269,15 @@ describe('N3 · run 生命周期真的经过 RUNNING', () => {
       maxSteps: 5,
     })
 
-    // 失败向上传播，不静默
-    expect(result.ok).toBe(false)
-    if (result.ok) return
-    expect(result.error.kind).toBe('HARNESS_UNAVAILABLE')
+    // 失败是状态流转,不是编排器异常(R1, issue #23):
+    // T-030 重试耗尽 → T-031 升人工 → 停 S-HUMAN_REVIEW,不静默吞错
+    expect(result.ok, result.ok ? '' : result.error.detail).toBe(true)
+    if (!result.ok) return
+    expect(result.value.finalStatus).toBe('S-HUMAN_REVIEW')
 
     const run = await asOwner((c) =>
       c.query<{ status: string; error_kind: string | null; ended_at: Date | null }>(
-        `SELECT status, error_kind, ended_at FROM run WHERE task_id=$1 AND stage='pm'`,
+        `SELECT status, error_kind, ended_at FROM run WHERE task_id=$1 AND stage='pm' ORDER BY attempt`,
         [taskId],
       ),
     )
