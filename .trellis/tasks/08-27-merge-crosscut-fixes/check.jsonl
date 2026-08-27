@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "复验清单:一条命令 pnpm run check 的七段门槛、review 清单、禁用模式"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "防假绿(§99)与 retryable 语义 —— 校验失败路径的 ErrorKind/重试判定未被成本入账改动破坏"}
+{"file": "src/acceptance/README.md", "reason": "R3 去重的判准依据:验收与 check 的分离标准 + 合并验收唯一入口,表格须与目录实际文件一致"}
+{"file": ".trellis/spec/backend/session-context.md", "reason": "R4 deferred 的契约边界:ContextBuilt 是 Agent 看到什么的唯一答案(O3),其 occurred_at 补齐需扩契约、不在本任务范围"}
