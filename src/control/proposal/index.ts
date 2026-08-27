@@ -1,4 +1,10 @@
-export { type PipelineOptions, type PipelineOutcome, runSessionUntilValid } from './pipeline.js'
+export {
+  type PipelineOptions,
+  type PipelineOutcome,
+  type PipelineResult,
+  runSessionUntilValid,
+  ZERO_USAGE,
+} from './pipeline.js'
 export {
   checkPlaneBoundary,
   checkSchema,
