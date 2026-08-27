@@ -59,6 +59,10 @@ export class WorkflowDriver {
    * 整个过程在**一个事务**内完成（不变量 I4：状态变更必然伴随事件）。
    * 任一步失败则全部回滚 —— 不会出现「状态变了但事件没写」。
    *
+   * 并发（N2，docs/08-cross-cutting.md §4.2/§4.4）：status 更新带
+   * `WHERE status = 读取值` 乐观锁，且**先占行再做副作用** ——
+   * 并发写者先行提交时返回 `CONFLICT`（可重试），副作用一个都不会落地。
+   *
    * @param now 时间由外部注入。控制平面不读时钟，否则重放会得到不同结果。
    */
   async advance(
@@ -76,9 +80,6 @@ export class WorkflowDriver {
         return err<AdvanceOutcome>(makeError('NOT_FOUND', `找不到 task ${taskId}`))
       }
 
-      // O2：trace_id 贯穿。在同一事务内 ensure，本次 advance 写的所有事件共用
-      const traceId = await ensureTraceId(c, taskId)
-
       const facts = await loadTransitionFacts(c, taskId, event)
       const result = transition(task.status, task.control_mode, event, facts)
 
@@ -86,6 +87,7 @@ export class WorkflowDriver {
       // 暂停中、终态、guard 未过 —— 三者都是正常的业务状态。
       // 但仍要如实记录，否则事件流会缺失「系统看到了这个事件但没动」这个事实。
       if (!result.matched) {
+        const traceId = await ensureTraceId(c, taskId)
         await c.query(
           `INSERT INTO event (task_id, type, payload, trace_id)
            VALUES ($1,'NoTransition',$2::jsonb,$3)`,
@@ -111,6 +113,47 @@ export class WorkflowDriver {
         })
       }
 
+      // ── N2 乐观锁：先占住 task 行，再执行副作用 ──
+      //
+      // `WHERE status = 读取值`：并发写者先行提交时影响行数为 0。
+      // 放在 applyEffects **之前**是刻意的 —— 冲突发生时副作用一个都还没做，
+      // 不需要回滚任何已做的事，只需如实记录并返回 CONFLICT（可重试）。
+      // 反过来放，就得靠整个事务回滚来撤销效果，连「冲突发生过」都记不下来。
+      const terminal = isTerminalStatus(result.next_status)
+      const upd = await c.query(
+        `UPDATE task
+         SET status = $2, updated_at = $3::timestamptz,
+             terminal_at = CASE WHEN $4 THEN $3::timestamptz ELSE terminal_at END
+         WHERE id = $1 AND status = $5`,
+        [taskId, result.next_status, now, terminal, result.from],
+      )
+      if (upd.rowCount === 0) {
+        // 败者阻塞在行锁上、直到胜者提交才走到这里 ——
+        // 此时 ensureTraceId 必然读到胜者已固定的 trace_id，不会分裂出第二条 trace
+        const traceId = await ensureTraceId(c, taskId)
+        await c.query(
+          `INSERT INTO event (task_id, type, payload, trace_id)
+           VALUES ($1,'NoTransition',$2::jsonb,$3)`,
+          [
+            taskId,
+            JSON.stringify({
+              event: event.type,
+              status: result.from,
+              reason: 'optimistic_lock_conflict',
+              detail: `期望 status=${result.from}，但已被并发写者改变`,
+            }),
+            traceId,
+          ],
+        )
+        return err<AdvanceOutcome>(
+          makeError('CONFLICT', `task ${taskId} 的 status 乐观锁冲突：期望 ${result.from}`),
+        )
+      }
+
+      // O2：trace_id 贯穿。放在赢得行锁**之后** ensure ——
+      // 并发的首次派发因此被序列化，不会生成两个 trace_id（见 src/fact/trace.ts）
+      const traceId = await ensureTraceId(c, taskId)
+
       const effects = await applyEffects(
         c,
         {
@@ -124,15 +167,6 @@ export class WorkflowDriver {
           ...(this.github === undefined ? {} : { github: this.github }),
         },
         result.effects,
-      )
-
-      const terminal = isTerminalStatus(result.next_status)
-      await c.query(
-        `UPDATE task
-         SET status = $2, updated_at = $3::timestamptz,
-             terminal_at = CASE WHEN $4 THEN $3::timestamptz ELSE terminal_at END
-         WHERE id = $1`,
-        [taskId, result.next_status, now, terminal],
       )
 
       // 放在最后，让它记录最终的 to 状态。

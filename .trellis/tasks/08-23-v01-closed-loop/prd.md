@@ -99,13 +99,21 @@
     实现落点是编排循环 post-run 而非转移表 —— C-* 与 T-* 是正交维度，转移表未动
   - [x] `C4` 无 `CAP-COST` 的兜底上限：每 Run `wall_clock_s: 180` + `max_turns: 8`（`loop.ts`）；
     `unavailable` 的 Run 不参与金额熔断（`budget-fuse.test.ts` 断言不误触发）
-- [ ] `N1`–`N4` 并发：**N1 落地，其余诚实标注**
+- [x] `N1`–`N4` 并发：**全部落地**（N2–N4 由 `08-27-v01-concurrency-guards` 补齐，2026-08-27）
   - [x] `N1` 每 Task 独立 worktree（`orchestrator-workspace.test.ts` 断言写入互不可见）
-  - [ ] `N2` ⚠️ **缺口**：`task.status` 更新在事务内先读后写，但无 `WHERE status=期望值` 条件。
-    v0.1 编排是单进程同步、无并发写者，风险受控但未按 §4.2 机械强制
-  - [ ] `N3` ⚠️ **部分**：无 `(task_id) WHERE status='RUNNING'` 部分唯一索引；
-    行为上由同步循环保证一次只跑一个 run
-  - [ ] `N4` ⚠️ **缺口**：并发上限未实现 —— v0.1 无调度器（durable timer / work queue 刻意切出）
+  - [x] `N2` `task.status` 更新走乐观锁：`driver.advance` 的 UPDATE 带 `WHERE status=读取值`
+    且**先占行再做副作用** —— 冲突返回 `CONFLICT`（可重试）+
+    `NoTransition(optimistic_lock_conflict)` 事件，副作用一个不落地
+    （`src/e2e/concurrency-guards.test.ts` 用真实行锁竞争验证，
+    同步点靠 pg_stat_activity 轮询而非 sleep）
+  - [x] `N3` 单 Task 至多一个 `RUNNING` Run：部分唯一索引 `run_one_running_per_task`
+    （migration `1000000000001`）由数据库强制；`executeRun` 开始时经
+    `claimRunForExecution` 认领（PENDING→RUNNING 乐观锁，`started_at` 落盘），
+    失败路径落 `FAILED` 不滞留 RUNNING（`limits.test.ts` 反例验证 + e2e 生命周期断言）
+  - [x] `N4` 全局并发上限：`DEFAULT_MAX_RUNNING_RUNS = 3`
+    （`src/control/concurrency/limits.ts`，§4.3 保守起步值），认领与上限检查同一事务，
+    超限返回可重试 `CONFLICT` 且编排器停下不静默（`concurrency-guards.test.ts`）。
+    单 repo 活跃 Task 数上限（§4.3 第二行）v0.1 defer —— 见该子任务 prd Out of Scope
 - [x] `ADR-0003` 硬约束保持：转移函数仍是纯函数（`check:purity` + dependency-cruiser
   `transition-must-be-pure` 持续为绿；副作用只作为返回值中的描述）
 - [x] 骨架建立的四条约束检查**没有被放宽**（`biome.json`/`.dependency-cruiser.cjs`/
@@ -188,6 +196,8 @@
 核心判据的三个部分都有真实证据；跨切面清单中 `O2`（trace_id 贯穿）与
 `C1`–`C3`（成本持久化与 `C-002` 熔断）已由 `08-26-v01-budget-fuse` 补齐
 （2026-08-26，确定性测试 `src/e2e/budget-fuse.test.ts`）；`N2`–`N4`
-（乐观锁/RUNNING 唯一索引/并发上限）仍为**显式缺口**，不假装完成。
+（乐观锁/RUNNING 唯一索引/并发上限）复核当时为**显式缺口**，
+后由 `08-27-v01-concurrency-guards` 补齐（2026-08-27，确定性测试
+`src/e2e/concurrency-guards.test.ts` + `src/control/concurrency/limits.test.ts`）。
 合并验收（一次真实运行同时证明三部分 + 真实 PR/CI）的执行记录见
 `08-26-v01-closeout/prd.md`。
