@@ -27,9 +27,10 @@ describe('promptFor · rfc_draft 的 policy_facts', () => {
     expect(prompt).not.toContain('非安全相关')
   })
 
-  it('明确要求如实填写(不套固定取值,不硬凑 low)', () => {
+  it('明确要求如实填写(不套固定取值,不为放行压低也不为保险抬高)', () => {
     const rfcPrompt = promptFor('rfc_draft', 'run-1')
-    expect(rfcPrompt).toContain('不要硬凑 low')
+    expect(rfcPrompt).toContain('不要为了保险而抬高')
+    expect(rfcPrompt).toContain('不要为了放行而压低')
     expect(rfcPrompt).toContain('全部依据')
   })
 })
@@ -71,8 +72,46 @@ describe('promptFor · rfc_draft 的方案来源聚焦(issue #25)', () => {
     expect(prompt).toContain('不要给整个项目写')
   })
 
-  it('要求如实评估而不是硬凑 low', () => {
-    expect(prompt).toContain('不要硬凑 low')
-    expect(prompt).toContain('按真实风险评估')
+  it('要求如实评估,不预设方向', () => {
+    expect(prompt).toContain('按 RFC 的真实内容评估')
+    expect(prompt).toContain('不要为了保险而抬高')
+  })
+})
+
+/**
+ * AC5 阻塞点(2026-08-27):两次真实运行里 Issue 正文写死 risk=low,
+ * rfc_draft 仍自报 high 被 P1 拦到 S-HUMAN_REVIEW。提示词必须把
+ * 「反馈给出的约束优先于自评估」讲成硬要求 —— 机械核对在
+ * src/control/proposal/feedback-constraints.ts。
+ */
+describe('promptFor · rfc_draft 服从反馈显式声明的约束(AC5)', () => {
+  const prompt = promptFor('rfc_draft', 'run-r2')
+
+  it('反馈给出约束时要求原样采用,且优先于自评估', () => {
+    expect(prompt).toContain('原样采用')
+    expect(prompt).toContain('优先于你的自评估')
+  })
+
+  it('列出被识别的约束键名 —— 与解析器认的别名一致', () => {
+    for (const key of ['risk=', 'complexity=', 'estimated_files=', 'security_sensitive=']) {
+      expect(prompt, `应提到约束键 ${key}`).toContain(key)
+    }
+  })
+
+  it('把「反馈未给出」单列一档,不与「已给出」混为一谈', () => {
+    expect(prompt).toContain('已显式给出')
+    expect(prompt).toContain('未给出')
+  })
+
+  it('仍不预置任何具体取值', () => {
+    expect(prompt).not.toContain('"risk":"low"')
+    expect(prompt).not.toContain('"complexity":"low"')
+  })
+
+  // 2026-08-27 第三次真实运行:模型给 policy_facts 加了 `note` 字段,
+  // 被 additionalProperties:false 连拒 3 次 → T-031 升人工。
+  it('声明 policy_facts 只此四键 —— 额外字段会被 schema 拒', () => {
+    expect(prompt).toContain('只允许上面这四个键')
+    expect(prompt).toContain('note')
   })
 })

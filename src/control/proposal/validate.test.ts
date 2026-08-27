@@ -122,3 +122,98 @@ describe('validate 第 4 步 · capability_request 授权', () => {
     expect(r.accepted).toBe(true) // 无 policy 也过 —— 该 kind 不需要授权
   })
 })
+
+/**
+ * 第 4b 步接线 —— 光有 feedback-constraints.ts 的纯函数不算数,
+ * 必须证明它真的挂在 validateProposal 上(父任务 AC5)。
+ */
+describe('validate 第 4b 步 · RFC 不得越出反馈显式声明的范围', () => {
+  /** fake client:只回答 ContextBuilder 同源的 feedback 查询 */
+  function clientWithFeedback(bodies: readonly string[]): PoolClient {
+    return {
+      query: async (sql: string) => {
+        if (sql.includes('FROM feedback f')) return { rows: bodies.map((body) => ({ body })) }
+        throw new Error(`未预期的查询:${sql.slice(0, 60)}`)
+      },
+    } as unknown as PoolClient
+  }
+
+  function rfc(facts: {
+    risk: string
+    complexity: string
+    estimated_files_changed: number
+    security_related: boolean
+  }): Proposal {
+    return {
+      proposal_id: 'p-rfc',
+      task_id: 't1',
+      kind: 'rfc',
+      key: '',
+      body: {
+        schema_version: '1.0',
+        title: 'README 补一句',
+        problem: '导出筛选未写进文档',
+        goals: ['补一句说明'],
+        non_goals: ['改代码'],
+        proposed_change: {
+          summary: '改 README.md 一处',
+          affected_areas: ['README.md'],
+          approach: '追加一行',
+        },
+        acceptance_criteria: [{ id: 'AC1', text: 'README 含该句', verifiable_by: '人工核对' }],
+        policy_facts: facts,
+      },
+      supersedes: null,
+      produced_by_run: 'run-rfc',
+    }
+  }
+
+  const declaring = '约束:\n- risk=low\n- complexity=low\n- estimated_files=1'
+
+  it('自报 high 而反馈写死 low → 拒收并回灌(不留给 Policy 兜)', async () => {
+    const r = await validateProposal(
+      rfc({
+        risk: 'high',
+        complexity: 'high',
+        estimated_files_changed: 1,
+        security_related: false,
+      }),
+      { client: clientWithFeedback([declaring]) },
+    )
+    expect(r.accepted).toBe(false)
+    expect(r.violations.map((v) => v.path)).toEqual([
+      'policy_facts.risk',
+      'policy_facts.complexity',
+    ])
+    expect(r.violations.every((v) => v.rule === 'declared-scope')).toBe(true)
+  })
+
+  it('原样采用声明值 → 通过', async () => {
+    const r = await validateProposal(
+      rfc({ risk: 'low', complexity: 'low', estimated_files_changed: 1, security_related: false }),
+      { client: clientWithFeedback([declaring]) },
+    )
+    expect(r.accepted).toBe(true)
+  })
+
+  it('反馈未声明约束 → 不干预模型自评估', async () => {
+    const r = await validateProposal(
+      rfc({
+        risk: 'high',
+        complexity: 'high',
+        estimated_files_changed: 40,
+        security_related: true,
+      }),
+      { client: clientWithFeedback(['导出的 Excel 希望能够按照日期筛选']) },
+    )
+    expect(r.accepted).toBe(true)
+  })
+
+  it('task 无关联 feedback → 空操作,不报错', async () => {
+    const r = await validateProposal(
+      rfc({ risk: 'high', complexity: 'low', estimated_files_changed: 3, security_related: false }),
+      { client: clientWithFeedback([]) },
+    )
+    expect(r.accepted).toBe(true)
+  })
+})

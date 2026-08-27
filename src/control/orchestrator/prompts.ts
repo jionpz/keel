@@ -76,7 +76,18 @@ export function promptFor(stage: Stage, runId: string): string {
         '```',
         '**方案的全部依据**来自上下文里的「用户反馈(原文)」与「当前事实(A-State)」' +
           '的候选方案(candidate_options):RFC 必须只解决这条反馈,不要给整个项目写。',
-        '若反馈不完整需要澄清,如实写 policy_facts 并按真实风险评估,不要硬凑 low。',
+        // 2026-08-27 真实运行:模型往 policy_facts 里塞了个 `note` 解释自己的取值,
+        // 被 schema 的 additionalProperties:false 连拒 3 次 → Run 失败升人工。
+        // 回灌讲清了「多了 note」它仍照写 —— 所以把「只此四键」写进正面指令。
+        'policy_facts **只允许上面这四个键**,多一个字段(note / comment 之类)就会被拒;' +
+          '要解释取值理由请写进 proposed_change.approach。',
+        'policy_facts 分两档填写:',
+        '1. 反馈**已显式给出**约束(形如 risk=、complexity=、estimated_files=、' +
+          'security_sensitive= 的键值)—— **原样采用**这些值。' +
+          '反馈给出的约束优先于你的自评估,同时也是本次改动的范围上限:' +
+          'proposed_change 必须落在该范围内,超出范围的内容写进 non_goals。',
+        '2. 反馈**未给出**约束 —— 才由你按 RFC 的真实内容评估并如实填写:' +
+          '既不要为了保险而抬高,也不要为了放行而压低。',
       ].join('\n')
 
     case 'develop':

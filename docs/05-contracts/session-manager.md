@@ -56,7 +56,12 @@ Control Plane 收到 Proposal 后依次校验，**任一步失败即整体拒绝
 | 2 | **引用完整性** —— `supersedes` 指向的 artifact 存在，且是当前最新版 | 拒绝（并发冲突） |
 | 3 | **平面越界** —— `body` 中不得含状态机跳转指令、不得直接指定 `task.status` | 拒绝 |
 | 4 | **Policy** —— 某些 `kind` 需授权（如 `capability_request`） | 记 `CapabilityDenied` |
+| 4b | **范围一致性**（仅 `rfc`）—— `policy_facts` 不得偏离反馈中**显式声明**的 `risk=` / `complexity=` / `estimated_files=` / `security_sensitive=` | 拒绝（回灌 `R-007`） |
 | 5 | **提交** —— 写入 `artifact` + 发 `ArtifactCommitted` 事件（同一事务） | — |
+
+第 4b 步不是风险豁免：反馈声明的范围是这次改动**被允许的上限**，
+RFC 自报超出上限说明它写的不是这条反馈要的东西。RFC 仍要过 Policy 的 `P1`–`P4`；
+模型若坚持超出范围，回灌耗尽后走 `R-006` → `T-030` / `T-031` 升人工。
 
 第 3 步是本契约的核心。**Session 可以陈述事实，但不能指挥流程。**
 它可以在 `A-State` 里写"方案 A 被选中"，但不能写"把 task.status 改成 DEVELOPING"——

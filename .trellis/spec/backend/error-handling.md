@@ -60,6 +60,32 @@ Proposal 不符合 schema 时走 `R-007`：把 `violations` **回灌给 Session 
 
 ---
 
+## 提示词不是保障：反馈显式约束要机械核对（2026-08-27，AC5）
+
+现象：`rfc_draft` 对「风险自报」连续两次给出 `risk/complexity=high`，命中 Policy P1
+停在 `S-HUMAN_REVIEW`；Issue 正文已显式写 `risk=low / complexity=low / estimated_files=1`。
+把「原样采用反馈约束」写进提示词后模型仍不听 —— **提示词只是请求，不是约束**。
+
+解法：`src/control/proposal/feedback-constraints.ts` —— 从反馈原文用正则解析**显式声明**的
+`risk= / complexity= / estimated_files= / security_related=` 键值，与 RFC 的
+`policy_facts` 机械核对，冲突即拒收并走 `R-007` 回灌（`validate.ts` 第 4b 步）。
+
+语义边界（容易误解）：
+- 这是**范围上限核对**，不是风险豁免。反馈声明的范围是本次改动被允许的上限，
+  RFC 自报超出上限说明它写的不是这条反馈要的东西；RFC 仍要过 Policy P1–P4。
+- 三次回灌耗尽后 Run 失败走 `T-030/T-031` 升人工 —— 该人看的还是人看。
+
+信任边界（prompt injection 入口）：
+- `feedback.body` 是不可信输入。让它约束 `policy_facts` 的前提是 label 闸门
+  （只有有 triage 权限的人能给 Issue 打 `keel` label，反馈才会进入系统）。
+- 只认「键 = 值」的显式声明；自由文本里的「风险不大」一律不解析。
+- 未声明字段缺省 —— 缺省即「由模型自评估」，核对不替模型做裁决。
+
+推广判断：凡「先让模型自觉、再人工兜底」的约束，若失败代价是整条 Run 停摆，
+值得把关键几项做成机械核对 + 可回灌的拒绝。
+
+---
+
 ## 检查脚本的失败输出
 
 `scripts/` 下的检查脚本失败时必须给出**可操作**的信息，不只是 exit 1：

@@ -16,6 +16,7 @@ import type { DecisionPoint, PolicyEngine } from '../../contracts/policy-engine.
 import type { Proposal, ProposalVerdict, SchemaViolation } from '../../contracts/types.js'
 import { SCHEMAS } from '../../generated/schemas.js'
 import { loadPolicyFacts } from '../driver/facts.js'
+import { parseDeclaredPolicyFacts, policyFactsConflicts } from './feedback-constraints.js'
 
 /**
  * 平面越界的禁用键名。
@@ -106,7 +107,40 @@ export async function validateProposal(
     return { accepted: false, artifact_ref: null, violations: policyViolations }
   }
 
+  // ── 第 4b 步：RFC 不得越出反馈显式声明的范围 ──
+  //
+  // 提示词要求「反馈给出的约束原样采用」,但提示词只是请求 ——
+  // 这里把它变成一次可回灌的拒绝(见 feedback-constraints.ts 的信任边界说明)。
+  const scopeViolations = await checkDeclaredScope(proposal, deps.client)
+  if (scopeViolations.length > 0) {
+    return { accepted: false, artifact_ref: null, violations: scopeViolations }
+  }
+
   return { accepted: true, artifact_ref: null, violations: [] }
+}
+
+/**
+ * 第 4b 步：RFC 的 policy_facts 与反馈显式声明的约束一致。
+ *
+ * 只对 rfc 生效;反馈没写显式键值时是空操作 —— 不替模型做裁决。
+ */
+async function checkDeclaredScope(
+  proposal: Proposal,
+  client: PoolClient,
+): Promise<SchemaViolation[]> {
+  if (proposal.kind !== 'rfc') return []
+
+  // 与 ContextBuilder 的 feedback section 同源:模型看到的就是这几条
+  const r = await client.query<{ body: string }>(
+    `SELECT f.body FROM feedback f
+     JOIN task_feedback tf ON tf.feedback_id = f.id
+     WHERE tf.task_id = $1 ORDER BY f.received_at LIMIT 3`,
+    [proposal.task_id],
+  )
+  if (r.rows.length === 0) return []
+
+  const declared = parseDeclaredPolicyFacts(r.rows.map((x) => x.body).join('\n'))
+  return policyFactsConflicts(declared, proposal.body)
 }
 
 /**
