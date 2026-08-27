@@ -129,7 +129,15 @@ describe('Issue → S-DONE 全真实闭环(需要凭据、远程仓库与 gh CLI
     let taskId: string | undefined
     let prUrl: string | null = null
     try {
-      const result = await runIssue({ issueUrl, label: LABEL, ci: 'real', maxSteps: 30 })
+      // wallClockS=600:真实 rfc_draft 在 180s 默认墙上多次超时(2026-08-27),
+      // 与 Policy/提示词无关;验收单独抬高,不改生产默认。
+      const result = await runIssue({
+        issueUrl,
+        label: LABEL,
+        ci: 'real',
+        maxSteps: 30,
+        wallClockS: 600,
+      })
       expect(result.ok, result.ok ? '' : `run-issue 失败:${result.error.detail}`).toBe(true)
       if (!result.ok) return
       taskId = result.value.taskId

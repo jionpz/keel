@@ -31,6 +31,8 @@ export interface RunIssueOptions {
   readonly repoId?: string
   readonly maxSteps?: number
   readonly ci?: CiMode
+  /** 透传 runTask;验收慢模型可抬高墙钟 */
+  readonly wallClockS?: number
   /** 测试注入 stub provider(只作用于 ingest 侧读 Issue) */
   readonly github?: GitHubProvider
   readonly now?: string
@@ -61,6 +63,7 @@ export async function runIssue(opts: RunIssueOptions): Promise<Result<RunIssueRe
 
   const run = await runTask(ingested.value.taskId, {
     ...(opts.maxSteps === undefined ? {} : { maxSteps: opts.maxSteps }),
+    ...(opts.wallClockS === undefined ? {} : { wallClockS: opts.wallClockS }),
     ci,
   })
   // 编排出错(克隆失败 / 超步数)时 ingest 已经落库了 —— 错误里必须带上 taskId,

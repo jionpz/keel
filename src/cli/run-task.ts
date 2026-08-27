@@ -66,6 +66,8 @@ export function resolveCiGateway(ci: CiMode): Result<GitHubProvider | undefined>
 export interface RunTaskOptions {
   readonly maxSteps?: number
   readonly ci?: CiMode
+  /** 单次 run 墙钟上限秒(默认 180)。验收/慢模型可抬高,不改全局默认。 */
+  readonly wallClockS?: number
 }
 
 export interface RunTaskResult {
@@ -123,6 +125,7 @@ export async function runTask(
       adapter: new OmpAdapter(),
       workspace: { mode: 'worktree', ...binding },
       now,
+      ...(opts.wallClockS === undefined ? {} : { wallClockS: opts.wallClockS }),
     },
     {
       maxSteps,
