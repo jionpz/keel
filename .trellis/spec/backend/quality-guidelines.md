@@ -88,6 +88,48 @@ lint → typecheck → boundaries → check:generated → check:transitions → 
 
 ---
 
+## 验收测试的凭据
+
+> 来源:`08-26-v01-closeout` 三轮验收实测。每一条都是真实撞过的坑。
+
+### 环境变量矩阵
+
+| 变量 | 用途 | 要求 |
+|---|---|---|
+| `OPENCODE_API_KEY`(或 `DEEPSEEK_API_KEY`) | omp 推理网关(OmpAdapter 默认模型 `deepseek-v4-flash`) | 任一即可解锁 |
+| `KEEL_GITHUB_TOKEN`(优先)/ `GITHUB_TOKEN` | GitHub REST:PR 创建 + CI 回读(`GitHubProvider`) | 见下「token 能力边界」 |
+| `KEEL_TEST_REMOTE_REPO` | 验收用真实远程仓库(如 `https://github.com/jionpz/keel`) | 对上述 token 可写 |
+| (git push 鉴权) | 不走上面的 token,走 git credential helper | `gh auth setup-git` |
+
+### token 能力边界:`ghs_` vs fine-grained PAT
+
+**「能 push」不等于「能开 PR」** —— 两者走的是不同通道:
+
+| token 类型 | git push(credential helper) | REST 创建 PR |
+|---|---|---|
+| Cloud Agent 的 GitHub App 安装 token(`ghs_` 前缀) | ✅ | ❌ 403 `Resource not accessible by integration` |
+| fine-grained PAT:Contents RW + Pull requests RW | ✅ | ✅ |
+
+实测后果:完整编排无人干预跑 2 分钟、真实 push 成功之后,
+才在 CreatePullRequest 上撞 403。因此
+`v01-criterion-github.acceptance.test.ts` 的 beforeEach 带**预检探针**:
+GET repo(401 → token 过期)+ 对不存在的 head 分支 POST /pulls
+(403 → 没有 PR 写权限;422 → 权限 OK)。两个探针都不改变远程状态。
+**新增打真实外部服务的验收测试时照抄这个模式:分钟级流程之前先做秒级权限探针。**
+
+### 已实测的陷阱
+
+- **残留的过期 `KEEL_GITHUB_TOKEN` 会以 401 覆盖 gh 的有效凭据**。
+  修法:`unset KEEL_GITHUB_TOKEN` 后 `export KEEL_GITHUB_TOKEN="$(gh auth token)"`。
+- **跑验收时不要设 `GIT_CONFIG_GLOBAL=/dev/null`**:
+  它会连 `gh` 的 credential helper 一起屏蔽,push 失去鉴权。
+  该隔离手段只用于 `pnpm run check`(签名等干扰已在代码里根治,
+  见 `git-workspace.md`)。
+- **错误映射**:403/401 → `AUTH_FAILED`(`retryable=false`,直接升人工不重试),
+  这是规范行为,见 `error-handling.md`。
+
+---
+
 ## Required Patterns(必须遵守)
 
 | 模式 | 出处 |

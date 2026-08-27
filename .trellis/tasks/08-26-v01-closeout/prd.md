@@ -340,3 +340,63 @@ PR 要过的 CI 就是 `pnpm run check`，让模型去改被四条架构约束�
   gh auth setup-git
   pnpm run test:acceptance src/acceptance/v01-criterion-github.acceptance.test.ts
   ```
+
+### 2026-08-27（第三轮）· Implement 子代理（Fable）：预检落地 + spec 沉淀
+
+**结论：合并验收 = blocked（同第二轮，环境 token 无 PR 写权限），
+但阻塞现在在第 0 秒暴露，不再烧完整编排。**
+
+#### 1）Acceptance 预检（fail-fast）已落地
+
+`v01-criterion-github.acceptance.test.ts` 的 beforeEach 新增两个探针
+（都不改变远程状态，token 只进 Authorization 头）：
+
+| 探针 | 手段 | 判定 |
+|---|---|---|
+| token 有效性 | `GET /repos/{slug}` | 401 → 失败并提示 unset 残留的过期 `KEEL_GITHUB_TOKEN`；非 200 → 失败 |
+| **PR 写权限** | 对**不存在的** head 分支 `POST /repos/{slug}/pulls` | 403 → 失败并写明 ghs_ 限制与 PAT 要求；422 → 授权通过（head 校验失败是预期），放行 |
+
+POST 探针利用 GitHub「先查授权、再做校验」的顺序：head 不存在，
+绝不会真的建出 PR。
+
+**实测（本轮，凭据 = 环境 `ghs_` token）**：
+
+- 用真实环境 token 跑：**410ms** 内失败于 preflight（上一轮同样的阻塞要跑
+  **2m04s**、真实 push 一次才暴露），错误信息完整给出 ghs_ 限制 +
+  fine-grained PAT（Contents RW + Pull requests RW）要求。远程零接触。
+- 反例验证 401 路径：注入无效 token（`ghp_invalid0000`）→
+  失败信息为「token 无效或已过期 + unset 修法」。两条路径都确认会红。
+
+#### 2）Spec 沉淀（trellis-update-spec）
+
+- **新增 `.trellis/spec/backend/session-context.md`**：上下文下行桥契约 ——
+  `withPrompt` 只能追加不能替换、`total_tokens` 同步重算、Adapter 渲染全部
+  section、`ContextBuilt` 不得说假话；含 Wrong vs Correct 与两条测试锚点。
+- **新增 `.trellis/spec/backend/git-workspace.md`**：Agent 提交用 `-c` 钉死
+  身份与签名（`commit.gpgsign=false`）、夹具关签名、`GIT_CONFIG_GLOBAL`
+  只用于 check 不用于验收；含反例验证记录。
+- **`.trellis/spec/backend/quality-guidelines.md` 新增 §验收测试的凭据**：
+  环境变量矩阵、`ghs_` vs fine-grained PAT 能力边界表、三个已实测陷阱、
+  预检探针模式。
+- `.trellis/spec/backend/index.md` 与 `src/acceptance/README.md` 同步更新。
+
+#### 3）验证结果
+
+- `GIT_CONFIG_GLOBAL=/dev/null pnpm run check` **全绿**（exit 0）：
+  lint / typecheck / boundaries（92 模块 384 依赖，0 违规）/ check:generated /
+  check:transitions（31 条）/ check:purity / **16 个测试文件 185 passed | 4 skipped**。
+  预检只动了 acceptance 文件与文档，默认 check 的测试数与上轮持平。
+- 合并验收（真实凭据）：如上，fail-fast 于 preflight（410ms），符合本轮目标
+  「若预检能更早失败并给出可操作信息，算成功」。
+
+#### 4）待办（需主会话执行）
+
+- 本轮变更**尚未提交**（子代理纪律）。变更文件：
+  - `src/acceptance/v01-criterion-github.acceptance.test.ts` —— 预检探针 + 头注释
+  - `src/acceptance/README.md` —— 凭据一节
+  - `.trellis/spec/backend/session-context.md`（新增）、
+    `.trellis/spec/backend/git-workspace.md`（新增）、
+    `.trellis/spec/backend/quality-guidelines.md`、`.trellis/spec/backend/index.md`
+  - 本文件（第三轮验收记录）
+- 合并验收最后一步的重跑命令不变（见第二轮 §6）；现在重跑前 preflight
+  会先替你确认 token 权限，不够就秒级失败。
