@@ -10,7 +10,7 @@
 
 -- Up Migration
 
-CREATE UNIQUE INDEX run_one_running_per_task ON run (task_id) WHERE status = 'RUNNING';
+CREATE UNIQUE INDEX IF NOT EXISTS run_one_running_per_task ON run (task_id) WHERE status = 'RUNNING';
 
 -- Down Migration
 

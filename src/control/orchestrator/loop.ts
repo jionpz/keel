@@ -24,6 +24,7 @@ import type { HarnessSessionManager } from '../../execution/session/manager.js'
 import { commitArtifactOn } from '../../fact/artifact-store.js'
 import { asRole } from '../../fact/db.js'
 import type { GitWorkspace } from '../../fact/git-workspace.js'
+import { ensureTraceId } from '../../fact/trace.js'
 import type { ControlMode, RoleId, Stage, TaskStatus } from '../../shared/ids.js'
 import { claimDueTimers } from '../../timer/drain.js'
 import { checkBudgetFuse } from '../budget/fuse.js'
@@ -231,9 +232,15 @@ export async function runTaskToCompletion(
     const executed = await executeRun(taskId, pending, deps, ctxBuilder)
     if (!executed.ok) {
       const runErr = executed.error
-      // N4:容量类可重试错误(全局 RUNNING 上限等)—— 不流转、不标 FAILED:
-      // claim 拒绝时 run 本就留在 PENDING,重试无意义,停下等名额释放。
-      if (runErr.kind === 'CONFLICT') return err(runErr)
+      // N4:claim 拒绝时 run 仍是 PENDING —— 不流转、不标 FAILED,停下等名额。
+      // post-claim 的 CONFLICT(如 artifact 版本冲突)则 run 已是 RUNNING,
+      // 必须走 R1 离开 RUNNING,否则 Task 卡死且无 PENDING。
+      if (runErr.kind === 'CONFLICT') {
+        const stillPending = await asRole('keel_control', (c) =>
+          c.query<{ status: string }>(`SELECT status FROM run WHERE id=$1`, [pending.id]),
+        )
+        if (stillPending.rows[0]?.status === 'PENDING') return err(runErr)
+      }
       // R1(issue #23):失败是状态流转,不是编排器异常 ——
       // 标 run 状态 + emit 失败事件,交给 T-030(重试)/T-031(升人工)。
       const next = await failRunAndAdvance(taskId, pending, runErr, deps, state, steps)
@@ -264,7 +271,7 @@ export async function runTaskToCompletion(
     // 评审完成后 T-009b 回流 brainstorm(n+1),新一轮收敛再走 T-010。
     if (pending.stage === 'brainstorm' && (await brainstormNeedsCritic(taskId))) {
       const capability = await brainstormRequestedCapability(taskId)
-      await synthesizeCapabilityRequest(taskId, pending.id, capability)
+      await synthesizeCapabilityRequest(taskId, pending.id, capability, deps.now())
       const adv = await deps.driver.advance(
         taskId,
         { type: 'CapabilityRequested', capability },
@@ -318,28 +325,12 @@ async function executeRun(
   const claimed = await asRole('keel_control', (c) => claimRunForExecution(c, pending.id))
   if (!claimed.ok) return err(claimed.error)
 
-  const executed = await executeClaimedRun(taskId, pending, deps, ctxBuilder)
-  if (!executed.ok) {
-    // N3 失败路径：失败也要**离开 RUNNING**。滞留会让部分唯一索引
-    // run_one_running_per_task 卡死该 Task 的后续 Run，
-    // 且「还在跑」与「已失败」在事实层是两个不同的事实。
-    await markRunFailed(pending.id, executed.error)
-  }
-  return executed
+  // 失败时由调用方 failRunAndAdvance 离开 RUNNING(一次写 + R1 流转)。
+  // 不再先 markRunFailed 再覆写 —— 双写之间崩溃会留下「FAILED 却无失败事件」。
+  return executeClaimedRun(taskId, pending, deps, ctxBuilder)
 }
 
-/** 失败的 run 如实落 FAILED —— error_kind/error_detail 是 T-030/T-031 守卫的输入来源 */
-async function markRunFailed(runId: string, error: KeelError): Promise<void> {
-  await asRole('keel_control', (c) =>
-    c.query(
-      `UPDATE run SET status='FAILED', ended_at=now(), error_kind=$2, error_detail=$3
-       WHERE id=$1 AND status='RUNNING'`,
-      [runId, error.kind, error.detail],
-    ),
-  )
-}
-
-/** 认领之后的执行主体。任何 err 返回都会由 executeRun 落成 run.status='FAILED' */
+/** 认领之后的执行主体。失败返回 err 后由 failRunAndAdvance 落终态并流转 */
 async function executeClaimedRun(
   taskId: string,
   pending: { id: string; stage: Stage; role: RoleId; attempt: number },
@@ -397,7 +388,7 @@ async function executeClaimedRun(
           pending.stage === 'develop'
             ? { allowed_tools: ['read', 'write'], mode: 'auto' }
             : { allowed_tools: ['read'], mode: 'auto' },
-        limits: { wall_clock_s: 180, budget_usd: null, max_turns: 8 },
+        limits: { wall_clock_s: wallClockS, budget_usd: null, max_turns: 8 },
       },
       adapter: deps.adapter,
       expect,
@@ -595,13 +586,11 @@ async function failRunAndAdvance(
         : 'FAILED'
 
   await asRole('keel_control', (c) =>
-    c.query(`UPDATE run SET status=$2, ended_at=$3, error_kind=$4, error_detail=$5 WHERE id=$1`, [
-      pending.id,
-      status,
-      deps.now(),
-      runErr.kind,
-      runErr.detail,
-    ]),
+    c.query(
+      `UPDATE run SET status=$2, ended_at=$3, error_kind=$4, error_detail=$5
+       WHERE id=$1 AND status='RUNNING'`,
+      [pending.id, status, deps.now(), runErr.kind, runErr.detail],
+    ),
   )
   // run 已终态:墙钟 timer 不再需要(方案 B,防残留误触发)
   await cancelRunWallClockTimer(pending.id)
@@ -696,6 +685,7 @@ async function synthesizeCapabilityRequest(
   taskId: string,
   producedByRun: string,
   capability: string,
+  now: string,
 ): Promise<void> {
   await asRole('keel_control', async (c) => {
     const existing = await c.query<{ id: string }>(
@@ -704,10 +694,17 @@ async function synthesizeCapabilityRequest(
     )
     if (existing.rows.length > 0) return // 已合成,幂等
 
+    const traceId = await ensureTraceId(c, taskId, now)
     const ev = await c.query<{ seq: string }>(
-      `INSERT INTO event (task_id, run_id, type, payload)
-       VALUES ($1,$2,'ProposalAccepted',$3::jsonb) RETURNING seq`,
-      [taskId, producedByRun, JSON.stringify({ kind: 'capability_request', key: 'latest' })],
+      `INSERT INTO event (task_id, run_id, type, payload, trace_id, occurred_at)
+       VALUES ($1,$2,'ProposalAccepted',$3::jsonb,$4,$5) RETURNING seq`,
+      [
+        taskId,
+        producedByRun,
+        JSON.stringify({ kind: 'capability_request', key: 'latest' }),
+        traceId,
+        now,
+      ],
     )
     await commitArtifactOn(c, {
       id: randomUUID(),
@@ -762,10 +759,11 @@ async function synthesizeStateFromBrainstorm(
     const details = (outcome.rows[0]?.body?.details ?? {}) as Record<string, unknown>
     const candidates = Array.isArray(details.candidates) ? details.candidates : []
 
+    const traceId = await ensureTraceId(c, taskId, now)
     const ev = await c.query<{ seq: string }>(
-      `INSERT INTO event (task_id, run_id, type, payload)
-       VALUES ($1,$2,'ProposalAccepted',$3::jsonb) RETURNING seq`,
-      [taskId, producedByRun, JSON.stringify({ kind: 'state', key: '' })],
+      `INSERT INTO event (task_id, run_id, type, payload, trace_id, occurred_at)
+       VALUES ($1,$2,'ProposalAccepted',$3::jsonb,$4,$5) RETURNING seq`,
+      [taskId, producedByRun, JSON.stringify({ kind: 'state', key: '' }), traceId, now],
     )
     await commitArtifactOn(c, {
       id: randomUUID(),

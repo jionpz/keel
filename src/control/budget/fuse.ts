@@ -66,27 +66,31 @@ export async function checkBudgetFuse(
     return { tripped: false, cost_spent_usd: costSpent, budget_usd: budget }
   }
 
-  const traceId = await ensureTraceId(c, taskId)
+  const traceId = await ensureTraceId(c, taskId, now)
   await c.query(
     `UPDATE task SET control_mode = 'paused', updated_at = $2::timestamptz WHERE id = $1`,
     [taskId, now],
   )
   await c.query(
-    `INSERT INTO event (task_id, type, payload, trace_id) VALUES ($1,$2,$3::jsonb,$4)`,
+    `INSERT INTO event (task_id, type, payload, trace_id, occurred_at)
+     VALUES ($1,$2,$3::jsonb,$4,$5)`,
     [
       taskId,
       'ControlModeChanged',
       JSON.stringify({ transition: 'C-002', from: 'auto', to: 'paused', reason: 'budget' }),
       traceId,
+      now,
     ],
   )
   await c.query(
-    `INSERT INTO event (task_id, type, payload, trace_id) VALUES ($1,$2,$3::jsonb,$4)`,
+    `INSERT INTO event (task_id, type, payload, trace_id, occurred_at)
+     VALUES ($1,$2,$3::jsonb,$4,$5)`,
     [
       taskId,
       'BudgetExceeded',
       JSON.stringify({ cost_spent_usd: costSpent, budget_usd: budget }),
       traceId,
+      now,
     ],
   )
 

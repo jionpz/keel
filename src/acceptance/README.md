@@ -47,7 +47,10 @@ R-007 的重试仍可能连续三次不合格。
 | 文件 | 验的是什么 | 额外前置 |
 |---|---|---|
 | `v01-criterion.acceptance.test.ts` | seed 的 S-NEW task 在无人干预下走到 S-DONE(CI 由测试注入) | 无 |
-| `github-pr.acceptance.test.ts` | push → 真实建 PR → 幂等复用 → 真实 CI 回读 | `KEEL_GITHUB_TOKEN`、`KEEL_TEST_REMOTE_REPO` |
+| `v01-criterion-github.acceptance.test.ts` | 编排器 + 真实 GitHub PR/CI 走完 S-NEW→S-DONE（合并验收；含 fail-fast 权限探针） | `KEEL_GITHUB_TOKEN`、`KEEL_TEST_REMOTE_REPO` |
+| `github-pr.acceptance.test.ts` | push → 真实建 PR → 幂等复用 → 真实 CI 回读（不经编排器） | 同上 |
+| `merge.acceptance.test.ts` | 编排器 + 真实 OMP/GitHub 的早期合并验收（与 `v01-criterion-github` 重叠，保留作对照） | 同上 |
+| `session-milestone.acceptance.test.ts` | Session 里程碑路径 | 视用例而定 |
 | `issue-e2e.acceptance.test.ts` | **真实 GitHub Issue** → S-DONE + 通过 CI 的真实 PR,事件流 T-001 起 T-024 终 | 上述两项 + 已登录的 `gh` CLI(创建/关闭验收用 Issue) |
 
 `issue-e2e` 与 `v01-criterion` 的差别只有一处,却正是 v0.1 判据里最后补上的那一环：

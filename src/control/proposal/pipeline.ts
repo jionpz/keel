@@ -172,7 +172,7 @@ export async function runSessionUntilValid(
         if (!verdict.accepted) return { ok: false as const, verdict }
 
         // 校验通过 → 落库。写 event 拿 seq，再提交 artifact（同事务）
-        const traceId = await ensureTraceId(c, proposal.task_id)
+        const traceId = await ensureTraceId(c, proposal.task_id, requireNow(opts))
         const ev = await c.query<{ seq: string }>(
           `INSERT INTO event (task_id, run_id, type, payload, trace_id, occurred_at)
            VALUES ($1,$2,'ProposalAccepted',$3::jsonb,$4,$5) RETURNING seq`,
@@ -213,7 +213,7 @@ export async function runSessionUntilValid(
       rejections.push(feedback)
 
       await asRole('keel_control', async (c) => {
-        const traceId = await ensureTraceId(c, proposal.task_id)
+        const traceId = await ensureTraceId(c, proposal.task_id, requireNow(opts))
         await c.query(
           `INSERT INTO event (task_id, run_id, type, payload, trace_id, occurred_at)
            VALUES ($1,$2,'ProposalRejected',$3::jsonb,$4,$5)`,
