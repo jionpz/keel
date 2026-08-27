@@ -158,3 +158,39 @@ ADR-0003 Proposed → Accepted(自研决策维持,迁移路径确证)。
 - 241/248 tests 全绿;build 产 dist;实测 status/timer-worker 命令通过
 
 v0.1 可用命令行入口:收割/驱动任务/状态查询。
+
+
+## Session 1: rfc-low-risk-ac5: 反馈显式约束机械核对，AC1/AC2 达成
+
+**Date**: 2026-08-27
+**Task**: rfc-low-risk-ac5: 反馈显式约束机械核对，AC1/AC2 达成
+**Branch**: `main`
+
+### Summary
+
+新增 feedback-constraints.ts 机械核对反馈显式声明与 RFC policy_facts(4b)，冲突回灌 R-007；提示词改「反馈约束原样采用+只允许四键」；run-issue/run-task 透传 wallClockS；pnpm run check 全绿(303 passed)。AC3 真实 e2e 未跑(opt-in)。
+
+### Main Changes
+
+- feat(proposal): 4b 范围一致性机械核对 + spec
+- feat(cli): wallClockS 透传
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0c84a40` | (see git log) |
+| `6954c52` | (see git log) |
+| `c759eb5` | (see git log) |
+
+### Testing
+
+- [OK] pnpm run check: 28 files / 303 passed + 4 skipped
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- AC3: keel run-issue --ci real(需 KEEL_GITHUB_TOKEN, 创建真实 PR)
