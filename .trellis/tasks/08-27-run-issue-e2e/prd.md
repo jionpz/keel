@@ -18,6 +18,18 @@
 - [ ] AC6：Policy 高风险 Issue 停在 S-HUMAN_REVIEW，run-issue 如实报告（不伪造成功）
 - [ ] AC7：`pnpm run check` 全绿；opt-in `test:acceptance` 至少跑通一次（模型波动按诚实失败记录）
 
+## 进展
+
+R7/R8/R9 均已实现并有测试覆盖；**AC5 卡在验收环境而非代码**。
+
+2026-08-28 第四次尝试未能运行，三项前置同时缺失（实测）：环境无 `omp` 可执行文件、
+`OPENCODE_API_KEY`/`DEEPSEEK_API_KEY` 均未设置、`gh` 的 `ghs_` token 建 PR 返回 403。
+未跑验收、未建 Issue、未伪造结果。归因与当日合入的确定性改动见父任务 `prd.md`
+§真实验收记录。
+
+再次验收所需：模型网关 key + 对测试仓库有 Contents RW / Pull requests RW 的
+fine-grained PAT（`ghs_` 不行）。
+
 ## Out of Scope
 
 - Webhook / daemon / work queue（Phase 3）
