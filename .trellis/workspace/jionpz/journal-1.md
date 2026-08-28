@@ -209,3 +209,43 @@ v0.1 可用命令行入口:收割/驱动任务/状态查询。
 ### Status
 
 [OK] **Completed** —— 待 human merge(收尾代理不合并)
+
+
+## Session 2: finish-work: merge-crosscut-fixes 归档收尾(PR #35)
+
+**Date**: 2026-08-28
+**Task**: finish-work: merge-crosscut-fixes 归档收尾(PR #35)
+**Branch**: `cursor/merge-crosscut-fixes-365e`
+
+### Summary
+
+代理代为执行 finish-work 全流程：修正 .trellis/.developer 被写成 --help 导致 active 任务不可见的问题；archive 08-27-merge-crosscut-fixes 到 archive/2026-08/；记录本 session；随后 squash merge PR #35 到 main。merge 排在 archive/journal 之后，使代码与归档在 main 上同一 commit 落地。
+
+### Main Changes
+
+- chore(task): archive 08-27-merge-crosscut-fixes -> .trellis/tasks/archive/2026-08/
+- 修正 .trellis/.developer(name=--help -> jionpz)，恢复 record 模式的 active 任务视图
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ee726c3` | (see git log) |
+| `9ce98a3` | (see git log) |
+| `68ce401` | (see git log) |
+| `b38b5ef` | (see git log) |
+| `c7cc4c0` | (see git log) |
+
+### Testing
+
+- [OK] 工作树 clean，Step 2 无 dirty 路径需分类
+- [OK] CI 对 .trellis/ 单独变更历史上均 success(c7cc4c0 / b38b5ef)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- R4 契约级遗留：ContextBuilt / artifact-store.commit 的 occurred_at 需扩事件契约，独立任务
+- ensureTraceId 省略 occurredAt 的回落分支待全部调用点改注入时钟后清零
