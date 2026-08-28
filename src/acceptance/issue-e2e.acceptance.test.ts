@@ -31,6 +31,7 @@ import { PgArtifactStore } from '../fact/artifact-store.js'
 import { asOwner, closePool } from '../fact/db.js'
 import { branchFor } from '../fact/git-workspace.js'
 import { ownerRepo, readTokenFromEnv } from '../fact/github-provider.js'
+import { preflightGitHub, preflightOmp } from './preflight.js'
 
 const store = new PgArtifactStore()
 
@@ -61,6 +62,10 @@ beforeEach(async () => {
       '缺少 KEEL_TEST_REMOTE_REPO,例如:`export KEEL_TEST_REMOTE_REPO=https://github.com/jionpz/keel`',
     )
   }
+  // 起编排器之前把「跑不出结论」的前置一次性挡掉:PR 权限与 omp 都不具备时,
+  // 这条链路只会烧十几分钟再落进一个**看起来像 AC6** 的终态。
+  preflightOmp()
+  await preflightGitHub(remote, token)
   await asOwner((c) =>
     c.query(
       'TRUNCATE artifact, event, task_feedback, run, task, feedback, repo RESTART IDENTITY CASCADE',
@@ -164,10 +169,35 @@ describe('Issue → S-DONE 全真实闭环(需要凭据、远程仓库与 gh CLI
       expect(fbEarly.rows[0]?.source).toBe('github')
       expect(fbEarly.rows[0]?.external_ref).toBe(`${slug.value}#${issueNumber}`)
 
+      // ── S-HUMAN_REVIEW 有两条来路,必须分开看 ──
+      //
+      // T-031(stage_retries_exhausted)也落 S-HUMAN_REVIEW,与 Policy 判高风险
+      // **同一个终态**。若只看终态就早退,那么「omp 不存在 / 网关没 key /
+      // 模型连续超时」这些**基础设施故障**会与 AC6 无法区分,测试照样判绿 ——
+      // 正是本项目一路在避免的假绿(见 README.md「不是『不可用就跳过』」)。
+      // 2026-08-27 第三次真实运行就是这一形态:用例绿,实际没跑出任何结论。
+      if (transitions.at(-1) === 'T-031') {
+        throw new Error(
+          [
+            '重试耗尽升人工(T-031)—— 这不是 AC6,是没跑出结论。',
+            `走过的路径:${transitions.join(' → ')}`,
+            '常见成因:omp 不可用 / 推理网关无 key / 模型连续超时。',
+            '按诚实纪律:本次既不算 AC5 通过,也不算 AC6 证据。',
+          ].join('\n'),
+        )
+      }
+
       // AC6:Policy 拦到 S-HUMAN_REVIEW 是设计内终点 —— 如实断言,不伪造成 S-DONE。
       // AC5 全自动到 PR 需要模型给出 low/low RFC;波动时本断言会红,按诚实纪律记录重跑。
       if (result.value.finalStatus === 'S-HUMAN_REVIEW') {
         console.log('走过的路径(AC6 人工闸门):', transitions.join(' → '))
+        // 真正的 Policy 闸门必有一条 human_review 裁决 —— 否则不算 AC6 证据
+        const policyHumanReview = evs.value.some(
+          (e) =>
+            e.type === 'PolicyEvaluated' &&
+            (e.payload as { decision?: string }).decision === 'human_review',
+        )
+        expect(policyHumanReview, 'AC6 需要一条 human_review 的 PolicyEvaluated 作证').toBe(true)
         expect(prUrl, '人工闸门路径不应假装已建 PR').toBeNull()
         return
       }
