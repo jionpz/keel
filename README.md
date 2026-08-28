@@ -57,6 +57,8 @@ Fact 与 Execution 之间只有两条单向通道：`Context` 下行、`Proposal
 > 一条真实的用户反馈进入系统后，在无人干预的情况下走完 `S-NEW → S-DONE`，
 > 产出一个通过 CI 的 PR；且 `readEvents(task_id, 0)` 能完整重建这个 Task 的全过程。
 
+导出支持按日期筛选。
+
 ## 技术栈
 
 **TypeScript / Node**（[`ADR-0002`](./docs/adr/0002-implementation-language.md)）。
