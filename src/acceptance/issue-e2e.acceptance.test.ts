@@ -12,8 +12,9 @@
  *   1. `KEEL_GITHUB_TOKEN`(或 `GITHUB_TOKEN`)—— 读 Issue / 建 PR / 读 CI;
  *   2. `KEEL_TEST_REMOTE_REPO`(如 `https://github.com/jionpz/keel`)——
  *      你拥有 push 权限的远程仓库;
- *   3. `gh` CLI 已登录 —— 用于创建/关闭验收用的 Issue(Keel 自己只读 Issue,
- *      建 Issue 是人的动作,不该进产品代码)。
+ *   3. `gh` CLI —— 用于创建/关闭验收用的 Issue(Keel 自己只读 Issue,
+ *      建 Issue 是人的动作,不该进产品代码)。`gh()` 会把 `KEEL_GITHUB_TOKEN`
+ *      注入 `GH_TOKEN`,避免 Cloud Agent 的 `ghs_` 凭据能 push 却不能打 label。
  *
  * 与项目纪律一致:**条件不满足时明确失败,绝不静默跳过**。
  *
@@ -76,7 +77,13 @@ beforeEach(async () => {
 afterAll(closePool)
 
 function gh(args: readonly string[]): string {
-  return execFileSync('gh', [...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  const t = readTokenFromEnv()
+  const env = t === undefined ? process.env : { ...process.env, GH_TOKEN: t, GITHUB_TOKEN: t }
+  return execFileSync('gh', [...args], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env,
+  })
 }
 
 /** 创建带目标 label 的真实 Issue,返回其 URL */
