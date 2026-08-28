@@ -86,6 +86,11 @@ function gh(args: readonly string[]): string {
   })
 }
 
+/** 从 PR URL 取编号 —— 断言与 cleanup 共用一份,不写第二遍 */
+function prNumber(url: string): string {
+  return url.split('/').at(-1) ?? ''
+}
+
 /** 创建带目标 label 的真实 Issue,返回其 URL */
 function createLabeledIssue(slug: string, title: string): string {
   try {
@@ -215,9 +220,40 @@ describe('Issue → S-DONE 全真实闭环(需要凭据、远程仓库与 gh CLI
       // ── AC5-2:真实 PR ──
       expect(prUrl, 'S-DONE 必须有真实 PR URL').not.toBeNull()
       expect(prUrl ?? '').toMatch(/^https:\/\/github\.com\/.+\/pull\/\d+$/)
+      if (prUrl === null) return
 
       // ── AC5-3:事件流终于 T-024(CI 通过)──
       expect(transitions.at(-1), '最后一条转移应是 T-024(CI 通过 → S-DONE)').toBe('T-024')
+
+      // ── AC5-3b:T-024 得有真实 CI 作证,不能只有 Keel 自己的事件 ──
+      //
+      // 2026-08-28 第六次验收:用例判绿,但 T-024 是在建 PR 后 3.5 秒流出的 ——
+      // 那时 Actions 还没启动(check-run 晚 5 秒才 started_at)。Keel 把
+      // 「两个端点都还读不到」当成了 passed。判据要的是「通过 CI 的 PR」,
+      // 所以这里回到 GitHub 核对一次:head SHA 上必须真有跑完且成功的 check。
+      const headSha = gh([
+        'pr',
+        'view',
+        prNumber(prUrl),
+        '--repo',
+        slug.value,
+        '--json',
+        'headRefOid',
+        '--jq',
+        '.headRefOid',
+      ]).trim()
+      const checkRuns = JSON.parse(
+        gh(['api', `/repos/${slug.value}/commits/${headSha}/check-runs`]),
+      ) as { check_runs: { name: string; status: string; conclusion: string | null }[] }
+      const completed = checkRuns.check_runs.filter((c) => c.status === 'completed')
+      expect(
+        completed.length,
+        `head SHA ${headSha} 上没有任何跑完的 check —— T-024 无真实 CI 作证(假绿)`,
+      ).toBeGreaterThan(0)
+      expect(
+        completed.every((c) => c.conclusion === 'success' || c.conclusion === 'skipped'),
+        `真实 check 结论:${completed.map((c) => `${c.name}=${c.conclusion}`).join(', ')}`,
+      ).toBe(true)
 
       // ── AC5-4:PR 是真做的,不是记意图 ──
       const prEvent = evs.value.find(
@@ -240,9 +276,8 @@ describe('Issue → S-DONE 全真实闭环(需要凭据、远程仓库与 gh CLI
     } finally {
       // 收尾:关 PR、删远端分支、关 Issue —— 验收不留垃圾
       if (prUrl !== null) {
-        const prNumber = prUrl.split('/').at(-1) ?? ''
         try {
-          gh(['pr', 'close', prNumber, '--repo', slug.value])
+          gh(['pr', 'close', prNumber(prUrl), '--repo', slug.value])
         } catch {
           /* 已关闭则忽略 */
         }
