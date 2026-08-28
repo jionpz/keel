@@ -103,7 +103,7 @@ pnpm run check     # CI 跑的就是这一条 —— 与本地完全一致
 
 **架构框架 + 仓库骨架已完成。** v0.1 最小闭环已跑通：真实反馈在本地 worktree 中无人干预走完 `S-NEW → S-DONE`，事件流可完整重建；回归测试全绿。
 
-**v0.1「进入」环节已闭合**（2026-08-28）：真实 GitHub Issue → `keel run-issue --ci real` → S-DONE + 通过 CI 的真实 PR（`issue-e2e` 验收，路径 T-001→T-024，~140s）。详见任务 `08-27-github-issue-automation` 的 `prd.md`。
+**v0.1「进入」环节已闭合**（2026-08-28）：真实 GitHub Issue → `keel run-issue --ci real` → S-DONE + 通过 CI 的真实 PR（`issue-e2e` 验收，路径 T-001→T-024，263s，[PR #45](https://github.com/jionpz/keel/pull/45)）。T-024 经远端核对：真实 Actions check 跑完 `success` 之后才流转，不是「读不到就算过」。同轮验收抓出并修掉一个 T-024 假绿（`unreported` 与 `passed` 同数据形态），详见任务 `08-27-github-issue-automation` 的 `prd.md`。
 
 GitHub PR / CI 集成已完成**真实验收**(2026-08-24,`jionpz/keel`):
 真实 push → 真实创建 PR(幂等复用)→ 真实 GitHub Actions 跑完 → CI 状态回读 `passed`,
