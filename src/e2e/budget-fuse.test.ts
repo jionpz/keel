@@ -38,11 +38,20 @@ import { DEFAULT_RULESET } from '../control/policy/ruleset.js'
 import { HarnessSessionManager } from '../execution/session/manager.js'
 import { asOwner, closePool } from '../fact/db.js'
 
-/** 桩 Adapter：产出合法的 pm 结论，并按注入的 usage 上报成本 */
+/**
+ * 桩 Adapter：按注入的 usage 上报成本。
+ *
+ * 默认产出合法的 pm 结论；`invalidProposal=true` 时每轮都产出**非法**提案
+ * （缺 run_id）—— R-007 回灌耗尽后 R-006 判 Run 失败，但每轮照常上报 usage：
+ * 失败 run 花的钱与成功的一样真实（C1）。
+ */
 class CostReportingAdapter implements HarnessAdapter {
   private lastRunId = ''
 
-  constructor(private readonly usage: Usage) {}
+  constructor(
+    private readonly usage: Usage,
+    private readonly invalidProposal = false,
+  ) {}
 
   describe(): HarnessDescriptor {
     return {
@@ -63,14 +72,18 @@ class CostReportingAdapter implements HarnessAdapter {
   async awaitResult(): Promise<Result<RunResult>> {
     return ok({
       status: 'SUCCEEDED',
-      text: JSON.stringify({
-        schema_version: '1.0',
-        run_id: this.lastRunId,
-        stage: 'pm',
-        verdict: 'actionable',
-        reason: '桩：可做',
-        details: { needs_design: false },
-      }),
+      text: JSON.stringify(
+        this.invalidProposal
+          ? { schema_version: '1.0', stage: 'pm', verdict: 'actionable' }
+          : {
+              schema_version: '1.0',
+              run_id: this.lastRunId,
+              stage: 'pm',
+              verdict: 'actionable',
+              reason: '桩：可做',
+              details: { needs_design: false },
+            },
+      ),
       proposals: [],
       usage: this.usage,
       session_ref: null,
@@ -263,6 +276,107 @@ describe('C3 · 超预算熔断（C-002）', () => {
     expect(exceeded?.payload.budget_usd, '默认预算应来自 DEFAULT_TASK_BUDGET_USD').toBe(
       DEFAULT_TASK_BUDGET_USD,
     )
+  })
+
+  it('失败 run 也成本入账：R-007 三轮累计超预算 → FAILED 行带 cost → 同事务熔断，T-030 不再重试', async () => {
+    // 最烧钱的场景（R-007 回灌 × T-030 重跑）：每轮 0.5，三轮非法提案 → R-006
+    // 判 Run 失败时已花 1.5 > 预算 1。此前失败路径不入账,熔断对它完全失明。
+    const taskId = await seedTask(1)
+    const adapter = new CostReportingAdapter(
+      { tokens_in: 100, tokens_out: 40, cost_usd: 0.5, cost_basis: 'estimated' },
+      true,
+    )
+
+    const result = await runTaskToCompletion(taskId, depsWith(adapter), { maxSteps: 10 })
+
+    // 熔断是正常停止:status 停在 PM 阶段,control_mode → paused
+    expect(result.ok, result.ok ? '' : result.error.detail).toBe(true)
+    if (!result.ok) return
+    expect(result.value.finalStatus).toBe('S-PM_ANALYZING')
+
+    const task = await asOwner((c) =>
+      c.query<{ status: string; control_mode: string }>(
+        'SELECT status, control_mode FROM task WHERE id=$1',
+        [taskId],
+      ),
+    )
+    expect(task.rows[0]?.control_mode).toBe('paused')
+    expect(task.rows[0]?.status).toBe('S-PM_ANALYZING')
+
+    // C1:FAILED 行带全部轮次的累计成本 —— 失败不等于免费
+    const run = await asOwner((c) =>
+      c.query<{
+        status: string
+        error_kind: string | null
+        tokens_in: string | null
+        tokens_out: string | null
+        cost_usd: string | null
+        cost_basis: string | null
+      }>(
+        `SELECT status, error_kind, tokens_in, tokens_out, cost_usd, cost_basis
+         FROM run WHERE task_id=$1 AND stage='pm'`,
+        [taskId],
+      ),
+    )
+    expect(run.rows[0]?.status).toBe('FAILED')
+    expect(run.rows[0]?.error_kind).toBe('SCHEMA_VIOLATION')
+    expect(Number(run.rows[0]?.tokens_in)).toBe(300)
+    expect(Number(run.rows[0]?.tokens_out)).toBe(120)
+    expect(Number(run.rows[0]?.cost_usd)).toBe(1.5)
+    expect(run.rows[0]?.cost_basis).toBe('estimated')
+
+    // 熔断事件对 + RunFailed 被 paused 拒绝(NoTransition)—— T-030 不再建新 run
+    const evs = await eventsOf(taskId)
+    const exceeded = evs.find((e) => e.type === 'BudgetExceeded')
+    expect(exceeded, '失败 run 的累计成本应触发 BudgetExceeded').toBeDefined()
+    expect(exceeded?.payload.cost_spent_usd).toBe(1.5)
+    expect(exceeded?.payload.budget_usd).toBe(1)
+    expect(evs.find((e) => e.type === 'ControlModeChanged')?.payload.transition).toBe('C-002')
+    expect(
+      evs.find((e) => e.type === 'NoTransition' && e.payload.reason === 'control_mode_not_auto'),
+      '熔断后的 RunFailed 应被如实记录为 NoTransition',
+    ).toBeDefined()
+
+    const runs = await asOwner((c) =>
+      c.query<{ n: string }>('SELECT count(*) AS n FROM run WHERE task_id=$1', [taskId]),
+    )
+    expect(Number(runs.rows[0]?.n), '熔断后 T-030 不得再建重试 run').toBe(1)
+  })
+
+  it('失败 run 成本可见但未超预算：不误熔断，T-030 正常重试到 T-031 升人工', async () => {
+    // 默认预算 10,每 run 3 轮 × 0.1 = 0.3:三次 attempt 共 0.9,远低于预算。
+    // 钉住两件事:失败行的 cost 逐 run 独立累计(不是全局串台),且不误触发熔断。
+    const taskId = await seedTask(null)
+    const adapter = new CostReportingAdapter(
+      { tokens_in: 10, tokens_out: 5, cost_usd: 0.1, cost_basis: 'estimated' },
+      true,
+    )
+
+    const result = await runTaskToCompletion(taskId, depsWith(adapter), { maxSteps: 8 })
+    expect(result.ok, result.ok ? '' : result.error.detail).toBe(true)
+    if (!result.ok) return
+    expect(result.value.finalStatus).toBe('S-HUMAN_REVIEW')
+
+    const runs = await asOwner((c) =>
+      c.query<{ status: string; cost_usd: string | null; cost_basis: string | null }>(
+        `SELECT status, cost_usd, cost_basis FROM run WHERE task_id=$1 AND stage='pm'
+         ORDER BY attempt`,
+        [taskId],
+      ),
+    )
+    expect(runs.rows).toHaveLength(3)
+    for (const r of runs.rows) {
+      expect(r.status).toBe('FAILED')
+      expect(Number(r.cost_usd), '每个失败 run 的成本独立入账').toBeCloseTo(0.3)
+      expect(r.cost_basis).toBe('estimated')
+    }
+
+    const task = await asOwner((c) =>
+      c.query<{ control_mode: string }>('SELECT control_mode FROM task WHERE id=$1', [taskId]),
+    )
+    expect(task.rows[0]?.control_mode, '未超预算不得熔断').toBe('auto')
+    const evs = await eventsOf(taskId)
+    expect(evs.find((e) => e.type === 'BudgetExceeded')).toBeUndefined()
   })
 
   it('unavailable 的成本不参与金额熔断 —— 「不知道」不折算成 0 或任何金额', async () => {

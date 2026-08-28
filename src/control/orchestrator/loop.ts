@@ -20,17 +20,19 @@ import { randomUUID } from 'node:crypto'
 import type { CiGateway } from '../../contracts/ci-gateway.js'
 import { err, type KeelError, makeError, ok, type Result } from '../../contracts/errors.js'
 import type { HarnessAdapter } from '../../contracts/harness-adapter.js'
+import type { Usage } from '../../contracts/types.js'
 import type { HarnessSessionManager } from '../../execution/session/manager.js'
 import { commitArtifactOn } from '../../fact/artifact-store.js'
 import { asRole } from '../../fact/db.js'
 import type { GitWorkspace } from '../../fact/git-workspace.js'
+import { ensureTraceId } from '../../fact/trace.js'
 import type { ControlMode, RoleId, Stage, TaskStatus } from '../../shared/ids.js'
 import { claimDueTimers } from '../../timer/drain.js'
 import { checkBudgetFuse } from '../budget/fuse.js'
 import { claimRunForExecution } from '../concurrency/limits.js'
 import { FactPlaneContextBuilder } from '../context/builder.js'
 import type { WorkflowDriver } from '../driver/driver.js'
-import { runSessionUntilValid } from '../proposal/pipeline.js'
+import { runSessionUntilValid, ZERO_USAGE } from '../proposal/pipeline.js'
 import { expectedArtifact, promptFor, ROLE_INSTRUCTIONS } from './prompts.js'
 
 /**
@@ -231,12 +233,26 @@ export async function runTaskToCompletion(
     const executed = await executeRun(taskId, pending, deps, ctxBuilder)
     if (!executed.ok) {
       const runErr = executed.error
-      // N4:容量类可重试错误(全局 RUNNING 上限等)—— 不流转、不标 FAILED:
-      // claim 拒绝时 run 本就留在 PENDING,重试无意义,停下等名额释放。
-      if (runErr.kind === 'CONFLICT') return err(runErr)
+      // N4:claim 拒绝时 run 仍是 PENDING —— 不流转、不标 FAILED,停下等名额。
+      // post-claim 的 CONFLICT(如 artifact 版本冲突)则 run 已是 RUNNING,
+      // 必须走 R1 离开 RUNNING,否则 Task 卡死且无 PENDING。
+      if (runErr.kind === 'CONFLICT') {
+        const stillPending = await asRole('keel_control', (c) =>
+          c.query<{ status: string }>(`SELECT status FROM run WHERE id=$1`, [pending.id]),
+        )
+        if (stillPending.rows[0]?.status === 'PENDING') return err(runErr)
+      }
       // R1(issue #23):失败是状态流转,不是编排器异常 ——
       // 标 run 状态 + emit 失败事件,交给 T-030(重试)/T-031(升人工)。
-      const next = await failRunAndAdvance(taskId, pending, runErr, deps, state, steps)
+      const next = await failRunAndAdvance(
+        taskId,
+        pending,
+        runErr,
+        executed.usage,
+        deps,
+        state,
+        steps,
+      )
       if (next === 'stopped-cancelled') {
         // 人工撤回(R-010):不重试;下一轮无 PENDING,loop 自然停
         continue
@@ -264,7 +280,7 @@ export async function runTaskToCompletion(
     // 评审完成后 T-009b 回流 brainstorm(n+1),新一轮收敛再走 T-010。
     if (pending.stage === 'brainstorm' && (await brainstormNeedsCritic(taskId))) {
       const capability = await brainstormRequestedCapability(taskId)
-      await synthesizeCapabilityRequest(taskId, pending.id, capability)
+      await synthesizeCapabilityRequest(taskId, pending.id, capability, deps.now())
       const adv = await deps.driver.advance(
         taskId,
         { type: 'CapabilityRequested', capability },
@@ -303,49 +319,41 @@ export async function runTaskToCompletion(
   )
 }
 
+/**
+ * run 执行结果。失败分支带**已累计的 usage** —— R-007 各轮的钱在失败/超时前
+ * 已经花掉，调用方（failRunAndAdvance）必须把它写回 run 行并核算熔断（C1/C-002）。
+ */
+type ExecOutcome =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly error: KeelError; readonly usage: Usage }
+
 /** 跑一个 run：认领（PENDING→RUNNING）→ 造 Context → 真实 session → 校验落库 → 终态 */
 async function executeRun(
   taskId: string,
   pending: { id: string; stage: Stage; role: RoleId; attempt: number },
   deps: OrchestratorDeps,
   ctxBuilder: FactPlaneContextBuilder,
-): Promise<Result<void>> {
+): Promise<ExecOutcome> {
   // ── N3/N4：开始执行前先认领 ──
   //
   // PENDING→RUNNING 乐观锁与全局 RUNNING 上限检查在**同一事务**内
   // （claimRunForExecution）。认领失败返回可重试 CONFLICT 并向上传播 ——
   // 编排器因此停下而不是静默吞掉（docs/08-cross-cutting.md §4.4 N4）。
   const claimed = await asRole('keel_control', (c) => claimRunForExecution(c, pending.id))
-  if (!claimed.ok) return err(claimed.error)
+  if (!claimed.ok) return { ok: false, error: claimed.error, usage: ZERO_USAGE }
 
-  const executed = await executeClaimedRun(taskId, pending, deps, ctxBuilder)
-  if (!executed.ok) {
-    // N3 失败路径：失败也要**离开 RUNNING**。滞留会让部分唯一索引
-    // run_one_running_per_task 卡死该 Task 的后续 Run，
-    // 且「还在跑」与「已失败」在事实层是两个不同的事实。
-    await markRunFailed(pending.id, executed.error)
-  }
-  return executed
+  // 失败时由调用方 failRunAndAdvance 离开 RUNNING(一次写 + R1 流转)。
+  // 不再先 markRunFailed 再覆写 —— 双写之间崩溃会留下「FAILED 却无失败事件」。
+  return executeClaimedRun(taskId, pending, deps, ctxBuilder)
 }
 
-/** 失败的 run 如实落 FAILED —— error_kind/error_detail 是 T-030/T-031 守卫的输入来源 */
-async function markRunFailed(runId: string, error: KeelError): Promise<void> {
-  await asRole('keel_control', (c) =>
-    c.query(
-      `UPDATE run SET status='FAILED', ended_at=now(), error_kind=$2, error_detail=$3
-       WHERE id=$1 AND status='RUNNING'`,
-      [runId, error.kind, error.detail],
-    ),
-  )
-}
-
-/** 认领之后的执行主体。任何 err 返回都会由 executeRun 落成 run.status='FAILED' */
+/** 认领之后的执行主体。失败返回 err 后由 failRunAndAdvance 落终态并流转 */
 async function executeClaimedRun(
   taskId: string,
   pending: { id: string; stage: Stage; role: RoleId; attempt: number },
   deps: OrchestratorDeps,
   ctxBuilder: FactPlaneContextBuilder,
-): Promise<Result<void>> {
+): Promise<ExecOutcome> {
   const ctx = await asRole('keel_control', (c) =>
     ctxBuilder.build(c, {
       task_id: taskId,
@@ -355,12 +363,12 @@ async function executeClaimedRun(
       budget_tokens: 40_000,
     }),
   )
-  if (!ctx.ok) return err(ctx.error)
+  if (!ctx.ok) return { ok: false, error: ctx.error, usage: ZERO_USAGE }
 
   const expect = expectedArtifact(pending.stage)
 
   const place = await resolveWorkspace(taskId, deps.workspace)
-  if (!place.ok) return err(place.error)
+  if (!place.ok) return { ok: false, error: place.error, usage: ZERO_USAGE }
 
   // 方案 B(issue #26):run 级墙钟 timer —— Keel 侧强制收割,不只靠 harness --max-time
   const wallClockS = deps.wallClockS ?? 180 // run 级墙钟上限(R-009,方案 B;测试可注入)
@@ -397,7 +405,7 @@ async function executeClaimedRun(
           pending.stage === 'develop'
             ? { allowed_tools: ['read', 'write'], mode: 'auto' }
             : { allowed_tools: ['read'], mode: 'auto' },
-        limits: { wall_clock_s: 180, budget_usd: null, max_turns: 8 },
+        limits: { wall_clock_s: wallClockS, budget_usd: null, max_turns: 8 },
       },
       adapter: deps.adapter,
       expect,
@@ -411,7 +419,8 @@ async function executeClaimedRun(
       wallClockMs: wallClockS * 1000,
     },
   )
-  if (!outcome.ok) return err(outcome.error)
+  // 失败也把累计 usage 带给调用方 —— 失败/超时的 run 花的钱与成功的一样真实
+  if (!outcome.ok) return { ok: false, error: outcome.error, usage: outcome.usage }
 
   // 谁执行了这个 run 是事实，记在 run 行上（O 可观测 + ADR-0005）——
   // Human L0 e2e 据此断言「L0 路径真的被执行过」，而不是靠桩自己声称。
@@ -457,10 +466,12 @@ async function executeClaimedRun(
       taskId,
       `${pending.stage}: run ${pending.id.slice(0, 8)}`,
     )
-    if (!sha.ok) return err(sha.error)
+    // 此处 run 已 SUCCEEDED、成本已入账 —— usage 给 ZERO 防止二次记账
+    // (failRunAndAdvance 的 UPDATE 也有 status='RUNNING' 守卫,双保险)
+    if (!sha.ok) return { ok: false, error: sha.error, usage: ZERO_USAGE }
   }
 
-  return ok(undefined)
+  return { ok: true }
 }
 
 /**
@@ -582,6 +593,7 @@ async function failRunAndAdvance(
   taskId: string,
   pending: { id: string; stage: Stage },
   runErr: KeelError,
+  usage: Usage,
   deps: OrchestratorDeps,
   state: { status: TaskStatus },
   steps: StepRecord[],
@@ -594,15 +606,30 @@ async function failRunAndAdvance(
         ? 'CANCELLED'
         : 'FAILED'
 
-  await asRole('keel_control', (c) =>
-    c.query(`UPDATE run SET status=$2, ended_at=$3, error_kind=$4, error_detail=$5 WHERE id=$1`, [
-      pending.id,
-      status,
-      deps.now(),
-      runErr.kind,
-      runErr.detail,
-    ]),
-  )
+  // 失败/超时/撤回也要成本入账(C1):R-007 各轮的 usage 已在 pipeline 累计,
+  // 花掉的钱不因 run 失败而消失。三态 cost_basis 原样落库(禁止用 0 冒充
+  // unavailable),熔断检查在**同一事务**内 —— 与成功路径同一纪律。
+  // 否则最烧钱的场景(R-007 回灌 × T-030 重试,每轮都失败)对 C-002 完全失明:
+  // 每次重试都白烧一整个 run 的预算,熔断永远看不到。
+  await asRole('keel_control', async (c) => {
+    await c.query(
+      `UPDATE run SET status=$2, ended_at=$3, error_kind=$4, error_detail=$5,
+              tokens_in=$6, tokens_out=$7, cost_usd=$8, cost_basis=$9
+       WHERE id=$1 AND status='RUNNING'`,
+      [
+        pending.id,
+        status,
+        deps.now(),
+        runErr.kind,
+        runErr.detail,
+        usage.tokens_in,
+        usage.tokens_out,
+        usage.cost_usd,
+        usage.cost_basis,
+      ],
+    )
+    await checkBudgetFuse(c, taskId, deps.now())
+  })
   // run 已终态:墙钟 timer 不再需要(方案 B,防残留误触发)
   await cancelRunWallClockTimer(pending.id)
 
@@ -696,6 +723,7 @@ async function synthesizeCapabilityRequest(
   taskId: string,
   producedByRun: string,
   capability: string,
+  now: string,
 ): Promise<void> {
   await asRole('keel_control', async (c) => {
     const existing = await c.query<{ id: string }>(
@@ -704,10 +732,17 @@ async function synthesizeCapabilityRequest(
     )
     if (existing.rows.length > 0) return // 已合成,幂等
 
+    const traceId = await ensureTraceId(c, taskId, now)
     const ev = await c.query<{ seq: string }>(
-      `INSERT INTO event (task_id, run_id, type, payload)
-       VALUES ($1,$2,'ProposalAccepted',$3::jsonb) RETURNING seq`,
-      [taskId, producedByRun, JSON.stringify({ kind: 'capability_request', key: 'latest' })],
+      `INSERT INTO event (task_id, run_id, type, payload, trace_id, occurred_at)
+       VALUES ($1,$2,'ProposalAccepted',$3::jsonb,$4,$5) RETURNING seq`,
+      [
+        taskId,
+        producedByRun,
+        JSON.stringify({ kind: 'capability_request', key: 'latest' }),
+        traceId,
+        now,
+      ],
     )
     await commitArtifactOn(c, {
       id: randomUUID(),
@@ -762,10 +797,11 @@ async function synthesizeStateFromBrainstorm(
     const details = (outcome.rows[0]?.body?.details ?? {}) as Record<string, unknown>
     const candidates = Array.isArray(details.candidates) ? details.candidates : []
 
+    const traceId = await ensureTraceId(c, taskId, now)
     const ev = await c.query<{ seq: string }>(
-      `INSERT INTO event (task_id, run_id, type, payload)
-       VALUES ($1,$2,'ProposalAccepted',$3::jsonb) RETURNING seq`,
-      [taskId, producedByRun, JSON.stringify({ kind: 'state', key: '' })],
+      `INSERT INTO event (task_id, run_id, type, payload, trace_id, occurred_at)
+       VALUES ($1,$2,'ProposalAccepted',$3::jsonb,$4,$5) RETURNING seq`,
+      [taskId, producedByRun, JSON.stringify({ kind: 'state', key: '' }), traceId, now],
     )
     await commitArtifactOn(c, {
       id: randomUUID(),

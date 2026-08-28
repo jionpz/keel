@@ -13,7 +13,7 @@
 
 import { randomUUID } from 'node:crypto'
 import type { PersistedArtifactKind } from '../../contracts/artifact-store.js'
-import { err, makeError, ok, type Result } from '../../contracts/errors.js'
+import { type KeelError, makeError } from '../../contracts/errors.js'
 import type { PolicyEngine } from '../../contracts/policy-engine.js'
 import type { Usage } from '../../contracts/types.js'
 import type {
@@ -66,8 +66,19 @@ export interface PipelineOutcome {
   readonly usage: Usage
 }
 
+/**
+ * 流水线结果。与 `Result<PipelineOutcome>` 的唯一差别：失败分支**也带累计 usage**。
+ *
+ * R-007 回灌的每一轮都是真实的 Adapter 调用，重试耗尽（R-006）或会话中断时
+ * 钱已经花了 —— 失败时丢弃 usage 会让最烧钱的场景（R-007 重试 × T-030 重跑）
+ * 对成本核算（C1）与预算熔断（C-002）完全失明。
+ */
+export type PipelineResult =
+  | { readonly ok: true; readonly value: PipelineOutcome }
+  | { readonly ok: false; readonly error: KeelError; readonly usage: Usage }
+
 /** 初始累计值：什么都还没上报。null 而非 0 —— 两者在核算里是不同的事实 */
-const ZERO_USAGE: Usage = {
+export const ZERO_USAGE: Usage = {
   tokens_in: null,
   tokens_out: null,
   cost_usd: null,
@@ -117,13 +128,13 @@ export async function runSessionUntilValid(
   spec: SessionSpec,
   prompt: string,
   opts: PipelineOptions = {},
-): Promise<Result<PipelineOutcome>> {
+): Promise<PipelineResult> {
   const maxRetries = opts.maxProposalRetries ?? 3
   const rejections: string[][] = []
   let usage: Usage = ZERO_USAGE
 
   const opened = await sessions.open(spec)
-  if (!opened.ok) return err(opened.error)
+  if (!opened.ok) return { ok: false, error: opened.error, usage }
   const handle: SessionHandle = opened.value
 
   // 方案 B(issue #26):墙钟 watchdog —— 会话总时长上限,到期 interrupt('timeout')。
@@ -144,7 +155,9 @@ export async function runSessionUntilValid(
         text: prompt,
         ...(feedback.length > 0 ? { rejected_violations: feedback } : {}),
       })
-      if (!turn.ok) return err(turn.error)
+      // 超时/取消/失败的轮次也要把**之前各轮**的累计带出去 ——
+      // 出错的这一轮 Adapter 是否上报 usage 由它自己决定(OMP 中断时报 unavailable)
+      if (!turn.ok) return { ok: false, error: turn.error, usage }
       usage = addUsage(usage, turn.value.usage)
 
       // 提取失败也走回灌 —— 它和 schema 不合格是同一类问题：
@@ -172,7 +185,7 @@ export async function runSessionUntilValid(
         if (!verdict.accepted) return { ok: false as const, verdict }
 
         // 校验通过 → 落库。写 event 拿 seq，再提交 artifact（同事务）
-        const traceId = await ensureTraceId(c, proposal.task_id)
+        const traceId = await ensureTraceId(c, proposal.task_id, requireNow(opts))
         const ev = await c.query<{ seq: string }>(
           `INSERT INTO event (task_id, run_id, type, payload, trace_id, occurred_at)
            VALUES ($1,$2,'ProposalAccepted',$3::jsonb,$4,$5) RETURNING seq`,
@@ -199,13 +212,16 @@ export async function runSessionUntilValid(
       })
 
       if (committed.ok) {
-        return ok({
-          committed: true,
-          artifactRef: committed.id,
-          attempts: attempt,
-          rejections,
-          usage,
-        })
+        return {
+          ok: true,
+          value: {
+            committed: true,
+            artifactRef: committed.id,
+            attempts: attempt,
+            rejections,
+            usage,
+          },
+        }
       }
 
       // R-007：把具体的拒绝理由回灌，让它改
@@ -213,7 +229,7 @@ export async function runSessionUntilValid(
       rejections.push(feedback)
 
       await asRole('keel_control', async (c) => {
-        const traceId = await ensureTraceId(c, proposal.task_id)
+        const traceId = await ensureTraceId(c, proposal.task_id, requireNow(opts))
         await c.query(
           `INSERT INTO event (task_id, run_id, type, payload, trace_id, occurred_at)
            VALUES ($1,$2,'ProposalRejected',$3::jsonb,$4,$5)`,
@@ -228,13 +244,15 @@ export async function runSessionUntilValid(
       })
     }
 
-    // R-006：连续失败到上限，判 Run 失败
-    return err(
-      makeError(
+    // R-006：连续失败到上限，判 Run 失败 —— 各轮累计的 usage 一并带出
+    return {
+      ok: false,
+      error: makeError(
         'SCHEMA_VIOLATION',
         `连续 ${maxRetries} 次提案均未通过校验：${rejections.at(-1)?.join('；') ?? ''}`,
       ),
-    )
+      usage,
+    }
   } finally {
     clearTimeout(watchdog)
     await sessions.close(handle)

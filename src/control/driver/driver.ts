@@ -111,11 +111,15 @@ export class WorkflowDriver {
       )
       const linked = existing.rows[0]
       if (linked !== undefined) {
+        // O2：幂等跳过也写同一条 trace —— 否则 ingress 重放段永久无 trace
+        const traceId = await ensureTraceId(c, linked.task_id, now)
         await c.query(
-          `INSERT INTO event (task_id, type, payload, occurred_at) VALUES ($1,'SideEffectSkipped',$2::jsonb,$3)`,
+          `INSERT INTO event (task_id, type, payload, trace_id, occurred_at)
+           VALUES ($1,'SideEffectSkipped',$2::jsonb,$3,$4)`,
           [
             linked.task_id,
             JSON.stringify({ kind: 'CreateTask', dedupe_key: input.feedbackId }),
+            traceId,
             now,
           ],
         )
@@ -148,8 +152,13 @@ export class WorkflowDriver {
         { kind: 'LinkFeedback', outcome: 'applied', detail: input.feedbackId },
       ]
 
+      // O2：T-001 即是 trace 起点。ensureTraceId 会落一条 TaskCreated 宿主事件，
+      // 其后本事务内所有事件共享同一 trace_id（与 advance/effects/pipeline 同纪律）。
+      const traceId = await ensureTraceId(c, taskId, now)
+
       await c.query(
-        `INSERT INTO event (task_id, type, payload, occurred_at) VALUES ($1,'SideEffectApplied',$2::jsonb,$3)`,
+        `INSERT INTO event (task_id, type, payload, trace_id, occurred_at)
+         VALUES ($1,'SideEffectApplied',$2::jsonb,$3,$4)`,
         [
           taskId,
           JSON.stringify({
@@ -158,11 +167,13 @@ export class WorkflowDriver {
             task_id: taskId,
             work_branch: workBranch,
           }),
+          traceId,
           now,
         ],
       )
       await c.query(
-        `INSERT INTO event (task_id, type, payload, occurred_at) VALUES ($1,'SideEffectApplied',$2::jsonb,$3)`,
+        `INSERT INTO event (task_id, type, payload, trace_id, occurred_at)
+         VALUES ($1,'SideEffectApplied',$2::jsonb,$3,$4)`,
         [
           taskId,
           JSON.stringify({
@@ -170,11 +181,13 @@ export class WorkflowDriver {
             dedupe_key: input.feedbackId,
             feedback_id: input.feedbackId,
           }),
+          traceId,
           now,
         ],
       )
       await c.query(
-        `INSERT INTO event (task_id, type, payload, occurred_at) VALUES ($1,'TaskStatusChanged',$2::jsonb,$3)`,
+        `INSERT INTO event (task_id, type, payload, trace_id, occurred_at)
+         VALUES ($1,'TaskStatusChanged',$2::jsonb,$3,$4)`,
         [
           taskId,
           JSON.stringify({
@@ -183,6 +196,7 @@ export class WorkflowDriver {
             transition: 'T-001',
             event: 'FeedbackTriaged',
           }),
+          traceId,
           now,
         ],
       )
@@ -228,10 +242,10 @@ export class WorkflowDriver {
       // 暂停中、终态、guard 未过 —— 三者都是正常的业务状态。
       // 但仍要如实记录，否则事件流会缺失「系统看到了这个事件但没动」这个事实。
       if (!result.matched) {
-        const traceId = await ensureTraceId(c, taskId)
+        const traceId = await ensureTraceId(c, taskId, now)
         await c.query(
-          `INSERT INTO event (task_id, type, payload, trace_id)
-           VALUES ($1,'NoTransition',$2::jsonb,$3)`,
+          `INSERT INTO event (task_id, type, payload, trace_id, occurred_at)
+           VALUES ($1,'NoTransition',$2::jsonb,$3,$4)`,
           [
             taskId,
             JSON.stringify({
@@ -242,6 +256,7 @@ export class WorkflowDriver {
               detail: result.detail,
             }),
             traceId,
+            now,
           ],
         )
         return ok<AdvanceOutcome>({
@@ -271,10 +286,10 @@ export class WorkflowDriver {
       if (upd.rowCount === 0) {
         // 败者阻塞在行锁上、直到胜者提交才走到这里 ——
         // 此时 ensureTraceId 必然读到胜者已固定的 trace_id，不会分裂出第二条 trace
-        const traceId = await ensureTraceId(c, taskId)
+        const traceId = await ensureTraceId(c, taskId, now)
         await c.query(
-          `INSERT INTO event (task_id, type, payload, trace_id)
-           VALUES ($1,'NoTransition',$2::jsonb,$3)`,
+          `INSERT INTO event (task_id, type, payload, trace_id, occurred_at)
+           VALUES ($1,'NoTransition',$2::jsonb,$3,$4)`,
           [
             taskId,
             JSON.stringify({
@@ -284,6 +299,7 @@ export class WorkflowDriver {
               detail: `期望 status=${result.from}，但已被并发写者改变`,
             }),
             traceId,
+            now,
           ],
         )
         return err<AdvanceOutcome>(
@@ -293,7 +309,7 @@ export class WorkflowDriver {
 
       // O2：trace_id 贯穿。放在赢得行锁**之后** ensure ——
       // 并发的首次派发因此被序列化，不会生成两个 trace_id（见 src/fact/trace.ts）
-      const traceId = await ensureTraceId(c, taskId)
+      const traceId = await ensureTraceId(c, taskId, now)
 
       const effects = await applyEffects(
         c,
@@ -313,8 +329,8 @@ export class WorkflowDriver {
       // 放在最后，让它记录最终的 to 状态。
       // payload 含 transition ID —— 使事件流可直接对照转移表核验
       await c.query(
-        `INSERT INTO event (task_id, type, payload, trace_id)
-         VALUES ($1,'TaskStatusChanged',$2::jsonb,$3)`,
+        `INSERT INTO event (task_id, type, payload, trace_id, occurred_at)
+         VALUES ($1,'TaskStatusChanged',$2::jsonb,$3,$4)`,
         [
           taskId,
           JSON.stringify({
@@ -324,6 +340,7 @@ export class WorkflowDriver {
             event: event.type,
           }),
           traceId,
+          now,
         ],
       )
 
