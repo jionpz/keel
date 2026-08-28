@@ -211,7 +211,7 @@ v0.1 可用命令行入口:收割/驱动任务/状态查询。
 [OK] **Completed** —— 待 human merge(收尾代理不合并)
 
 
-## Session 2: finish-work: merge-crosscut-fixes 归档收尾(PR #35)
+## Session 3: finish-work: merge-crosscut-fixes 归档收尾(PR #35)
 
 **Date**: 2026-08-28
 **Task**: finish-work: merge-crosscut-fixes 归档收尾(PR #35)
