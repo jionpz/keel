@@ -33,6 +33,7 @@ import { claimRunForExecution } from '../concurrency/limits.js'
 import { FactPlaneContextBuilder } from '../context/builder.js'
 import type { WorkflowDriver } from '../driver/driver.js'
 import { runSessionUntilValid, ZERO_USAGE } from '../proposal/pipeline.js'
+import { loadDeclaredPolicyFacts } from '../proposal/validate.js'
 import { expectedArtifact, promptFor, ROLE_INSTRUCTIONS } from './prompts.js'
 
 /**
@@ -367,6 +368,13 @@ async function executeClaimedRun(
 
   const expect = expectedArtifact(pending.stage)
 
+  // rfc_draft 才需要:把反馈里显式声明的约束读出来,写进提示词。
+  // 只有这一阶段产 rfc,也只有 rfc 会被 4b 核对(validate.ts 第 4b 步)。
+  const declared =
+    pending.stage === 'rfc_draft'
+      ? await asRole('keel_control', (c) => loadDeclaredPolicyFacts(c, taskId))
+      : {}
+
   const place = await resolveWorkspace(taskId, deps.workspace)
   if (!place.ok) return { ok: false, error: place.error, usage: ZERO_USAGE }
 
@@ -410,7 +418,7 @@ async function executeClaimedRun(
       adapter: deps.adapter,
       expect,
     },
-    promptFor(pending.stage, pending.id),
+    promptFor(pending.stage, pending.id, declared),
     {
       // #1-02:capability_request 等需要授权的 Proposal 由同一 Policy 实例裁决
       policy: deps.driver.policyEngine,

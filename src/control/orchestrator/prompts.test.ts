@@ -115,3 +115,49 @@ describe('promptFor · rfc_draft 服从反馈显式声明的约束(AC5)', () => 
     expect(prompt).toContain('note')
   })
 })
+
+/**
+ * 把 4b 要核对的值直接写进提示词(2026-08-28)。
+ *
+ * 只写「原样采用」时,模型要自己从正文认出约束;4b 却按字面值核对。
+ * 第一轮被拒是可预料的,而 R-007 各轮共用一个 session 墙钟 ——
+ * 一轮白烧就可能把 rfc_draft 推进超时(第三次真实运行的形态)。
+ */
+describe('promptFor · 显式声明直接进提示词', () => {
+  const declared = {
+    risk: 'low',
+    complexity: 'low',
+    estimated_files_changed: 1,
+    security_related: false,
+  } as const
+
+  it('逐项给出 4b 将要核对的字面值', () => {
+    const prompt = promptFor('rfc_draft', 'run-r3', declared)
+    expect(prompt).toContain('"risk": "low"')
+    expect(prompt).toContain('"complexity": "low"')
+    expect(prompt).toContain('"estimated_files_changed": 1')
+    expect(prompt).toContain('"security_related": false')
+  })
+
+  it('说明不符会被退回,以及超范围内容该写去哪 —— 否则模型只会抬高取值', () => {
+    const prompt = promptFor('rfc_draft', 'run-r3', declared)
+    expect(prompt).toContain('机械核对')
+    expect(prompt).toContain('non_goals')
+  })
+
+  it('只声明一部分时不替未声明的字段填值', () => {
+    const prompt = promptFor('rfc_draft', 'run-r4', { risk: 'low' })
+    expect(prompt).toContain('"risk": "low"')
+    expect(prompt).not.toContain('"complexity": "low"')
+    expect(prompt).not.toContain('"security_related": false')
+  })
+
+  it('无声明时与既有提示词逐字一致 —— 未声明即不干预模型自评估', () => {
+    expect(promptFor('rfc_draft', 'run-r5', {})).toBe(promptFor('rfc_draft', 'run-r5'))
+  })
+
+  it('只对 rfc_draft 生效:别的阶段不产 rfc,也就无从核对', () => {
+    expect(promptFor('develop', 'run-r6', declared)).toBe(promptFor('develop', 'run-r6'))
+    expect(promptFor('qa', 'run-r6', declared)).toBe(promptFor('qa', 'run-r6'))
+  })
+})
