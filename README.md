@@ -69,7 +69,7 @@ Fact 与 Execution 之间只有两条单向通道：`Context` 下行、`Proposal
 还有 Harness 实现者与人工操作者。
 
 Workflow engine 推荐 v0.1 自研最小状态机（[`ADR-0003`](./docs/adr/0003-workflow-engine.md)，
-Proposed，待查证）。
+Accepted —— 2026-08-26 查证：硬约束已自动化强制，迁移路径确证）。
 
 ## 开发
 

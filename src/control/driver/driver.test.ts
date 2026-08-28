@@ -176,6 +176,14 @@ describe('intake · T-001 真实化', () => {
     expect(statusChange).toBeDefined()
     if (statusChange === undefined) return
     expect((statusChange.payload as { transition: string }).transition).toBe('T-001')
+
+    // O2：intake 段所有事件共享非 null trace_id（含 ensureTraceId 宿主 TaskCreated）
+    const traces = [...new Set(evs.value.map((e) => e.trace_id))]
+    expect(traces.length, '全部事件应共享同一个 trace_id').toBe(1)
+    expect(traces[0]).toBeTruthy()
+    // pg timestamptz → toISOString 会补毫秒；与注入 now 语义相等即可
+    const norm = (s: string) => new Date(s).toISOString()
+    expect(evs.value.every((e) => norm(e.occurred_at) === norm(NOW))).toBe(true)
   })
 
   it('重复 intake 同一 feedback 返回既有 taskId', async () => {

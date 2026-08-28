@@ -1,0 +1,4 @@
+{"file": "docs/08-cross-cutting.md", "reason": "O2(trace_id 贯穿, L162) / C1(run 记录 tokens·cost·cost_basis, L227) / C3(超预算触发 C-002 不静默继续, L229) —— 三批修复的要求来源"}
+{"file": "src/control/orchestrator/loop.ts", "reason": "R1+R2 主落点:failRunAndAdvance 单点离开 RUNNING、写回三态成本、同事务 checkBudgetFuse;wall_clock_s 跟随 deps.wallClockS"}
+{"file": "src/control/budget/fuse.ts", "reason": "R1 事件写入点(trace_id + occurred_at)与 C-002 熔断实现,R2 在失败事务内复用"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量门槛只有 pnpm run check、禁止放宽断言换稳定、禁止条件不满足时 skip —— 约束本任务不得用 0 冒充 unavailable 成本"}
