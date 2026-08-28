@@ -6,7 +6,11 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { parseDeclaredPolicyFacts, policyFactsConflicts } from './feedback-constraints.js'
+import {
+  declaredFactsDirective,
+  parseDeclaredPolicyFacts,
+  policyFactsConflicts,
+} from './feedback-constraints.js'
 
 /** 与 src/acceptance/issue-e2e.acceptance.test.ts 的 ISSUE_BODY 同构 */
 const ACCEPTANCE_BODY = [
@@ -95,5 +99,27 @@ describe('policyFactsConflicts', () => {
   it('body 缺 policy_facts(schema 已在第 1 步拦下)→ 空操作,不抛错', () => {
     expect(policyFactsConflicts(declared, { title: 't' })).toEqual([])
     expect(policyFactsConflicts(declared, null)).toEqual([])
+  })
+})
+
+describe('declaredFactsDirective', () => {
+  const declared = parseDeclaredPolicyFacts(ACCEPTANCE_BODY)
+
+  it('渲染出的字面值与 policyFactsConflicts 认可的取值一致', () => {
+    const text = declaredFactsDirective(declared) ?? ''
+    // 指令里出现的每个键值,原样填进 RFC 后都必须过 4b —— 否则提示词在骗模型
+    const body = { policy_facts: { ...declared } }
+    expect(policyFactsConflicts(declared, body)).toEqual([])
+    for (const [k, v] of Object.entries(declared)) {
+      expect(text, `应含 ${k}`).toContain(`"${k}": ${JSON.stringify(v)}`)
+    }
+  })
+
+  it('无声明 → null,调用方据此不追加任何内容', () => {
+    expect(declaredFactsDirective({})).toBeNull()
+  })
+
+  it('给出越界内容的去处,而不是只说「不许超」', () => {
+    expect(declaredFactsDirective(declared)).toContain('non_goals')
   })
 })

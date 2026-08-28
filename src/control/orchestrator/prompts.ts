@@ -7,6 +7,10 @@
 
 import type { ProposalKind } from '../../contracts/types.js'
 import type { Stage } from '../../shared/ids.js'
+import {
+  type DeclaredPolicyFacts,
+  declaredFactsDirective,
+} from '../proposal/feedback-constraints.js'
 
 /** 各 Role 的固定指令（ContextBuilder 的 `fixed` 来源） */
 export const ROLE_INSTRUCTIONS: Readonly<Record<string, string>> = {
@@ -29,8 +33,12 @@ export function expectedArtifact(stage: Stage): { kind: ProposalKind; key: strin
  *
  * 每个都明确给出**期望的 JSON 形状** —— 模型猜形状的成功率远低于照抄。
  * `run_id` 由调用方填入，因为 schema 要求它。
+ *
+ * `declared` 是反馈里显式声明的 policy 约束(rfc_draft 才用):给了就把具体取值
+ * 写进提示词,而不是让模型自己去正文里认 —— 见 declaredFactsDirective。
+ * 缺省 `{}` 保持既有行为不变。
  */
-export function promptFor(stage: Stage, runId: string): string {
+export function promptFor(stage: Stage, runId: string, declared: DeclaredPolicyFacts = {}): string {
   const outcome = (verdicts: string, extra = ''): string =>
     [
       '',
@@ -63,7 +71,10 @@ export function promptFor(stage: Stage, runId: string): string {
           '系统会派发 Critic 评审后再让你收敛。',
       ].join('\n')
 
-    case 'rfc_draft':
+    case 'rfc_draft': {
+      // 有显式声明时把具体取值摆在最后一行 —— 位置本身是语义:
+      // 它是模型读到的最后一条指令,也是 4b 唯一会机械核对的那几个值。
+      const directive = declaredFactsDirective(declared)
       return [
         '把**用户反馈**写成 RFC。只输出一个 JSON 对象（用 ```json 围栏），形如：',
         '```json',
@@ -88,7 +99,9 @@ export function promptFor(stage: Stage, runId: string): string {
           'proposed_change 必须落在该范围内,超出范围的内容写进 non_goals。',
         '2. 反馈**未给出**约束 —— 才由你按 RFC 的真实内容评估并如实填写:' +
           '既不要为了保险而抬高,也不要为了放行而压低。',
+        ...(directive === null ? [] : [directive]),
       ].join('\n')
+    }
 
     case 'develop':
       return [
