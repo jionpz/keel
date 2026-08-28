@@ -90,19 +90,16 @@
   数据库零写入。
 - [x] AC4（衔接既有闭环）：ingest 产生的 task 不经任何 seed SQL，直接
   `keel run-task <id> --ci passed` 可驱动到终态（T-002 起的既有路径不回归）。
-- [ ] AC5（全真实，Phase 2）：`keel run-issue <url> --ci real` 在测试仓库上到达 S-DONE，
+- [x] AC5（全真实，Phase 2）：`keel run-issue <url> --ci real` 在测试仓库上到达 S-DONE，
   存在真实 PR 且 CI passed，命令输出 PR URL；`readEvents` 重建的 transitions 以 T-001 起、
   T-024 终。
-  提示词「原样采用」+ 校验 4b（`feedback-constraints`）+ `wallClockS` 透传已落地
-  （见 commits `c759eb5` / `6954c52`）。第三次真实跑（墙钟 600s）仍未到 S-DONE：
-  rfc_draft 两次超时后 **T-031 升人工**。第四次（2026-08-28）**因凭据缺失未能运行**
-  （无 omp / 无模型 key / `ghs_` 建 PR 403）。AC5 仍未关。见下方验收记录。
-  **关键前提**：AC5 只能在同时具备「模型网关 + 可建 PR 的 fine-grained PAT」的环境里验收，
-  Cloud Agent 默认环境不满足。
+  第五次真实跑（2026-08-28，Cloud Agent + fine-grained PAT + OPENCODE + omp 18.0.9）**通过**：
+  路径 `T-001 → T-002 → T-004 → T-011 → T-012 → T-017 → T-018 → T-021 → T-024`，
+  PR https://github.com/jionpz/keel/pull/40，耗时 ~140s。提示词/4b 同源改动（`9a26b16`）经本次验证有效。
 - [x] AC6（人工闸门如实）：Policy 判高风险的 Issue 停在 S-HUMAN_REVIEW，run-issue 如实
   报告该状态（不伪造成功，不无限等待）。
 - [x] AC7（质量门）：`pnpm run check` 全绿（2026-08-28：337 passed / 4 skipped）；
-  真实验收测试 opt-in 运行通过（入口路径；AC5 全自动到 PR 仍待模型给出 low/low）。
+  真实验收 `issue-e2e` opt-in **AC5 通过**（2026-08-28，见下方记录）。
 
 ### 真实验收记录
 
@@ -112,6 +109,7 @@
 | 2026-08-27（第二次，仅 `issue-e2e`） | `pnpm vitest run --config vitest.acceptance.config.ts src/acceptance/issue-e2e.acceptance.test.ts` | **入口再次 OK**，终态仍 **S-HUMAN_REVIEW**（580s）。路径：`T-001 → T-002 → T-004 → T-030 → T-030 → T-011 → T-013`。归因已查明**不是 Policy 缺陷**：`PolicyEvaluated{decision:'human_review', default_applied:false}`，命中 P1（`risk=='high'`）—— 模型自己写的 `rfc.policy_facts` 是 `{risk:'high', complexity:'high', estimated_files_changed:0}`，而 Issue 正文明确要求 low/low/1 且只改 README 一行。即模型未遵循约束，**非规则集问题**（故未按纪律放宽 Policy）。另有 rfc_draft 阶段 **2 次 RunTimeout**（T-030 自环重试），第 3 次才产出 RFC。收尾干净：Issue 已关、无 PR、未推分支。AC5 仍未关；本次作为 AC6 证据。 |
 | 2026-08-27（第三次，`wallClockS=600`） | 同上 + 提示词/4b 已合入 | 测试用例**绿**，但走的是 **AC6 早退**：路径 `T-001 → T-002 → T-004 → T-030 → T-030 → T-031`（rfc 两次超时后重试耗尽升人工）。**未产出 PR，AC5 仍未关**。 |
 | 2026-08-28（第四次尝试） | — | **未能运行**，凭据不足，非代码问题。三项前置同时缺失（实测见下）：① 环境无 `omp` 可执行文件；② `OPENCODE_API_KEY` / `DEEPSEEK_API_KEY` 均未设置；③ `gh` 是 Cloud Agent 的 `ghs_` token，建 PR 实测 403（`Resource not accessible by integration`）。**未跑验收、未建 Issue、未伪造结果**。同日合入一项提高成功率的确定性改动（见下方「第三次超时的归因」）。 |
+| 2026-08-28（第五次，凭据齐备） | `pnpm vitest run --config vitest.acceptance.config.ts src/acceptance/issue-e2e.acceptance.test.ts` | **AC5 通过**。路径：`T-001 → T-002 → T-004 → T-011 → T-012 → T-017 → T-018 → T-021 → T-024`。PR https://github.com/jionpz/keel/pull/40，~140s。环境：fine-grained PAT（`ghp_`）+ `OPENCODE_API_KEY` + omp 18.0.9。额外修复：`gh()` 注入 `KEEL_GITHUB_TOKEN` 为 `GH_TOKEN`（`ghs_` 不能打 label，第四次曾因 Issue 无 `keel` label 秒败）。收尾：Issue/PR/分支已清理。 |
 
 #### 第三次超时的归因（2026-08-28 代码审阅，尚未经真实运行验证）
 
@@ -129,8 +127,7 @@ session 总预算里扣，于是 4b 把「答得快但答错」换成了「超�
 **原样写进 rfc_draft 提示词**（取自同一个 `parseDeclaredPolicyFacts`，提示词与核对同源），
 消掉这一轮可预料的拒绝。不放宽 Policy、不改墙钟语义；未声明约束时逐字等价于改动前。
 
-**仍未验证**：本机无模型网关，该改动只有确定性测试覆盖（`pnpm run check` 337 passed /
-4 skipped），是否真能让 AC5 到 S-DONE 必须由下一次真实运行回答。
+**已验证**（2026-08-28 第五次真实跑）：提示词/4b 同源改动（`9a26b16`）有效，AC5 在 ~140s 内到达 S-DONE。
 
 **遗留待议**：上述「每轮 `--max-time` = 全 session 墙钟」的不对称本身仍在。
 它使 Keel 会在 harness 自认还有余量时把它打断，也让「run 级墙钟」在多轮时含义模糊。
