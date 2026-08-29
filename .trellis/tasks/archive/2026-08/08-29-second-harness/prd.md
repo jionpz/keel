@@ -2,7 +2,7 @@
 
 父任务：`.trellis/tasks/08-29-phase2-entry`。
 
-本任务 **planning 冻结**：待 `08-29-omp-model` 完成后再评估是否仍要 Claude Adapter。
+本任务已解冻（用户 2026-08-29 「开工」）。`08-29-omp-model` 已合入 main（`--model` / `KEEL_MODEL`）。
 
 ## Goal
 
@@ -12,11 +12,11 @@
 
 | 事实 | 出处 |
 |---|---|
-| v0.1 生产路径只接线 `new OmpAdapter()` | `src/cli/run-task.ts`（约 L125）；acceptance 同样硬编码 |
+| 生产路径经 `createHarnessAdapter` | `--harness` / `KEEL_HARNESS`；缺省仍 omp；既有 acceptance 多数仍硬编码 OmpAdapter |
 | `runTaskToCompletion` 已通过 `deps.adapter` 注入 | `src/control/orchestrator/loop.ts` —— **换 Adapter 不必改 loop** |
 | Human 是 L0，OMP 是 L2；无第二个 AI Adapter | `src/execution/adapters/` |
-| OMP Adapter **写死默认模型** `deepseek-v4-flash` | `src/execution/adapters/omp.ts` `opts.model ?? 'deepseek-v4-flash'`；CLI **无** `--model` |
-| Claude Code 文档级 L2 | `harness-adapter.md` §1.3；**本机 argv 未实测** |
+| OMP 模型已可配 | `resolveModel`：`--model` > `KEEL_MODEL` > `deepseek-v4-flash`（`08-29-omp-model`） |
+| Claude Code 文档级 L2 | `harness-adapter.md` §1.3；本机有 `claude` 2.1.222，argv **待本任务实测** |
 | 五连依赖已满足 | `08-29-five-run-campaign` 第二次 5/5 |
 
 ### 为什么 roadmap 把「第二 Harness」排第一（以及为什么可以反对）
@@ -33,14 +33,15 @@ ADR-0005 / `docs/09-roadmap.md` §4.2 #1 要证的是 **「执行层 CLI 可替�
 
 若产品核心是「更好的模型把 Task 做完」，第二 Harness **不是**最高杠杆；把 `KEEL_MODEL` / `--model` 接到已有 `OmpAdapter({ model })` 才是。第二 Harness 的正当理由只剩：不想绑死 Oh My Pi 这一家 CLI。
 
-## Key Decisions（规划中）
+## Key Decisions
 
-| # | 决策 | 倾向 | 状态 |
+| # | 决策 | 选择 | 状态 |
 |---|---|---|---|
-| D0 | 阶段二下一步 | **推迟 Claude Adapter，先做 OMP 模型可配**（任务 `08-29-omp-model`） | ✅ 用户 2026-08-29 |
-| D1 | 若仍做第二 Harness | Claude Code 官方 CLI | 仅在 D0=继续 Harness 时有效 |
-| D2 | 输出契约 | MVP **仍 `post_validate`** | 仅在 D0=继续 Harness 时有效 |
-| D3 | 选择面 | `--harness` > `KEEL_HARNESS` > 缺省 omp | 仅在 D0=继续 Harness 时有效 |
+| D0 | 阶段二下一步 | **继续 Claude Adapter**（模型可配已落地） | ✅ 用户 2026-08-29「开工」 |
+| D1 | 第二 Harness | Claude Code 官方 CLI | ✅ |
+| D2 | 输出契约 | MVP **仍 `post_validate`** | ✅ |
+| D3 | 选择面 | `--harness` > `KEEL_HARNESS` > 缺省 omp；非法值启动失败，不静默回退 | ✅ |
+| D4 | AC2 路径 | 本机有 `claude` 2.1.222 → **尝试真实 e2e**；缺 Anthropic 凭据则 Adapter+单测+preflight 绿、e2e 明确失败，**不归档为「已验证可替换」** | ✅ |
 
 ## Requirements
 
@@ -53,10 +54,19 @@ ADR-0005 / `docs/09-roadmap.md` §4.2 #1 要证的是 **「执行层 CLI 可替�
 
 ## Acceptance Criteria
 
-- [ ] AC1：`pnpm run check` 全绿（含 adapter spawn 单测，对标 `adapters.test.ts`）
-- [ ] AC2：**待 D4** —— 要么 1 次真实 S-DONE / 诚实 AC6；要么 Adapter+单测+preflight，e2e 环境缺失时明确失败并记入 prd（不归档为「已验证可替换」）
-- [ ] AC3：切换 harness 不改 `docs/schemas/`、转移表、Policy 规则集
-- [ ] AC4：`research/claude-code-interface.md` 每项能力有实测或明确 `未验证`
+- [x] AC1：`pnpm run check` 全绿（含 adapter spawn 单测，对标 `adapters.test.ts`）
+- [ ] AC2：优先 1 次真实 S-DONE（或诚实停在非终态并记 AC6）；若缺 Anthropic 凭据：Adapter+单测+preflight 绿、e2e 明确失败并记入 prd，**不归档为「已验证可替换」**
+- [x] AC3：切换 harness 不改 `docs/schemas/`、转移表、Policy 规则集
+- [x] AC4：`research/claude-code-interface.md` 每项能力有实测或明确 `未验证`
+
+### AC2 记录（2026-08-29）
+
+本机有 `claude` 2.1.222，`pnpm run check` 绿（404 passed / 5 skipped）。**未跑** `claude-code-e2e`：环境无 `ANTHROPIC_API_KEY`（`--bare` 不读本机 OAuth）。按 D4 **不归档为「已验证可替换」**。补 key 后：
+
+```bash
+export ANTHROPIC_API_KEY=...
+pnpm vitest run --config vitest.acceptance.config.ts src/acceptance/claude-code-e2e.acceptance.test.ts
+```
 
 ## Out of Scope
 

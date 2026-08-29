@@ -26,6 +26,8 @@ const REMOTE = 'https://github.com/acme/widget.git'
 const ENV_KEYS = ['KEEL_GITHUB_TOKEN', 'GITHUB_TOKEN'] as const
 const saved = new Map<string, string | undefined>(ENV_KEYS.map((k) => [k, process.env[k]]))
 const savedModel = process.env.KEEL_MODEL
+const savedHarness = process.env.KEEL_HARNESS
+const savedAnthropic = process.env.ANTHROPIC_API_KEY
 
 let server: Server
 let baseUrl: string
@@ -33,6 +35,8 @@ let baseUrl: string
 beforeEach(async () => {
   for (const k of ENV_KEYS) delete process.env[k]
   delete process.env.KEEL_MODEL
+  delete process.env.KEEL_HARNESS
+  delete process.env.ANTHROPIC_API_KEY
 
   await asOwner((c) =>
     c.query(
@@ -73,6 +77,16 @@ afterAll(async () => {
     delete process.env.KEEL_MODEL
   } else {
     process.env.KEEL_MODEL = savedModel
+  }
+  if (savedHarness === undefined) {
+    delete process.env.KEEL_HARNESS
+  } else {
+    process.env.KEEL_HARNESS = savedHarness
+  }
+  if (savedAnthropic === undefined) {
+    delete process.env.ANTHROPIC_API_KEY
+  } else {
+    process.env.ANTHROPIC_API_KEY = savedAnthropic
   }
   await closePool()
 })
@@ -158,6 +172,41 @@ describe('run-issue 组合命令', () => {
     if (r.ok) return
     expect(r.error.kind).toBe('CAPABILITY_UNSUPPORTED')
     expect(r.error.detail).toMatch(/空白/)
+    expect(await countRows('feedback')).toBe(0)
+    expect(await countRows('task')).toBe(0)
+  })
+
+  it('非法 harness 先于 ingest 失败(零写入、不回退 omp)', async () => {
+    await registerRepoMain([REMOTE])
+
+    const r = await runIssue({
+      issueUrl: ISSUE_URL,
+      ci: 'passed',
+      harness: 'codex',
+      github: github(),
+      now: NOW,
+    })
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('CAPABILITY_UNSUPPORTED')
+    expect(await countRows('feedback')).toBe(0)
+    expect(await countRows('task')).toBe(0)
+  })
+
+  it('harness=claude 缺 ANTHROPIC_API_KEY 先于 ingest 失败(AUTH_FAILED 且零写入)', async () => {
+    await registerRepoMain([REMOTE])
+
+    const r = await runIssue({
+      issueUrl: ISSUE_URL,
+      ci: 'passed',
+      harness: 'claude',
+      github: github(),
+      now: NOW,
+    })
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('AUTH_FAILED')
+    expect(r.error.detail).toMatch(/--bare/)
     expect(await countRows('feedback')).toBe(0)
     expect(await countRows('task')).toBe(0)
   })

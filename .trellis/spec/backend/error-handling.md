@@ -121,6 +121,10 @@ if (files.length === 0) {
 立刻返回 `AUTH_FAILED`，**不得**先 ingest / 克隆 / 跑模型。否则会留下
 「已建 task 却永远建不了 PR」的半成品，且浪费 token。
 
+`--harness claude` 同理：缺 `ANTHROPIC_API_KEY`（`AUTH_FAILED`；`--bare` 不读 OAuth）
+或缺 `claude` 二进制（`HARNESS_UNAVAILABLE`）时立刻失败，**不得**先 ingest。
+缺二进制若拖到 spawn，错误可重试，会一路 T-030 落到 T-031，与 Policy 闸门同终态。
+
 `run-issue` 组合命令若 ingest 成功、驱动失败：错误 detail 必须带上已 ingest 的
 `taskId`（可继续 `keel status`），不能只丢 `run` 侧错误。
 

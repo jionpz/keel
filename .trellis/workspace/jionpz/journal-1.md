@@ -249,3 +249,39 @@ v0.1 可用命令行入口:收割/驱动任务/状态查询。
 
 - R4 契约级遗留：ContextBuilt / artifact-store.commit 的 occurred_at 需扩事件契约，独立任务
 - ensureTraceId 省略 occurredAt 的回落分支待全部调用点改注入时钟后清零
+
+
+## Session 4: Claude Code 第二 Harness：接入并收尾
+
+**Date**: 2026-08-29
+**Task**: Claude Code 第二 Harness：接入并收尾
+**Branch**: `feat/second-harness`
+
+### Summary
+
+实现 ClaudeCodeAdapter，经 --harness / KEEL_HARNESS 切换（缺省仍 omp）。untrusted 强制 --bare。pnpm run check 全绿。未跑 claude-code-e2e（无 ANTHROPIC_API_KEY），不宣称 Harness 可替换已验证。
+
+### Main Changes
+
+- ClaudeCodeAdapter + stream-json 解析 + CLI resolveHarness
+- 缺 claude 二进制或缺 ANTHROPIC_API_KEY 在 ingest 前失败，避免 T-031 假绿
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2867719` | (see git log) |
+
+### Testing
+
+- [OK] pnpm run check：404 passed / 5 skipped
+- [OK] claude-code-e2e 未跑（无 ANTHROPIC_API_KEY；--bare 不读 OAuth）
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 补 ANTHROPIC_API_KEY 后跑 claude-code-e2e，再决定是否把「可替换」标为已验证
+- 父任务 08-29-phase2-entry 仍开放（wallclock-adr / ingress-poller 按需）

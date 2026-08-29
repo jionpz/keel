@@ -51,6 +51,7 @@ R-007 的重试仍可能连续三次不合格。
 | `github-pr.acceptance.test.ts` | push → 真实建 PR → 幂等复用 → 真实 CI 回读（不经编排器） | 同上 |
 | `session-milestone.acceptance.test.ts` | Session 里程碑路径 | 视用例而定 |
 | `issue-e2e.acceptance.test.ts` | **真实 GitHub Issue** → S-DONE + 通过 CI 的真实 PR,事件流 T-001 起 T-024 终 | 上述两项 + 已登录的 `gh` CLI(创建/关闭验收用 Issue) |
+| `claude-code-e2e.acceptance.test.ts` | 同上闭环，执行层换成 **Claude Code**（`--harness claude`） | 上述 + `claude` CLI + `ANTHROPIC_API_KEY`（`--bare` 不读 OAuth） |
 | `five-run.acceptance.test.ts` | **五连稳定性战役**：5× 同上,闭合 roadmap §4.1 #2 | 同上；整 batch ~15–25min |
 
 早期的 `merge.acceptance.test.ts`（任务 `08-25-merge-acceptance`）与 `v01-criterion-github`
@@ -72,6 +73,8 @@ FEEDBACK 注释里分析过的那类夹具错误）；其唯一独特断言 —�
 | `omp` CLI（不是环境变量） | 六个阶段的推理 | 必须在 `PATH` 上 |
 | `OPENCODE_API_KEY`（或 `DEEPSEEK_API_KEY`） | omp 推理网关 | 任一即可 |
 | `KEEL_MODEL` | 覆盖 OMP 模型（也可 `keel run-issue … --model <id>`） | 可选；缺省 `deepseek-v4-flash`；空白值会启动失败 |
+| `KEEL_HARNESS` | 选择执行层（也可 `--harness omp\|claude`） | 可选；缺省 `omp`；非法/空白拒绝，不静默回退 |
+| `ANTHROPIC_API_KEY` | Claude Code `--bare` 认证（不读 OAuth） | `--harness claude` / `claude-code-e2e` 必须 |
 | `KEEL_GITHUB_TOKEN`（或 `GITHUB_TOKEN`） | PR 创建 + CI 回读（REST API） | fine-grained PAT：Contents RW + Pull requests RW |
 | `KEEL_TEST_REMOTE_REPO` | 真实远程仓库 | 对上述 token 可写 |
 
