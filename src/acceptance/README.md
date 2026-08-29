@@ -71,6 +71,7 @@ FEEDBACK 注释里分析过的那类夹具错误）；其唯一独特断言 —�
 |---|---|---|
 | `omp` CLI（不是环境变量） | 六个阶段的推理 | 必须在 `PATH` 上 |
 | `OPENCODE_API_KEY`（或 `DEEPSEEK_API_KEY`） | omp 推理网关 | 任一即可 |
+| `KEEL_MODEL` | 覆盖 OMP 模型（也可 `keel run-issue … --model <id>`） | 可选；缺省 `deepseek-v4-flash`；空白值会启动失败 |
 | `KEEL_GITHUB_TOKEN`（或 `GITHUB_TOKEN`） | PR 创建 + CI 回读（REST API） | fine-grained PAT：Contents RW + Pull requests RW |
 | `KEEL_TEST_REMOTE_REPO` | 真实远程仓库 | 对上述 token 可写 |
 

@@ -3,7 +3,7 @@
   "name": "omp-model",
   "title": "OMP 模型可配",
   "description": "把 OmpAdapter 已有的 model 选项透传到 CLI/env，缺省仍 deepseek-v4-flash",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,
@@ -12,7 +12,7 @@
   "assignee": "cloud-agent",
   "createdAt": "2026-08-29",
   "completedAt": null,
-  "branch": null,
+  "branch": "cursor/phase2-planning-090a",
   "base_branch": "main",
   "worktree_path": null,
   "commit": null,
@@ -20,7 +20,11 @@
   "subtasks": [],
   "children": [],
   "parent": "08-29-phase2-entry",
-  "relatedFiles": [],
-  "notes": "",
+  "relatedFiles": [
+    "src/cli/run-task.ts",
+    "src/cli/run-issue.ts",
+    "src/execution/adapters/omp.ts"
+  ],
+  "notes": "2026-08-29 实现完成：resolveModel CLI>env>default；pnpm run check 351 passed / 4 skipped。",
   "meta": {}
 }

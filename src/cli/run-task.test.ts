@@ -20,6 +20,7 @@ import { readPrUrl, resolveCiGateway, runTask } from './run-task.js'
 
 const ENV_KEYS = ['KEEL_GITHUB_TOKEN', 'GITHUB_TOKEN'] as const
 const saved = new Map<string, string | undefined>(ENV_KEYS.map((k) => [k, process.env[k]]))
+const savedModel = process.env.KEEL_MODEL
 
 function setToken(value: string | undefined): void {
   for (const k of ENV_KEYS) {
@@ -33,6 +34,7 @@ function setToken(value: string | undefined): void {
 
 beforeEach(() => {
   setToken(undefined)
+  delete process.env.KEEL_MODEL
 })
 
 afterAll(async () => {
@@ -42,6 +44,11 @@ afterAll(async () => {
     } else {
       process.env[k] = v
     }
+  }
+  if (savedModel === undefined) {
+    delete process.env.KEEL_MODEL
+  } else {
+    process.env.KEEL_MODEL = savedModel
   }
   await closePool()
 })
@@ -89,6 +96,14 @@ describe('runTask · --ci real 缺 token 时不进 loop', () => {
     expect(r.ok).toBe(false)
     if (r.ok) return
     expect(r.error.kind).toBe('NOT_FOUND')
+  })
+
+  it('空白 model 在 task 查询之前失败(CAPABILITY_UNSUPPORTED 而非 NOT_FOUND)', async () => {
+    const r = await runTask(randomUUID(), { ci: 'passed', model: '   ' })
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('CAPABILITY_UNSUPPORTED')
+    expect(r.error.detail).toMatch(/空白/)
   })
 })
 

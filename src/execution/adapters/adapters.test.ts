@@ -30,7 +30,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { RunSpec } from '../../contracts/harness-adapter.js'
 import { TIER_REQUIREMENTS } from '../../shared/ids.js'
 import { HUMAN_CAPABILITIES, HumanAdapter, type HumanInbox } from './human.js'
-import { buildArgv, OMP_CAPABILITIES, OmpAdapter } from './omp.js'
+import { buildArgv, DEFAULT_OMP_MODEL, OMP_CAPABILITIES, OmpAdapter } from './omp.js'
 import { parseOmpStream } from './omp-parse.js'
 import { tierOf } from './tier.js'
 
@@ -183,6 +183,21 @@ describe('buildArgv', () => {
   it('固定使用 -p --mode=json', () => {
     const argv = buildArgv(spec(), 'm')
     expect(argv.slice(0, 2)).toEqual(['-p', '--mode=json'])
+  })
+
+  it('缺省模型钉在 --model 之后(五连基线)', () => {
+    const argv = buildArgv(spec(), DEFAULT_OMP_MODEL)
+    const i = argv.indexOf('--model')
+    expect(i).toBeGreaterThanOrEqual(0)
+    expect(argv[i + 1]).toBe('deepseek-v4-flash')
+    expect(argv[i + 1]).toBe(DEFAULT_OMP_MODEL)
+  })
+
+  it('自定义 model 原样透传，不回退缺省', () => {
+    const argv = buildArgv(spec(), 'gpt-5.2')
+    const i = argv.indexOf('--model')
+    expect(argv[i + 1]).toBe('gpt-5.2')
+    expect(argv).not.toContain(DEFAULT_OMP_MODEL)
   })
 })
 

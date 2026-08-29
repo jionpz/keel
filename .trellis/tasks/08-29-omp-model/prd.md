@@ -24,10 +24,10 @@
 
 ## Acceptance Criteria
 
-- [ ] AC1：`pnpm run check` 全绿
-- [ ] AC2：单测：缺省 / `--model` / `KEEL_MODEL` / CLI 覆盖 env / 空白拒绝
-- [ ] AC3：`run-issue` 把同一 `model` 传进 `runTask`（组合不丢字段）
-- [ ] AC4：不改默认模型；不把第二 Harness 当作本任务范围
+- [x] AC1：`pnpm run check` 全绿（351 passed / 4 skipped）
+- [x] AC2：单测：缺省 / `--model` / `KEEL_MODEL` / CLI 覆盖 env / 空白拒绝
+- [x] AC3：`run-issue` 把同一 `model` 传进 `runTask`（组合不丢字段）
+- [x] AC4：不改默认模型；不把第二 Harness 当作本任务范围
 
 ## Out of Scope
 

@@ -97,6 +97,7 @@ lint → typecheck → boundaries → check:generated → check:transitions → 
 | 变量 | 用途 | 要求 |
 |---|---|---|
 | `OPENCODE_API_KEY`(或 `DEEPSEEK_API_KEY`) | omp 推理网关(OmpAdapter 默认模型 `deepseek-v4-flash`) | 任一即可解锁 |
+| `KEEL_MODEL` | 覆盖 OMP `--model`(CLI `--model` 优先) | 可选；空白拒绝、不静默回退缺省 `deepseek-v4-flash` |
 | `KEEL_GITHUB_TOKEN`(优先)/ `GITHUB_TOKEN` | GitHub REST:PR 创建 + CI 回读(`GitHubProvider`) | 见下「token 能力边界」 |
 | `KEEL_TEST_REMOTE_REPO` | 验收用真实远程仓库(如 `https://github.com/jionpz/keel`) | 对上述 token 可写 |
 | (git push 鉴权) | 不走上面的 token,走 git credential helper | `gh auth setup-git` |
