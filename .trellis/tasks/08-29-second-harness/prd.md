@@ -13,18 +13,32 @@
 | v0.1 生产路径只接线 `new OmpAdapter()` | `src/cli/run-task.ts`（约 L125）；acceptance 同样硬编码 |
 | `runTaskToCompletion` 已通过 `deps.adapter` 注入 | `src/control/orchestrator/loop.ts` —— **换 Adapter 不必改 loop** |
 | Human 是 L0，OMP 是 L2；无第二个 AI Adapter | `src/execution/adapters/` |
-| Claude Code 文档级 L2：`-p`、`--resume`、`stream-json`、`total_cost_usd`、`--bare`、`--json-schema` | `docs/05-contracts/harness-adapter.md` §1.3；`research/harness-interfaces.md` §1 |
-| **本机 argv/事件流尚未实测**（与 OMP 当年纪律相同：文档 ≠ Adapter） | `research/claude-code-interface.md` 仍为待填 |
-| 五连依赖已满足 | `08-29-five-run-campaign` 第二次 5/5 S-DONE（已归档） |
+| OMP Adapter **写死默认模型** `deepseek-v4-flash` | `src/execution/adapters/omp.ts` `opts.model ?? 'deepseek-v4-flash'`；CLI **无** `--model` |
+| Claude Code 文档级 L2 | `harness-adapter.md` §1.3；**本机 argv 未实测** |
+| 五连依赖已满足 | `08-29-five-run-campaign` 第二次 5/5 |
+
+### 为什么 roadmap 把「第二 Harness」排第一（以及为什么可以反对）
+
+ADR-0005 / `docs/09-roadmap.md` §4.2 #1 要证的是 **「执行层 CLI 可替换」**（session/resume/权限/事件流/untrusted workspace），不是「换一个更聪明的模型」。
+
+**换模型 ≠ 换 Harness：**
+
+| | 在 OMP 里换 `--model` | 再接 Claude Code Adapter |
+|---|---|---|
+| 测的是 | 同一套工具/会话/降级路径下，**推理质量** | 另一套 CLI 的 capability 与 Adapter 契约 |
+| 用户能感到的 | 成功率、超时、Policy 波动 | 几乎感觉不到（闭环长得一样） |
+| v0.1 现状 | **未暴露**：模型写死 deepseek | 架构保险，成本高 |
+
+若产品核心是「更好的模型把 Task 做完」，第二 Harness **不是**最高杠杆；把 `KEEL_MODEL` / `--model` 接到已有 `OmpAdapter({ model })` 才是。第二 Harness 的正当理由只剩：不想绑死 Oh My Pi 这一家 CLI。
 
 ## Key Decisions（规划中）
 
 | # | 决策 | 倾向 | 状态 |
 |---|---|---|---|
-| D1 | 目标 Harness | Claude Code（官方 `claude` CLI），不是 Cursor Agent | 已定（roadmap / ADR-0005） |
-| D2 | 输出契约 | MVP **仍 `post_validate`**，即使 Claude 有 `--json-schema` | 已定（先证明 drop-in；原生 schema 另开） |
-| D3 | 选择面 | `KEEL_HARNESS=omp\|claude` + CLI `--harness`（显式优先于 env） | 待你确认见下 |
-| D4 | 本任务是否必须真实 S-DONE | **见本轮问题** | 未定 |
+| D0 | 阶段二下一步 | **待你确认**：推迟 Claude Adapter，先做 OMP 模型可配 | 本轮问题 |
+| D1 | 若仍做第二 Harness | Claude Code 官方 CLI | 仅在 D0=继续 Harness 时有效 |
+| D2 | 输出契约 | MVP **仍 `post_validate`** | 仅在 D0=继续 Harness 时有效 |
+| D3 | 选择面 | `--harness` > `KEEL_HARNESS` > 缺省 omp | 仅在 D0=继续 Harness 时有效 |
 
 ## Requirements
 
