@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "CLI 错误须明确失败不静默回退"}
+{"file": "docs/09-roadmap.md", "reason": "阶段二优先级对照：本任务替代第二 Harness 作为当前杠杆"}

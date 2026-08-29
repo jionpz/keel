@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "可预期失败走 Result；空白模型不可静默"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "空白/非法不得静默回退缺省"}
