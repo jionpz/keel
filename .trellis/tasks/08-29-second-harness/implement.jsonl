@@ -1,0 +1,4 @@
+{"file": "docs/09-roadmap.md", "reason": "阶段二触发条件与内容优先级"}
+{"file": "docs/08-cross-cutting.md", "reason": "事件流四问与 O1-O4 要求"}
+{"file": "docs/adr/0005-harness-support-tiers.md", "reason": "第二Harness优先级与L0/L2定义"}
+{"file": ".trellis/tasks/archive/2026-08/08-23-harness-adapters/research/omp-interface.md", "reason": "Adapter实测格式参考"}
