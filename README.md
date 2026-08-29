@@ -73,6 +73,8 @@ Accepted —— 2026-08-26 查证：硬约束已自动化强制，迁移路径�
 
 ## 开发
 
+开发环境需 Node 24+。
+
 ```bash
 pnpm install
 pnpm run check     # CI 跑的就是这一条 —— 与本地完全一致
