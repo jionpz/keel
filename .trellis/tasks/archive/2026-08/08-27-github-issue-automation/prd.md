@@ -90,16 +90,19 @@
   数据库零写入。
 - [x] AC4（衔接既有闭环）：ingest 产生的 task 不经任何 seed SQL，直接
   `keel run-task <id> --ci passed` 可驱动到终态（T-002 起的既有路径不回归）。
-- [ ] AC5（全真实，Phase 2）：`keel run-issue <url> --ci real` 在测试仓库上到达 S-DONE，
+- [x] AC5（全真实，Phase 2）：`keel run-issue <url> --ci real` 在测试仓库上到达 S-DONE，
   存在真实 PR 且 CI passed，命令输出 PR URL；`readEvents` 重建的 transitions 以 T-001 起、
   T-024 终。
-  提示词「原样采用」+ 校验 4b（`feedback-constraints`）+ `wallClockS` 透传已落地
-  （见 commits `c759eb5` / `6954c52`）。第三次真实跑（墙钟 600s）仍未到 S-DONE：
-  rfc_draft 两次超时后 **T-031 升人工**。AC5 仍未关。见下方验收记录。
+  第七次真实跑（2026-08-28，Cloud Agent + fine-grained PAT + OPENCODE + omp 18.0.9）**通过**：
+  路径 `T-001 → T-002 → T-004 → T-011 → T-012 → T-017 → T-018 → T-021 → T-024`，
+  PR https://github.com/jionpz/keel/pull/45，耗时 263s，**且 T-024 经真实 CI 核对**
+  （head SHA 上两条 check 15:57:21 / 15:57:29 completed=success，T-024 在 15:57:32 才流出）。
+  提示词/4b 同源改动（`9a26b16`）经本次验证有效。
+  ⚠️ 第五、六次的 T-024 是**假绿**（CI 未开跑就判通过），已在第六次查明并修复，见下方记录。
 - [x] AC6（人工闸门如实）：Policy 判高风险的 Issue 停在 S-HUMAN_REVIEW，run-issue 如实
   报告该状态（不伪造成功，不无限等待）。
-- [x] AC7（质量门）：`pnpm run check` 全绿（含既有 248 测试 + 新增单测/集成测试）；
-  真实验收测试 opt-in 运行通过（入口路径；AC5 全自动到 PR 仍待模型给出 low/low）。
+- [x] AC7（质量门）：`pnpm run check` 全绿（2026-08-28：337 passed / 4 skipped）；
+  真实验收 `issue-e2e` opt-in **AC5 通过**（2026-08-28，见下方记录）。
 
 ### 真实验收记录
 
@@ -108,6 +111,70 @@
 | 2026-08-27 | `test:acceptance` + `KEEL_TEST_REMOTE_REPO=jionpz/keel` | **入口 OK**：T-001 + github feedback；终态 **S-HUMAN_REVIEW**（Policy，~472s）。github-pr / session-milestone 绿。v01/merge 亦因模型波动未到 S-DONE。AC5 未关。 |
 | 2026-08-27（第二次，仅 `issue-e2e`） | `pnpm vitest run --config vitest.acceptance.config.ts src/acceptance/issue-e2e.acceptance.test.ts` | **入口再次 OK**，终态仍 **S-HUMAN_REVIEW**（580s）。路径：`T-001 → T-002 → T-004 → T-030 → T-030 → T-011 → T-013`。归因已查明**不是 Policy 缺陷**：`PolicyEvaluated{decision:'human_review', default_applied:false}`，命中 P1（`risk=='high'`）—— 模型自己写的 `rfc.policy_facts` 是 `{risk:'high', complexity:'high', estimated_files_changed:0}`，而 Issue 正文明确要求 low/low/1 且只改 README 一行。即模型未遵循约束，**非规则集问题**（故未按纪律放宽 Policy）。另有 rfc_draft 阶段 **2 次 RunTimeout**（T-030 自环重试），第 3 次才产出 RFC。收尾干净：Issue 已关、无 PR、未推分支。AC5 仍未关；本次作为 AC6 证据。 |
 | 2026-08-27（第三次，`wallClockS=600`） | 同上 + 提示词/4b 已合入 | 测试用例**绿**，但走的是 **AC6 早退**：路径 `T-001 → T-002 → T-004 → T-030 → T-030 → T-031`（rfc 两次超时后重试耗尽升人工）。**未产出 PR，AC5 仍未关**。 |
+| 2026-08-28（第四次尝试） | — | **未能运行**，凭据不足，非代码问题。三项前置同时缺失（实测见下）：① 环境无 `omp` 可执行文件；② `OPENCODE_API_KEY` / `DEEPSEEK_API_KEY` 均未设置；③ `gh` 是 Cloud Agent 的 `ghs_` token，建 PR 实测 403（`Resource not accessible by integration`）。**未跑验收、未建 Issue、未伪造结果**。同日合入一项提高成功率的确定性改动（见下方「第三次超时的归因」）。 |
+| 2026-08-28（第五次，凭据齐备） | `pnpm vitest run --config vitest.acceptance.config.ts src/acceptance/issue-e2e.acceptance.test.ts` | 用例判绿，**但 T-024 是假绿**（第六次查明后回溯认定）。路径完整走到 `T-024`，PR https://github.com/jionpz/keel/pull/40，~140s。证据：PR 15:32:27 建成、15:32:28 就被 cleanup 关掉 —— 中间只隔 1s，真实 Actions 不可能跑完。环境：fine-grained PAT（`ghp_`）+ `OPENCODE_API_KEY` + omp 18.0.9。本次的确定性收获仍有效：`gh()` 注入 `KEEL_GITHUB_TOKEN` 为 `GH_TOKEN`（`ghs_` 不能打 label，第四次曾因 Issue 无 `keel` label 秒败）。收尾：Issue/PR/分支已清理。 |
+| 2026-08-28（第六次） | 同上 | 用例判绿，**查明是假绿并修掉**。路径 `T-001 → … → T-021 → T-024`，PR https://github.com/jionpz/keel/pull/43，263s。核对远端时间线发现：PR **15:45:53** 建成 → T-024 **15:45:56**（3.4s 后），而真实 check-run **15:46:01** 才 `started_at`、15:47:00 / 15:47:09 才 completed —— **CI 还没开始跑，系统已宣布通过**。归因与修复见下方「T-024 假绿的归因」。按诚实纪律：本次不计 AC5 通过。 |
+| 2026-08-28（第七次，修复后复跑） | 同上 | **AC5 真通过**。路径 `T-001 → T-002 → T-004 → T-011 → T-012 → T-017 → T-018 → T-021 → T-024`。PR https://github.com/jionpz/keel/pull/45，263s。时间线经远端核对：PR 15:56:16 → 真实 check 15:56:24/26 启动、15:57:21/29 completed=success → T-024 **15:57:32**（末条 check 完成后 3.4s）。即 Keel 真等了 76s 的 CI 才流转。收尾：Issue #44 已关、PR 已关、`ai/*` 分支已删。 |
+
+#### 第三次超时的归因（2026-08-28 代码审阅，尚未经真实运行验证）
+
+把墙钟从 180s 抬到 600s 之后，rfc_draft 反而由「2 次超时 + 第 3 次成功」退化为
+「3 次全超时 → T-031」。若只是模型慢，加时间不该让结果更差 —— 说明是**多花掉了轮次**。
+
+机制上有一条对得上的路径：`pipeline.ts` 的 watchdog 是 **整个 session 一个**
+（`wallClockMs` 覆盖全部 R-007 轮次），而 `limits.wall_clock_s` 是**每轮**传给 harness 的
+（`omp.ts` 的 `--max-time`）。两者被赋了同一个数：第 1 轮就可以合法地用掉全部 600s。
+4b 落地后，模型自报 high 的第一轮**必然被拒**并重来 —— 这一轮白烧的时间直接从
+session 总预算里扣，于是 4b 把「答得快但答错」换成了「超时」。
+
+已做的修正（commit `9a26b16`，分支 `cursor/ac5-real-e2e-090a`）：4b 核对的是字面值，
+提示词却只说「原样采用」，要模型自己从正文认出约束键名。现改为把 4b 将要核对的取值
+**原样写进 rfc_draft 提示词**（取自同一个 `parseDeclaredPolicyFacts`，提示词与核对同源），
+消掉这一轮可预料的拒绝。不放宽 Policy、不改墙钟语义；未声明约束时逐字等价于改动前。
+
+**已验证**（2026-08-28 第五 / 六 / 七次真实跑）：提示词/4b 同源改动（`9a26b16`）有效，
+rfc_draft 一轮过，不再出现 T-030 自环。
+
+**遗留待议**：上述「每轮 `--max-time` = 全 session 墙钟」的不对称本身仍在。
+它使 Keel 会在 harness 自认还有余量时把它打断，也让「run 级墙钟」在多轮时含义模糊。
+改动涉及 R-009 语义（方案 B / issue #26），按 README「放宽约束走 ADR」的纪律，
+**不在本轮擅自更改**，留作后续 ADR 议题。
+
+#### T-024 假绿的归因与修复（2026-08-28 第六次，已修复并经第七次真实验证）
+
+第五、六次的用例都判绿，路径也确实终于 T-024，但 **T-024 不是真实 CI 结论**。
+第六次核对远端时间线才看出来：PR 15:45:53 建成 → T-024 15:45:56（3.4s 后），
+而真实 check-run 15:46:01 才 `started_at`。CI 尚未开跑，系统已宣布它通过。
+
+机制（`src/fact/github-provider.ts` 的 `combinedStatus`）：
+
+- Actions-only 仓库的 `commits/{sha}/status` **恒为** `state=pending` + 空 `statuses`
+  （没有任何 Commit Status 上报方）；
+- check-run 要过几秒才注册到 `commits/{sha}/check-runs`（实测 3–10s）。
+
+于是建 PR 后的头几秒，两个端点都读不到任何东西 —— 这个形态与
+**「该仓库压根没配 CI」在数据上完全同形**。旧实现有两条通往 `passed` 的出口
+（`state=pending` 且零 statuses → passed；无 check 无 status → passed），
+本意都是「没配 CI 的仓库不该永远卡死」，却无法与「CI 还没注册」区分，
+所以第一次轮询就早退成 passed。
+
+修复（commit `7d71bd2`）：
+
+1. `combinedStatus` 三态改**四态**，新增 `unreported` —— 只如实分辨「无人上报」，
+   本身不下结论（CI 是外部事实源，归并函数不制造结论）；
+2. `waitForCi` 加**静默期**（`emptySettleMs`，默认 90s，盖住 Actions 排队延迟）：
+   读到 `unreported` 必须熬过静默期才认定「该仓库没有 CI」返回 passed，否则继续轮询。
+   没配 CI 的仓库依旧不会卡到 30min 硬超时；
+3. `issue-e2e` 补 **AC5-3b**：回到 GitHub 核对 head SHA 上真有跑完且成功的 check，
+   T-024 不再只靠 Keel 自己的事件作证（防同类假绿复发）。
+
+反例已验证：把 `combinedStatus` 最后一行恢复成旧的 `ok('passed')`，两条新用例确实变红
+（轮询次数 1 —— 第一次就早退），恢复修复后转绿。遵循
+`spec/backend/error-handling.md` §防假绿「未经反例验证的检查等同于没有检查」。
+
+这一条与本任务此前的教训同源：**T-031 与 Policy 人工闸门同终态**曾让基础设施故障
+判成 AC6；这次是**「无人上报」与「CI 通过」同数据形态**让排队延迟判成 CI 通过。
+两次都是「两种语义共用一个可观测形态」，都得靠加一维事实（而不是加一个假设）来分开。
 
 ## Out of Scope
 

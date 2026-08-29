@@ -16,7 +16,11 @@ import type { DecisionPoint, PolicyEngine } from '../../contracts/policy-engine.
 import type { Proposal, ProposalVerdict, SchemaViolation } from '../../contracts/types.js'
 import { SCHEMAS } from '../../generated/schemas.js'
 import { loadPolicyFacts } from '../driver/facts.js'
-import { parseDeclaredPolicyFacts, policyFactsConflicts } from './feedback-constraints.js'
+import {
+  type DeclaredPolicyFacts,
+  parseDeclaredPolicyFacts,
+  policyFactsConflicts,
+} from './feedback-constraints.js'
 
 /**
  * 平面越界的禁用键名。
@@ -130,17 +134,31 @@ async function checkDeclaredScope(
 ): Promise<SchemaViolation[]> {
   if (proposal.kind !== 'rfc') return []
 
-  // 与 ContextBuilder 的 feedback section 同源:模型看到的就是这几条
+  const declared = await loadDeclaredPolicyFacts(client, proposal.task_id)
+  return policyFactsConflicts(declared, proposal.body)
+}
+
+/**
+ * 读这个 Task 的反馈,解析出其中显式声明的约束。
+ *
+ * 编排器构造 rfc_draft 提示词时也调它 —— **提示词与 4b 核对必须同源**,
+ * 否则会出现「告诉模型填 A、却按 B 核对」的自相矛盾。
+ *
+ * 查询与 ContextBuilder 的 feedback section 同源:模型看到的就是这几条。
+ */
+export async function loadDeclaredPolicyFacts(
+  client: PoolClient,
+  taskId: string,
+): Promise<DeclaredPolicyFacts> {
   const r = await client.query<{ body: string }>(
     `SELECT f.body FROM feedback f
      JOIN task_feedback tf ON tf.feedback_id = f.id
      WHERE tf.task_id = $1 ORDER BY f.received_at LIMIT 3`,
-    [proposal.task_id],
+    [taskId],
   )
-  if (r.rows.length === 0) return []
+  if (r.rows.length === 0) return {}
 
-  const declared = parseDeclaredPolicyFacts(r.rows.map((x) => x.body).join('\n'))
-  return policyFactsConflicts(declared, proposal.body)
+  return parseDeclaredPolicyFacts(r.rows.map((x) => x.body).join('\n'))
 }
 
 /**

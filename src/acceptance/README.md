@@ -68,14 +68,22 @@ FEEDBACK 注释里分析过的那类夹具错误）；其唯一独特断言 —�
 
 | 环境变量 | 用途 | 要求 |
 |---|---|---|
+| `omp` CLI（不是环境变量） | 六个阶段的推理 | 必须在 `PATH` 上 |
 | `OPENCODE_API_KEY`（或 `DEEPSEEK_API_KEY`） | omp 推理网关 | 任一即可 |
 | `KEEL_GITHUB_TOKEN`（或 `GITHUB_TOKEN`） | PR 创建 + CI 回读（REST API） | fine-grained PAT：Contents RW + Pull requests RW |
 | `KEEL_TEST_REMOTE_REPO` | 真实远程仓库 | 对上述 token 可写 |
 
-两个已实测的陷阱：
+三个已实测的陷阱：
 
 - **Cloud Agent 的 `ghs_` token 能 push 不能开 PR**（403）——
-  `v01-criterion-github` 的 beforeEach 预检会在起编排器之前失败并打印此信息；
+  `preflight.ts` 的探针会在起编排器之前失败并打印此信息；
+- **`ghs_` 也不能给 Issue 打 label** —— `issue-e2e` 的 `gh()` 会把
+  `KEEL_GITHUB_TOKEN` 注入 `GH_TOKEN`;只用 `gh auth login` 的 App token 时
+  `gh issue create --label keel` 会静默建出无 label 的 Issue;
+- **`omp` 不在环境里时，链路会假绿**（2026-08-28 实测）：缺它时每个 run 都失败，
+  编排一路重试到 `T-031` 落进 `S-HUMAN_REVIEW` —— 与「Policy 判高风险」**同一个终态**。
+  `issue-e2e` 早先只看终态就早退，于是什么都没跑出来也判绿。现已两处堵上：
+  `preflightOmp()` 在第 0 秒挡掉，且 `T-031` 结尾一律判失败（不算 AC6 证据）；
 - **不要**在跑验收时设 `GIT_CONFIG_GLOBAL=/dev/null`：
   那会一并屏蔽 `gh` 的 credential helper，push 失去鉴权。
   该变量只用于 `pnpm run check`（隔离操作者的签名等全局配置）。

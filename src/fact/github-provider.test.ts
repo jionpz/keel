@@ -8,7 +8,7 @@
  *   - PR 幂等(先查后建 / 复用已有)
  *   - 非 ai/* 分支拒绝
  *   - 错误映射 401/403/404/429/5xx
- *   - CI 三态归并与硬超时
+ *   - CI 四态归并、无人上报静默期与硬超时
  */
 
 import { createServer, type Server } from 'node:http'
@@ -189,7 +189,7 @@ describe('错误映射(design.md §7)', () => {
   })
 })
 
-describe('waitForCi 三态归并', () => {
+describe('waitForCi 四态归并', () => {
   function ciRoutes(checks: unknown, status: unknown): void {
     routes.set(routeKey('GET', '/repos/acme/widget/commits/sha-x/check-runs'), () => ({
       status: 200,
@@ -297,9 +297,67 @@ describe('waitForCi 三态归并', () => {
     expect(r.ok && r.value).toBe('failed')
   })
 
-  it('无任何 CI 配置 → passed(仓库不该永远卡死)', async () => {
+  it('无任何 CI 配置 + 静默期已过 → passed(仓库不该永远卡死)', async () => {
     ciRoutes({ total_count: 0, check_runs: [] }, { state: null })
-    const r = await provider().waitForCi({ repoId: 'r1', remoteUrl: REMOTE, headSha: 'sha-x' })
+    const r = await provider({ emptySettleMs: 0 }).waitForCi({
+      repoId: 'r1',
+      remoteUrl: REMOTE,
+      headSha: 'sha-x',
+    })
+    expect(r.ok && r.value).toBe('passed')
+  })
+
+  // ── 假绿反例(2026-08-28 第六次真实验收实录)────────────────────────────────
+  //
+  // Actions-only 仓库建 PR 后的头几秒:check-runs 还没注册(total_count=0),
+  // commit status 恒为 pending + 空 statuses —— 两个端点都读不到东西。
+  // 旧实现把这一瞬间当 passed,PR 建好 3.5 秒就流出 T-024,而真实 check-run
+  // 是又过 5 秒才启动的。判据要的是「通过 CI 的 PR」,那个结论是假的。
+
+  it('check-run 尚未注册时不得当成 passed —— 等到真结果为 failed(假绿反例)', async () => {
+    let polls = 0
+    routes.set(routeKey('GET', '/repos/acme/widget/commits/sha-x/check-runs'), () => {
+      polls += 1
+      return polls === 1
+        ? { status: 200, json: { total_count: 0, check_runs: [] } }
+        : {
+            status: 200,
+            json: { total_count: 1, check_runs: [{ status: 'completed', conclusion: 'failure' }] },
+          }
+    })
+    routes.set(routeKey('GET', '/repos/acme/widget/commits/sha-x/status'), () => ({
+      status: 200,
+      json: { state: 'pending', statuses: [] },
+    }))
+
+    // 静默期远大于轮询间隔:第一次「什么都没读到」必须继续等,不能下结论
+    const r = await provider({ pollIntervalMs: 5, emptySettleMs: 10_000 }).waitForCi({
+      repoId: 'r1',
+      remoteUrl: REMOTE,
+      headSha: 'sha-x',
+    })
+    expect(polls).toBeGreaterThanOrEqual(2)
+    expect(r.ok && r.value).toBe('failed')
+  })
+
+  it('静默期内无人上报 → 继续轮询,期满才认定「没配 CI」', async () => {
+    let polls = 0
+    routes.set(routeKey('GET', '/repos/acme/widget/commits/sha-x/check-runs'), () => {
+      polls += 1
+      return { status: 200, json: { total_count: 0, check_runs: [] } }
+    })
+    routes.set(routeKey('GET', '/repos/acme/widget/commits/sha-x/status'), () => ({
+      status: 200,
+      json: { state: 'pending', statuses: [] },
+    }))
+
+    const r = await provider({
+      pollIntervalMs: 5,
+      emptySettleMs: 40,
+      pollTimeoutMs: 10_000,
+    }).waitForCi({ repoId: 'r1', remoteUrl: REMOTE, headSha: 'sha-x' })
+    // 期满前至少轮询过两次 —— 证明没有第一次就早退
+    expect(polls).toBeGreaterThanOrEqual(2)
     expect(r.ok && r.value).toBe('passed')
   })
 })

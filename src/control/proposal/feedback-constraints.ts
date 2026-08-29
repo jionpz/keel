@@ -58,6 +58,34 @@ export function parseDeclaredPolicyFacts(text: string): DeclaredPolicyFacts {
 }
 
 /**
+ * 把显式声明渲染成 rfc_draft 提示词里的一段**具体指令**。
+ *
+ * 为什么光有核对(4b)不够(2026-08-28):提示词只泛泛说「原样采用反馈给出的约束」,
+ * 要模型自己从正文里认出哪些是约束、叫什么键名;而 4b 核对的是具体字面值。
+ * 两边不对齐时,模型第一轮几乎必然被拒 —— 一次预料之中的拒绝要烧掉一整轮
+ * R-007,而整个 session 的墙钟是所有轮次**共用**的(pipeline.ts 的 watchdog),
+ * 于是 4b 反而把「答得快但答错」变成了「超时」。
+ *
+ * 这里把 4b 将要核对的值原样写进提示词:**要它填什么,就先告诉它填什么**。
+ * 值来自同一个 parse 函数,因此提示词与核对永远同源,不会各说各话。
+ *
+ * ⚠️ 注入面:渲染的是 parse 出的枚举/数字/布尔,不是反馈原文 ——
+ * 原文另由 ContextBuilder 的 feedback section 给出,这里不放大它。
+ */
+export function declaredFactsDirective(declared: DeclaredPolicyFacts): string | null {
+  const entries = Object.entries(declared)
+  if (entries.length === 0) return null
+
+  return [
+    '本次反馈**已显式声明**下列约束,policy_facts 必须逐字填成这些值 ——',
+    '系统会机械核对,不符即退回重写(白烧一轮):',
+    ...entries.map(([field, value]) => `- "${field}": ${JSON.stringify(value)}`),
+    '这同时是本次改动的**范围上限**:proposed_change 必须落在其内,' +
+      '超出的内容写进 non_goals,而不是抬高这几个取值。',
+  ].join('\n')
+}
+
+/**
  * 核对 RFC 的 policy_facts 是否与反馈的显式声明一致。
  *
  * 只比较**声明过**的字段;返回的 violation 直接进 R-007 回灌,
