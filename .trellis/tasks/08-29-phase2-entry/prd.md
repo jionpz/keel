@@ -12,8 +12,8 @@
 |---|---|
 | v0.1 判据已闭合（真实 Issue → S-DONE + 真实 CI PR，T-001→T-024） | `08-27-github-issue-automation` 归档 prd，PR #36 |
 | 阶段二触发 #1（v0.1 判据）| ✅ |
-| 阶段二触发 #2（连续 5 个真实 Task 无人工干预）| ❌ 目前可靠验证 ~1–2 次 |
-| 阶段二触发 #3（事件流四问）| ⚠️ 机制已有，需在五连战役里抽样验证 |
+| 阶段二触发 #2（连续 5 个真实 Task 无人工干预）| ✅ 2026-08-29 第二次五连 5/5（见 `08-29-five-run-campaign`） |
+| 阶段二触发 #3（事件流四问）| ✅ 抽样 task `68eb4965-9aca-4940-a586-d5f8a8f83beb`：`readEvents` + ContextBuilt `source_ref`/`dropped` |
 | 阶段二触发 #4（ADR-0003 ✅；0005 后果「第二 Harness」）| ⚠️ 仅 OMP 为 AI harness |
 | ADR-0005 明确：第二个 AI harness 是阶段二**首要验证目标** | `docs/adr/0005-harness-support-tiers.md` |
 
@@ -38,8 +38,8 @@
 
 ## Acceptance Criteria（父任务）
 
-- [ ] AC1：`08-29-five-run-campaign` 归档，prd 中 **5/5** S-DONE + `ci_verified` 记录
-- [ ] AC2：五连抽样证明 `docs/08-cross-cutting.md` §2.2 四问均可回答（附 1 个 task_id 示例）
+- [x] AC1：`08-29-five-run-campaign` 归档，prd 中 **5/5** S-DONE + `ci_verified` 记录
+- [x] AC2：五连抽样证明 `docs/08-cross-cutting.md` §2.2 四问均可回答（task `68eb4965-9aca-4940-a586-d5f8a8f83beb`）
 - [ ] AC3：`08-29-second-harness` 归档，至少 1 次真实验收（OMP 以外 AI harness 跑通 S-DONE 或诚实 AC6）
 - [ ] AC4：父任务 prd 中阶段二触发清单 **全部勾选**
 - [ ] AC5：`08-29-ingress-poller` 可仍为 planning（未触发时不阻塞父任务归档）

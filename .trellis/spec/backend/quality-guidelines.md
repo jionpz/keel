@@ -127,6 +127,10 @@ GET repo(401 → token 过期)+ 对不存在的 head 分支 POST /pulls
   见 `git-workspace.md`)。
 - **错误映射**:403/401 → `AUTH_FAILED`(`retryable=false`,直接升人工不重试),
   这是规范行为,见 `error-handling.md`。
+- **`gh issue create --label` 与 REST GET 短暂不一致**(2026-08-29 五连 run 4):
+  create 已返回 URL,`GitHubProvider.getIssue` 仍 `labels=[]`,ingest 闸门拒绝。
+  修法:等到 **ingest 同一条 API** 看见目标 label 再 ingest
+  (`createLabeledIssue` → `waitUntilIssueHasLabel`)。
 
 ---
 
