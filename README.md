@@ -76,6 +76,7 @@ Accepted —— 2026-08-26 查证：硬约束已自动化强制，迁移路径�
 ```bash
 pnpm install
 pnpm run check     # CI 跑的就是这一条 —— 与本地完全一致
+pnpm run test:acceptance  # 真实验收（需 GitHub 凭据，见「状态」节）
 ```
 
 `check` 聚合了 lint / typecheck / 架构边界 / 类型同步 / 转移表比对 / 纯度 / 测试。
