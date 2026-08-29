@@ -22,6 +22,9 @@ import { collectGitDiff } from './git-diff.js'
 import { parseOmpStream } from './omp-parse.js'
 import { tierOf } from './tier.js'
 
+/** 缺省模型。CLI / env 未指定时必须仍是这个值，避免五连基线漂移。 */
+export const DEFAULT_OMP_MODEL = 'deepseek-v4-flash'
+
 /** 实测确认的能力集（research/omp-interface.md §7） */
 export const OMP_CAPABILITIES: readonly CapabilityId[] = [
   'CAP-HEADLESS',
@@ -70,7 +73,7 @@ export class OmpAdapter implements HarnessAdapter {
 
   constructor(private readonly opts: OmpOptions = {}) {
     this.bin = opts.bin ?? 'omp'
-    this.model = opts.model ?? 'deepseek-v4-flash'
+    this.model = opts.model ?? DEFAULT_OMP_MODEL
   }
 
   describe(): HarnessDescriptor {

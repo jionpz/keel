@@ -51,6 +51,7 @@ R-007 的重试仍可能连续三次不合格。
 | `github-pr.acceptance.test.ts` | push → 真实建 PR → 幂等复用 → 真实 CI 回读（不经编排器） | 同上 |
 | `session-milestone.acceptance.test.ts` | Session 里程碑路径 | 视用例而定 |
 | `issue-e2e.acceptance.test.ts` | **真实 GitHub Issue** → S-DONE + 通过 CI 的真实 PR,事件流 T-001 起 T-024 终 | 上述两项 + 已登录的 `gh` CLI(创建/关闭验收用 Issue) |
+| `five-run.acceptance.test.ts` | **五连稳定性战役**：5× 同上,闭合 roadmap §4.1 #2 | 同上；整 batch ~15–25min |
 
 早期的 `merge.acceptance.test.ts`（任务 `08-25-merge-acceptance`）与 `v01-criterion-github`
 跑的是同一条昂贵链路，已删除，不再「保留作对照」：它的终态断言更宽松（容忍
@@ -70,6 +71,7 @@ FEEDBACK 注释里分析过的那类夹具错误）；其唯一独特断言 —�
 |---|---|---|
 | `omp` CLI（不是环境变量） | 六个阶段的推理 | 必须在 `PATH` 上 |
 | `OPENCODE_API_KEY`（或 `DEEPSEEK_API_KEY`） | omp 推理网关 | 任一即可 |
+| `KEEL_MODEL` | 覆盖 OMP 模型（也可 `keel run-issue … --model <id>`） | 可选；缺省 `deepseek-v4-flash`；空白值会启动失败 |
 | `KEEL_GITHUB_TOKEN`（或 `GITHUB_TOKEN`） | PR 创建 + CI 回读（REST API） | fine-grained PAT：Contents RW + Pull requests RW |
 | `KEEL_TEST_REMOTE_REPO` | 真实远程仓库 | 对上述 token 可写 |
 
@@ -80,6 +82,9 @@ FEEDBACK 注释里分析过的那类夹具错误）；其唯一独特断言 —�
 - **`ghs_` 也不能给 Issue 打 label** —— `issue-e2e` 的 `gh()` 会把
   `KEEL_GITHUB_TOKEN` 注入 `GH_TOKEN`;只用 `gh auth login` 的 App token 时
   `gh issue create --label keel` 会静默建出无 label 的 Issue;
+- **`gh issue create --label` 与 REST GET 有短暂不一致**（2026-08-29 五连 run 4）：
+  create 已返回 URL，ingest 读到 `labels=[]`。`createLabeledIssue` 会等到
+  `GitHubProvider.getIssue` 看见 `keel` 再返回;
 - **`omp` 不在环境里时，链路会假绿**（2026-08-28 实测）：缺它时每个 run 都失败，
   编排一路重试到 `T-031` 落进 `S-HUMAN_REVIEW` —— 与「Policy 判高风险」**同一个终态**。
   `issue-e2e` 早先只看终态就早退，于是什么都没跑出来也判绿。现已两处堵上：

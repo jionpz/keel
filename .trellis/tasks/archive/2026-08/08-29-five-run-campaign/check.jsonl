@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "验收凭据矩阵与假绿纪律"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "AUTH_FAILED与防假绿反例"}
+{"file": "src/acceptance/README.md", "reason": "opt-in验收纪律与ghs_陷阱"}

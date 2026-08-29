@@ -7,7 +7,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { parseArgs } from './argv.js'
-import { CI_MODES, parseCiMode } from './run-task.js'
+import { CI_MODES, DEFAULT_OMP_MODEL, parseCiMode, resolveModel } from './run-task.js'
 
 describe('parseArgs(零依赖 argv 解析)', () => {
   it('位置参数 + 标志值', () => {
@@ -120,5 +120,63 @@ describe('--ci 取值清单不得漂移', () => {
       const r = parseCiMode(mode)
       expect(r.ok && r.value).toBe(mode)
     }
+  })
+})
+
+describe('run-issue 把同一 model 传进 runTask', () => {
+  it('组合调用含 model: model.value(不丢字段)', () => {
+    const source = readFileSync(new URL('./run-issue.ts', import.meta.url), 'utf8')
+    expect(source).toMatch(/runTask\([\s\S]*model: model\.value/)
+  })
+})
+
+describe('resolveModel · CLI > env > 缺省，空白拒绝', () => {
+  it('都不给 → 缺省 deepseek-v4-flash', () => {
+    const r = resolveModel(undefined, undefined)
+    expect(r.ok && r.value).toBe(DEFAULT_OMP_MODEL)
+    expect(r.ok && r.value).toBe('deepseek-v4-flash')
+  })
+
+  it('--model 取值原样(trim)', () => {
+    const r = resolveModel('  gpt-5.2  ', 'ignored')
+    expect(r.ok && r.value).toBe('gpt-5.2')
+  })
+
+  it('KEEL_MODEL 在无 CLI 时生效', () => {
+    const r = resolveModel(undefined, '  claude-opus  ')
+    expect(r.ok && r.value).toBe('claude-opus')
+  })
+
+  it('CLI 覆盖 env', () => {
+    const r = resolveModel('gpt-5.2', DEFAULT_OMP_MODEL)
+    expect(r.ok && r.value).toBe('gpt-5.2')
+  })
+
+  it('空白 CLI 拒绝，不回退缺省', () => {
+    for (const cli of ['', '   ', true] as const) {
+      const r = resolveModel(cli, DEFAULT_OMP_MODEL)
+      expect(r.ok).toBe(false)
+      if (r.ok) return
+      expect(r.error.kind).toBe('CAPABILITY_UNSUPPORTED')
+      expect(r.error.retryable).toBe(false)
+      expect(r.error.detail).toMatch(/空白/)
+    }
+  })
+
+  it('空白 KEEL_MODEL 拒绝，不回退缺省', () => {
+    const r = resolveModel(undefined, '   ')
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('CAPABILITY_UNSUPPORTED')
+    expect(r.error.detail).toMatch(/KEEL_MODEL/)
+  })
+
+  it('parseArgs 的 --model 无值(布尔 true)拒绝', () => {
+    const p = parseArgs(['task-1', '--model'])
+    expect(p.flags.model).toBe(true)
+    const r = resolveModel(p.flags.model, undefined)
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('CAPABILITY_UNSUPPORTED')
   })
 })

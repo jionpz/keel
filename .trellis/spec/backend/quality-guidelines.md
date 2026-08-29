@@ -97,6 +97,7 @@ lint → typecheck → boundaries → check:generated → check:transitions → 
 | 变量 | 用途 | 要求 |
 |---|---|---|
 | `OPENCODE_API_KEY`(或 `DEEPSEEK_API_KEY`) | omp 推理网关(OmpAdapter 默认模型 `deepseek-v4-flash`) | 任一即可解锁 |
+| `KEEL_MODEL` | 覆盖 OMP `--model`(CLI `--model` 优先) | 可选；空白拒绝、不静默回退缺省 `deepseek-v4-flash` |
 | `KEEL_GITHUB_TOKEN`(优先)/ `GITHUB_TOKEN` | GitHub REST:PR 创建 + CI 回读(`GitHubProvider`) | 见下「token 能力边界」 |
 | `KEEL_TEST_REMOTE_REPO` | 验收用真实远程仓库(如 `https://github.com/jionpz/keel`) | 对上述 token 可写 |
 | (git push 鉴权) | 不走上面的 token,走 git credential helper | `gh auth setup-git` |
@@ -127,6 +128,10 @@ GET repo(401 → token 过期)+ 对不存在的 head 分支 POST /pulls
   见 `git-workspace.md`)。
 - **错误映射**:403/401 → `AUTH_FAILED`(`retryable=false`,直接升人工不重试),
   这是规范行为,见 `error-handling.md`。
+- **`gh issue create --label` 与 REST GET 短暂不一致**(2026-08-29 五连 run 4):
+  create 已返回 URL,`GitHubProvider.getIssue` 仍 `labels=[]`,ingest 闸门拒绝。
+  修法:等到 **ingest 同一条 API** 看见目标 label 再 ingest
+  (`createLabeledIssue` → `waitUntilIssueHasLabel`)。
 
 ---
 

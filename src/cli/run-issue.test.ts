@@ -25,12 +25,14 @@ const REMOTE = 'https://github.com/acme/widget.git'
 
 const ENV_KEYS = ['KEEL_GITHUB_TOKEN', 'GITHUB_TOKEN'] as const
 const saved = new Map<string, string | undefined>(ENV_KEYS.map((k) => [k, process.env[k]]))
+const savedModel = process.env.KEEL_MODEL
 
 let server: Server
 let baseUrl: string
 
 beforeEach(async () => {
   for (const k of ENV_KEYS) delete process.env[k]
+  delete process.env.KEEL_MODEL
 
   await asOwner((c) =>
     c.query(
@@ -66,6 +68,11 @@ afterAll(async () => {
     } else {
       process.env[k] = v
     }
+  }
+  if (savedModel === undefined) {
+    delete process.env.KEEL_MODEL
+  } else {
+    process.env.KEEL_MODEL = savedModel
   }
   await closePool()
 })
@@ -135,5 +142,23 @@ describe('run-issue 组合命令', () => {
     expect(r.error.detail).toContain(taskId ?? '/无 task/')
     // 原始原因不能被外层信息盖掉
     expect(r.error.cause?.kind).toBe('WORKSPACE_ERROR')
+  })
+
+  it('空白 model 先于 ingest 失败(CAPABILITY_UNSUPPORTED 且零写入)', async () => {
+    await registerRepoMain([REMOTE])
+
+    const r = await runIssue({
+      issueUrl: ISSUE_URL,
+      ci: 'passed',
+      model: '   ',
+      github: github(),
+      now: NOW,
+    })
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('CAPABILITY_UNSUPPORTED')
+    expect(r.error.detail).toMatch(/空白/)
+    expect(await countRows('feedback')).toBe(0)
+    expect(await countRows('task')).toBe(0)
   })
 })

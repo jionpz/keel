@@ -5,11 +5,11 @@
  *
  * 子命令:
  *   timer-worker [--interval <ms>]  到期收割(单次/常驻)
- *   run-task <taskId> [--max-steps N] [--ci passed|failed|real]
+ *   run-task <taskId> [--max-steps N] [--ci passed|failed|real] [--model <id>]
  *   status <taskId> [--events N]
  *   register-repo <remoteUrl> [--default-branch <name>]
  *   ingest-issue <issueUrl> [--label <name>] [--repo <uuid>]
- *   run-issue <issueUrl> [--label <name>] [--max-steps N] [--ci passed|failed|real]
+ *   run-issue <issueUrl> [--label <name>] [--max-steps N] [--ci passed|failed|real] [--model <id>]
  */
 
 import { ingestIssueMain } from './ingest-issue.js'
@@ -28,11 +28,11 @@ const HELP = `keel — AI Engineering Runtime CLI
 
 命令:
   timer-worker [--interval <ms>]   到期收割 timer(默认单次;--interval 常驻)
-  run-task <taskId> [--max-steps N] [--ci passed|failed|real]   驱动单 task 到终态
+  run-task <taskId> [--max-steps N] [--ci passed|failed|real] [--model <id>]   驱动单 task 到终态
   status <taskId> [--events N]     查 task / run / 事件摘要
   register-repo <remoteUrl> [--default-branch <name>]   注册 repo
   ingest-issue <issueUrl> [--label <name>] [--repo <uuid>]   GitHub Issue → task
-  run-issue <issueUrl> [--label <name>] [--max-steps N] [--ci passed|failed|real]   Issue → task → 驱动到终态
+  run-issue <issueUrl> [--label <name>] [--max-steps N] [--ci passed|failed|real] [--model <id>]   Issue → task → 驱动到终态
 
 选项:
   --help, -h   显示帮助

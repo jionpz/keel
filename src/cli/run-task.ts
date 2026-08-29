@@ -16,7 +16,7 @@ import { WorkflowDriver } from '../control/driver/driver.js'
 import { runTaskToCompletion, type StepRecord } from '../control/orchestrator/loop.js'
 import { RuleBasedPolicyEngine } from '../control/policy/engine.js'
 import { DEFAULT_RULESET } from '../control/policy/ruleset.js'
-import { OmpAdapter } from '../execution/adapters/omp.js'
+import { DEFAULT_OMP_MODEL, OmpAdapter } from '../execution/adapters/omp.js'
 import { HarnessSessionManager } from '../execution/session/manager.js'
 import { asRole } from '../fact/db.js'
 import { GitWorkspace } from '../fact/git-workspace.js'
@@ -40,6 +40,48 @@ export function parseCiMode(raw: string): Result<CiMode> {
     )
   }
   return ok(found)
+}
+
+export { DEFAULT_OMP_MODEL }
+
+/**
+ * 解析 OMP 模型：CLI `--model` > env `KEEL_MODEL` > 缺省 `DEFAULT_OMP_MODEL`。
+ *
+ * 空白 / 仅空白 / 只写 `--model` 没有值 → `CAPABILITY_UNSUPPORTED`。
+ * 不能静默回退缺省：那会让人以为换了模型，argv 其实仍是 deepseek。
+ *
+ * `cli` 形状跟 `parseArgs` 的 flag 值对齐（string | number | boolean）。
+ * 非法模型 id 不在这里拦 —— 没有 Keel 侧目录，交给 omp 失败。
+ */
+export function resolveModel(
+  cli: string | number | boolean | undefined,
+  env: string | undefined,
+): Result<string> {
+  if (cli !== undefined) return parseModelToken(cli, '--model')
+  if (env !== undefined) return parseModelToken(env, 'KEEL_MODEL')
+  return ok(DEFAULT_OMP_MODEL)
+}
+
+function parseModelToken(
+  raw: string | number | boolean,
+  source: '--model' | 'KEEL_MODEL',
+): Result<string> {
+  if (typeof raw === 'boolean') {
+    return err(
+      makeError(
+        'CAPABILITY_UNSUPPORTED',
+        `${source} 需要一个非空模型 id。只写标志没有值等同空白，` +
+          '空白模型会静默回退缺省，拒绝。',
+      ),
+    )
+  }
+  const trimmed = String(raw).trim()
+  if (trimmed === '') {
+    return err(
+      makeError('CAPABILITY_UNSUPPORTED', `${source} 为空。空白模型会静默回退缺省，拒绝。`),
+    )
+  }
+  return ok(trimmed)
 }
 
 /**
@@ -68,6 +110,8 @@ export interface RunTaskOptions {
   readonly ci?: CiMode
   /** 单次 run 墙钟上限秒(默认 180)。验收/慢模型可抬高,不改全局默认。 */
   readonly wallClockS?: number
+  /** OMP `--model`。省略则走 `KEEL_MODEL` / 缺省 `DEFAULT_OMP_MODEL`。 */
+  readonly model?: string
 }
 
 export interface RunTaskResult {
@@ -89,6 +133,9 @@ export async function runTask(
 
   const gateway = resolveCiGateway(ci)
   if (!gateway.ok) return gateway
+
+  const model = resolveModel(opts.model, process.env.KEEL_MODEL)
+  if (!model.ok) return model
 
   // 读 task + repo(remote_url)。以 keel_control 身份读 —— asOwner 按 db.ts
   // 的纪律只留给测试装置与迁移,生产命令不该用属主权限读生产数据。
@@ -122,7 +169,7 @@ export async function runTask(
         gateway.value,
       ),
       sessions: new HarnessSessionManager(),
-      adapter: new OmpAdapter(),
+      adapter: new OmpAdapter({ model: model.value }),
       workspace: { mode: 'worktree', ...binding },
       now,
       ...(opts.wallClockS === undefined ? {} : { wallClockS: opts.wallClockS }),
@@ -190,10 +237,11 @@ export async function printNonDoneReport(taskId: string, finalStatus: TaskStatus
 export async function runTaskMain(argv: readonly string[]): Promise<void> {
   const { positionals, flags } = parseArgs(argv)
   if (flags.help === true || positionals.length === 0) {
-    console.log(`用法: keel run-task <taskId> [--max-steps N] [--ci passed|failed|real]
+    console.log(`用法: keel run-task <taskId> [--max-steps N] [--ci passed|failed|real] [--model <id>]
 
 驱动单 task 到终态(真实 OMP + worktree)。--ci 缺省 passed(模拟 CI 结果);
---ci real 接真实 GitHub PR / CI,需要 KEEL_GITHUB_TOKEN。`)
+--ci real 接真实 GitHub PR / CI,需要 KEEL_GITHUB_TOKEN。
+--model 缺省 ${DEFAULT_OMP_MODEL}，也可设 KEEL_MODEL；空白值拒绝（不静默回退）。`)
     return
   }
   const taskId = positionals[0] as string
@@ -209,8 +257,14 @@ export async function runTaskMain(argv: readonly string[]): Promise<void> {
     process.exitCode = 1
     return
   }
+  const model = resolveModel(flags.model, process.env.KEEL_MODEL)
+  if (!model.ok) {
+    console.error(`run-task: ${model.error.detail}`)
+    process.exitCode = 1
+    return
+  }
 
-  const result = await runTask(taskId, { maxSteps, ci: ci.value })
+  const result = await runTask(taskId, { maxSteps, ci: ci.value, model: model.value })
   if (!result.ok) {
     console.error(`run-task: ${result.error.detail}`)
     process.exitCode = 1
