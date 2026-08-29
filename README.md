@@ -10,6 +10,10 @@
 - **Session inside, State outside**：Agent 会话是临时计算资源，结构化 State / RFC / Checkpoint 才是事实来源
 - 人工与 AI 使用同一套工程规范，可随时 PAUSE → HUMAN_TAKEOVER → RESUME
 
+## 术语表
+
+- **Keel** = 编排运行时
+
 ## 📐 架构文档
 
 **[`docs/`](./docs/README.md) 是架构的事实来源。**
