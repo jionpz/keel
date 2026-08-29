@@ -29,6 +29,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 import type { RunSpec } from '../../contracts/harness-adapter.js'
 import { TIER_REQUIREMENTS } from '../../shared/ids.js'
+import { CLAUDE_CAPABILITIES } from './claude-code.js'
 import { HUMAN_CAPABILITIES, HumanAdapter, type HumanInbox } from './human.js'
 import { buildArgv, DEFAULT_OMP_MODEL, OMP_CAPABILITIES, OmpAdapter } from './omp.js'
 import { parseOmpStream } from './omp-parse.js'
@@ -106,6 +107,11 @@ describe('parseOmpStream —— 用真实抓到的事件流', () => {
 describe('tier 由 capability 推导，不硬编码', () => {
   it('OMP 是 L2', () => {
     expect(tierOf(OMP_CAPABILITIES)).toBe('L2')
+  })
+
+  it('Claude Code 是 L2（本任务接入的第二个 AI harness）', () => {
+    expect(tierOf(CLAUDE_CAPABILITIES)).toBe('L2')
+    expect(CLAUDE_CAPABILITIES).not.toContain('CAP-STRUCTURED_OUTPUT')
   })
 
   it('Human 是 L0', () => {

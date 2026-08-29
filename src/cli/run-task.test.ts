@@ -21,6 +21,8 @@ import { readPrUrl, resolveCiGateway, runTask } from './run-task.js'
 const ENV_KEYS = ['KEEL_GITHUB_TOKEN', 'GITHUB_TOKEN'] as const
 const saved = new Map<string, string | undefined>(ENV_KEYS.map((k) => [k, process.env[k]]))
 const savedModel = process.env.KEEL_MODEL
+const savedHarness = process.env.KEEL_HARNESS
+const savedAnthropic = process.env.ANTHROPIC_API_KEY
 
 function setToken(value: string | undefined): void {
   for (const k of ENV_KEYS) {
@@ -35,6 +37,8 @@ function setToken(value: string | undefined): void {
 beforeEach(() => {
   setToken(undefined)
   delete process.env.KEEL_MODEL
+  delete process.env.KEEL_HARNESS
+  delete process.env.ANTHROPIC_API_KEY
 })
 
 afterAll(async () => {
@@ -49,6 +53,16 @@ afterAll(async () => {
     delete process.env.KEEL_MODEL
   } else {
     process.env.KEEL_MODEL = savedModel
+  }
+  if (savedHarness === undefined) {
+    delete process.env.KEEL_HARNESS
+  } else {
+    process.env.KEEL_HARNESS = savedHarness
+  }
+  if (savedAnthropic === undefined) {
+    delete process.env.ANTHROPIC_API_KEY
+  } else {
+    process.env.ANTHROPIC_API_KEY = savedAnthropic
   }
   await closePool()
 })
@@ -104,6 +118,23 @@ describe('runTask · --ci real 缺 token 时不进 loop', () => {
     if (r.ok) return
     expect(r.error.kind).toBe('CAPABILITY_UNSUPPORTED')
     expect(r.error.detail).toMatch(/空白/)
+  })
+
+  it('非法 harness 在 task 查询之前失败(不静默回退 omp)', async () => {
+    const r = await runTask(randomUUID(), { ci: 'passed', harness: 'codex' })
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('CAPABILITY_UNSUPPORTED')
+    expect(r.error.detail).toMatch(/claude/)
+  })
+
+  it('harness=claude 缺 ANTHROPIC_API_KEY → AUTH_FAILED 且不可重试', async () => {
+    const r = await runTask(randomUUID(), { ci: 'passed', harness: 'claude' })
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('AUTH_FAILED')
+    expect(r.error.retryable).toBe(false)
+    expect(r.error.detail).toMatch(/--bare/)
   })
 })
 

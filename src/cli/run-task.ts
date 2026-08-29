@@ -12,10 +12,12 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { err, makeError, ok, type Result } from '../contracts/errors.js'
+import type { HarnessAdapter } from '../contracts/harness-adapter.js'
 import { WorkflowDriver } from '../control/driver/driver.js'
 import { runTaskToCompletion, type StepRecord } from '../control/orchestrator/loop.js'
 import { RuleBasedPolicyEngine } from '../control/policy/engine.js'
 import { DEFAULT_RULESET } from '../control/policy/ruleset.js'
+import { ClaudeCodeAdapter, requireClaudeReady } from '../execution/adapters/claude-code.js'
 import { DEFAULT_OMP_MODEL, OmpAdapter } from '../execution/adapters/omp.js'
 import { HarnessSessionManager } from '../execution/session/manager.js'
 import { asRole } from '../fact/db.js'
@@ -27,6 +29,9 @@ import { statusMain } from './status.js'
 
 export const CI_MODES = ['passed', 'failed', 'real'] as const
 export type CiMode = (typeof CI_MODES)[number]
+
+export const HARNESS_IDS = ['omp', 'claude'] as const
+export type HarnessId = (typeof HARNESS_IDS)[number]
 
 export function parseCiMode(raw: string): Result<CiMode> {
   const found = CI_MODES.find((m) => m === raw)
@@ -45,21 +50,113 @@ export function parseCiMode(raw: string): Result<CiMode> {
 export { DEFAULT_OMP_MODEL }
 
 /**
- * 解析 OMP 模型：CLI `--model` > env `KEEL_MODEL` > 缺省 `DEFAULT_OMP_MODEL`。
+ * 解析模型 id，**不**套缺省。CLI `--model` > env `KEEL_MODEL`；都没有 → `undefined`。
+ * 空白 / 只写标志 → `CAPABILITY_UNSUPPORTED`。
  *
- * 空白 / 仅空白 / 只写 `--model` 没有值 → `CAPABILITY_UNSUPPORTED`。
- * 不能静默回退缺省：那会让人以为换了模型，argv 其实仍是 deepseek。
- *
- * `cli` 形状跟 `parseArgs` 的 flag 值对齐（string | number | boolean）。
- * 非法模型 id 不在这里拦 —— 没有 Keel 侧目录，交给 omp 失败。
+ * omp 用 `resolveModel` 再套 `DEFAULT_OMP_MODEL`；claude 用本函数，
+ * 未指定则不传 `--model`（禁止把 deepseek 缺省塞给 claude）。
  */
+export function resolveOptionalModel(
+  cli: string | number | boolean | undefined,
+  env: string | undefined,
+): Result<string | undefined> {
+  if (cli !== undefined) {
+    const r = parseModelToken(cli, '--model')
+    return r.ok ? ok(r.value) : r
+  }
+  if (env !== undefined) {
+    const r = parseModelToken(env, 'KEEL_MODEL')
+    return r.ok ? ok(r.value) : r
+  }
+  return ok(undefined)
+}
+
 export function resolveModel(
   cli: string | number | boolean | undefined,
   env: string | undefined,
 ): Result<string> {
-  if (cli !== undefined) return parseModelToken(cli, '--model')
-  if (env !== undefined) return parseModelToken(env, 'KEEL_MODEL')
-  return ok(DEFAULT_OMP_MODEL)
+  const r = resolveOptionalModel(cli, env)
+  if (!r.ok) return r
+  return ok(r.value ?? DEFAULT_OMP_MODEL)
+}
+
+/**
+ * `--harness` > `KEEL_HARNESS` > 缺省 `omp`。
+ * 非法 / 空白 / 只写标志 → `CAPABILITY_UNSUPPORTED`，不静默回退 omp。
+ */
+export function resolveHarness(
+  cli: string | number | boolean | undefined,
+  env: string | undefined,
+): Result<HarnessId> {
+  if (cli !== undefined) return parseHarnessToken(cli, '--harness')
+  if (env !== undefined) return parseHarnessToken(env, 'KEEL_HARNESS')
+  return ok('omp')
+}
+
+function parseHarnessToken(
+  raw: string | number | boolean,
+  source: '--harness' | 'KEEL_HARNESS',
+): Result<HarnessId> {
+  if (typeof raw === 'boolean') {
+    return err(
+      makeError(
+        'CAPABILITY_UNSUPPORTED',
+        `${source} 需要 omp 或 claude。只写标志没有值等同空白，` +
+          '空白 harness 会静默回退缺省 omp，拒绝。',
+      ),
+    )
+  }
+  const trimmed = String(raw).trim()
+  if (trimmed === '') {
+    return err(
+      makeError(
+        'CAPABILITY_UNSUPPORTED',
+        `${source} 为空。空白 harness 会静默回退缺省 omp，拒绝。`,
+      ),
+    )
+  }
+  const found = HARNESS_IDS.find((id) => trimmed === id)
+  if (found === undefined) {
+    return err(
+      makeError(
+        'CAPABILITY_UNSUPPORTED',
+        `${source} 只接受 ${HARNESS_IDS.join(' | ')},收到:${trimmed}。` +
+          '拼错的取值不能静默退化成 omp。',
+      ),
+    )
+  }
+  return ok(found)
+}
+
+/**
+ * 按 harness 解析模型。omp 套缺省；claude 不套（禁止 deepseek 进 --model）。
+ * 新增 harness 必须加 case —— 没有 default 回退。
+ */
+export function resolveModelForHarness(
+  harness: HarnessId,
+  cli: string | number | boolean | undefined,
+  env: string | undefined,
+): Result<string | undefined> {
+  switch (harness) {
+    case 'omp': {
+      const r = resolveModel(cli, env)
+      return r.ok ? ok(r.value) : r
+    }
+    case 'claude':
+      return resolveOptionalModel(cli, env)
+  }
+}
+
+export function createHarnessAdapter(
+  harness: HarnessId,
+  model: string | undefined,
+): HarnessAdapter {
+  switch (harness) {
+    case 'claude':
+      return new ClaudeCodeAdapter(model === undefined ? {} : { model })
+    case 'omp':
+      return new OmpAdapter({ model: model ?? DEFAULT_OMP_MODEL })
+  }
 }
 
 function parseModelToken(
@@ -110,8 +207,13 @@ export interface RunTaskOptions {
   readonly ci?: CiMode
   /** 单次 run 墙钟上限秒(默认 180)。验收/慢模型可抬高,不改全局默认。 */
   readonly wallClockS?: number
-  /** OMP `--model`。省略则走 `KEEL_MODEL` / 缺省 `DEFAULT_OMP_MODEL`。 */
-  readonly model?: string
+  /**
+   * `--model` 原值。omp：省略则 KEEL_MODEL / 缺省 deepseek；
+   * claude：省略则不传 `--model`。空白拒绝。
+   */
+  readonly model?: string | number | boolean
+  /** `--harness` 原值。省略则 KEEL_HARNESS / 缺省 omp。 */
+  readonly harness?: string | number | boolean
 }
 
 export interface RunTaskResult {
@@ -134,7 +236,15 @@ export async function runTask(
   const gateway = resolveCiGateway(ci)
   if (!gateway.ok) return gateway
 
-  const model = resolveModel(opts.model, process.env.KEEL_MODEL)
+  const harness = resolveHarness(opts.harness, process.env.KEEL_HARNESS)
+  if (!harness.ok) return harness
+
+  if (harness.value === 'claude') {
+    const ready = requireClaudeReady()
+    if (!ready.ok) return ready
+  }
+
+  const model = resolveModelForHarness(harness.value, opts.model, process.env.KEEL_MODEL)
   if (!model.ok) return model
 
   // 读 task + repo(remote_url)。以 keel_control 身份读 —— asOwner 按 db.ts
@@ -169,7 +279,7 @@ export async function runTask(
         gateway.value,
       ),
       sessions: new HarnessSessionManager(),
-      adapter: new OmpAdapter({ model: model.value }),
+      adapter: createHarnessAdapter(harness.value, model.value),
       workspace: { mode: 'worktree', ...binding },
       now,
       ...(opts.wallClockS === undefined ? {} : { wallClockS: opts.wallClockS }),
@@ -237,11 +347,13 @@ export async function printNonDoneReport(taskId: string, finalStatus: TaskStatus
 export async function runTaskMain(argv: readonly string[]): Promise<void> {
   const { positionals, flags } = parseArgs(argv)
   if (flags.help === true || positionals.length === 0) {
-    console.log(`用法: keel run-task <taskId> [--max-steps N] [--ci passed|failed|real] [--model <id>]
+    console.log(`用法: keel run-task <taskId> [--max-steps N] [--ci passed|failed|real] [--model <id>] [--harness omp|claude]
 
-驱动单 task 到终态(真实 OMP + worktree)。--ci 缺省 passed(模拟 CI 结果);
+驱动单 task 到终态(真实 harness + worktree)。--ci 缺省 passed(模拟 CI 结果);
 --ci real 接真实 GitHub PR / CI,需要 KEEL_GITHUB_TOKEN。
---model 缺省 ${DEFAULT_OMP_MODEL}，也可设 KEEL_MODEL；空白值拒绝（不静默回退）。`)
+--harness 缺省 omp，也可设 KEEL_HARNESS；非法值拒绝（不静默回退）。
+--model 对 omp 缺省 ${DEFAULT_OMP_MODEL}，也可设 KEEL_MODEL；空白值拒绝（不静默回退）。
+claude 未指定 --model / KEEL_MODEL 时不传 --model（不把 omp 缺省塞给 claude）。`)
     return
   }
   const taskId = positionals[0] as string
@@ -257,14 +369,25 @@ export async function runTaskMain(argv: readonly string[]): Promise<void> {
     process.exitCode = 1
     return
   }
-  const model = resolveModel(flags.model, process.env.KEEL_MODEL)
+  const harness = resolveHarness(flags.harness, process.env.KEEL_HARNESS)
+  if (!harness.ok) {
+    console.error(`run-task: ${harness.error.detail}`)
+    process.exitCode = 1
+    return
+  }
+  const model = resolveModelForHarness(harness.value, flags.model, process.env.KEEL_MODEL)
   if (!model.ok) {
     console.error(`run-task: ${model.error.detail}`)
     process.exitCode = 1
     return
   }
 
-  const result = await runTask(taskId, { maxSteps, ci: ci.value, model: model.value })
+  const result = await runTask(taskId, {
+    maxSteps,
+    ci: ci.value,
+    harness: harness.value,
+    ...(model.value === undefined ? {} : { model: model.value }),
+  })
   if (!result.ok) {
     console.error(`run-task: ${result.error.detail}`)
     process.exitCode = 1

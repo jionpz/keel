@@ -1,0 +1,10 @@
+{"file": "docs/09-roadmap.md", "reason": "阶段二触发条件与内容优先级"}
+{"file": "docs/08-cross-cutting.md", "reason": "事件流四问与 O1-O4 要求"}
+{"file": "docs/adr/0005-harness-support-tiers.md", "reason": "第二Harness优先级与L0/L2定义"}
+{"file": ".trellis/tasks/archive/2026-08/08-23-harness-adapters/research/omp-interface.md", "reason": "Adapter实测格式参考"}
+{"file": "docs/05-contracts/harness-adapter.md", "reason": "HarnessAdapter 契约、capability、untrusted 拒绝、post_validate"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "三平面边界：execution 不得写 fact；.js 后缀"}
+{"file": ".trellis/spec/backend/session-context.md", "reason": "Adapter 必须按序渲染全部 section"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Result/ErrorKind；缺二进制 HARNESS_UNAVAILABLE vs 假绿"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "不 mock harness；验收不 skip；check 必须绿"}
+{"file": ".trellis/tasks/08-29-second-harness/research/claude-code-interface.md", "reason": "本机 claude 2.1.222 --help 实测与 argv 约束"}

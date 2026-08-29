@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "验收凭据矩阵与假绿纪律"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "AUTH_FAILED与防假绿反例"}
+{"file": "docs/05-contracts/harness-adapter.md", "reason": "切换 harness 不得改 schema/转移表"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "边界与 generated 纪律"}
+{"file": ".trellis/spec/backend/session-context.md", "reason": "section 到达性不得回退"}
+{"file": ".trellis/tasks/08-29-second-harness/research/claude-code-interface.md", "reason": "capability 声明不得超出实测；--bare 不得省略"}

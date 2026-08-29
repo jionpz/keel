@@ -7,7 +7,17 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { parseArgs } from './argv.js'
-import { CI_MODES, DEFAULT_OMP_MODEL, parseCiMode, resolveModel } from './run-task.js'
+import {
+  CI_MODES,
+  createHarnessAdapter,
+  DEFAULT_OMP_MODEL,
+  HARNESS_IDS,
+  parseCiMode,
+  resolveHarness,
+  resolveModel,
+  resolveModelForHarness,
+  resolveOptionalModel,
+} from './run-task.js'
 
 describe('parseArgs(零依赖 argv 解析)', () => {
   it('位置参数 + 标志值', () => {
@@ -123,10 +133,90 @@ describe('--ci 取值清单不得漂移', () => {
   })
 })
 
-describe('run-issue 把同一 model 传进 runTask', () => {
+describe('run-issue 把同一 model / harness 传进 runTask', () => {
   it('组合调用含 model: model.value(不丢字段)', () => {
     const source = readFileSync(new URL('./run-issue.ts', import.meta.url), 'utf8')
     expect(source).toMatch(/runTask\([\s\S]*model: model\.value/)
+  })
+
+  it('组合调用含 harness: harness.value(不丢字段)', () => {
+    const source = readFileSync(new URL('./run-issue.ts', import.meta.url), 'utf8')
+    expect(source).toMatch(/runTask\([\s\S]*harness: harness\.value/)
+  })
+})
+
+describe('--harness 取值清单不得漂移', () => {
+  function harnessFlagLists(src: string): string[] {
+    return [...src.matchAll(/--harness ([a-z]+(?:\|[a-z]+)+)/g)].map((m) => m[1] as string)
+  }
+
+  it('每处帮助文本里的 --harness 清单都与 HARNESS_IDS 一致', () => {
+    const expected = HARNESS_IDS.join('|')
+    expect(HARNESS_IDS.length).toBeGreaterThan(1)
+    for (const file of ['./index.ts', './run-task.ts', './run-issue.ts']) {
+      const lists = harnessFlagLists(readFileSync(new URL(file, import.meta.url), 'utf8'))
+      expect(lists.length, `${file} 未列出 --harness 取值`).toBeGreaterThan(0)
+      for (const list of lists) {
+        expect(list, `${file} 的 --harness 清单漂移`).toBe(expected)
+      }
+    }
+  })
+})
+
+describe('resolveHarness · CLI > env > 缺省 omp，非法拒绝', () => {
+  it('都不给 → 缺省 omp', () => {
+    const r = resolveHarness(undefined, undefined)
+    expect(r.ok && r.value).toBe('omp')
+  })
+
+  it('--harness 取值原样(trim)', () => {
+    const r = resolveHarness('  claude  ', 'omp')
+    expect(r.ok && r.value).toBe('claude')
+  })
+
+  it('KEEL_HARNESS 在无 CLI 时生效', () => {
+    const r = resolveHarness(undefined, '  claude  ')
+    expect(r.ok && r.value).toBe('claude')
+  })
+
+  it('CLI 覆盖 env', () => {
+    const r = resolveHarness('claude', 'omp')
+    expect(r.ok && r.value).toBe('claude')
+  })
+
+  it('空白 CLI 拒绝，不回退 omp', () => {
+    for (const cli of ['', '   ', true] as const) {
+      const r = resolveHarness(cli, 'omp')
+      expect(r.ok).toBe(false)
+      if (r.ok) return
+      expect(r.error.kind).toBe('CAPABILITY_UNSUPPORTED')
+      expect(r.error.retryable).toBe(false)
+    }
+  })
+
+  it('空白 KEEL_HARNESS 拒绝，不回退 omp', () => {
+    const r = resolveHarness(undefined, '   ')
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('CAPABILITY_UNSUPPORTED')
+    expect(r.error.detail).toMatch(/KEEL_HARNESS/)
+  })
+
+  it('非法 id 拒绝，不回退 omp', () => {
+    const r = resolveHarness('codex', undefined)
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('CAPABILITY_UNSUPPORTED')
+    expect(r.error.detail).toMatch(/codex/)
+  })
+
+  it('parseArgs 的 --harness 无值(布尔 true)拒绝', () => {
+    const p = parseArgs(['task-1', '--harness'])
+    expect(p.flags.harness).toBe(true)
+    const r = resolveHarness(p.flags.harness, undefined)
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('CAPABILITY_UNSUPPORTED')
   })
 })
 
@@ -178,5 +268,54 @@ describe('resolveModel · CLI > env > 缺省，空白拒绝', () => {
     expect(r.ok).toBe(false)
     if (r.ok) return
     expect(r.error.kind).toBe('CAPABILITY_UNSUPPORTED')
+  })
+})
+
+describe('resolveOptionalModel · 都不给是 undefined，不套 omp 缺省', () => {
+  it('都不给 → undefined（claude 用这条，避免 deepseek 进 --model）', () => {
+    const r = resolveOptionalModel(undefined, undefined)
+    expect(r.ok && r.value).toBeUndefined()
+  })
+
+  it('有 CLI 时原样 trim，不套缺省', () => {
+    const r = resolveOptionalModel('  opus  ', undefined)
+    expect(r.ok && r.value).toBe('opus')
+  })
+})
+
+describe('resolveModelForHarness · omp 套缺省，claude 不套', () => {
+  it('omp 都不给 → DEFAULT_OMP_MODEL', () => {
+    const r = resolveModelForHarness('omp', undefined, undefined)
+    expect(r.ok && r.value).toBe(DEFAULT_OMP_MODEL)
+  })
+
+  it('claude 都不给 → undefined，不是 deepseek', () => {
+    const r = resolveModelForHarness('claude', undefined, undefined)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value).toBeUndefined()
+    expect(r.value).not.toBe(DEFAULT_OMP_MODEL)
+  })
+
+  it('claude 显式 model 原样，仍不是缺省 deepseek', () => {
+    const r = resolveModelForHarness('claude', '  claude-opus-4-6  ', DEFAULT_OMP_MODEL)
+    expect(r.ok && r.value).toBe('claude-opus-4-6')
+  })
+})
+
+describe('createHarnessAdapter', () => {
+  it('缺省 omp；claude 的 harness_id 是 claude', () => {
+    expect(createHarnessAdapter('omp', undefined).describe().harness_id).toBe('omp')
+    expect(createHarnessAdapter('claude', undefined).describe().harness_id).toBe('claude')
+    expect(createHarnessAdapter('claude', undefined).describe().cost_basis).toBe('estimated')
+  })
+})
+
+describe('claude 副作用前预检不得漂移', () => {
+  it('run-task / run-issue 都调用 requireClaudeReady', () => {
+    for (const file of ['./run-task.ts', './run-issue.ts']) {
+      const src = readFileSync(new URL(file, import.meta.url), 'utf8')
+      expect(src, `${file} 未调用 requireClaudeReady`).toMatch(/requireClaudeReady/)
+    }
   })
 })
