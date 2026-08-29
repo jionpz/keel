@@ -26,3 +26,24 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 2: OMP 模型可配：实现并合入 #46
+
+**Date**: 2026-08-29
+**Task**: OMP 模型可配：实现并合入 #46
+**Branch**: `main`
+
+### Summary
+
+实现 resolveModel（CLI --model > KEEL_MODEL > deepseek-v4-flash），空白拒绝；squash 合入 PR #46。第二 Harness 仍按 D0 推迟。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4ea75ac` | (see git log) |
+
+### Status
+
+[OK] **Completed**
