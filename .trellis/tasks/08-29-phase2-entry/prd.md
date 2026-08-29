@@ -31,9 +31,10 @@
 
 | 子任务 | 职责 | 阻塞关系 |
 |---|---|---|
-| `08-29-five-run-campaign` | 5 连 `run-issue --ci real`，JSONL 证据 | **必须先做**；阻塞阶段二入口 #2 |
-| `08-29-wallclock-adr` | R-009 墙钟语义 ADR + 可选实现 | 与五连并行；五连超时多时才 blocking |
-| `08-29-second-harness` | Claude Code Adapter MVP + opt-in 验收 | 依赖五连 ≥3/5 成功 |
+| `08-29-five-run-campaign` | 5 连 `run-issue --ci real`，JSONL 证据 | **已归档 5/5** |
+| `08-29-omp-model` | OMP `--model` / `KEEL_MODEL` 透传 | **当前优先**；不换 Harness |
+| `08-29-wallclock-adr` | R-009 墙钟语义 ADR + 可选实现 | 五连超时未阻塞终态，非紧急 |
+| `08-29-second-harness` | Claude Code Adapter MVP | **推迟**（D0：换模型 ≠ 换 Harness） |
 | `08-29-ingress-poller` | daemon 轮询 ingest+run-issue | 依赖「人工跑 CLI 成瓶颈」信号 |
 
 ## Acceptance Criteria（父任务）

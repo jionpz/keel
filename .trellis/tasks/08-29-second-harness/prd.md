@@ -2,6 +2,8 @@
 
 父任务：`.trellis/tasks/08-29-phase2-entry`。
 
+本任务 **planning 冻结**：待 `08-29-omp-model` 完成后再评估是否仍要 Claude Adapter。
+
 ## Goal
 
 实现 **ClaudeCodeAdapter** MVP，验证 ADR-0005：「Harness 可替换」且切换**不改** Control / Fact 契约（转移表、事件 schema、Policy）。
@@ -35,7 +37,7 @@ ADR-0005 / `docs/09-roadmap.md` §4.2 #1 要证的是 **「执行层 CLI 可替�
 
 | # | 决策 | 倾向 | 状态 |
 |---|---|---|---|
-| D0 | 阶段二下一步 | **待你确认**：推迟 Claude Adapter，先做 OMP 模型可配 | 本轮问题 |
+| D0 | 阶段二下一步 | **推迟 Claude Adapter，先做 OMP 模型可配**（任务 `08-29-omp-model`） | ✅ 用户 2026-08-29 |
 | D1 | 若仍做第二 Harness | Claude Code 官方 CLI | 仅在 D0=继续 Harness 时有效 |
 | D2 | 输出契约 | MVP **仍 `post_validate`** | 仅在 D0=继续 Harness 时有效 |
 | D3 | 选择面 | `--harness` > `KEEL_HARNESS` > 缺省 omp | 仅在 D0=继续 Harness 时有效 |
