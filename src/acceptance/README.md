@@ -51,6 +51,7 @@ R-007 的重试仍可能连续三次不合格。
 | `github-pr.acceptance.test.ts` | push → 真实建 PR → 幂等复用 → 真实 CI 回读（不经编排器） | 同上 |
 | `session-milestone.acceptance.test.ts` | Session 里程碑路径 | 视用例而定 |
 | `issue-e2e.acceptance.test.ts` | **真实 GitHub Issue** → S-DONE + 通过 CI 的真实 PR,事件流 T-001 起 T-024 终 | 上述两项 + 已登录的 `gh` CLI(创建/关闭验收用 Issue) |
+| `five-run.acceptance.test.ts` | **五连稳定性战役**：5× 同上,闭合 roadmap §4.1 #2 | 同上；整 batch ~15–25min |
 
 早期的 `merge.acceptance.test.ts`（任务 `08-25-merge-acceptance`）与 `v01-criterion-github`
 跑的是同一条昂贵链路，已删除，不再「保留作对照」：它的终态断言更宽松（容忍

@@ -24,14 +24,18 @@
  *   pnpm run test:acceptance
  */
 
-import { execFileSync } from 'node:child_process'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { registerRepoMain } from '../cli/register-repo.js'
 import { runIssue } from '../cli/run-issue.js'
 import { PgArtifactStore } from '../fact/artifact-store.js'
 import { asOwner, closePool } from '../fact/db.js'
-import { branchFor } from '../fact/git-workspace.js'
 import { ownerRepo, readTokenFromEnv } from '../fact/github-provider.js'
+import {
+  cleanupAcceptanceRun,
+  createLabeledIssue,
+  KEEL_LABEL,
+  verifyCiOnPr,
+} from './gh-issue-helpers.js'
 import { preflightGitHub, preflightOmp } from './preflight.js'
 
 const store = new PgArtifactStore()
@@ -39,7 +43,7 @@ const store = new PgArtifactStore()
 const token: string | undefined = readTokenFromEnv()
 const remote = process.env.KEEL_TEST_REMOTE_REPO
 
-const LABEL = 'keel'
+const LABEL = KEEL_LABEL
 /** 刻意压到 Policy P4(auto_develop)窗口:文档-only、单文件、无安全面。 */
 const ISSUE_BODY = [
   '目标:只改 README.md 一处文档,补一句「导出支持按日期筛选」。',
@@ -76,52 +80,6 @@ beforeEach(async () => {
 
 afterAll(closePool)
 
-function gh(args: readonly string[]): string {
-  const t = readTokenFromEnv()
-  const env = t === undefined ? process.env : { ...process.env, GH_TOKEN: t, GITHUB_TOKEN: t }
-  return execFileSync('gh', [...args], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env,
-  })
-}
-
-/** 从 PR URL 取编号 —— 断言与 cleanup 共用一份,不写第二遍 */
-function prNumber(url: string): string {
-  return url.split('/').at(-1) ?? ''
-}
-
-/** 创建带目标 label 的真实 Issue,返回其 URL */
-function createLabeledIssue(slug: string, title: string): string {
-  try {
-    gh(['label', 'create', LABEL, '--repo', slug, '--description', 'Keel 自动构建闸门'])
-  } catch {
-    // label 已存在 —— 这是期望的常态
-  }
-  const out = gh([
-    'issue',
-    'create',
-    '--repo',
-    slug,
-    '--title',
-    title,
-    '--body',
-    ISSUE_BODY,
-    '--label',
-    LABEL,
-  ])
-  const url = out
-    .trim()
-    .split('\n')
-    .map((l) => l.trim())
-    .filter((l) => l.startsWith('https://'))
-    .at(-1)
-  if (url === undefined) {
-    throw new Error(`gh issue create 未返回 URL:${out}`)
-  }
-  return url
-}
-
 describe('Issue → S-DONE 全真实闭环(需要凭据、远程仓库与 gh CLI)', () => {
   it('keel run-issue --ci real 从真实 Issue 走到 S-DONE,产出通过 CI 的真实 PR', {
     timeout: 1_800_000,
@@ -140,7 +98,7 @@ describe('Issue → S-DONE 全真实闭环(需要凭据、远程仓库与 gh CLI
     // try/finally,远端会留一个没人关的验收 Issue。
     await registerRepoMain([remote])
 
-    const issueUrl = createLabeledIssue(slug.value, `[keel-acc] 文档补充 ${stamp}`)
+    const issueUrl = createLabeledIssue(slug.value, `[keel-acc] 文档补充 ${stamp}`, ISSUE_BODY)
     const issueNumber = issueUrl.split('/').at(-1) ?? ''
 
     let taskId: string | undefined
@@ -231,29 +189,7 @@ describe('Issue → S-DONE 全真实闭环(需要凭据、远程仓库与 gh CLI
       // 那时 Actions 还没启动(check-run 晚 5 秒才 started_at)。Keel 把
       // 「两个端点都还读不到」当成了 passed。判据要的是「通过 CI 的 PR」,
       // 所以这里回到 GitHub 核对一次:head SHA 上必须真有跑完且成功的 check。
-      const headSha = gh([
-        'pr',
-        'view',
-        prNumber(prUrl),
-        '--repo',
-        slug.value,
-        '--json',
-        'headRefOid',
-        '--jq',
-        '.headRefOid',
-      ]).trim()
-      const checkRuns = JSON.parse(
-        gh(['api', `/repos/${slug.value}/commits/${headSha}/check-runs`]),
-      ) as { check_runs: { name: string; status: string; conclusion: string | null }[] }
-      const completed = checkRuns.check_runs.filter((c) => c.status === 'completed')
-      expect(
-        completed.length,
-        `head SHA ${headSha} 上没有任何跑完的 check —— T-024 无真实 CI 作证(假绿)`,
-      ).toBeGreaterThan(0)
-      expect(
-        completed.every((c) => c.conclusion === 'success' || c.conclusion === 'skipped'),
-        `真实 check 结论:${completed.map((c) => `${c.name}=${c.conclusion}`).join(', ')}`,
-      ).toBe(true)
+      verifyCiOnPr(slug.value, prUrl)
 
       // ── AC5-4:PR 是真做的,不是记意图 ──
       const prEvent = evs.value.find(
@@ -274,26 +210,13 @@ describe('Issue → S-DONE 全真实闭环(需要凭据、远程仓库与 gh CLI
       console.log('\n走过的路径(AC5):', transitions.join(' → '))
       console.log('PR:', prUrl)
     } finally {
-      // 收尾:关 PR、删远端分支、关 Issue —— 验收不留垃圾
-      if (prUrl !== null) {
-        try {
-          gh(['pr', 'close', prNumber(prUrl), '--repo', slug.value])
-        } catch {
-          /* 已关闭则忽略 */
-        }
-      }
-      if (taskId !== undefined) {
-        try {
-          execFileSync('git', ['push', remote, '--delete', branchFor(taskId)], { stdio: 'pipe' })
-        } catch {
-          /* 分支可能已随 PR 关闭被清理 */
-        }
-      }
-      try {
-        gh(['issue', 'close', issueNumber, '--repo', slug.value])
-      } catch {
-        /* 已关闭则忽略 */
-      }
+      cleanupAcceptanceRun({
+        remote,
+        slug: slug.value,
+        taskId,
+        prUrl,
+        issueNumber,
+      })
     }
   })
 })
