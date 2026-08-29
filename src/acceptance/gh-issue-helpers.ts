@@ -6,7 +6,7 @@
 import { execFileSync } from 'node:child_process'
 import { appendFileSync } from 'node:fs'
 import { branchFor } from '../fact/git-workspace.js'
-import { readTokenFromEnv } from '../fact/github-provider.js'
+import { GitHubProvider, readTokenFromEnv } from '../fact/github-provider.js'
 
 export const KEEL_LABEL = 'keel'
 
@@ -24,8 +24,44 @@ export function prNumber(url: string): string {
   return url.split('/').at(-1) ?? ''
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * 等到 GET /issues/:n 能看见目标 label。
+ *
+ * 2026-08-29 五连 run 4：`gh issue create --label keel` 立刻返回 URL，
+ * 但 ingest 的 REST 读到 labels=[]（Issue #53 事后才有 keel）。
+ * 闸门按当时快照拒绝 —— 必须等到 **ingest 同一条 API** 看见 label。
+ */
+async function waitUntilIssueHasLabel(slug: string, number: string, label: string): Promise<void> {
+  const github = new GitHubProvider()
+  const remoteUrl = `https://github.com/${slug}.git`
+  const deadline = Date.now() + 20_000
+  let patched = false
+  while (Date.now() < deadline) {
+    const info = await github.getIssue(remoteUrl, Number(number))
+    if (info.ok && info.value.labels.includes(label)) return
+    if (!patched) {
+      try {
+        gh(['issue', 'edit', number, '--repo', slug, '--add-label', label])
+      } catch {
+        /* 可能已加上,下一轮 GET 会看见 */
+      }
+      patched = true
+    }
+    await sleep(400)
+  }
+  throw new Error(`Issue #${number} 创建后 20s 内 REST 仍看不到 label "${label}"（ingest 会拒绝）`)
+}
+
 /** 创建带 keel label 的 Issue；body 由调用方提供（五连用 5 变体） */
-export function createLabeledIssue(slug: string, title: string, body: string): string {
+export async function createLabeledIssue(
+  slug: string,
+  title: string,
+  body: string,
+): Promise<string> {
   try {
     gh(['label', 'create', KEEL_LABEL, '--repo', slug, '--description', 'Keel 自动构建闸门'])
   } catch {
@@ -52,6 +88,8 @@ export function createLabeledIssue(slug: string, title: string, body: string): s
   if (url === undefined) {
     throw new Error(`gh issue create 未返回 URL:${out}`)
   }
+  const number = url.split('/').at(-1) ?? ''
+  await waitUntilIssueHasLabel(slug, number, KEEL_LABEL)
   return url
 }
 

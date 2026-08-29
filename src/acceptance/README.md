@@ -81,6 +81,9 @@ FEEDBACK 注释里分析过的那类夹具错误）；其唯一独特断言 —�
 - **`ghs_` 也不能给 Issue 打 label** —— `issue-e2e` 的 `gh()` 会把
   `KEEL_GITHUB_TOKEN` 注入 `GH_TOKEN`;只用 `gh auth login` 的 App token 时
   `gh issue create --label keel` 会静默建出无 label 的 Issue;
+- **`gh issue create --label` 与 REST GET 有短暂不一致**（2026-08-29 五连 run 4）：
+  create 已返回 URL，ingest 读到 `labels=[]`。`createLabeledIssue` 会等到
+  `GitHubProvider.getIssue` 看见 `keel` 再返回;
 - **`omp` 不在环境里时，链路会假绿**（2026-08-28 实测）：缺它时每个 run 都失败，
   编排一路重试到 `T-031` 落进 `S-HUMAN_REVIEW` —— 与「Policy 判高风险」**同一个终态**。
   `issue-e2e` 早先只看终态就早退，于是什么都没跑出来也判绿。现已两处堵上：

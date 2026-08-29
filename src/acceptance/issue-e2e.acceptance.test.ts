@@ -98,7 +98,11 @@ describe('Issue → S-DONE 全真实闭环(需要凭据、远程仓库与 gh CLI
     // try/finally,远端会留一个没人关的验收 Issue。
     await registerRepoMain([remote])
 
-    const issueUrl = createLabeledIssue(slug.value, `[keel-acc] 文档补充 ${stamp}`, ISSUE_BODY)
+    const issueUrl = await createLabeledIssue(
+      slug.value,
+      `[keel-acc] 文档补充 ${stamp}`,
+      ISSUE_BODY,
+    )
     const issueNumber = issueUrl.split('/').at(-1) ?? ''
 
     let taskId: string | undefined

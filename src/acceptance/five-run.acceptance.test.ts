@@ -130,7 +130,7 @@ describe('五连稳定性战役(5× run-issue --ci real)', () => {
       const body = ISSUE_BODIES[run - 1]
       if (body === undefined) throw new Error(`缺少 run-${run} 模板`)
 
-      const issueUrl = createLabeledIssue(slug.value, `[keel-5run] #${run} ${stamp}`, body)
+      const issueUrl = await createLabeledIssue(slug.value, `[keel-5run] #${run} ${stamp}`, body)
       const issueNumber = issueUrl.split('/').at(-1) ?? ''
 
       let taskId: string | undefined
