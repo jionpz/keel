@@ -112,3 +112,5 @@ pending 归并、runner 无 omp),记录见任务 `prd.md`。
 
 运行真实验收:`KEEL_GITHUB_TOKEN="$(gh auth token)" KEEL_TEST_REMOTE_REPO=<url> pnpm run test:acceptance`
 (缺凭据时明确失败,不静默跳过)。未注入 provider 时系统如实记录 `SideEffectIntent`,不假装成功。
+
+导出支持按日期筛选。
