@@ -26,6 +26,13 @@ const API_ROOT = 'https://api.github.com'
 
 const POLL_INTERVAL_MS = 10_000
 const POLL_TIMEOUT_MS = 30 * 60_000
+/**
+ * 「无人上报」静默期 —— 见 combinedStatus 关于 `unreported` 的说明。
+ * 90s 用来盖住 Actions 从 push/建 PR 到 check-run 出现在 API 上的排队延迟
+ * (2026-08-28 实测约 3–10s),取一个宽裕值:多等一会儿不伤正确性,
+ * 早下结论会造出假绿。
+ */
+const EMPTY_SETTLE_MS = 90_000
 
 export interface GitHubProviderOptions {
   /** 覆盖 API 根地址 —— 测试用 stub server 注入 */
@@ -35,6 +42,8 @@ export interface GitHubProviderOptions {
   /** 覆盖轮询间隔/上限 —— 测试用毫秒级 */
   readonly pollIntervalMs?: number
   readonly pollTimeoutMs?: number
+  /** 覆盖「无人上报」静默期 —— 测试用毫秒级 */
+  readonly emptySettleMs?: number
 }
 
 export function readTokenFromEnv(): string | undefined {
@@ -89,10 +98,12 @@ export class GitHubProvider implements PullRequestGateway, CiGateway {
     this.token = opts.token === undefined ? readTokenFromEnv() : (opts.token ?? undefined)
     this.pollIntervalMs = opts.pollIntervalMs ?? POLL_INTERVAL_MS
     this.pollTimeoutMs = opts.pollTimeoutMs ?? POLL_TIMEOUT_MS
+    this.emptySettleMs = opts.emptySettleMs ?? EMPTY_SETTLE_MS
   }
 
   private readonly pollIntervalMs: number
   private readonly pollTimeoutMs: number
+  private readonly emptySettleMs: number
 
   /** GitHub API 公共头。Authorization 只在此处出现,不进 URL/argv/日志 */
   private headers(): Record<string, string> {
@@ -205,16 +216,29 @@ export class GitHubProvider implements PullRequestGateway, CiGateway {
     return ok({ number: pr.number, url: pr.html_url, created: true })
   }
 
+  /**
+   * 等 CI 到终态。四个出口:
+   *   - 读到 passed / failed → 直接返回;
+   *   - 有人上报但没跑完(pending)→ 继续轮询;
+   *   - 无人上报(unreported)且已过静默期 → 认定该仓库没配 CI,返回 passed;
+   *   - 硬超时 → 按失败返回,由编排器转成 CIFailed(T-025),人可介入。
+   */
   async waitForCi(input: CiWaitInput): Promise<Result<'passed' | 'failed'>> {
     const slug = ownerRepo(input.remoteUrl)
     if (!slug.ok) return slug
 
-    const deadline = Date.now() + this.pollTimeoutMs
+    const start = Date.now()
+    const deadline = start + this.pollTimeoutMs
     for (;;) {
       const combined = await this.combinedStatus(slug.value, input.headSha)
       if (!combined.ok) return combined
 
-      if (combined.value !== 'pending') return ok(combined.value)
+      if (combined.value === 'passed' || combined.value === 'failed') return ok(combined.value)
+
+      // 无人上报:先把静默期走完,才敢下「这仓库没有 CI」的结论。
+      if (combined.value === 'unreported' && Date.now() - start >= this.emptySettleMs) {
+        return ok('passed')
+      }
 
       if (Date.now() > deadline) {
         // 硬超时按失败处理 —— 由编排器转成 CIFailed(T-025),人可介入
@@ -225,15 +249,26 @@ export class GitHubProvider implements PullRequestGateway, CiGateway {
   }
 
   /**
-   * 合并 Checks 与 Commit Status 为三态:
-   *   任一 failed → failed;全部 success → passed;否则 pending。
+   * 合并 Checks 与 Commit Status 为四态:
+   *   任一 failed → failed;有人上报但未跑完 → pending;
+   *   有人上报且全绿 → passed;**一个都没人上报** → unreported。
    *
    * CI 是外部事实源,这里只读取并归并,**绝不制造结论**。
+   *
+   * `unreported` 必须与 `passed` 分开(2026-08-28 假绿实测教训):
+   * Actions-only 仓库的 `commits/{sha}/status` 恒为 `state=pending` + 空 statuses,
+   * 而 check-run 要过几秒才出现在 `commits/{sha}/check-runs` 上。建 PR 后的那几秒里
+   * 两个端点都读不到任何东西,与「这仓库压根没配 CI」在数据上完全同形。
+   * 旧实现把它当 passed,于是 PR 建好 3.5 秒就流出了 T-024 ——
+   * CI 还没开始跑,系统已经宣布它过了(2026-08-28 第六次验收实录:
+   * PR 15:45:53 建成,T-024 15:45:56,真实 check-run 15:46:01 才启动)。
+   * 判据要的是「通过 CI 的 PR」,这种结论是假绿。等多久算「真的没人上报」
+   * 是策略,归 waitForCi 的静默期;本函数只负责如实分辨两者。
    */
   private async combinedStatus(
     slug: string,
     sha: string,
-  ): Promise<Result<'passed' | 'failed' | 'pending'>> {
+  ): Promise<Result<'passed' | 'failed' | 'pending' | 'unreported'>> {
     const checks = await this.request(`/repos/${slug}/commits/${sha}/check-runs`)
     if (!checks.ok) return checks
     const statuses = await this.request(`/repos/${slug}/commits/${sha}/status`)
@@ -243,31 +278,29 @@ export class GitHubProvider implements PullRequestGateway, CiGateway {
       total_count: number
       check_runs: { status: string; conclusion: string | null }[]
     } | null
-    if (cj !== null && Array.isArray(cj.check_runs)) {
-      for (const run of cj.check_runs) {
-        if (
-          run.status === 'completed' &&
-          run.conclusion !== 'success' &&
-          run.conclusion !== 'skipped'
-        ) {
-          return ok('failed')
-        }
-        if (run.status !== 'completed') return ok('pending')
+    const checkRuns = cj !== null && Array.isArray(cj.check_runs) ? cj.check_runs : []
+    for (const run of checkRuns) {
+      if (
+        run.status === 'completed' &&
+        run.conclusion !== 'success' &&
+        run.conclusion !== 'skipped'
+      ) {
+        return ok('failed')
       }
+      if (run.status !== 'completed') return ok('pending')
     }
 
     const sj = statuses.value.json as { state: string | null; statuses: unknown[] } | null
-    if (sj !== null && sj.state !== null) {
-      // state=pending 且无任何 status 上报 = 没人上报(如只有 Actions 的仓库),
-      // 不是「还在跑」。有显式 status 时才按 pending 等待。
-      if (sj.state === 'pending') {
-        return ok(Array.isArray(sj.statuses) && sj.statuses.length > 0 ? 'pending' : 'passed')
-      }
+    if (sj !== null && sj.state !== null && sj.state !== 'pending') {
       return ok(sj.state === 'success' ? 'passed' : 'failed')
     }
+    // state=pending:有显式 status 上报才是「还在跑」;
+    // 无上报时本端点对结论毫无贡献(Actions-only 仓库恒如此),不能当成结论。
+    if (sj !== null && Array.isArray(sj.statuses) && sj.statuses.length > 0) return ok('pending')
 
-    // 无任何 check/status:视为通过 —— 没有配置 CI 的仓库不该永远卡死
-    return ok('passed')
+    // Commit Status 给不出结论,只剩 Checks 可依据:
+    // 有 check 且已全绿 → passed(上面的循环已经放过 failed/未完成);一条都没有 → 无人上报。
+    return ok(checkRuns.length > 0 ? 'passed' : 'unreported')
   }
 
   async getIssue(remoteUrl: string, issueNumber: number): Promise<Result<IssueInfo>> {

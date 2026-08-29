@@ -145,3 +145,39 @@ for (const file of prodFiles) { … }
 
 这条是 `check-purity.ts` 实况：`GUARDED_DIRS` 全是 Control Plane 代码，
 若某天目录只剩测试文件，原检查会假绿。
+
+### 第三层：「读不到」不等于「通过」（2026-08-28，issue-e2e 第六次验收）
+
+读外部事实源时，最危险的形态是**两种语义共用一个可观测形态**。
+此时归并函数若挑一个「宽容」的默认值，就会在另一种语义下造出假绿。
+
+实录：`GitHubProvider.combinedStatus` 把「建 PR 后 CI 还没注册」判成了 `passed`。
+Actions-only 仓库的 `commits/{sha}/status` 恒为 `state=pending` + 空 `statuses`，
+而 check-run 要过 3–10s 才出现在 `commits/{sha}/check-runs`。于是建 PR 后的头几秒，
+两个端点都读不到东西 —— 与「该仓库压根没配 CI」**数据上完全同形**。
+旧实现为了「没配 CI 的仓库不该永远卡死」把这一形态归成 passed，
+结果 PR 建好 3.4s 就流出 `T-024`，CI 还没 `started_at`，系统已宣布它通过。
+
+纪律：
+
+1. **归并函数不下结论**。三态不够就加一态：把「无人上报」（`unreported`）
+   与「有人上报且全绿」（`passed`）分成两个值，如实反映读到了什么。
+   「等多久才算真的没人上报」是策略，归调用方（`waitForCi` 的静默期），
+   不许塞进读取层当默认值。
+2. **给外部系统的注册延迟留静默期**。默认值要宽裕（`emptySettleMs` 取 90s）：
+   多等一会儿不伤正确性，早下结论会造出假绿。
+3. **终态断言要有外部作证**。`issue-e2e` 的 AC5-3b 会回到 GitHub 核对 head SHA 上
+   真有跑完且成功的 check —— 只看 Keel 自己写的事件，等于让被测系统自证。
+
+```ts
+// ✗ 读不到就算过 —— 无法区分「没配 CI」与「CI 还没注册」
+if (sj.state === 'pending' && sj.statuses.length === 0) return ok('passed')
+
+// ✓ 如实分辨，结论交给带静默期的调用方
+if (sj.statuses.length > 0) return ok('pending')
+return ok(checkRuns.length > 0 ? 'passed' : 'unreported')
+```
+
+与本项目 `T-031` 那条教训同源（重试耗尽升人工与 Policy 人工闸门**同终态**，
+只看终态会把基础设施故障判成 AC6，见 `src/acceptance/issue-e2e.acceptance.test.ts`）：
+**同形态歧义只能靠加一维事实来分开，不能靠猜一个默认值。**

@@ -1,4 +1,10 @@
 export {
+  type DeclaredPolicyFacts,
+  declaredFactsDirective,
+  parseDeclaredPolicyFacts,
+  policyFactsConflicts,
+} from './feedback-constraints.js'
+export {
   type PipelineOptions,
   type PipelineOutcome,
   type PipelineResult,
@@ -8,6 +14,7 @@ export {
 export {
   checkPlaneBoundary,
   checkSchema,
+  loadDeclaredPolicyFacts,
   validateProposal,
   violationsToFeedback,
 } from './validate.js'

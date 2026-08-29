@@ -14,9 +14,14 @@
 
 ## Acceptance Criteria
 
-- [ ] AC5：`keel run-issue <url> --ci real` 在测试仓库到达 S-DONE，真实 PR + CI passed，输出 PR URL；事件流 T-001 起 T-024 终
-- [ ] AC6：Policy 高风险 Issue 停在 S-HUMAN_REVIEW，run-issue 如实报告（不伪造成功）
-- [ ] AC7：`pnpm run check` 全绿；opt-in `test:acceptance` 至少跑通一次（模型波动按诚实失败记录）
+- [x] AC5：`keel run-issue <url> --ci real` 在测试仓库到达 S-DONE，真实 PR + CI passed，输出 PR URL；事件流 T-001 起 T-024 终
+- [x] AC6：Policy 高风险 Issue 停在 S-HUMAN_REVIEW，run-issue 如实报告（不伪造成功）
+- [x] AC7：`pnpm run check` 全绿；opt-in `test:acceptance` 至少跑通一次（模型波动按诚实失败记录）
+
+## 进展
+
+2026-08-28 第五次真实跑 **AC5 通过**（~140s，PR #40，路径 T-001→T-024）。
+详见父任务 `prd.md` §真实验收记录。
 
 ## Out of Scope
 
