@@ -17,6 +17,7 @@ import type {
   InterruptReason,
   RunResult,
   RunSpec,
+  WorkspaceDiff,
 } from '../../contracts/harness-adapter.js'
 import type { ContextSection, Proposal, ProposalKind, Usage } from '../../contracts/types.js'
 import { extractJson } from './extract.js'
@@ -41,6 +42,15 @@ export interface TurnOutcome {
   readonly raw: string
   /** 提取失败的原因；成功时为 null */
   readonly extract_error: string | null
+  /**
+   * 这一轮的工作区改动（**git 观测到的**，不是模型自述）。
+   *
+   * null = 采集本身失败（adapter 无法读 / git 出错）—— 「测不出来」不等于
+   * 「没有改动」，调用方不得用 null 冒充空 diff。
+   */
+  readonly diff: WorkspaceDiff | null
+  /** diff 为 null 时的原因；成功采集时为 null（要留下「为什么没测到」） */
+  readonly diff_error: string | null
 }
 
 export interface SessionSpec {
@@ -125,6 +135,15 @@ export class HarnessSessionManager {
       return err(makeError(RUN_STATUS_ERROR[res.value.status], `Run 状态 ${res.value.status}`))
     }
 
+    // 采集工作区改动 —— **必须在这里做**：
+    // 1) pipeline 的 finally 会 close → adapter.dispose，之后 adapter 内的 state
+    //    已被删，collectChanges 只能拿到 NOT_FOUND；
+    // 2) 编排层稍后还会 commitAll，提交之后工作树干净，再读就是「假空」。
+    // 失败只降级为 null，不让这一轮失败 —— 测不出来 ≠ 没干活。
+    const collected = await spec.adapter.collectChanges(started.value)
+    const diff = collected.ok ? collected.value : null
+    const diffError = collected.ok ? null : collected.error.detail
+
     // Adapter 已声明无 CAP-STRUCTURED_OUTPUT，走 post_validate：从自由文本提取
     const raw = res.value.text ?? ''
     const extracted = extractJson(raw)
@@ -136,6 +155,8 @@ export class HarnessSessionManager {
         session_ref: res.value.session_ref,
         raw,
         extract_error: extracted.reason,
+        diff,
+        diff_error: diffError,
       })
     }
 
@@ -155,6 +176,8 @@ export class HarnessSessionManager {
       session_ref: res.value.session_ref,
       raw,
       extract_error: null,
+      diff,
+      diff_error: diffError,
     })
   }
 

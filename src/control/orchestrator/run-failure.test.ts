@@ -13,6 +13,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+import { makeError, type Result } from '../../contracts/errors.js'
 import type {
   DisposeReport,
   HarnessAdapter,
@@ -34,8 +35,14 @@ class FailAdapter implements HarnessAdapter {
   calls: string[] = []
   private readonly bodyByRun = new Map<string, Record<string, unknown>>()
   private readonly pending: Array<Record<string, unknown>> = []
+  /** run_id → `${stage}#${attempt}`，collectChanges 要按 stage 分支 */
+  private readonly stageOf = new Map<string, string>()
   /** 恒返回 CANCELLED(用例 C) */
   alwaysCancelled = false
+  /** 这些 attempt 的 develop 声称实现了但「什么都没改」(用例 D) */
+  emptyDevelopAttempts = new Set<number>()
+  /** collectChanges 直接报错(用例 E) */
+  collectFails = false
 
   appendBody(body: Record<string, unknown>): void {
     this.pending.push(body)
@@ -55,6 +62,7 @@ class FailAdapter implements HarnessAdapter {
     const body = this.pending.shift()
     if (body === undefined) throw new Error(`没有为 ${spec.run.stage} 准备产物`)
     this.bodyByRun.set(spec.run.run_id, body)
+    this.stageOf.set(spec.run.run_id, `${spec.run.stage}#${spec.run.attempt}`)
     return { ok: true, value: { run_id: spec.run.run_id, harness_id: 'fail-stub' } }
   }
   async awaitResult(_handle: RunHandle): Promise<{ ok: true; value: RunResult }> {
@@ -92,8 +100,23 @@ class FailAdapter implements HarnessAdapter {
       },
     }
   }
-  async collectChanges(): Promise<{ ok: true; value: WorkspaceDiff }> {
-    return { ok: true, value: { files_changed: [], patch: null, commits: [], is_dirty: false } }
+  async collectChanges(handle: RunHandle): Promise<Result<WorkspaceDiff>> {
+    if (this.collectFails) {
+      return { ok: false, error: makeError('WORKSPACE_ERROR', '桩：git 读不到工作区') }
+    }
+    const [stage, attempt] = (this.stageOf.get(handle.run_id) ?? '#0').split('#')
+    const empty = stage === 'develop' && this.emptyDevelopAttempts.has(Number(attempt))
+    return {
+      ok: true,
+      value: empty
+        ? { files_changed: [], patch: null, commits: [], is_dirty: false }
+        : {
+            files_changed: [{ path: 'README.md', change: 'modified' }],
+            patch: '+x\n',
+            commits: [],
+            is_dirty: true,
+          },
+    }
   }
   async interrupt(): Promise<{ ok: true; value: undefined }> {
     return { ok: true, value: undefined }
@@ -278,5 +301,98 @@ describe('R1(issue #23)· run 失败面', () => {
       ]),
     )
     expect(runs2.rows.every((r) => r.attempt === 1)).toBe(true)
+  })
+
+  // ── D/E：develop 的「真改了吗」闸门（collectChanges 接进编排）──
+  //
+  // 旧行为：develop 判 SUCCEEDED 只看模型那句 `"verdict":"implemented"`，
+  // 它什么都不改也照样成功，然后 QA/review 对着 RFC 空想。
+
+  function goodRfc(): Record<string, unknown> {
+    return {
+      schema_version: '1.0',
+      title: 't',
+      problem: 'p',
+      goals: ['g'],
+      non_goals: [],
+      proposed_change: { summary: 's', affected_areas: ['x'], approach: 'a' },
+      acceptance_criteria: [{ id: 'AC1', text: 't', verifiable_by: '测试' }],
+      policy_facts: {
+        risk: 'low',
+        complexity: 'low',
+        estimated_files_changed: 1,
+        security_related: false,
+      },
+    }
+  }
+  function stageOutcome(stage: string, verdict: string): Record<string, unknown> {
+    return { schema_version: '1.0', run_id: 'r', stage, verdict, reason: 'ok' }
+  }
+
+  it('D. develop 空 diff → 不算成功 → T-030 重试，乱报 implemented 不再能混过去', async () => {
+    const taskId = await seedTask()
+    adapter.appendBody(goodPmOutcome())
+    adapter.appendBody(goodRfc())
+    adapter.appendBody(stageOutcome('develop', 'implemented')) // attempt 1：声称改了，实际没改
+    adapter.appendBody(stageOutcome('develop', 'implemented')) // attempt 2：真的改了
+    adapter.appendBody(stageOutcome('qa', 'pass'))
+    adapter.appendBody(stageOutcome('review', 'pass'))
+    adapter.emptyDevelopAttempts = new Set([1])
+
+    await runTaskToCompletion(taskId, depsFor(), { maxSteps: 10 })
+
+    const runs = await asOwner((c) =>
+      c.query<{ attempt: number; status: string }>(
+        `SELECT attempt, status FROM run WHERE task_id=$1 AND stage='develop' ORDER BY attempt`,
+        [taskId],
+      ),
+    )
+    expect(
+      runs.rows.map((r) => r.status),
+      'attempt1 判死，attempt2 成功',
+    ).toEqual(['FAILED', 'SUCCEEDED'])
+
+    // 只有成功那一轮留下 diff 事件 —— 被判失败的 run 不许留下「我改了」的观测
+    const evs = await asOwner((c) =>
+      c.query<{ payload: Record<string, unknown> }>(
+        `SELECT payload FROM event WHERE task_id=$1 AND type='WorkspaceDiffCollected'
+           AND payload->>'stage'='develop' ORDER BY seq`,
+        [taskId],
+      ),
+    )
+    expect(evs.rows).toHaveLength(1)
+    expect(evs.rows[0]?.payload.attempt).toBe(2)
+    expect(evs.rows[0]?.payload.collected).toBe(true)
+    expect(evs.rows[0]?.payload.files_changed).toEqual([{ path: 'README.md', change: 'modified' }])
+  })
+
+  it('E. 采集失败不判死（测不出来 ≠ 没干活），但事件里如实记 collected=false', async () => {
+    const taskId = await seedTask()
+    adapter.appendBody(goodPmOutcome())
+    adapter.appendBody(goodRfc())
+    adapter.appendBody(stageOutcome('develop', 'implemented'))
+    adapter.appendBody(stageOutcome('qa', 'pass'))
+    adapter.appendBody(stageOutcome('review', 'pass'))
+    adapter.collectFails = true
+
+    await runTaskToCompletion(taskId, depsFor(), { maxSteps: 10 })
+
+    const runs = await asOwner((c) =>
+      c.query<{ status: string }>(`SELECT status FROM run WHERE task_id=$1 AND stage='develop'`, [
+        taskId,
+      ]),
+    )
+    expect(runs.rows[0]?.status, '没有证据 ≠ 有证据表明没干活').toBe('SUCCEEDED')
+
+    const evs = await asOwner((c) =>
+      c.query<{ payload: Record<string, unknown> }>(
+        `SELECT payload FROM event WHERE task_id=$1 AND type='WorkspaceDiffCollected'
+           AND payload->>'stage'='develop'`,
+        [taskId],
+      ),
+    )
+    expect(evs.rows).toHaveLength(1)
+    expect(evs.rows[0]?.payload.collected).toBe(false)
+    expect(String(evs.rows[0]?.payload.collect_error)).toContain('桩：git 读不到')
   })
 })

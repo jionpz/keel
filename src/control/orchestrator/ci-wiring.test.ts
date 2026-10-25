@@ -18,7 +18,11 @@ import { join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import type { CiGateway, CiWaitInput } from '../../contracts/ci-gateway.js'
 import type { Result } from '../../contracts/errors.js'
-import type { HarnessAdapter, HarnessDescriptor } from '../../contracts/harness-adapter.js'
+import type {
+  HarnessAdapter,
+  HarnessDescriptor,
+  WorkspaceDiff,
+} from '../../contracts/harness-adapter.js'
 import type { Proposal } from '../../contracts/types.js'
 import { HarnessSessionManager } from '../../execution/session/manager.js'
 import { PgArtifactStore } from '../../fact/artifact-store.js'
@@ -138,8 +142,9 @@ class NoSessionAdapter implements HarnessAdapter {
   async awaitResult(): Promise<never> {
     throw new Error('CI 接线测试不应再等 session')
   }
-  async collectChanges(): Promise<never> {
-    throw new Error('CI 接线测试不应收集改动')
+  async collectChanges(): Promise<{ ok: true; value: WorkspaceDiff }> {
+    // 本测试不关心改动内容，只要求「采集这一步不会炸」
+    return { ok: true, value: { files_changed: [], patch: null, commits: [], is_dirty: false } }
   }
   async interrupt() {
     return { ok: true, value: undefined } as const

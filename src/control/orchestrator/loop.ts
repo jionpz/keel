@@ -19,7 +19,7 @@
 import { randomUUID } from 'node:crypto'
 import type { CiGateway } from '../../contracts/ci-gateway.js'
 import { err, type KeelError, makeError, ok, type Result } from '../../contracts/errors.js'
-import type { HarnessAdapter } from '../../contracts/harness-adapter.js'
+import type { HarnessAdapter, WorkspaceDiff } from '../../contracts/harness-adapter.js'
 import type { Usage } from '../../contracts/types.js'
 import type { HarnessSessionManager } from '../../execution/session/manager.js'
 import { commitArtifactOn } from '../../fact/artifact-store.js'
@@ -430,6 +430,34 @@ async function executeClaimedRun(
   // 失败也把累计 usage 带给调用方 —— 失败/超时的 run 花的钱与成功的一样真实
   if (!outcome.ok) return { ok: false, error: outcome.error, usage: outcome.usage }
 
+  // ── develop 的「真改了吗」闸门 ──
+  //
+  // 没有这道闸门时，develop 判 SUCCEEDED 的唯一依据是模型自己那句
+  // `"verdict":"implemented"` —— 它什么都不改、只回一句话，Run 照样成功，
+  // 然后 QA/review 对着 RFC 空想。
+  //
+  // 判据用 **git 观测值**，不用模型自述。`diff === null` 表示采集失败：
+  // 没有证据 ≠ 有证据表明没干活，这种情况放行但在事件里如实记录，
+  // 否则「git 偶发读不到」会变成一整类莫名其妙的 RunFailed。
+  const diff = outcome.value.diff
+  if (
+    pending.stage === 'develop' &&
+    diff !== null &&
+    diff.files_changed.length === 0 &&
+    diff.commits.length === 0
+  ) {
+    await cancelRunWallClockTimer(pending.id)
+    return {
+      ok: false,
+      error: makeError(
+        'PROTOCOL_ERROR',
+        'develop 声称 implemented，但工作区在 git 上没有任何改动（0 文件、0 提交）。' +
+          '这一轮不算成功（可重试，T-030）：要么真的没干活，要么改动落在工作区之外。',
+      ),
+      usage: outcome.value.usage,
+    }
+  }
+
   // 谁执行了这个 run 是事实，记在 run 行上（O 可观测 + ADR-0005）——
   // Human L0 e2e 据此断言「L0 路径真的被执行过」，而不是靠桩自己声称。
   //
@@ -440,7 +468,14 @@ async function executeClaimedRun(
   // 崩溃重启后不会出现「成本已入账但该暂停的 Task 还在跑」。
   const descriptor = deps.adapter.describe()
   const usage = outcome.value.usage
+  const diffPayload = buildDiffPayload(
+    pending.stage,
+    pending.attempt,
+    diff,
+    outcome.value.diff_error,
+  )
   await asRole('keel_control', async (c) => {
+    const now = deps.now()
     await c.query(
       `UPDATE run SET status='SUCCEEDED', ended_at=$2, harness_id=$3, harness_tier=$4,
               tokens_in=$5, tokens_out=$6, cost_usd=$7, cost_basis=$8
@@ -448,7 +483,7 @@ async function executeClaimedRun(
       [
         pending.id,
         // 注入 now —— 重放不读时钟(ADR-0003),execute-run-attempt 断言据此钉死
-        deps.now(),
+        now,
         descriptor.harness_id,
         descriptor.tier,
         usage.tokens_in,
@@ -457,7 +492,16 @@ async function executeClaimedRun(
         usage.cost_basis,
       ],
     )
-    await checkBudgetFuse(c, taskId, deps.now())
+    // 工作区改动的观测记录 —— 与 run 终态**同事务**：
+    // 分开写会出现「run 已 SUCCEEDED 但事件没落」或反之的半截事实。
+    // 载体选 event 而不是 artifact：这是每次 run 追加的观测，不是要冻结的决策（无版本链）。
+    const traceId = await ensureTraceId(c, taskId, now)
+    await c.query(
+      `INSERT INTO event (task_id, run_id, type, payload, trace_id, occurred_at)
+       VALUES ($1,$2,'WorkspaceDiffCollected',$3::jsonb,$4,$5)`,
+      [taskId, pending.id, JSON.stringify(diffPayload), traceId, now],
+    )
+    await checkBudgetFuse(c, taskId, now)
   })
   // run 已终态:墙钟 timer 不再需要(方案 B,防残留误触发)
   await cancelRunWallClockTimer(pending.id)
@@ -480,6 +524,71 @@ async function executeClaimedRun(
   }
 
   return { ok: true }
+}
+
+/**
+ * patch 体积上限：超出即截断。
+ * 截断必须**如实标注**（`patch_truncated` + `patch_chars` 记截断前长度）——
+ * 一份被静默截断的 diff 会让 QA 以为自己看到了全部改动，比不给更糟。
+ */
+const PATCH_LIMIT = 16_000
+
+/**
+ * `WorkspaceDiffCollected` 的 payload。
+ *
+ * 读者是 ContextBuilder 的 `'diff'` section（qa / review 配方）与事后复盘：
+ * 「这个 run 到底改了哪些文件」必须能从事件里独立答出来，不依赖模型自述。
+ */
+interface DiffCollectedPayload {
+  readonly stage: Stage
+  readonly attempt: number
+  /** false = 采集失败（不是「没有改动」） */
+  readonly collected: boolean
+  readonly collect_error: string | null
+  readonly files_changed: readonly { readonly path: string; readonly change: string }[]
+  readonly commits: readonly string[]
+  /** null = 未知。不许用 false 冒充「干净」 */
+  readonly is_dirty: boolean | null
+  readonly patch: string | null
+  readonly patch_chars: number | null
+  readonly patch_truncated: boolean
+}
+
+function buildDiffPayload(
+  stage: Stage,
+  attempt: number,
+  diff: WorkspaceDiff | null,
+  collectError: string | null,
+): DiffCollectedPayload {
+  if (diff === null) {
+    return {
+      stage,
+      attempt,
+      collected: false,
+      collect_error: collectError ?? '适配器未提供工作区读取结果',
+      files_changed: [],
+      commits: [],
+      is_dirty: null,
+      patch: null,
+      patch_chars: null,
+      patch_truncated: false,
+    }
+  }
+
+  const full = diff.patch ?? ''
+  const truncated = full.length > PATCH_LIMIT
+  return {
+    stage,
+    attempt,
+    collected: true,
+    collect_error: null,
+    files_changed: diff.files_changed.map((f) => ({ path: f.path, change: f.change })),
+    commits: [...diff.commits],
+    is_dirty: diff.is_dirty,
+    patch: full === '' ? null : truncated ? full.slice(0, PATCH_LIMIT) : full,
+    patch_chars: full.length,
+    patch_truncated: truncated,
+  }
 }
 
 /**

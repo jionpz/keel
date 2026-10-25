@@ -105,7 +105,16 @@ class HangingAdapter implements HarnessAdapter {
     return { ok: true, value: undefined }
   }
   async collectChanges(): Promise<{ ok: true; value: WorkspaceDiff }> {
-    return { ok: true, value: { files_changed: [], patch: null, commits: [], is_dirty: false } }
+    // 桩要「真的改了文件」：develop 的空 diff 会被编排层判成没干活（fail-closed）
+    return {
+      ok: true,
+      value: {
+        files_changed: [{ path: 'README.md', change: 'modified' }],
+        patch: '+x\n',
+        commits: [],
+        is_dirty: true,
+      },
+    }
   }
   async dispose(): Promise<{ ok: true; value: DisposeReport }> {
     return { ok: true, value: { session_ref_retained: false, workspace_cleaned: false } }

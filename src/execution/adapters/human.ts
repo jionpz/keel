@@ -23,7 +23,7 @@ import type {
   WorkspaceDiff,
 } from '../../contracts/harness-adapter.js'
 import type { CapabilityId } from '../../shared/ids.js'
-import { collectGitDiff } from './git-diff.js'
+import { collectGitDiff, gitHeadSha } from './git-diff.js'
 import { tierOf } from './tier.js'
 
 /**
@@ -48,8 +48,14 @@ export interface HumanInbox {
   withdraw(runId: string): Promise<void>
 }
 
+interface HumanRun {
+  readonly spec: RunSpec
+  /** 待办发出时的 HEAD —— collectChanges 的基线。null = 非 git 工作区 */
+  readonly baseSha: string | null
+}
+
 export class HumanAdapter implements HarnessAdapter {
-  private readonly runs = new Map<string, RunSpec>()
+  private readonly runs = new Map<string, HumanRun>()
 
   constructor(private readonly inbox: HumanInbox) {}
 
@@ -73,9 +79,15 @@ export class HumanAdapter implements HarnessAdapter {
     }
     const existing = this.runs.get(spec.idempotency_key)
     if (existing !== undefined) {
-      return ok({ run_id: existing.run.run_id, harness_id: 'human' })
+      return ok({ run_id: existing.spec.run.run_id, harness_id: 'human' })
     }
-    this.runs.set(spec.idempotency_key, spec)
+    // 基线在**人开始动手之前**取：通知发出去之后工作区随时可能被改。
+    const head = await gitHeadSha(spec.workspace.path)
+    const raced = this.runs.get(spec.idempotency_key)
+    if (raced !== undefined) {
+      return ok({ run_id: raced.spec.run.run_id, harness_id: 'human' })
+    }
+    this.runs.set(spec.idempotency_key, { spec, baseSha: head.ok ? head.value : null })
     await this.inbox.notify(spec)
     return ok({ run_id: spec.run.run_id, harness_id: 'human' })
   }
@@ -108,17 +120,17 @@ export class HumanAdapter implements HarnessAdapter {
    * collectChanges 必须看到同一份脏树,否则人工轮的改动会丢。
    */
   async collectChanges(handle: RunHandle): Promise<Result<WorkspaceDiff>> {
-    let spec: RunSpec | undefined
+    let run: HumanRun | undefined
     for (const v of this.runs.values()) {
-      if (v.run.run_id === handle.run_id) {
-        spec = v
+      if (v.spec.run.run_id === handle.run_id) {
+        run = v
         break
       }
     }
-    if (spec === undefined) {
+    if (run === undefined) {
       return err(makeError('NOT_FOUND', `未知 run ${handle.run_id}`))
     }
-    return collectGitDiff(spec.workspace.path)
+    return collectGitDiff(run.spec.workspace.path, { since: run.baseSha })
   }
 
   async interrupt(handle: RunHandle, _reason: InterruptReason): Promise<Result<void>> {
@@ -128,7 +140,7 @@ export class HumanAdapter implements HarnessAdapter {
 
   async dispose(handle: RunHandle): Promise<Result<DisposeReport>> {
     for (const [k, v] of this.runs) {
-      if (v.run.run_id === handle.run_id) this.runs.delete(k)
+      if (v.spec.run.run_id === handle.run_id) this.runs.delete(k)
     }
     return ok({ session_ref_retained: false, workspace_cleaned: false })
   }
