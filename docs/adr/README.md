@@ -13,6 +13,7 @@
 | [0005](./0005-harness-support-tiers.md) | Harness 支持优先级与 capability 分级 | **Accepted** — Claude Code + OMP 首批（2026-08-23 修订） |
 | [0006](./0006-session-recovery.md) | Session 恢复策略 | **Proposed** — restore 双路径未实现，刻意不转 Accepted（2026-08-26 复核） |
 | [0007](./0007-migration-and-query-layer.md) | 迁移工具与查询层 | **Accepted** — node-pg-migrate + raw pg |
+| [0008](./0008-wall-clock-semantics.md) | 墙钟语义：Run 级预算 | **Accepted** — 实现已落地，五连 5/5 验证（2026-10-25 追认） |
 
 ## Status 语义
 
