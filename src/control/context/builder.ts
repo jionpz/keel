@@ -53,8 +53,10 @@ const RECIPES: Readonly<Record<string, readonly string[]>> = {
   PM: ['role', 'feedback', 'state', 'critic'],
   Critic: ['role', 'state'],
   Developer: ['role', 'rfc', 'state', 'last_failure'],
-  QA: ['role', 'rfc', 'state'],
-  Reviewer: ['role', 'rfc', 'state'],
+  // QA / Reviewer 的活就是核对**实际改动**：不给 diff，它们只能对着 RFC 空想，
+  // 然后把自己猜的结论当成核对结果报上来（10-25 真机跑通时的实际表现）
+  QA: ['role', 'rfc', 'state', 'diff'],
+  Reviewer: ['role', 'rfc', 'state', 'diff'],
 }
 
 export class FactPlaneContextBuilder {
@@ -252,8 +254,87 @@ export class FactPlaneContextBuilder {
         }
       }
 
+      case 'diff': {
+        // 只取 develop 那一轮的观测：返工后 pm / develop 自己也会写事件，
+        // 取「最近一条」会把 QA 指到错误的 diff 上。
+        const r = await c.query<{ seq: string; payload: DiffPayload }>(
+          `SELECT seq, payload FROM event
+           WHERE task_id=$1 AND type='WorkspaceDiffCollected' AND payload->>'stage'='develop'
+           ORDER BY seq DESC LIMIT 1`,
+          [req.task_id],
+        )
+        const row = r.rows[0]
+        if (row === undefined) return null
+        return {
+          id,
+          source_ref: `event:WorkspaceDiffCollected@${row.seq}`,
+          // 事件是运行期观测，不是持久化产物 —— 归 'workspace'（这个 run 在工作区里干了什么）
+          source_kind: 'workspace',
+          // required：QA/Reviewer 拿不到实际改动就无法履行核对职责。
+          // 预算放不下时按既有语义直接失败（CONTEXT_BUDGET_EXCEEDED），
+          // 不许静默降级 —— 那样它们又会退回「凭 RFC 猜」。
+          priority: 'required',
+          content: renderDiff(row.payload),
+        }
+      }
+
       default:
         return null
     }
   }
+}
+
+/** `WorkspaceDiffCollected` 的 payload 形状（写入方见 `orchestrator/loop.ts`） */
+interface DiffPayload {
+  readonly collected?: boolean
+  readonly collect_error?: string | null
+  readonly files_changed?: readonly { readonly path: string; readonly change: string }[]
+  readonly commits?: readonly string[]
+  readonly is_dirty?: boolean | null
+  readonly patch?: string | null
+  readonly patch_chars?: number | null
+  readonly patch_truncated?: boolean
+}
+
+/**
+ * 把 diff 事件渲染成 Agent 能读的段落。
+ *
+ * 采集失败 / 被截断都必须**写在正文里**：一份看起来完整、其实缺了半截的 diff
+ * 会让 QA 得出「验收标准未覆盖」之类的错误结论，比不给更糟。
+ */
+function renderDiff(p: DiffPayload): string {
+  if (p.collected === false) {
+    return [
+      '## develop 的实际改动',
+      '',
+      `**未能采集**：${p.collect_error ?? '适配器没有返回工作区信息'}。`,
+      '「没测到」不等于「没有改动」—— 请以工作区里的实际文件为准，并在理由里说明你核对了什么。',
+    ].join('\n')
+  }
+
+  const files = p.files_changed ?? []
+  const lines = ['## develop 的实际改动（git 观测，不是模型自述）', '']
+  lines.push(files.length === 0 ? '文件：无' : '文件：')
+  for (const f of files) lines.push(`- ${f.change} ${f.path}`)
+
+  const commits = p.commits ?? []
+  lines.push(
+    '',
+    commits.length === 0 ? '本轮提交：无（改动仍在工作区）' : `本轮提交：${commits.join(', ')}`,
+  )
+  lines.push(
+    `工作区是否仍有未提交改动：${p.is_dirty === true ? '是' : p.is_dirty === false ? '否' : '未知'}`,
+  )
+
+  if (p.patch === null || p.patch === undefined) {
+    lines.push('', 'patch：（无文本 diff）')
+  } else {
+    const chars = p.patch_chars ?? p.patch.length
+    const head =
+      p.patch_truncated === true
+        ? `patch（**已截断**，共 ${chars} 字符，以下仅为开头部分）：`
+        : `patch（共 ${chars} 字符）：`
+    lines.push('', head, '```diff', p.patch, '```')
+  }
+  return lines.join('\n')
 }

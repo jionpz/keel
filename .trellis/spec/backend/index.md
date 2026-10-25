@@ -20,6 +20,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Quality Guidelines](./quality-guidelines.md) | 质量门槛、测试分层、mock 纪律、验收凭据、禁用模式、review 清单 | ✅ 已填(2026-08-23 收尾;08-26 补验收凭据) |
 | [Session Context](./session-context.md) | 上下文下行桥：`withPrompt` 只能追加、Adapter 渲染全部 section、`ContextBuilt` 不得说假话 | ✅ 已填（`08-26-v01-closeout`） |
 | [Harness Adapter](./harness-adapter.md) | 子进程环境隔离（宿主运行时变量）、同 Run 多轮 state 定位、argv 以当前 CLI 版本为准 | ✅ 已填（`10-25-claude-auth-config`） |
+| [Workspace Diff](./workspace-diff.md) | `collectChanges` 接入编排：采集时机、HEAD 基线、未跟踪文件、事件载体与 fail-closed | ✅ 已填（`10-25-collect-changes-wiring`） |
 | [Git Workspace](./git-workspace.md) | Agent 提交用 `-c` 钉死身份与签名、夹具关 gpgsign、`GIT_CONFIG_GLOBAL` 的使用边界 | ✅ 已填（`08-26-v01-closeout`） |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | ⏳ 暂缓 —— 尚无日志代码 |
 

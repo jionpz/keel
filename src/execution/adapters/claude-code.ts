@@ -22,7 +22,7 @@ import type {
 } from '../../contracts/harness-adapter.js'
 import type { CapabilityId } from '../../shared/ids.js'
 import { parseClaudeStream } from './claude-code-parse.js'
-import { collectGitDiff } from './git-diff.js'
+import { collectGitDiff, gitHeadSha } from './git-diff.js'
 import { tierOf } from './tier.js'
 
 /**
@@ -65,6 +65,8 @@ export interface ClaudeArgvOpts {
 interface RunState {
   readonly handle: RunHandle
   readonly spec: RunSpec
+  /** startRun 时的 HEAD —— collectChanges 的基线。null = 非 git 工作区 */
+  readonly baseSha: string | null
   promise: Promise<Result<RunResult>>
   aborted: boolean
   timeout: boolean
@@ -112,10 +114,17 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
     const existing = this.runs.get(spec.idempotency_key)
     if (existing !== undefined) return ok(existing.handle)
 
+    // 基线必须在**起进程之前**取：起完之后工作区可能已经被改过。
+    const head = await gitHeadSha(spec.workspace.path)
+    // 取基线期间可能有同键调用抢先登记 —— 幂等语义不能因为一个 await 破掉
+    const raced = this.runs.get(spec.idempotency_key)
+    if (raced !== undefined) return ok(raced.handle)
+
     const handle: RunHandle = { run_id: spec.run.run_id, harness_id: 'claude' }
     const state: RunState = {
       handle,
       spec,
+      baseSha: head.ok ? head.value : null,
       aborted: false,
       timeout: false,
       proc: null,
@@ -140,7 +149,8 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
     if (state === undefined) {
       return err(makeError('NOT_FOUND', `未知 run ${handle.run_id}`))
     }
-    return collectGitDiff(state.spec.workspace.path)
+    // 相对 startRun 时的 HEAD —— 模型自己 commit 过也照样看得见（见 git-diff.ts）
+    return collectGitDiff(state.spec.workspace.path, { since: state.baseSha })
   }
 
   async interrupt(handle: RunHandle, _reason: InterruptReason): Promise<Result<void>> {

@@ -81,7 +81,16 @@ class PromptCapturingAdapter implements HarnessAdapter {
   }
 
   async collectChanges(): Promise<{ ok: true; value: WorkspaceDiff }> {
-    return { ok: true, value: { files_changed: [], patch: null, commits: [], is_dirty: false } }
+    // 桩要「真的改了文件」：develop 的空 diff 会被编排层判成没干活（fail-closed）
+    return {
+      ok: true,
+      value: {
+        files_changed: [{ path: 'README.md', change: 'modified' }],
+        patch: '+x\n',
+        commits: [],
+        is_dirty: true,
+      },
+    }
   }
 
   async interrupt(): Promise<{ ok: true; value: undefined }> {

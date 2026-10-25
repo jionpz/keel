@@ -256,6 +256,14 @@ WorkspaceDiff {
 Adapter 的职责是**把这种差异吸收掉**，向上统一成 `WorkspaceDiff`。
 `estimated_files_changed` 这个 Policy fact 的运行期校验值就来自这里。
 
+**语义是「这个 Run 改了什么」，不是「工作树现在脏不脏」**（2026-10-26 修订）：
+Adapter 在 `startRun` 时记下当时 HEAD 作为基线，`collectChanges` 相对基线读取 ——
+模型自己 `git commit` 之后工作树是干净的，只读脏树会把真完成的 Run 报成 0 文件。
+因此 `commits` **不再恒空**：有基线时填入本轮提交的 SHA。
+未跟踪文件由 porcelain 补进来（`git diff` 看不见它们）。
+采集时机必须在 `dispose` 与编排层 `commitAll` **之前**，细节见
+`.trellis/spec/backend/workspace-diff.md`。
+
 ### 3.5 `interrupt()` `[v0.1 必须]`
 
 ```

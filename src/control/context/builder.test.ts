@@ -110,3 +110,153 @@ describe('FactPlaneContextBuilder · rfc_draft 方案传递(issue #25)', () => {
     expect(contents).toContain('导出时加 UTF-8 BOM')
   })
 })
+
+// ───────────── QA / Reviewer 必须看到 develop 的真实改动 ─────────────
+//
+// 旧配方是 ['role','rfc','state'] —— QA 没有任何 diff 可看，只能对着 RFC 空想，
+// 它报的「仅改了一个文件」是猜的。diff section 让它看到 git 观测到的事实。
+
+/** 给 task 铺一条 WorkspaceDiffCollected 事件 */
+async function insertDiffEvent(
+  taskId: string,
+  stage: string,
+  payload: Record<string, unknown>,
+): Promise<number> {
+  const r = await asOwner((c) =>
+    c.query<{ seq: string }>(
+      `INSERT INTO event (task_id, type, payload)
+       VALUES ($1,'WorkspaceDiffCollected',$2::jsonb) RETURNING seq`,
+      [taskId, JSON.stringify({ stage, attempt: 1, collected: true, ...payload })],
+    ),
+  )
+  return Number(r.rows[0]?.seq)
+}
+
+async function seedQaRun(taskId: string, runId: string): Promise<void> {
+  await asOwner((c) =>
+    c.query(
+      `INSERT INTO run (id, task_id, stage, role, attempt, status, idempotency_key)
+       VALUES ($1,$2,'qa','QA',1,'PENDING',$3)`,
+      [runId, taskId, `${taskId}/qa/1`],
+    ),
+  )
+}
+
+describe('FactPlaneContextBuilder · QA 看到 develop 的真实 diff', () => {
+  it('有 diff 事件 → section 出现，含文件清单与 patch，source_ref 指回 seq', async () => {
+    const { taskId } = await seed()
+    const runId = randomUUID()
+    await seedQaRun(taskId, runId)
+    const seq = await insertDiffEvent(taskId, 'develop', {
+      files_changed: [{ path: 'README.md', change: 'modified' }],
+      commits: ['abc123'],
+      is_dirty: false,
+      patch: 'diff --git a/README.md b/README.md\n+hello\n',
+      patch_chars: 45,
+      patch_truncated: false,
+    })
+
+    const r = await asOwner((c) =>
+      ctxBuilder.build(c, {
+        task_id: taskId,
+        run_id: runId,
+        role: 'QA',
+        stage: 'qa',
+        budget_tokens: 200_000,
+      }),
+    )
+    expect(r.ok, r.ok ? '' : r.error.detail).toBe(true)
+    if (!r.ok) return
+
+    const section = r.value.sections.find((s) => s.id === 'diff')
+    expect(section, 'QA 配方里必须有 diff').toBeDefined()
+    expect(section?.priority).toBe('required')
+    expect(section?.source_ref).toBe(`event:WorkspaceDiffCollected@${seq}`)
+    expect(section?.content).toContain('README.md')
+    expect(section?.content).toContain('abc123')
+    expect(section?.content).toContain('+hello')
+  })
+
+  it('没有 develop 的 diff 事件 → section 缺席（不拿「无改动」冒充）', async () => {
+    const { taskId } = await seed()
+    const runId = randomUUID()
+    await seedQaRun(taskId, runId)
+
+    const r = await asOwner((c) =>
+      ctxBuilder.build(c, {
+        task_id: taskId,
+        run_id: runId,
+        role: 'QA',
+        stage: 'qa',
+        budget_tokens: 200_000,
+      }),
+    )
+    expect(r.ok, r.ok ? '' : r.error.detail).toBe(true)
+    if (!r.ok) return
+    expect(r.value.sections.find((s) => s.id === 'diff')).toBeUndefined()
+  })
+
+  it('只取 stage=develop 的那条 —— 后面的 pm 事件不得把它顶掉', async () => {
+    const { taskId } = await seed()
+    const runId = randomUUID()
+    await seedQaRun(taskId, runId)
+    await insertDiffEvent(taskId, 'develop', {
+      files_changed: [{ path: 'src/a.ts', change: 'modified' }],
+      commits: [],
+      is_dirty: true,
+      patch: null,
+      patch_chars: 0,
+      patch_truncated: false,
+    })
+    // 返工后 pm 又跑了一轮，写了一条更晚的（空）事件
+    await insertDiffEvent(taskId, 'pm', {
+      files_changed: [],
+      commits: [],
+      is_dirty: false,
+      patch: null,
+      patch_chars: 0,
+      patch_truncated: false,
+    })
+
+    const r = await asOwner((c) =>
+      ctxBuilder.build(c, {
+        task_id: taskId,
+        run_id: runId,
+        role: 'QA',
+        stage: 'qa',
+        budget_tokens: 200_000,
+      }),
+    )
+    if (!r.ok) return
+    const section = r.value.sections.find((s) => s.id === 'diff')
+    expect(section?.content).toContain('src/a.ts')
+  })
+
+  it('patch 被截断时如实标注，不假装给全了', async () => {
+    const { taskId } = await seed()
+    const runId = randomUUID()
+    await seedQaRun(taskId, runId)
+    await insertDiffEvent(taskId, 'develop', {
+      files_changed: [{ path: 'big.ts', change: 'modified' }],
+      commits: [],
+      is_dirty: true,
+      patch: '+x\n',
+      patch_chars: 99_999,
+      patch_truncated: true,
+    })
+
+    const r = await asOwner((c) =>
+      ctxBuilder.build(c, {
+        task_id: taskId,
+        run_id: runId,
+        role: 'QA',
+        stage: 'qa',
+        budget_tokens: 200_000,
+      }),
+    )
+    if (!r.ok) return
+    const section = r.value.sections.find((s) => s.id === 'diff')
+    expect(section?.content).toContain('截断')
+    expect(section?.content).toContain('99999')
+  })
+})

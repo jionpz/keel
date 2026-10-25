@@ -38,7 +38,7 @@
 | 17 | Policy 求值 | `[P]` `rfc_ready` | 命中 P4（`complexity==low && risk==low`）→ `auto_develop`；`default_applied=false` |
 | 18 | 建工作分支（幂等）+ 派发开发 | `T-012` | `[写]` `run(develop, 1)` → `S-DEVELOPING`；分支 `ai/task-<id>` |
 | 19 | Developer 实现 | — | `[读]` `A-RFC@1`（**冻结版，经 `getAsOf`**）、开发规范、git 状态、相关代码 |
-| 20 | 收集工作区变更 | — | `WorkspaceDiff`：4 个文件；`[写]` `A-StageOutcome(develop, implemented)` |
+| 20 | 收集工作区变更 | — | `WorkspaceDiff`：4 个文件；`[写]` Event `WorkspaceDiffCollected` + `A-StageOutcome(develop, implemented)`。**测得 0 文件 0 提交 → develop 不算成功**（T-030 重试），不再是「模型说实现了就算」 |
 | 21 | 漂移检测 | `[P]` `post_develop` | `actual=4` vs `estimated=4`，无漂移 → 继续 |
 | 22 | 派发 QA | `T-017` | `[写]` `run(qa, 1)` → `S-QA` |
 | 23 | QA 通过 | — | `[写]` `A-StageOutcome(qa, pass)` |

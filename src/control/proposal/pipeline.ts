@@ -14,6 +14,7 @@
 import { randomUUID } from 'node:crypto'
 import type { PersistedArtifactKind } from '../../contracts/artifact-store.js'
 import { type KeelError, makeError } from '../../contracts/errors.js'
+import type { WorkspaceDiff } from '../../contracts/harness-adapter.js'
 import type { PolicyEngine } from '../../contracts/policy-engine.js'
 import type { Usage } from '../../contracts/types.js'
 import type {
@@ -64,6 +65,17 @@ export interface PipelineOutcome {
    * 都花了钱。只报最后一轮会系统性低估成本（C1，docs/08-cross-cutting.md §3）。
    */
   readonly usage: Usage
+  /**
+   * **最后一轮**由 git 观测到的工作区改动（`SessionManager` 采集）。
+   *
+   * 不回退到更早轮次：回灌的各轮都在同一个工作区上累加，最后一轮已经包含前面
+   * 的结果；而「最后一轮测不出来」如果拿前面某一轮顶上，会让「改动被撤销回去」
+   * 这种情况看起来像还有改动 —— 判定必须只看最后一轮的观测值。
+   * null = 采集失败（未测到），不是「没有改动」（那是空 diff）。
+   */
+  readonly diff: WorkspaceDiff | null
+  /** 采集失败的原因；成功时为 null */
+  readonly diff_error: string | null
 }
 
 /**
@@ -132,6 +144,9 @@ export async function runSessionUntilValid(
   const maxRetries = opts.maxProposalRetries ?? 3
   const rejections: string[][] = []
   let usage: Usage = ZERO_USAGE
+  /** 最后一轮的采集结果；每轮覆盖，不回退（见 PipelineOutcome.diff） */
+  let diff: WorkspaceDiff | null = null
+  let diffError: string | null = null
 
   const opened = await sessions.open(spec)
   if (!opened.ok) return { ok: false, error: opened.error, usage }
@@ -159,6 +174,8 @@ export async function runSessionUntilValid(
       // 出错的这一轮 Adapter 是否上报 usage 由它自己决定(OMP 中断时报 unavailable)
       if (!turn.ok) return { ok: false, error: turn.error, usage }
       usage = addUsage(usage, turn.value.usage)
+      diff = turn.value.diff
+      diffError = turn.value.diff_error
 
       // 提取失败也走回灌 —— 它和 schema 不合格是同一类问题：
       // 模型输出的形状不对，让它改比重跑整个阶段便宜
@@ -220,6 +237,8 @@ export async function runSessionUntilValid(
             attempts: attempt,
             rejections,
             usage,
+            diff,
+            diff_error: diffError,
           },
         }
       }

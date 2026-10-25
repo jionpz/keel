@@ -402,6 +402,47 @@ describe('HumanAdapter —— 人工作为一种 Harness', () => {
       rmSync(repo, { recursive: true, force: true })
     }
   })
+
+  it('collectChanges 相对 startRun 时的 HEAD —— 自己 commit 过也看得见', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'keel-human-baseline-'))
+    execFileSync('git', ['init', '-q', '-b', 'main', '.'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 'h@test'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'h'], { cwd: repo })
+    writeFileSync(join(repo, 'f.txt'), 'v1\n')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: repo })
+
+    try {
+      const inbox: HumanInbox = {
+        notify: async () => undefined,
+        await: async () => ({ text: '做完了' }),
+        withdraw: async () => undefined,
+      }
+      const a = new HumanAdapter(inbox)
+      const started = await a.startRun(
+        spec({ workspace: { path: repo, repo_id: 'r', branch: 'main', untrusted: true } }),
+      )
+      expect(started.ok).toBe(true)
+      if (!started.ok) return
+
+      // 人改完**自己提交**了 —— 工作树干净，但这一轮确实干了活
+      writeFileSync(join(repo, 'f.txt'), 'v2\n')
+      execFileSync('git', ['add', '.'], { cwd: repo })
+      execFileSync('git', ['commit', '-q', '-m', 'human commit'], { cwd: repo })
+
+      const diff = await a.collectChanges(started.value)
+      expect(diff.ok, diff.ok ? '' : diff.error.detail).toBe(true)
+      if (!diff.ok) return
+      expect(diff.value.is_dirty, '已提交 → 脏树为 false').toBe(false)
+      expect(
+        diff.value.files_changed.map((f) => f.path),
+        '改动仍必须报出来',
+      ).toContain('f.txt')
+      expect(diff.value.commits.length, '本轮提交数').toBe(1)
+    } finally {
+      rmSync(repo, { recursive: true, force: true })
+    }
+  })
 })
 
 // ───────────────────── 3. 真实集成（会花钱） ─────────────────────
