@@ -14,7 +14,7 @@
 | 阶段二触发 #1（v0.1 判据）| ✅ |
 | 阶段二触发 #2（连续 5 个真实 Task 无人工干预）| ✅ 2026-08-29 第二次五连 5/5（见 `08-29-five-run-campaign`） |
 | 阶段二触发 #3（事件流四问）| ✅ 抽样 task `68eb4965-9aca-4940-a586-d5f8a8f83beb`：`readEvents` + ContextBuilt `source_ref`/`dropped` |
-| 阶段二触发 #4（ADR-0003 ✅；0005 后果「第二 Harness」）| ⚠️ 仅 OMP 为 AI harness |
+| 阶段二触发 #4（ADR-0003 ✅；0005 后果「第二 Harness」）| ✅ 两个 AI harness 可切（OMP 缺省 / Claude Code Adapter）；Claude Code 真实 e2e **未跑**，见下方 AC3 记录 |
 | ADR-0005 明确：第二个 AI harness 是阶段二**首要验证目标** | `docs/adr/0005-harness-support-tiers.md` |
 
 ## Key Decisions
@@ -41,9 +41,30 @@
 
 - [x] AC1：`08-29-five-run-campaign` 归档，prd 中 **5/5** S-DONE + `ci_verified` 记录
 - [x] AC2：五连抽样证明 `docs/08-cross-cutting.md` §2.2 四问均可回答（task `68eb4965-9aca-4940-a586-d5f8a8f83beb`）
-- [ ] AC3：`08-29-second-harness` 归档，至少 1 次真实验收（OMP 以外 AI harness 跑通 S-DONE 或诚实 AC6）
-- [ ] AC4：父任务 prd 中阶段二触发清单 **全部勾选**
-- [ ] AC5：`08-29-ingress-poller` 可仍为 planning（未触发时不阻塞父任务归档）
+- [x] AC3：`08-29-second-harness` 归档，至少 1 次真实验收（OMP 以外 AI harness 跑通 S-DONE 或诚实 AC6）
+      → 走的是**诚实 AC6** 分支：Adapter + 单测 + preflight 绿，`claude-code-e2e` 因无
+      `ANTHROPIC_API_KEY` **未跑**。**不宣称「Harness 可替换已验证」**；
+      补 key 后跑 `claude-code-e2e.acceptance.test.ts` 才能升级该结论
+- [x] AC4：父任务 prd 中阶段二触发清单 **全部勾选**
+- [x] AC5：`08-29-ingress-poller` 可仍为 planning（未触发时不阻塞父任务归档）
+      → 用户 2026-10-25 决定保持 planning（触发条件为「人工 CLI ≥3 次/天 × 3 天」）
+- [x] 墙钟遗留：`docs/adr/0008-wall-clock-semantics.md`（Accepted，选项 B，2026-10-25）
+
+## 结项记录（2026-10-25）
+
+本任务**零产品代码**（D5），实际交付是编排与验收。三个条件型子任务最终处置：
+
+| 子任务 | 结果 |
+|---|---|
+| `08-29-five-run-campaign` | 已归档，第二次 5/5 |
+| `08-29-omp-model` | 已归档，`--model` / `KEEL_MODEL` |
+| `08-29-second-harness` | 已归档，Adapter MVP + 诚实 AC6 |
+| `08-29-wallclock-adr` | 已归档，ADR-0008 Accepted |
+| `08-29-ingress-poller` | **保持 planning**（触发条件未满足，随父任务归档一并挂起） |
+
+阶段二触发四条全部满足。**唯一未验证项**：Claude Code 在真实闭环中的端到端表现
+（缺 `ANTHROPIC_API_KEY`）—— 这是**已知缺口**，不是未知风险。
+
 
 ## Out of Scope
 
