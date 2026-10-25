@@ -17,7 +17,11 @@ import { WorkflowDriver } from '../control/driver/driver.js'
 import { runTaskToCompletion, type StepRecord } from '../control/orchestrator/loop.js'
 import { RuleBasedPolicyEngine } from '../control/policy/engine.js'
 import { DEFAULT_RULESET } from '../control/policy/ruleset.js'
-import { ClaudeCodeAdapter, requireClaudeReady } from '../execution/adapters/claude-code.js'
+import {
+  type ClaudeAuthProbe,
+  ClaudeCodeAdapter,
+  requireClaudeReady,
+} from '../execution/adapters/claude-code.js'
 import { DEFAULT_OMP_MODEL, OmpAdapter } from '../execution/adapters/omp.js'
 import { HarnessSessionManager } from '../execution/session/manager.js'
 import { asRole } from '../fact/db.js'
@@ -214,6 +218,11 @@ export interface RunTaskOptions {
   readonly model?: string | number | boolean
   /** `--harness` 原值。省略则 KEEL_HARNESS / 缺省 omp。 */
   readonly harness?: string | number | boolean
+  /**
+   * 测试注入：claude 认证探测。省略则读本机 `claude auth status --json`。
+   * 不注入会让断言依赖「本机是否装了 claude、是否登录」。
+   */
+  readonly claudeAuthProbe?: ClaudeAuthProbe
 }
 
 export interface RunTaskResult {
@@ -240,7 +249,10 @@ export async function runTask(
   if (!harness.ok) return harness
 
   if (harness.value === 'claude') {
-    const ready = requireClaudeReady()
+    const ready =
+      opts.claudeAuthProbe === undefined
+        ? requireClaudeReady()
+        : requireClaudeReady('claude', opts.claudeAuthProbe)
     if (!ready.ok) return ready
   }
 

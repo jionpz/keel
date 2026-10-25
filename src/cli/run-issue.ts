@@ -12,7 +12,7 @@
 
 import type { Result } from '../contracts/errors.js'
 import { err, makeError, ok } from '../contracts/errors.js'
-import { requireClaudeReady } from '../execution/adapters/claude-code.js'
+import { type ClaudeAuthProbe, requireClaudeReady } from '../execution/adapters/claude-code.js'
 import type { GitHubProvider } from '../fact/github-provider.js'
 import { parseArgs } from './argv.js'
 import { ingestIssue } from './ingest-issue.js'
@@ -43,6 +43,8 @@ export interface RunIssueOptions {
   readonly harness?: string | number | boolean
   /** 测试注入 stub provider(只作用于 ingest 侧读 Issue) */
   readonly github?: GitHubProvider
+  /** 测试注入：claude 认证探测(默认读本机 `claude auth status`) */
+  readonly claudeAuthProbe?: ClaudeAuthProbe
   readonly now?: string
 }
 
@@ -65,7 +67,10 @@ export async function runIssue(opts: RunIssueOptions): Promise<Result<RunIssueRe
 
   // 模型 / claude 凭据+二进制闸门先于 ingest:不能留下一个已 ingest 却驱动不了的 task。
   if (harness.value === 'claude') {
-    const ready = requireClaudeReady()
+    const ready =
+      opts.claudeAuthProbe === undefined
+        ? requireClaudeReady()
+        : requireClaudeReady('claude', opts.claudeAuthProbe)
     if (!ready.ok) return ready
   }
 
@@ -84,6 +89,7 @@ export async function runIssue(opts: RunIssueOptions): Promise<Result<RunIssueRe
   const run = await runTask(ingested.value.taskId, {
     ...(opts.maxSteps === undefined ? {} : { maxSteps: opts.maxSteps }),
     ...(opts.wallClockS === undefined ? {} : { wallClockS: opts.wallClockS }),
+    ...(opts.claudeAuthProbe === undefined ? {} : { claudeAuthProbe: opts.claudeAuthProbe }),
     harness: harness.value,
     ...(model.value === undefined ? {} : { model: model.value }),
     ci,

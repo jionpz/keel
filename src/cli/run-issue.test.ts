@@ -28,6 +28,7 @@ const saved = new Map<string, string | undefined>(ENV_KEYS.map((k) => [k, proces
 const savedModel = process.env.KEEL_MODEL
 const savedHarness = process.env.KEEL_HARNESS
 const savedAnthropic = process.env.ANTHROPIC_API_KEY
+const savedAuthToken = process.env.ANTHROPIC_AUTH_TOKEN
 
 let server: Server
 let baseUrl: string
@@ -37,6 +38,7 @@ beforeEach(async () => {
   delete process.env.KEEL_MODEL
   delete process.env.KEEL_HARNESS
   delete process.env.ANTHROPIC_API_KEY
+  delete process.env.ANTHROPIC_AUTH_TOKEN
 
   await asOwner((c) =>
     c.query(
@@ -87,6 +89,11 @@ afterAll(async () => {
     delete process.env.ANTHROPIC_API_KEY
   } else {
     process.env.ANTHROPIC_API_KEY = savedAnthropic
+  }
+  if (savedAuthToken === undefined) {
+    delete process.env.ANTHROPIC_AUTH_TOKEN
+  } else {
+    process.env.ANTHROPIC_AUTH_TOKEN = savedAuthToken
   }
   await closePool()
 })
@@ -193,13 +200,14 @@ describe('run-issue 组合命令', () => {
     expect(await countRows('task')).toBe(0)
   })
 
-  it('harness=claude 缺 ANTHROPIC_API_KEY 先于 ingest 失败(AUTH_FAILED 且零写入)', async () => {
+  it('harness=claude 未登录先于 ingest 失败(AUTH_FAILED 且零写入)', async () => {
     await registerRepoMain([REMOTE])
 
     const r = await runIssue({
       issueUrl: ISSUE_URL,
       ci: 'passed',
       harness: 'claude',
+      claudeAuthProbe: () => false,
       github: github(),
       now: NOW,
     })

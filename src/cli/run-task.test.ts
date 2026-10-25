@@ -23,6 +23,7 @@ const saved = new Map<string, string | undefined>(ENV_KEYS.map((k) => [k, proces
 const savedModel = process.env.KEEL_MODEL
 const savedHarness = process.env.KEEL_HARNESS
 const savedAnthropic = process.env.ANTHROPIC_API_KEY
+const savedAuthToken = process.env.ANTHROPIC_AUTH_TOKEN
 
 function setToken(value: string | undefined): void {
   for (const k of ENV_KEYS) {
@@ -39,6 +40,8 @@ beforeEach(() => {
   delete process.env.KEEL_MODEL
   delete process.env.KEEL_HARNESS
   delete process.env.ANTHROPIC_API_KEY
+  // 网关凭据同样是合法认证路径 —— 断言必须与「本机是否配了网关」解耦
+  delete process.env.ANTHROPIC_AUTH_TOKEN
 })
 
 afterAll(async () => {
@@ -63,6 +66,11 @@ afterAll(async () => {
     delete process.env.ANTHROPIC_API_KEY
   } else {
     process.env.ANTHROPIC_API_KEY = savedAnthropic
+  }
+  if (savedAuthToken === undefined) {
+    delete process.env.ANTHROPIC_AUTH_TOKEN
+  } else {
+    process.env.ANTHROPIC_AUTH_TOKEN = savedAuthToken
   }
   await closePool()
 })
@@ -128,8 +136,12 @@ describe('runTask · --ci real 缺 token 时不进 loop', () => {
     expect(r.error.detail).toMatch(/claude/)
   })
 
-  it('harness=claude 缺 ANTHROPIC_API_KEY → AUTH_FAILED 且不可重试', async () => {
-    const r = await runTask(randomUUID(), { ci: 'passed', harness: 'claude' })
+  it('harness=claude 未登录 → AUTH_FAILED 且不可重试', async () => {
+    const r = await runTask(randomUUID(), {
+      ci: 'passed',
+      harness: 'claude',
+      claudeAuthProbe: () => false,
+    })
     expect(r.ok).toBe(false)
     if (r.ok) return
     expect(r.error.kind).toBe('AUTH_FAILED')

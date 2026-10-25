@@ -14,10 +14,7 @@
 
 import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import {
-  requireAnthropicApiKeyForBare,
-  requireClaudeBinary,
-} from '../execution/adapters/claude-code.js'
+import { requireClaudeAuth, requireClaudeBinary } from '../execution/adapters/claude-code.js'
 
 /** 从 remote URL 解析 `owner/repo` */
 export function ownerRepoSlug(remoteUrl: string): string {
@@ -125,19 +122,19 @@ export function preflightOmp(bin = 'omp'): void {
 }
 
 /**
- * 预检 Claude Code：`claude --version`；untrusted 路径还要 ANTHROPIC_API_KEY
- * （`--bare` 不读 OAuth / 钥匙串）。
+ * 预检 Claude Code：`claude --version` + 认证就绪（`--bare` 不读 OAuth / 钥匙串）。
  *
- * 缺二进制或缺 key 时抛错，**不 skip**。否则编排会 T-031 升人工，
- * 与 Policy 闸门同终态，只看终态就会假绿。
+ * 认证接受三种凭据：环境 `ANTHROPIC_API_KEY`、环境 `ANTHROPIC_AUTH_TOKEN`、
+ * 或 claude 自身配置已登录（网关场景）。缺二进制或确实未登录时抛错，**不 skip**。
+ * 否则编排会 T-031 升人工，与 Policy 闸门同终态，只看终态就会假绿。
  */
 export function preflightClaude(bin = 'claude'): void {
   const binOk = requireClaudeBinary(bin)
   if (!binOk.ok) {
     throw new Error(binOk.error.detail)
   }
-  const key = requireAnthropicApiKeyForBare()
-  if (!key.ok) {
-    throw new Error(key.error.detail)
+  const auth = requireClaudeAuth(bin)
+  if (!auth.ok) {
+    throw new Error(auth.error.detail)
   }
 }
