@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量门槛、测试分层、防假绿与 review 清单"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "核对错误分类是否可重试、是否被滥用成通配标签"}
+{"file": ".trellis/spec/backend/session-context.md", "reason": "检查 ContextBuilt 是否仍能如实回答「QA 看到了什么」"}
+{"file": "docs/08-cross-cutting.md", "reason": "事件流四问 O1-O4 与「不许用 0/null 冒充不知道」"}
+{"file": "docs/05-contracts/policy-engine.md", "reason": "§2.2 post_develop / files_drift_ratio —— 确认本任务只采事实、不越界求值"}
