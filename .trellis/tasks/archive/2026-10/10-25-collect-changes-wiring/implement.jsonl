@@ -1,0 +1,7 @@
+{"file": "docs/05-contracts/harness-adapter.md", "reason": "§3.4 collectChanges / WorkspaceDiff 契约原文与 commits 字段现状"}
+{"file": "docs/05-contracts/context-builder.md", "reason": "配方 / section 来源 / 降级顺序与 required 语义"}
+{"file": "docs/07-flows.md", "reason": "第 19-23 步：收集工作区变更 → 漂移检测 → 派发 QA 的理想流"}
+{"file": ".trellis/spec/backend/harness-adapter.md", "reason": "Adapter 三条契约与失败模式/测试锚点表的写法"}
+{"file": ".trellis/spec/backend/session-context.md", "reason": "上下文下行桥：withPrompt 只能追加、ContextBuilt 不得说假话"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "ErrorKind 选取与 retryable 语义（PROTOCOL_ERROR 的选择依据）"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "三平面边界：Execution 不写 Fact、Control 不直调 LLM"}
