@@ -13,13 +13,17 @@ import { EventEmitter } from 'node:events'
 import { readFile } from 'node:fs/promises'
 import { Readable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RunSpec } from '../../contracts/harness-adapter.js'
 import {
   buildClaudeArgv,
   CLAUDE_CAPABILITIES,
   ClaudeCodeAdapter,
+  claudeAuthMissingDetail,
+  envCredentialName,
+  requireClaudeAuth,
   requireClaudeBinary,
+  sanitizeClaudeEnv,
 } from './claude-code.js'
 import { parseClaudeStream } from './claude-code-parse.js'
 import { DEFAULT_OMP_MODEL } from './omp.js'
@@ -166,11 +170,23 @@ describe('buildClaudeArgv', () => {
     expect(argv).not.toContain('--bare')
   })
 
-  it('固定 -p --output-format stream-json', () => {
-    const argv = buildClaudeArgv(spec())
+  it('固定 -p <prompt> --output-format stream-json --verbose', () => {
+    const argv = buildClaudeArgv(spec(), { prompt: '做点什么' })
     expect(argv[0]).toBe('-p')
+    expect(argv[1]).toBe('做点什么')
     const i = argv.indexOf('--output-format')
     expect(argv[i + 1]).toBe('stream-json')
+    // 2.1.300：print + stream-json 缺 --verbose 直接报错
+    expect(argv).toContain('--verbose')
+  })
+
+  it('Keel 工具名映射到 claude 真实名（write→Edit，Write 已不存在）', () => {
+    const argv = buildClaudeArgv(
+      spec({ permissions: { allowed_tools: ['read', 'write'], mode: 'auto' } }),
+    )
+    const i = argv.indexOf('--tools')
+    expect(argv[i + 1]).toBe('Read,Edit')
+    expect(argv[i + 1]).not.toContain('Write')
   })
 
   it('缺省不传 --model，也不出现 omp 缺省 deepseek', () => {
@@ -201,13 +217,17 @@ describe('buildClaudeArgv', () => {
     expect(argv[i + 1]).toBe('Read,Edit')
   })
 
-  it('权限模式映射：auto → dontAsk，accept_edits → acceptEdits', () => {
-    expect(
-      buildClaudeArgv(spec({ permissions: { allowed_tools: [], mode: 'auto' } })),
-    ).toContainEqual('dontAsk')
-    expect(
-      buildClaudeArgv(spec({ permissions: { allowed_tools: [], mode: 'accept_edits' } })),
-    ).toContainEqual('acceptEdits')
+  it('权限模式映射：manual → manual，accept_edits / auto → acceptEdits', () => {
+    const mode = (m: 'manual' | 'accept_edits' | 'auto'): string => {
+      const argv = buildClaudeArgv(spec({ permissions: { allowed_tools: [], mode: m } }))
+      const i = argv.indexOf('--permission-mode')
+      return argv[i + 1] ?? ''
+    }
+    expect(mode('manual')).toBe('manual')
+    expect(mode('accept_edits')).toBe('acceptEdits')
+    // dontAsk 在 2.1.300 下拒绝 Edit（headless 无人可问），不能映射过去
+    expect(mode('auto')).toBe('acceptEdits')
+    expect(mode('auto')).not.toBe('dontAsk')
   })
 
   it('deny_unlisted + 白名单 → permission-mode manual + --allowedTools', () => {
@@ -296,16 +316,21 @@ describe('renderPrompt —— context 的每个 section 都要真的进提示词
     if (!started.ok) return
     expect((await a.awaitResult(started.value)).ok).toBe(true)
 
-    const prompt = calls[0]?.at(-1) ?? ''
+    // prompt 必须紧跟 -p（2.1.300：放末位会被当成没有输入）
+    const prompt = calls[0]?.[1] ?? ''
     expect(prompt).toContain('你是 PM。')
     expect(prompt).toContain('KEEL_MARKER_FEEDBACK')
     expect(prompt.indexOf('KEEL_MARKER_FEEDBACK')).toBeLessThan(prompt.indexOf('判断上面的'))
   })
 
-  it('spawn cwd 是 workspace.path，prompt 在 argv 末位', async () => {
-    const calls: { cwd: string | undefined; args: string[] }[] = []
-    const spawnFn = ((_bin: string, args: readonly string[], opts?: { cwd?: string }) => {
-      calls.push({ cwd: opts?.cwd, args: [...args] })
+  it('spawn cwd 是 workspace.path，prompt 紧跟 -p，env 已剔除宿主运行时变量', async () => {
+    const calls: { cwd: string | undefined; args: string[]; env: NodeJS.ProcessEnv }[] = []
+    const spawnFn = ((
+      _bin: string,
+      args: readonly string[],
+      opts?: { cwd?: string; env?: NodeJS.ProcessEnv },
+    ) => {
+      calls.push({ cwd: opts?.cwd, args: [...args], env: opts?.env ?? {} })
       const p = new EventEmitter() as EventEmitter & {
         stdout: Readable
         stderr: Readable
@@ -316,16 +341,44 @@ describe('renderPrompt —— context 的每个 section 都要真的进提示词
       return p
     }) as unknown as typeof spawn
 
-    const a = new ClaudeCodeAdapter({ spawnFn })
-    const started = await a.startRun(
-      spec({ workspace: { path: '/ws/task-1', repo_id: 'r', branch: 'ai/x', untrusted: true } }),
-    )
-    expect(started.ok).toBe(true)
-    if (!started.ok) return
-    await a.awaitResult(started.value)
-    expect(calls[0]?.cwd).toBe('/ws/task-1')
-    expect(calls[0]?.args).toContain('--bare')
-    expect(calls[0]?.args.at(-1)).toBe('回复 ok')
+    // 模拟「Keel 跑在 Claude Code 会话里」：宿主变量必须被剔除，
+    // 否则子 claude 会误判 provider 由宿主托管并拒绝 settings 里的模型。
+    const injected: Record<string, string> = {
+      CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: '1',
+      CLAUDE_CODE_MESSAGING_SOCKET: '/tmp/cc-socks/x.sock',
+      KEEL_MARKER_KEEP: 'kept',
+    }
+    const saved = new Map<string, string | undefined>()
+    for (const [k, v] of Object.entries(injected)) {
+      saved.set(k, process.env[k])
+      process.env[k] = v
+    }
+    try {
+      const a = new ClaudeCodeAdapter({ spawnFn })
+      const started = await a.startRun(
+        spec({ workspace: { path: '/ws/task-1', repo_id: 'r', branch: 'ai/x', untrusted: true } }),
+      )
+      expect(started.ok).toBe(true)
+      if (!started.ok) return
+      await a.awaitResult(started.value)
+      expect(calls[0]?.cwd).toBe('/ws/task-1')
+      expect(calls[0]?.args).toContain('--bare')
+      expect(calls[0]?.args[0]).toBe('-p')
+      expect(calls[0]?.args[1]).toBe('回复 ok')
+      expect(calls[0]?.env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBeUndefined()
+      expect(calls[0]?.env.CLAUDE_CODE_MESSAGING_SOCKET).toBeUndefined()
+      // 其余环境原样保留（凭据、PATH、用户配置都不能被顺手删掉）
+      expect(calls[0]?.env.KEEL_MARKER_KEEP).toBe('kept')
+      expect(calls[0]?.env.PATH).toBe(process.env.PATH)
+    } finally {
+      for (const [k, v] of saved) {
+        if (v === undefined) {
+          delete process.env[k]
+        } else {
+          process.env[k] = v
+        }
+      }
+    }
   })
 
   it('未指定 model 时 spawn argv 不含 omp 缺省模型', async () => {
@@ -466,6 +519,199 @@ describe('interrupt 杀子进程(注入 spawn fixture)', () => {
 })
 
 const REQUIRE_CLAUDE = process.env.KEEL_REQUIRE_CLAUDE === '1'
+
+describe('requireClaudeAuth · 认证门禁', () => {
+  const savedKey = process.env.ANTHROPIC_API_KEY
+  const savedToken = process.env.ANTHROPIC_AUTH_TOKEN
+
+  afterEach(() => {
+    if (savedKey === undefined) delete process.env.ANTHROPIC_API_KEY
+    else process.env.ANTHROPIC_API_KEY = savedKey
+    if (savedToken === undefined) delete process.env.ANTHROPIC_AUTH_TOKEN
+    else process.env.ANTHROPIC_AUTH_TOKEN = savedToken
+  })
+
+  function noEnv(): void {
+    delete process.env.ANTHROPIC_API_KEY
+    delete process.env.ANTHROPIC_AUTH_TOKEN
+  }
+
+  it('环境 ANTHROPIC_API_KEY → 放行，且不探测 CLI', () => {
+    noEnv()
+    process.env.ANTHROPIC_API_KEY = 'sk-test'
+    let probed = false
+    const r = requireClaudeAuth('claude', () => {
+      probed = true
+      return false
+    })
+    expect(r.ok).toBe(true)
+    expect(probed).toBe(false)
+    expect(envCredentialName()).toBe('ANTHROPIC_API_KEY')
+  })
+
+  it('环境 ANTHROPIC_AUTH_TOKEN（网关）→ 放行', () => {
+    noEnv()
+    process.env.ANTHROPIC_AUTH_TOKEN = 'gateway-token'
+    const r = requireClaudeAuth('claude', () => false)
+    expect(r.ok).toBe(true)
+    expect(envCredentialName()).toBe('ANTHROPIC_AUTH_TOKEN')
+  })
+
+  it('无环境凭据 + CLI 报已登录 → 放行（settings 里的网关配置）', () => {
+    noEnv()
+    const r = requireClaudeAuth('claude', () => true)
+    expect(r.ok).toBe(true)
+  })
+
+  it('无环境凭据 + CLI 报未登录 → AUTH_FAILED，文案列出三条路径', () => {
+    noEnv()
+    const r = requireClaudeAuth('claude', () => false)
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('AUTH_FAILED')
+    expect(r.error.retryable).toBe(false)
+    expect(r.error.detail).toMatch(/--bare/)
+    expect(r.error.detail).toMatch(/ANTHROPIC_API_KEY/)
+    expect(r.error.detail).toMatch(/ANTHROPIC_AUTH_TOKEN/)
+    expect(r.error.detail).toBe(claudeAuthMissingDetail())
+  })
+
+  it('探测不可判定（缺二进制）→ 不误报 AUTH_FAILED，交给二进制闸门', () => {
+    noEnv()
+    const r = requireClaudeAuth('keel-no-such-claude-bin-xyz', () => null)
+    expect(r.ok).toBe(true)
+  })
+
+  it('空白环境值不算凭据', () => {
+    noEnv()
+    process.env.ANTHROPIC_API_KEY = '   '
+    expect(envCredentialName()).toBeUndefined()
+  })
+})
+
+describe('同 run_id 多轮（R-007 回灌）—— 不得串到上一轮', () => {
+  function stream(text: string): string {
+    return `${JSON.stringify({
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      result: text,
+      session_id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+      total_cost_usd: 0.01,
+    })}\n`
+  }
+
+  it('第二轮 awaitResult 拿到第二轮自己的输出', async () => {
+    let call = 0
+    const spawnFn = ((_bin: string, _args: readonly string[]) => {
+      call += 1
+      const p = new EventEmitter() as EventEmitter & { stdout: Readable; stderr: Readable }
+      p.stdout = Readable.from([stream(call === 1 ? '第一轮' : '第二轮')])
+      p.stderr = Readable.from([])
+      p.stdout.on('end', () => p.emit('close', 0))
+      return p
+    }) as unknown as typeof spawn
+
+    const a = new ClaudeCodeAdapter({ spawnFn })
+    const t1 = await a.startRun(spec({ idempotency_key: 't1/develop/1#turn1' }))
+    const t2 = await a.startRun(spec({ idempotency_key: 't1/develop/1#turn2' }))
+    expect(t1.ok && t2.ok).toBe(true)
+    if (!t1.ok || !t2.ok) return
+
+    const r1 = await a.awaitResult(t1.value)
+    const r2 = await a.awaitResult(t2.value)
+    expect(r1.ok && r1.value.text).toBe('第一轮')
+    expect(r2.ok && r2.value.text).toBe('第二轮')
+  })
+
+  it('interrupt 打到**当前轮**的进程，而不是上一轮的陈旧 state', async () => {
+    interface FakeProc {
+      pid: number
+      stdout: { on: () => void }
+      stderr: { on: () => void }
+      on: (ev: 'error' | 'close', cb: (code?: number | null) => void) => void
+      emitClose: (code: number | null) => void
+    }
+    const procs: FakeProc[] = []
+    const spawnFn = ((_cmd: string, _args: readonly string[]): unknown => {
+      const closeHandlers: Array<(code?: number | null) => void> = []
+      const index = procs.length
+      const proc: FakeProc = {
+        pid: 20000 + index,
+        stdout: { on: () => {} },
+        stderr: { on: () => {} },
+        on: (ev, cb) => {
+          if (ev === 'close') closeHandlers.push(cb)
+        },
+        emitClose: (code) => {
+          for (const cb of closeHandlers) cb(code)
+        },
+      }
+      procs.push(proc)
+      // 第一轮已经结束；第二轮挂住不回（真实进程仍在跑）
+      if (index === 0) setImmediate(() => proc.emitClose(0))
+      return proc
+    }) as typeof spawn
+
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true)
+    try {
+      const a = new ClaudeCodeAdapter({ spawnFn, interruptKillTimeoutMs: 5 })
+      const t1 = await a.startRun(spec({ idempotency_key: 't1/develop/1#turn1' }))
+      const t2 = await a.startRun(spec({ idempotency_key: 't1/develop/1#turn2' }))
+      expect(t1.ok && t2.ok).toBe(true)
+      if (!t1.ok || !t2.ok) return
+      await a.awaitResult(t1.value)
+
+      await a.interrupt(t2.value, 'timeout')
+      // 打中的必须是第二轮的进程组，不是第一轮那个已经结束的
+      expect(killSpy).toHaveBeenCalledWith(-(procs[1]?.pid as number), 'SIGTERM')
+      expect(killSpy).not.toHaveBeenCalledWith(-(procs[0]?.pid as number), 'SIGTERM')
+
+      procs[1]?.emitClose(null)
+      const r2 = await a.awaitResult(t2.value)
+      expect(r2.ok && r2.value.status).toBe('TIMEOUT')
+    } finally {
+      killSpy.mockRestore()
+    }
+  })
+})
+
+describe('sanitizeClaudeEnv · 宿主运行时变量不进子进程', () => {
+  it('剔除宿主托管 / 会话身份 / IPC 变量，其余原样保留', () => {
+    const out = sanitizeClaudeEnv({
+      CLAUDECODE: '1',
+      CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: '1',
+      CLAUDE_CODE_MODEL_CATALOG: '0',
+      CLAUDE_CODE_MESSAGING_SOCKET: '/tmp/cc.sock',
+      CLAUDE_CODE_MESSAGING_TOKEN: 't',
+      CLAUDE_CODE_SESSION_ID: 's',
+      // 真正的配置与运行前提：必须保留
+      ANTHROPIC_AUTH_TOKEN: 'token',
+      ANTHROPIC_BASE_URL: 'http://127.0.0.1:3425',
+      CLAUDE_CONFIG_DIR: '/home/u/.claude-work',
+      PATH: '/usr/bin',
+      HTTPS_PROXY: 'http://proxy:8080',
+    })
+    expect(out.CLAUDECODE).toBeUndefined()
+    expect(out.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBeUndefined()
+    expect(out.CLAUDE_CODE_MODEL_CATALOG).toBeUndefined()
+    expect(out.CLAUDE_CODE_MESSAGING_SOCKET).toBeUndefined()
+    expect(out.CLAUDE_CODE_MESSAGING_TOKEN).toBeUndefined()
+    expect(out.CLAUDE_CODE_SESSION_ID).toBeUndefined()
+
+    expect(out.ANTHROPIC_AUTH_TOKEN).toBe('token')
+    expect(out.ANTHROPIC_BASE_URL).toBe('http://127.0.0.1:3425')
+    expect(out.CLAUDE_CONFIG_DIR).toBe('/home/u/.claude-work')
+    expect(out.PATH).toBe('/usr/bin')
+    expect(out.HTTPS_PROXY).toBe('http://proxy:8080')
+  })
+
+  it('不改原 env（纯函数）', () => {
+    const src = { CLAUDECODE: '1', PATH: '/usr/bin' }
+    sanitizeClaudeEnv(src)
+    expect(src.CLAUDECODE).toBe('1')
+  })
+})
 
 describe('requireClaudeBinary', () => {
   it('找不到二进制 → HARNESS_UNAVAILABLE（可重试 kind，但 CLI 在进 loop 前返回）', () => {
