@@ -285,3 +285,48 @@ v0.1 可用命令行入口:收割/驱动任务/状态查询。
 
 - 补 ANTHROPIC_API_KEY 后跑 claude-code-e2e，再决定是否把「可替换」标为已验证
 - 父任务 08-29-phase2-entry 仍开放（wallclock-adr / ingress-poller 按需）
+
+## Session 5: 收口 collectChanges + 修 firstRun 撞键 + --wall-clock
+
+**Date**: 2026-10-26
+**Tasks**: `10-25-collect-changes-wiring`（归档）、`10-26-run-reentry-wallclock`（归档）
+**Branch**: `main`
+
+### Summary
+
+两条任务一起收口。`collectChanges` 接进编排后，真机 claude 跑通到 S-DONE（5 run ≈$0.13），
+develop 的 diff 事件与 commitAll 的 commit 对得上。随后修掉 `firstRun` 漏改这一类缺陷：
+`T-010`/`T-012`/`T-017`/`T-018` 四处落在可二次进入的位置，返工后重进阶段会算出重键 →
+只有 `SideEffectSkipped` → 驱动无 pending run 直接收工，Task 静默停在原状态。
+同时给 `run-task` / `run-issue` 补上 `--wall-clock`。
+
+### Main Changes
+
+- 四处 `firstRun` → `nextRun`，每处注释点明二次进入路径
+- `ALLOWED_FIRST_RUN` 白名单 + **双向**断言（多/少都红），断言对象是转移 id 不是阶段名
+- `SideEffectSkipped` 的 CreateRun payload 加 `existing_status`：PENDING = 真重放，终态 = 派发丢失
+- `parseWallClock` + 两个 CLI 入口 + 顶层 HELP；非法值退出码 1，不静默回退 180
+- spec 新增 `transition-effects.md`；database-guidelines 补 `asRole` 只在抛错时回滚
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `39d93ae` | feat(control): 接上 collectChanges —— develop 后收真实 diff 并喂给 QA/Review |
+| `2ca98b3` | fix(control): firstRun 漏改四处 —— 返工后重进 qa/review/rfc_draft/develop 会撞幂等键卡死 |
+
+### Testing
+
+- [OK] `pnpm run check`：35 files / 449 passed, 5 skipped
+- [OK] 四组负对照都真的变红（T-017 改回 first / 去 existing_status / 放宽墙钟守卫 / 删 wallClockS 展开），还原后转绿
+- [OK] CLI 端到端 `--wall-clock 0|abc|1.5` 退出码 1；`--wall-clock 600` 过闸进 runTask
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- driver「无 PENDING run 即收工、退出码 0」是另一条缺陷，单独立项
+- R4 契约级遗留：ContextBuilt / artifact-store.commit 的 occurred_at 需扩事件契约
+- 未决：`.trellis/.template-hashes.json` 与未跟踪的 `.agents/` `.codex/` `.dsh/` 是否入库
