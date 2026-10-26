@@ -232,6 +232,7 @@ describe('runIssueMain · --wall-clock 闸门', () => {
         created: false,
         finalStatus: 'S-DONE',
         steps: [],
+        stopReason: 'terminal',
         prUrl: null,
       })
     }

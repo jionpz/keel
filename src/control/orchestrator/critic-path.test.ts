@@ -322,7 +322,10 @@ describe('R3/R4/R5 · capability 来源确判 / guard 拒=停 / 活锁上限', (
     adapter.appendBody(pmBody())
     adapter.appendBody(brainstormBody('human_input'))
     // 尝试执行过程中 reject 会怎样?看 loop —— 直接用 maxSteps 兜住
-    await runTaskToCompletion(taskId, depsFor(), { maxSteps: 6 })
+    const result = await runTaskToCompletion(taskId, depsFor(), { maxSteps: 6 })
+    expect(result.ok, result.ok ? '' : result.error.detail).toBe(true)
+    // 能力请求被拒 = 需要人工/外部介入，不是故障
+    expect(result.ok && result.value.stopReason).toBe('capability-denied')
 
     // guard 拒 → loop 返回停(brainstormRequestedCapability='human_input' 不中 P-ALLOW-CRITIC)
     // finalStatus 停在 S-BRAINSTORM

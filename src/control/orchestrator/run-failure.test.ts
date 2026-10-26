@@ -285,6 +285,8 @@ describe('R1(issue #23)· run 失败面', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.value.finalStatus).toBe('S-PM_ANALYZING') // 停在阶段态
+    // 人工撤回是设计内的停；它也是「阶段态没有待执行 run」，但绝不能报成卡住
+    expect(result.value.stopReason).toBe('cancelled')
 
     const runs = await asOwner((c) =>
       c.query<{ status: string }>(`SELECT status FROM run WHERE task_id=$1 AND stage='pm'`, [

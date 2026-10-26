@@ -67,7 +67,7 @@ nextRun(stage)  → [{ kind: 'CreateRun', stage, attempt: 'next' }]    // attemp
 
 | 错误 | 后果 |
 |---|---|
-| 给返工阶段写 `firstRun` | 第二次派发撞键 → 没有 PENDING run → 驱动「无活可干」收工，任务静默停在原状态 |
+| 给返工阶段写 `firstRun` | 第二次派发撞键 → 没有 PENDING run。编排器现在会报错（见 [orchestrator-loop](./orchestrator-loop.md)「阶段态没有待执行 run」）；在 2026-10-26 之前它是静默收工，任务停在原状态、退出码 0 |
 | 在执行器里给撞键加 +1 兜底 | 重放会造重复 run；`SideEffectSkipped` 失去含义 |
 | 白名单只断言「都在允许集里」 | 少一条白名单（有人改成 `nextRun`）不会被发现 |
 | 新增副作用时忘了「必须幂等」 | 重放重复开 PR / 重复发通知（`docs/04-state-machine.md` §5.2） |

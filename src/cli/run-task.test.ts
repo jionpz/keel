@@ -15,11 +15,12 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ok } from '../contracts/errors.js'
+import { err, makeError, ok } from '../contracts/errors.js'
 import { asOwner, closePool } from '../fact/db.js'
 import { parseArgs } from './argv.js'
 import {
   parseWallClock,
+  printRunResult,
   type RunTaskOptions,
   readPrUrl,
   resolveCiGateway,
@@ -198,6 +199,8 @@ describe('runTask · 非 S-DONE 停靠如实报告(AC6)', () => {
       expect(r.value.finalStatus).toBe('S-HUMAN_REVIEW')
       expect(r.value.steps).toEqual([])
       expect(r.value.prUrl).toBeNull()
+      // 「走到哪」之外还要答「为什么停」：等人审批，而不是卡住
+      expect(r.value.stopReason).toBe('awaiting-human')
     } finally {
       rmSync(origin, { recursive: true, force: true })
     }
@@ -308,7 +311,7 @@ describe('--wall-clock 旗标', () => {
     const seen: RunTaskOptions[] = []
     const stub: typeof runTask = async (_id, opts = {}) => {
       seen.push(opts)
-      return ok({ finalStatus: 'S-DONE', steps: [], prUrl: null })
+      return ok({ finalStatus: 'S-DONE', steps: [], stopReason: 'terminal', prUrl: null })
     }
     await runTaskMain(argv, { runTask: stub })
     return seen[0]
@@ -322,5 +325,41 @@ describe('--wall-clock 旗标', () => {
   it('runTaskMain 省略 --wall-clock：wallClockS 为 undefined（下游默认 180，不是 0）', async () => {
     const opts = await captureRunTaskOpts([randomUUID()])
     expect(opts === undefined || !('wallClockS' in opts)).toBe(true)
+  })
+})
+
+describe('停止原因 · CLI 输出与退出码', () => {
+  it('printRunResult 把 stopReason 说成人话（与 finalStatus 分开两行）', () => {
+    const lines: string[] = []
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((m: unknown) => {
+      lines.push(String(m))
+    })
+    try {
+      printRunResult({
+        finalStatus: 'S-HUMAN_REVIEW',
+        steps: [],
+        stopReason: 'awaiting-human',
+        prUrl: null,
+      })
+    } finally {
+      logSpy.mockRestore()
+    }
+    expect(lines).toContain('finalStatus: S-HUMAN_REVIEW')
+    expect(lines.some((l) => l.startsWith('stopped: awaiting-human（'))).toBe(true)
+  })
+
+  it('卡住（loop 返回错误）→ runTaskMain 退出码 1，且错误原文可见', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const prevCode = process.exitCode
+    const detail = '停在 S-QA，但没有待执行的 run —— 最近一次 run 是 qa/1（SUCCEEDED）'
+    const stub: typeof runTask = async () => err(makeError('NOT_FOUND', detail))
+    try {
+      await runTaskMain([randomUUID()], { runTask: stub })
+      expect(process.exitCode).toBe(1)
+      expect(errSpy.mock.calls.flat().join(' ')).toContain(detail)
+    } finally {
+      errSpy.mockRestore()
+      process.exitCode = prevCode
+    }
   })
 })

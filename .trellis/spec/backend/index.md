@@ -22,6 +22,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Harness Adapter](./harness-adapter.md) | 子进程环境隔离（宿主运行时变量）、同 Run 多轮 state 定位、argv 以当前 CLI 版本为准 | ✅ 已填（`10-25-claude-auth-config`） |
 | [Workspace Diff](./workspace-diff.md) | `collectChanges` 接入编排：采集时机、HEAD 基线、未跟踪文件、事件载体与 fail-closed | ✅ 已填（`10-25-collect-changes-wiring`） |
 | [Transition Effects](./transition-effects.md) | `firstRun`/`nextRun` 的可用站点与白名单双向断言、撞键可归因（`existing_status`）、不改键算法的理由 | ✅ 已填（`10-26-run-reentry-wallclock`） |
+| [Orchestrator Loop](./orchestrator-loop.md) | 停止原因必填（`stopReason`）、阶段态无 run 的证据式判据、单进程前提、只报告不修复 | ✅ 已填（`10-26-orchestrator-stop-reasons`） |
 | [Git Workspace](./git-workspace.md) | Agent 提交用 `-c` 钉死身份与签名、夹具关 gpgsign、`GIT_CONFIG_GLOBAL` 的使用边界 | ✅ 已填（`08-26-v01-closeout`） |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | ⏳ 暂缓 —— 尚无日志代码 |
 
