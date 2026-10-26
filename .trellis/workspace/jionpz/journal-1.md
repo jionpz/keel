@@ -330,3 +330,47 @@ develop 的 diff 事件与 commitAll 的 commit 对得上。随后修掉 `firstR
 - driver「无 PENDING run 即收工、退出码 0」是另一条缺陷，单独立项
 - R4 契约级遗留：ContextBuilt / artifact-store.commit 的 occurred_at 需扩事件契约
 - 未决：`.trellis/.template-hashes.json` 与未跟踪的 `.agents/` `.codex/` `.dsh/` 是否入库
+
+## Session 6: 停止原因可区分 —— 静默收工改成可诊断的报错
+
+**Tasks:** `.trellis/tasks/archive/2026-10/10-26-orchestrator-stop-reasons`
+
+### Summary
+
+`loop.ts` 的「阶段态没有 PENDING run → `return ok`」把设计内等待、派发丢失、进程已死
+三件事压成同一个成功返回。上一轮刚被它坑过：firstRun 撞键导致 T-017 派发丢失，任务
+静默停在 S-QA，看起来像「QA 自己跑完了」，查了两轮才找到上游。
+
+### Main Changes
+
+- 判据读证据不按状态归类：阶段态 + 无 PENDING run 时看**最近一次 run** ——
+  `CANCELLED` 是设计内的停（`ok` + `cancelled`），其余是故障（`err(NOT_FOUND)`）
+- 错误 detail 三要素：当前状态 / 最近 run 的 stage·attempt·status（无 run 明说）/
+  下一步查 `SideEffectSkipped.existing_status`（PENDING·RUNNING = 真重放，终态 = 派发丢失）
+- `RunToCompletionResult.stopReason` **必填**（7 值），六处既有 `ok` 各补原因 ——
+  必填是「新增停止路径忘了表态就编译不过」的强制点
+- CLI `printRunResult` 多打 `stopped: <reason>（人话）`；`finalStatus:` 行不动
+- 只报告不修复：不自动重派 / 不改 control_mode / 不回滚
+- spec 新增 `backend/orchestrator-loop.md`；顺带修掉 `effects.ts` 注释里并不存在的 `CLAIMED`
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `be15408` | fix(control): 停止必须带原因 —— 阶段态无 PENDING run 不再当「跑完了」 |
+
+### Testing
+
+- [OK] `pnpm run check`：36 files / 460 passed, 5 skipped
+- [OK] 负对照 N1：「一律 ok」→ AC1 / AC6 / AC1' 红 3 绿 6；N2 还原 → 9 全绿
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 多 worker 出现时，「RUNNING 在别人手里」与「RUNNING 死在崩溃进程里」要用租约区分
+  —— 现在的 RUNNING 判据只在单进程前提下成立（已写进 spec）
+- 剩余遗留不变：GitHub-Issue + 真 CI 验收线未验；R4 `occurred_at` 契约；`post_develop` 策略点未接线
+- 未决：`.trellis/.template-hashes.json` 与未跟踪的 `.agents/` `.codex/` `.dsh/` 是否入库
