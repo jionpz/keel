@@ -27,6 +27,7 @@ import { asRole } from '../../fact/db.js'
 import type { GitWorkspace } from '../../fact/git-workspace.js'
 import { ensureTraceId } from '../../fact/trace.js'
 import type { ControlMode, RoleId, Stage, TaskStatus } from '../../shared/ids.js'
+import { isStageStatus } from '../../shared/ids.js'
 import { claimDueTimers } from '../../timer/drain.js'
 import { checkBudgetFuse } from '../budget/fuse.js'
 import { claimRunForExecution } from '../concurrency/limits.js'
@@ -87,9 +88,32 @@ export interface StepRecord {
   readonly note: string
 }
 
+/**
+ * 为什么停下来的。
+ *
+ * 每一个 `ok` 返回都必须表态（字段必填）—— 这是「以后新增停止路径忘了想清楚」
+ * 的强制点。故障不算停止原因：卡住走 `err`，见 `readPendingRun` 之后的分支。
+ */
+export type StopReason =
+  /** 终态（S-DONE / S-REJECTED / S-ABANDONED / S-FAILED） */
+  | 'terminal'
+  /** `control_mode ≠ auto`：预算熔断（C-002）或人工暂停/接管，恢复（C-005）后可续 */
+  | 'paused'
+  /** 澄清态、TTL 未到期，等人工回答（ClarificationReceived） */
+  | 'awaiting-clarification'
+  /** `S-PR_OPEN` 且没有注入 CI 回调：等外部 CI 事实 */
+  | 'awaiting-external-ci'
+  /** `S-HUMAN_REVIEW`：等人工批准 / 驳回 / 回炉 */
+  | 'awaiting-human'
+  /** 能力请求被守卫拒绝（R4）：需要人工或外部介入 */
+  | 'capability-denied'
+  /** 最近一次 run 被人工撤回（R-010），不重试、不派发，等恢复 */
+  | 'cancelled'
+
 export interface RunToCompletionResult {
   readonly finalStatus: TaskStatus
   readonly steps: readonly StepRecord[]
+  readonly stopReason: StopReason
 }
 
 const TERMINAL: readonly string[] = ['S-DONE', 'S-REJECTED', 'S-ABANDONED', 'S-FAILED']
@@ -125,7 +149,7 @@ export async function runTaskToCompletion(
     const state = await readState(taskId)
     if (state === null) return err(makeError('NOT_FOUND', `找不到 task ${taskId}`))
     if (TERMINAL.includes(state.status)) {
-      return ok({ finalStatus: state.status, steps })
+      return ok({ finalStatus: state.status, steps, stopReason: 'terminal' })
     }
 
     // ── control_mode ≠ auto：不派发新 run，正常停止 ──
@@ -134,7 +158,7 @@ export async function runTaskToCompletion(
     // 停止是**正常返回而非 error**：status 未变、事实完整，
     // 恢复（C-005）后可从当前 status 继续 —— 把它当错误会掩盖这一点。
     if (state.control_mode !== 'auto') {
-      return ok({ finalStatus: state.status, steps })
+      return ok({ finalStatus: state.status, steps, stopReason: 'paused' })
     }
 
     // ── S-NEW：踢一脚 ──
@@ -183,7 +207,7 @@ export async function runTaskToCompletion(
         continue
       }
       // 未到期:等人工回答(生产由外部 ClarificationReceived 驱动,注入 now)
-      return ok({ finalStatus: state.status, steps })
+      return ok({ finalStatus: state.status, steps, stopReason: 'awaiting-clarification' })
     }
 
     // ── S-PR_OPEN：等外部 CI ──
@@ -212,7 +236,7 @@ export async function runTaskToCompletion(
         continue
       }
       if (opts.externalCi === undefined) {
-        return ok({ finalStatus: state.status, steps })
+        return ok({ finalStatus: state.status, steps, stopReason: 'awaiting-external-ci' })
       }
       const ci = await opts.externalCi(taskId)
       const adv = await deps.driver.advance(
@@ -228,7 +252,27 @@ export async function runTaskToCompletion(
     // ── 阶段态：找 PENDING run 执行 ──
     const pending = await readPendingRun(taskId)
     if (pending === null) {
-      return ok({ finalStatus: state.status, steps })
+      // 没有待执行的 run。这里必须分清「设计内等待」与「卡住」——
+      // 旧实现两者返回同一个 ok，于是派发丢失会以「退出码 0、跑完了」的样子出现
+      // （2026-10-26 的 firstRun 撞键 bug 正是被这层兜住，查了两轮才定位到上游）。
+      //
+      // 判据只读证据，不按状态归类：人工撤回（R-010）也会让阶段态没有待执行 run，
+      // 而那是设计内的停 —— 所以要看最近一次 run 到底发生了什么。
+      if (isStageStatus(state.status)) {
+        const latest = await readLatestRun(taskId)
+        if (latest?.status === 'CANCELLED') {
+          // 人工撤回：不重试、不派发；等 C-005 恢复后从当前状态继续
+          return ok({ finalStatus: state.status, steps, stopReason: 'cancelled' })
+        }
+        return err(stalledError(state.status, latest))
+      }
+      // 非阶段态走到这里只可能是 S-HUMAN_REVIEW 等人审批：
+      // 其它关口与终态各有分支，且都在这之前 return。新增关口态时，
+      // 应在这里显式表态 —— 静默沿用「成功收工」正是本任务要消灭的东西。
+      if (state.status !== 'S-HUMAN_REVIEW') {
+        throw new Error(`不可达：${state.status} 应在更早的分支处理`)
+      }
+      return ok({ finalStatus: state.status, steps, stopReason: 'awaiting-human' })
     }
 
     const executed = await executeRun(taskId, pending, deps, ctxBuilder)
@@ -293,7 +337,7 @@ export async function runTaskToCompletion(
         // NoTransition 已落库留痕;能力请求无法受理,停(需要人工/外部),
         // 不假装成功继续。
         steps.push(record(state.status, adv, 'critic', `capability ${capability} 被拒(guard 未过)`))
-        return ok({ finalStatus: state.status, steps })
+        return ok({ finalStatus: state.status, steps, stopReason: 'capability-denied' })
       }
       steps.push(record(state.status, adv, 'critic', `brainstorm 请求 Critic 评审(${capability})`))
       continue
@@ -643,6 +687,54 @@ async function readState(
     ),
   )
   return r.rows[0] ?? null
+}
+
+/**
+ * 最近一次 run（不分阶段）。
+ *
+ * 停止原因判据要回答的是「上一次派发到底发生了什么」，而不是「某个阶段跑到第几轮」——
+ * 所以按开始时间取最新一行（PENDING 从未开始过，`started_at` 为 null，排最后）。
+ */
+async function readLatestRun(
+  taskId: string,
+): Promise<{ stage: Stage; attempt: number; status: string } | null> {
+  const r = await asRole('keel_control', (c) =>
+    c.query<{ stage: Stage; attempt: number; status: string }>(
+      `SELECT stage, attempt, status FROM run WHERE task_id=$1
+       ORDER BY started_at DESC NULLS LAST, attempt DESC LIMIT 1`,
+      [taskId],
+    ),
+  )
+  return r.rows[0] ?? null
+}
+
+/**
+ * 卡住时的错误。
+ *
+ * detail 要能直接回答三个问题：停在哪个状态、上一次派发是什么、下一步查什么。
+ * 只报「没有待执行的 run」等于把定位成本原封不动转给下一个人。
+ *
+ * kind 用 NOT_FOUND 而不是新增 kind：本错误从不落 `run.error_kind`，
+ * 而新增 kind 要同步改 ERROR_KINDS / RETRYABLE / docs/05-contracts/README.md 三处
+ * （同类先例见 execution/session/manager.ts 对 CANCELLED 的处理）。
+ * 语义上「本该存在的待执行 run 不存在」与 NOT_FOUND 的定义一致，且 retryable=false
+ * 正确 —— 对同一状态再跑一次，run 不会自己出现。
+ */
+function stalledError(
+  status: TaskStatus,
+  latest: { stage: Stage; attempt: number; status: string } | null,
+): KeelError {
+  const what =
+    latest === null
+      ? '该 task 从未创建过任何 run'
+      : `最近一次 run 是 ${latest.stage}/${latest.attempt}（${latest.status}）`
+  return makeError(
+    'NOT_FOUND',
+    `停在 ${status}，但没有待执行的 run —— ${what}。` +
+      '阶段态本该有 PENDING run：要么上一轮转移没有建出来（查 SideEffectSkipped 的 ' +
+      'existing_status：PENDING/RUNNING 是真重放，终态说明派发丢失），' +
+      '要么那条 run 仍被占着没人推进。编排器不会自动重派 —— 确认原因后由人决定是否恢复。',
+  )
 }
 
 async function readPendingRun(

@@ -192,6 +192,7 @@ describe('C3 · 超预算熔断（C-002）', () => {
     expect(result.ok, result.ok ? '' : result.error.detail).toBe(true)
     if (!result.ok) return
     expect(result.value.finalStatus).toBe('S-PM_ANALYZING')
+    expect(result.value.stopReason).toBe('paused')
 
     // ── 2. control_mode → paused，status 不变（C-002 的正交性）──
     const task = await asOwner((c) =>
@@ -299,6 +300,7 @@ describe('C3 · 超预算熔断（C-002）', () => {
     expect(result.ok, result.ok ? '' : result.error.detail).toBe(true)
     if (!result.ok) return
     expect(result.value.finalStatus).toBe('S-PM_ANALYZING')
+    expect(result.value.stopReason).toBe('paused')
 
     const task = await asOwner((c) =>
       c.query<{ status: string; control_mode: string }>(

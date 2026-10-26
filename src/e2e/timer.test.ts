@@ -182,6 +182,7 @@ describe('durable timer · clarification TTL(issue #24,方案 A)', () => {
     expect(r1.ok, r1.ok ? '' : r1.error.detail).toBe(true)
     if (!r1.ok) return
     expect(r1.value.finalStatus).toBe('S-NEED_CLARIFICATION')
+    expect(r1.value.stopReason).toBe('awaiting-clarification')
 
     // StartTimer 落库:due_at = 初始时钟 + 24h
     const t0 = await timerRow(taskId)
@@ -197,6 +198,7 @@ describe('durable timer · clarification TTL(issue #24,方案 A)', () => {
     expect(r2.ok, r2.ok ? '' : r2.error.detail).toBe(true)
     if (!r2.ok) return
     expect(r2.value.finalStatus).toBe('S-ABANDONED')
+    expect(r2.value.stopReason).toBe('terminal')
 
     const t = await timerRow(taskId)
     expect(t?.state).toBe('fired')

@@ -14,7 +14,11 @@ import { join } from 'node:path'
 import { err, makeError, ok, type Result } from '../contracts/errors.js'
 import type { HarnessAdapter } from '../contracts/harness-adapter.js'
 import { WorkflowDriver } from '../control/driver/driver.js'
-import { runTaskToCompletion, type StepRecord } from '../control/orchestrator/loop.js'
+import {
+  runTaskToCompletion,
+  type StepRecord,
+  type StopReason,
+} from '../control/orchestrator/loop.js'
 import { RuleBasedPolicyEngine } from '../control/policy/engine.js'
 import { DEFAULT_RULESET } from '../control/policy/ruleset.js'
 import {
@@ -253,6 +257,8 @@ export interface RunTaskOptions {
 export interface RunTaskResult {
   readonly finalStatus: TaskStatus
   readonly steps: readonly StepRecord[]
+  /** 为什么停下来 —— 与 finalStatus 一起读才答得出「是在等人，还是已经做完」 */
+  readonly stopReason: StopReason
   /** 真实模式下建/复用的 PR;模拟模式与未到 S-PR_OPEN 时为 null */
   readonly prUrl: string | null
 }
@@ -333,6 +339,7 @@ export async function runTask(
   return ok({
     finalStatus: result.value.finalStatus,
     steps: result.value.steps,
+    stopReason: result.value.stopReason,
     prUrl: await readPrUrl(taskId),
   })
 }
@@ -358,8 +365,25 @@ export async function readPrUrl(taskId: string): Promise<string | null> {
   return r.rows[0]?.pr_url ?? null
 }
 
+/**
+ * 停止原因的人话。
+ *
+ * 与 `finalStatus` 分开打，是因为两者回答的是不同问题：「走到哪」与「为什么停」。
+ * 旧输出只有前者，于是「卡住」和「等人」长得一样（见 loop.ts 阶段态分支）。
+ */
+const STOP_REASON_TEXT: Readonly<Record<StopReason, string>> = {
+  terminal: '已到终态',
+  paused: '控制模式不是 auto（预算熔断或人工接管），恢复后可从这里继续',
+  'awaiting-clarification': '等人工回答澄清问题',
+  'awaiting-external-ci': '等外部 CI 结果',
+  'awaiting-human': '等人工审批（批准 / 驳回 / 回炉）',
+  'capability-denied': '能力请求被拒，需要人工或外部介入',
+  cancelled: '最近一次 run 被人工撤回，等恢复',
+}
+
 export function printRunResult(result: RunTaskResult): void {
   console.log(`finalStatus: ${result.finalStatus}`)
+  console.log(`stopped: ${result.stopReason}（${STOP_REASON_TEXT[result.stopReason]}）`)
   if (result.prUrl !== null) {
     console.log(`prUrl: ${result.prUrl}`)
   }

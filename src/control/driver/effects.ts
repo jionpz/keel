@@ -196,8 +196,8 @@ async function createRun(
 
   if (ins.rowCount === 0) {
     // 同键已存在有两种完全不同的含义，只记「跳过」会让它们长得一模一样：
-    // - PENDING / CLAIMED / RUNNING → 真重放：那次派发还在，本来就没活干
-    // - 终态（SUCCEEDED / FAILED / …）→ **派发丢失**：表里用了 firstRun 而该阶段
+    // - PENDING / RUNNING → 真重放：那次派发还在，本来就没活干
+    // - SUCCEEDED / FAILED / TIMEOUT / CANCELLED → **派发丢失**：表里用了 firstRun 而该阶段
     //   其实能二次进入（见 transition.test.ts 的 ALLOWED_FIRST_RUN），或者 attempt 算错。
     //   Task 会静默停在原状态，所以至少让「为什么停在这里」能从事件流直接答出来。
     const existing = await c.query<{ status: string }>(
