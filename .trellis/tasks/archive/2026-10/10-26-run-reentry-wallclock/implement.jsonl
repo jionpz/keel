@@ -1,0 +1,6 @@
+{"file": "docs/04-state-machine.md", "reason": "§2 转移表原文（T-010/T-012/T-017/T-018 的产物列）与 §5.1 幂等键 (task_id,stage,attempt) 的定义 —— 改表必须同步这里"}
+{"file": "docs/07-flows.md", "reason": "§3 流程三：QA 失败返工 / 重试耗尽 / RFC 回炉三条路径的理想流与当前实现注记"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "ErrorKind 选取与 retryable 语义；CLI 参数拒绝沿用的 CAPABILITY_UNSUPPORTED 约定"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "asRole 角色身份写入与事务边界 —— 判断「return err 会不会回滚」的唯一依据"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "防假绿：负对照纪律、白名单式检查的写法、测试分层"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "三平面边界：转移表属于 control、CLI 属于外侧入口，不许跨层直连"}

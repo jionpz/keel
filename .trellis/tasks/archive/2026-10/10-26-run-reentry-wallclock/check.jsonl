@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "核对：白名单检查是否双向、负对照是否真的跑过、有没有留下「永远绿」的断言"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "核对 CLI 拒绝用的 ErrorKind 是否恰当、detail 是否真的说明「不会静默回退」"}
+{"file": "docs/04-state-machine.md", "reason": "核对文档产物列与实现一致；check:transitions 只比对 id/from/to/guard，产物列要人眼核对"}
+{"file": "docs/08-cross-cutting.md", "reason": "事件流四问 O1-O4：加了 existing_status 后「这个 Task 为什么停在这里」能否只靠事件答出"}
