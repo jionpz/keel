@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "核对：负对照真的跑过、断言不是「永远绿」、合法停没有被顺手改成报错"}
+{"file": "docs/04-state-machine.md", "reason": "核对判据与转移表一致：S-HUMAN_REVIEW / S-PR_OPEN / S-NEED_CLARIFICATION 确实不建 run"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "核对错误 kind 复用是否恰当、detail 是否足以让人直接定位（状态 + 最近 run + 下一步）"}

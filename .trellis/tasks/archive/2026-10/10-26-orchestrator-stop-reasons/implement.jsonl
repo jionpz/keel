@@ -1,0 +1,6 @@
+{"file": "src/control/orchestrator/loop.ts", "reason": "编排循环本体：六个 return ok 站点、阶段态分支、failRunAndAdvance 的 CANCELLED 语义 —— 本任务全部改动都在这里"}
+{"file": "src/shared/ids.ts", "reason": "STAGE_STATUSES / GATE_STATUSES / TERMINAL_STATUSES 的既有分组 —— 判据要复用这套词汇，不要再造一张表"}
+{"file": "src/contracts/errors.ts", "reason": "ErrorKind 注册表与 RETRYABLE：决定复用 NOT_FOUND 还是新增 kind 的唯一依据"}
+{"file": "docs/04-state-machine.md", "reason": "§2 转移表：哪些转移建 run、哪些不建 —— 判据的前提"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "ErrorKind 选取纪律：新增 kind 要同时改代码与 docs/05-contracts/README.md"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "防假绿：负对照纪律、测试分层（acceptance 不进默认 check）"}
