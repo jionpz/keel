@@ -13,11 +13,12 @@
 import { randomUUID } from 'node:crypto'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ok } from '../contracts/errors.js'
 import { asOwner, closePool } from '../fact/db.js'
 import { GitHubProvider } from '../fact/github-provider.js'
 import { registerRepoMain } from './register-repo.js'
-import { runIssue } from './run-issue.js'
+import { runIssue, runIssueMain } from './run-issue.js'
 
 const NOW = '2026-08-27T12:00:00Z'
 const ISSUE_URL = 'https://github.com/acme/widget/issues/42'
@@ -217,5 +218,40 @@ describe('run-issue 组合命令', () => {
     expect(r.error.detail).toMatch(/--bare/)
     expect(await countRows('feedback')).toBe(0)
     expect(await countRows('task')).toBe(0)
+  })
+})
+
+describe('runIssueMain · --wall-clock 闸门', () => {
+  it('600 透传进 runIssue 的 wallClockS（注入替身，不起真进程）', async () => {
+    const seen: number[] = []
+    const stub: typeof runIssue = async (opts) => {
+      seen.push(opts.wallClockS ?? -1)
+      return ok({
+        taskId: 't',
+        feedbackId: 'f',
+        created: false,
+        finalStatus: 'S-DONE',
+        steps: [],
+        prUrl: null,
+      })
+    }
+    await runIssueMain([ISSUE_URL, '--wall-clock', '600'], { runIssue: stub })
+    expect(seen).toEqual([600])
+  })
+
+  it('非法墙钟在 ingest 之前拒绝(退出码 1，零写入)', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const prevCode = process.exitCode
+    try {
+      await runIssueMain([ISSUE_URL, '--wall-clock', '0'])
+      expect(process.exitCode).toBe(1)
+      expect(errSpy.mock.calls.flat().join(' ')).toContain('正整数')
+    } finally {
+      errSpy.mockRestore()
+      process.exitCode = prevCode
+    }
+    // 闸门在 ingest 之前:不能因为参数写错而留下一个 task
+    expect(await countRows('task')).toBe(0)
+    expect(await countRows('feedback')).toBe(0)
   })
 })

@@ -105,6 +105,29 @@ async function statusOf(taskId: string): Promise<string> {
   return r.rows[0]?.status ?? '(missing)'
 }
 
+/** 某阶段已建出的 run attempt 列表（升序）—— 「有没有真的派发下一轮」的直接证据 */
+async function attemptsOf(taskId: string, stage: string): Promise<number[]> {
+  const r = await asOwner((c) =>
+    c.query<{ attempt: number }>(
+      'SELECT attempt FROM run WHERE task_id = $1 AND stage = $2 ORDER BY attempt',
+      [taskId, stage],
+    ),
+  )
+  return r.rows.map((x) => Number(x.attempt))
+}
+
+/** `CreateRun` 被跳过时留下的幂等键 —— 空数组表示没有派发丢失 */
+async function createRunSkips(taskId: string): Promise<string[]> {
+  const evs = await store.readEvents(taskId, 0, 500)
+  expect(evs.ok, '读事件流应成功').toBe(true)
+  if (!evs.ok) return []
+  return evs.value
+    .filter((e) => e.type === 'SideEffectSkipped')
+    .map((e) => (e.payload ?? {}) as { kind?: string; idempotency_key?: string })
+    .filter((p) => p.kind === 'CreateRun')
+    .map((p) => String(p.idempotency_key))
+}
+
 beforeEach(async () => {
   await asOwner((c) =>
     c.query(
@@ -327,6 +350,90 @@ describe('失败路径：QA 失败 → 返工 → 重试耗尽 → 人工', () =
     const r = await driver.advance(taskId, { type: 'RunSucceeded', stage: 'qa' }, NOW)
     expect(r.ok && r.value.transition_id).toBe('T-019')
     expect(await statusOf(taskId)).toBe('S-DEVELOPING')
+  })
+
+  it('QA 返工后重进 S-QA：新建 run(qa, 2)，不再撞 run(qa, 1)', async () => {
+    // T-017 曾用 firstRun：attempt 恒为 1 → 第二次进入撞 run(qa,1) →
+    // 只记 SideEffectSkipped、没有 RunCreated → Task 静默停在 S-QA。
+    const taskId = await seedTask()
+    await toDeveloping(taskId)
+    await stageOutcome(taskId, 'develop', 'implemented')
+    await driver.advance(taskId, { type: 'RunSucceeded', stage: 'develop' }, NOW)
+    expect(await attemptsOf(taskId, 'qa')).toEqual([1])
+
+    await stageOutcome(taskId, 'qa', 'fail')
+    const back = await driver.advance(taskId, { type: 'RunSucceeded', stage: 'qa' }, NOW)
+    expect(back.ok && back.value.transition_id).toBe('T-019')
+
+    await stageOutcome(taskId, 'develop', 'implemented')
+    const again = await driver.advance(taskId, { type: 'RunSucceeded', stage: 'develop' }, NOW)
+    expect(again.ok && again.value.transition_id).toBe('T-017')
+    expect(await statusOf(taskId)).toBe('S-QA')
+    expect(await attemptsOf(taskId, 'qa')).toEqual([1, 2])
+    expect(await createRunSkips(taskId)).not.toContain(`${taskId}/qa/2`)
+  })
+
+  it('评审判 fail 返工后重进 S-REVIEW：新建 run(review, 2)', async () => {
+    const taskId = await seedTask()
+    await toDeveloping(taskId)
+    await stageOutcome(taskId, 'develop', 'implemented')
+    await driver.advance(taskId, { type: 'RunSucceeded', stage: 'develop' }, NOW)
+    await stageOutcome(taskId, 'qa', 'pass')
+    await driver.advance(taskId, { type: 'RunSucceeded', stage: 'qa' }, NOW)
+    expect(await statusOf(taskId)).toBe('S-REVIEW')
+    expect(await attemptsOf(taskId, 'review')).toEqual([1])
+
+    await stageOutcome(taskId, 'review', 'fail')
+    const back = await driver.advance(taskId, { type: 'RunSucceeded', stage: 'review' }, NOW)
+    expect(back.ok && back.value.transition_id).toBe('T-022')
+
+    await stageOutcome(taskId, 'develop', 'implemented')
+    await driver.advance(taskId, { type: 'RunSucceeded', stage: 'develop' }, NOW)
+    await stageOutcome(taskId, 'qa', 'pass')
+    const again = await driver.advance(taskId, { type: 'RunSucceeded', stage: 'qa' }, NOW)
+    expect(again.ok && again.value.transition_id).toBe('T-018')
+    expect(await attemptsOf(taskId, 'review')).toEqual([1, 2])
+    expect(await createRunSkips(taskId)).not.toContain(`${taskId}/review/2`)
+  })
+
+  it('人工判 RFC 有问题（T-016）→ 回炉后 rfc_draft / develop 都建下一轮', async () => {
+    // 流程三第 6-9 步：重试耗尽升人工 → 人工判断是方案问题 → 回 brainstorm → 重出 RFC。
+    // T-010 / T-012 曾用 firstRun，回炉后必然撞键。
+    const taskId = await seedTask()
+    await toDeveloping(taskId)
+    expect(await attemptsOf(taskId, 'rfc_draft')).toEqual([1])
+
+    // develop 反复失败到上限 → T-031 升人工
+    for (let i = 0; i < 3; i++) {
+      await driver.advance(taskId, { type: 'RunFailed', stage: 'develop' }, NOW)
+    }
+    expect(await statusOf(taskId)).toBe('S-HUMAN_REVIEW')
+    const devBefore = await attemptsOf(taskId, 'develop')
+
+    const rework = await driver.advance(taskId, { type: 'HumanRequestedRework' }, NOW)
+    expect(rework.ok && rework.value.transition_id).toBe('T-016')
+
+    await stageOutcome(taskId, 'brainstorm', 'converged')
+    const rfc = await driver.advance(taskId, { type: 'RunSucceeded', stage: 'brainstorm' }, NOW)
+    expect(rfc.ok && rfc.value.transition_id).toBe('T-010')
+    expect(await statusOf(taskId)).toBe('S-RFC_DRAFT')
+    expect(await attemptsOf(taskId, 'rfc_draft')).toEqual([1, 2])
+
+    await commitRfc(taskId, {
+      risk: 'low',
+      complexity: 'low',
+      estimated_files_changed: 2,
+      security_related: false,
+    })
+    const ready = await driver.advance(taskId, { type: 'ArtifactCommitted', kind: 'rfc' }, NOW)
+    expect(ready.ok && ready.value.transition_id).toBe('T-011')
+    const dev = await driver.advance(
+      taskId,
+      { type: 'PolicyEvaluated', decision: 'auto_develop' },
+      NOW,
+    )
+    expect(dev.ok && dev.value.transition_id).toBe('T-012')
+    expect(await attemptsOf(taskId, 'develop')).toEqual([...devBefore, devBefore.length + 1])
   })
 
   it('Run 失败反复直到上限 → 走 T-031 升人工', async () => {

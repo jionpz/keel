@@ -124,6 +124,10 @@
 | 9 | 重新冻结并重新求值 Policy | `T-011` `[P]` `rfc_ready` | facts 已变 → 新的 `A-PolicyDecision` |
 | 10 | 代码回滚 | — | **不是状态机的事**：在 `run(develop, 4)` 内用 `git revert` 处理 |
 
+> 返工后回到 `S-QA` 时 `T-017` 派发的是 `run(qa, 2)`，回到 `S-REVIEW` 时 `T-018` 派发
+> `run(review, 2)` —— attempt 由该阶段已有 run 数 +1 得出，**不是恒为 1**。
+> 写成 `firstRun` 会让第二次派发撞上幂等键、静默停在原状态（见 `04-state-machine.md` §5.1）。
+
 ### 3.1 幂等演示
 
 假设第 6 步后控制平面崩溃并重放事件流：

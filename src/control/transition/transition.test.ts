@@ -287,3 +287,59 @@ describe('端到端：docs/07-flows.md 流程一（Excel 日期筛选）', () =>
     expect(r.matched).toBe(false)
   })
 })
+
+// ────────────────────────── CreateRun 的 attempt 选择 ──────────────────────────
+
+/**
+ * 允许使用 `firstRun`（attempt 恒为 1）的转移。
+ *
+ * 判据：**该阶段的派发在一个 Task 的生命周期内至多命中一次**。
+ * 不满足却用了 first，第二次进入会算出重键 → `ON CONFLICT DO NOTHING` →
+ * 只记一条 `SideEffectSkipped`、没有 `RunCreated` → 驱动无事可做，
+ * Task 静默停在原状态（T-017 的 qa 返工就是这样卡住的，2026-10-26）。
+ *
+ * 新增一处 firstRun 必须在这里登记理由；改回 next 却没删条目同样会红 ——
+ * 那说明理由已经悬空，该删的是理由本身。
+ */
+const ALLOWED_FIRST_RUN: Readonly<Record<string, string>> = {
+  'T-002': 'S-NEW 仅由 T-001（intake，一次性）进入，pm 只派发一次',
+  'T-003':
+    'S-PM_ANALYZING 的二次进入走 T-007 的 nextRun(pm)；没有转移从别的状态回到 S-PM_ANALYZING',
+  'T-004': '理由同 T-003：pm 完成后 S-PM_ANALYZING 不可再回',
+}
+
+const firstRunSites = TASK_TRANSITIONS.filter((r) =>
+  r.effects.some((e) => e.kind === 'CreateRun' && e.attempt === 'first'),
+).map((r) => r.id)
+
+describe('CreateRun 的 attempt 选择', () => {
+  it('firstRun 白名单双向一致（多一处、少一处都红）', () => {
+    expect([...firstRunSites].sort()).toEqual(Object.keys(ALLOWED_FIRST_RUN).sort())
+  })
+
+  it('返工 / 回炉会再次经过的阶段一律用 next', () => {
+    // 这四处漏过 first：T-010/T-012（RFC 回炉）、T-017/T-018（QA/评审判 fail 返工）
+    for (const id of ['T-010', 'T-012', 'T-017', 'T-018']) {
+      const rule = TASK_TRANSITIONS.find((r) => r.id === id)
+      expect(rule, `${id} 不存在`).toBeDefined()
+      const runs = rule?.effects.filter((e) => e.kind === 'CreateRun') ?? []
+      expect(runs, `${id} 应恰好派发一次`).toHaveLength(1)
+      expect(runs[0]?.kind === 'CreateRun' && runs[0].attempt, `${id} 必须用 next`).toBe('next')
+    }
+  })
+
+  it('T-017 派发的是 qa 的「下一轮」，不是恒为 1', () => {
+    const r = transition(
+      'S-DEVELOPING',
+      'auto',
+      { type: 'RunSucceeded', stage: 'develop' },
+      facts(),
+    )
+    expect(r.matched && r.id).toBe('T-017')
+    expect(r.matched && r.effects).toContainEqual({
+      kind: 'CreateRun',
+      stage: 'qa',
+      attempt: 'next',
+    })
+  })
+})

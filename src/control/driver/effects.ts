@@ -195,8 +195,28 @@ async function createRun(
   )
 
   if (ins.rowCount === 0) {
-    await emit(c, ctx, 'SideEffectSkipped', { kind: 'CreateRun', idempotency_key: key }, ctx.now)
-    return { kind: 'CreateRun', outcome: 'skipped', detail: `${key} 已存在` }
+    // 同键已存在有两种完全不同的含义，只记「跳过」会让它们长得一模一样：
+    // - PENDING / CLAIMED / RUNNING → 真重放：那次派发还在，本来就没活干
+    // - 终态（SUCCEEDED / FAILED / …）→ **派发丢失**：表里用了 firstRun 而该阶段
+    //   其实能二次进入（见 transition.test.ts 的 ALLOWED_FIRST_RUN），或者 attempt 算错。
+    //   Task 会静默停在原状态，所以至少让「为什么停在这里」能从事件流直接答出来。
+    const existing = await c.query<{ status: string }>(
+      'SELECT status FROM run WHERE idempotency_key = $1',
+      [key],
+    )
+    const existingStatus = existing.rows[0]?.status ?? null
+    await emit(
+      c,
+      ctx,
+      'SideEffectSkipped',
+      { kind: 'CreateRun', idempotency_key: key, existing_status: existingStatus },
+      ctx.now,
+    )
+    return {
+      kind: 'CreateRun',
+      outcome: 'skipped',
+      detail: `${key} 已存在（${existingStatus ?? 'unknown'}）`,
+    }
   }
 
   await emit(c, ctx, 'RunCreated', { stage, attempt, idempotency_key: key }, ctx.now)
