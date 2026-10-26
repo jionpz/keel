@@ -206,6 +206,31 @@ export function resolveCiGateway(ci: CiMode): Result<GitHubProvider | undefined>
   return ok(new GitHubProvider())
 }
 
+/**
+ * 解析 `--wall-clock <秒>`。
+ *
+ * 只接受正整数，其余一律拒绝 —— 与 `--ci` / `--harness` 同一条纪律：
+ * 拼错的值静默退化成默认 180，会让人以为「上限已经抬高了」，然后在真机跑满
+ * 三分钟时被带走。省略则返回 undefined，交给下游默认值。
+ */
+export function parseWallClock(raw: unknown): Result<number | undefined> {
+  if (raw === undefined) return ok(undefined)
+  if (typeof raw === 'number' && Number.isInteger(raw) && raw > 0) return ok(raw)
+  return err(
+    makeError(
+      'CAPABILITY_UNSUPPORTED',
+      `--wall-clock 只接受正整数秒（例如 600），收到:${stringifyArg(raw)}。` +
+        '非法值不会静默回退到默认 180 —— 那会让人以为上限已经调过。',
+    ),
+  )
+}
+
+/** 把 argv 里的原值转成人能读的样子（布尔 true 表示旗标后面没跟值） */
+function stringifyArg(raw: unknown): string {
+  if (raw === true) return '（缺少秒数）'
+  return `「${String(raw)}」`
+}
+
 export interface RunTaskOptions {
   readonly maxSteps?: number
   readonly ci?: CiMode
@@ -356,16 +381,28 @@ export async function printNonDoneReport(taskId: string, finalStatus: TaskStatus
   await statusMain([taskId, '--events', '12'])
 }
 
-export async function runTaskMain(argv: readonly string[]): Promise<void> {
+/**
+ * 测试注入点。默认用真实实现 —— 只为让「旗标真的落进 `runTask` 的
+ * `wallClockS`」可被断言,不必起真进程(AC6)。
+ */
+export interface RunTaskMainDeps {
+  readonly runTask?: typeof runTask
+}
+
+export async function runTaskMain(
+  argv: readonly string[],
+  deps: RunTaskMainDeps = {},
+): Promise<void> {
   const { positionals, flags } = parseArgs(argv)
   if (flags.help === true || positionals.length === 0) {
-    console.log(`用法: keel run-task <taskId> [--max-steps N] [--ci passed|failed|real] [--model <id>] [--harness omp|claude]
+    console.log(`用法: keel run-task <taskId> [--max-steps N] [--ci passed|failed|real] [--model <id>] [--harness omp|claude] [--wall-clock <秒>]
 
 驱动单 task 到终态(真实 harness + worktree)。--ci 缺省 passed(模拟 CI 结果);
 --ci real 接真实 GitHub PR / CI,需要 KEEL_GITHUB_TOKEN。
 --harness 缺省 omp，也可设 KEEL_HARNESS；非法值拒绝（不静默回退）。
 --model 对 omp 缺省 ${DEFAULT_OMP_MODEL}，也可设 KEEL_MODEL；空白值拒绝（不静默回退）。
-claude 未指定 --model / KEEL_MODEL 时不传 --model（不把 omp 缺省塞给 claude）。`)
+claude 未指定 --model / KEEL_MODEL 时不传 --model（不把 omp 缺省塞给 claude）。
+--wall-clock 单次 run 的墙钟上限秒，缺省 180；只接受正整数，非法值拒绝（不静默回退）。`)
     return
   }
   const taskId = positionals[0] as string
@@ -393,12 +430,20 @@ claude 未指定 --model / KEEL_MODEL 时不传 --model（不把 omp 缺省塞�
     process.exitCode = 1
     return
   }
+  const wallClock = parseWallClock(flags['wall-clock'])
+  if (!wallClock.ok) {
+    console.error(`run-task: ${wallClock.error.detail}`)
+    process.exitCode = 1
+    return
+  }
 
-  const result = await runTask(taskId, {
+  const run = deps.runTask ?? runTask
+  const result = await run(taskId, {
     maxSteps,
     ci: ci.value,
     harness: harness.value,
     ...(model.value === undefined ? {} : { model: model.value }),
+    ...(wallClock.value === undefined ? {} : { wallClockS: wallClock.value }),
   })
   if (!result.ok) {
     console.error(`run-task: ${result.error.detail}`)

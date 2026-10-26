@@ -61,6 +61,26 @@ control 对 feedback 刻意只读，这是矩阵约束。
 
 ---
 
+### `asRole` 只在**抛错**时回滚 —— `return err` 照样 COMMIT
+
+`asRole` 的形状是 `BEGIN → SET LOCAL ROLE → fn(c) → COMMIT`（`src/fact/db.ts`），
+`fn` 里**正常返回就提交**，不管返回的是 `ok` 还是 `err`。于是：
+
+- 想在事务内「撤销刚才那步」→ 必须 `throw`，不能 `return err`；
+- 想「先写后判断再放弃」→ 这个写法在本仓库不成立。
+
+驱动里已经有一处踩在这个边界上：`advance()` 先 `UPDATE task.status`
+（`driver.ts`）再 `applyEffects`。所以副作用执行器**不能**因为「发现不对」就
+`return err` —— 状态已经写进去了，`return err` 只会把它一起提交，
+调用方看到的却是「没成功」。要中止只能抛错，而那会把整次转移回滚
+（含已经算好的 `task.status`），语义是「这次转移没发生」，不是「转移发生了但某步失败」。
+
+判断是否需要「聚合并返回部分失败」时，先问：这些写入能不能接受部分生效？
+能 → 用 `AppliedEffect.outcome` 这类**结果记录**表达，不碰事务；
+不能 → 抛错。
+
+---
+
 ## `superseded_by` 只能经 `keel_commit_artifact` 写
 
 `I2` 要求不授予 UPDATE，但「新版取代旧版」需要回填 `superseded_by` —— 直接冲突。

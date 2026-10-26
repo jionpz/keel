@@ -14,9 +14,18 @@ import { randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ok } from '../contracts/errors.js'
 import { asOwner, closePool } from '../fact/db.js'
-import { readPrUrl, resolveCiGateway, runTask } from './run-task.js'
+import { parseArgs } from './argv.js'
+import {
+  parseWallClock,
+  type RunTaskOptions,
+  readPrUrl,
+  resolveCiGateway,
+  runTask,
+  runTaskMain,
+} from './run-task.js'
 
 const ENV_KEYS = ['KEEL_GITHUB_TOKEN', 'GITHUB_TOKEN'] as const
 const saved = new Map<string, string | undefined>(ENV_KEYS.map((k) => [k, process.env[k]]))
@@ -248,5 +257,70 @@ describe('readPrUrl · 从事件流回读 PR', () => {
     const taskId = await seedTask()
     await emit(taskId, 'SideEffectApplied', { kind: 'CreateBranch', dedupe_key: 'x' })
     expect(await readPrUrl(taskId)).toBeNull()
+  })
+})
+
+// ────────────────────────── --wall-clock ──────────────────────────
+
+describe('--wall-clock 旗标', () => {
+  it('parseWallClock：正整数通过，省略返回 undefined', () => {
+    const ok600 = parseWallClock(600)
+    expect(ok600.ok && ok600.value).toBe(600)
+
+    const omitted = parseWallClock(undefined)
+    expect(omitted.ok).toBe(true)
+    expect(omitted.ok && omitted.value).toBeUndefined()
+  })
+
+  it('parseWallClock：非法值一律拒绝，并说明「不静默回退」', () => {
+    // parseArgs 把 `--wall-clock 600` 解析成 number、`abc` 成 string、
+    // 旗标单独出现成 true —— 三种形态都要被判定，不能只认 number
+    for (const bad of [0, -5, 1.5, 'abc', '600', true, Number.NaN]) {
+      const r = parseWallClock(bad)
+      expect(r.ok, `${String(bad)} 应被拒绝`).toBe(false)
+      if (r.ok) continue
+      expect(r.error.detail).toContain('正整数')
+    }
+  })
+
+  it('parseArgs 与 parseWallClock 组合：`--wall-clock 600` → 600', () => {
+    const { flags } = parseArgs(['t1', '--wall-clock', '600'])
+    const r = parseWallClock(flags['wall-clock'])
+    expect(r.ok && r.value).toBe(600)
+  })
+
+  it('runTaskMain --wall-clock 0：退出码 1，且在访问数据库之前就拒绝', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const prevCode = process.exitCode
+    try {
+      await runTaskMain(['nonexistent-task', '--wall-clock', '0'])
+      expect(process.exitCode).toBe(1)
+      expect(errSpy.mock.calls.flat().join(' ')).toContain('正整数')
+    } finally {
+      errSpy.mockRestore()
+      process.exitCode = prevCode
+    }
+  })
+
+  // 用注入替身观察透传：不起真进程、不碰数据库（最终要断言的是「600 有没有
+  // 落进 RunTaskOptions.wallClockS」，真跑 runTask 只会得到 NOT_FOUND）
+  async function captureRunTaskOpts(argv: readonly string[]): Promise<RunTaskOptions | undefined> {
+    const seen: RunTaskOptions[] = []
+    const stub: typeof runTask = async (_id, opts = {}) => {
+      seen.push(opts)
+      return ok({ finalStatus: 'S-DONE', steps: [], prUrl: null })
+    }
+    await runTaskMain(argv, { runTask: stub })
+    return seen[0]
+  }
+
+  it('runTaskMain --wall-clock 600：600 透传进 runTask 的 wallClockS', async () => {
+    const opts = await captureRunTaskOpts([randomUUID(), '--wall-clock', '600'])
+    expect(opts?.wallClockS).toBe(600)
+  })
+
+  it('runTaskMain 省略 --wall-clock：wallClockS 为 undefined（下游默认 180，不是 0）', async () => {
+    const opts = await captureRunTaskOpts([randomUUID()])
+    expect(opts === undefined || !('wallClockS' in opts)).toBe(true)
   })
 })

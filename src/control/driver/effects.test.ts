@@ -424,3 +424,75 @@ describe('幂等重放（at-least-once 投递）', () => {
     expect(noTransition?.payload.event).toBe('RunSucceeded')
   })
 })
+
+// ───────────────────── CreateRun 撞键时的可归因性 ─────────────────────
+
+/**
+ * 同键 `CreateRun` 有两种含义，事件必须能区分：
+ * - 既有 run 仍 PENDING → 真重放（那次派发还在）
+ * - 既有 run 已终态     → **派发丢失**（表里用了 firstRun 而该阶段能二次进入）
+ *
+ * 只记一条 `SideEffectSkipped` 会让「Task 为什么停在这里」无从回答。
+ */
+describe('CreateRun 撞键：existing_status 区分重放与派发丢失', () => {
+  /**
+   * 用 `T-002`（pm，仍是 firstRun —— S-NEW 只进一次）做碰撞实验：
+   * 它是对的去处，因为碰撞只在该阶段的派发被重复触发时才会出现。
+   */
+  async function seedNewTask(): Promise<string> {
+    const repoId = randomUUID()
+    const taskId = randomUUID()
+    await asOwner(async (c) => {
+      await c.query(
+        `INSERT INTO repo (id, provider, remote_url, default_branch)
+         VALUES ($1,'local','file:///tmp/x','main')`,
+        [repoId],
+      )
+      await c.query(
+        `INSERT INTO task (id, status, title, repo_id, base_branch, work_branch)
+         VALUES ($1,'S-NEW','CreateRun 撞键',$2,'main',$3)`,
+        [taskId, repoId, branchFor(taskId)],
+      )
+    })
+    return taskId
+  }
+
+  const skipOf = async (taskId: string): Promise<Record<string, unknown> | undefined> =>
+    (await eventsOf(taskId)).find(
+      (e) => e.type === 'SideEffectSkipped' && e.payload.kind === 'CreateRun',
+    )?.payload
+
+  it('既有 run 仍 PENDING → existing_status=PENDING（真重放）', async () => {
+    const taskId = await seedNewTask()
+    const driver = new WorkflowDriver(new RuleBasedPolicyEngine(DEFAULT_RULESET))
+
+    const first = await driver.advance(taskId, { type: 'Dispatch' }, NOW)
+    expect(first.ok && first.value.to).toBe('S-PM_ANALYZING')
+
+    // 状态拨回事件发生前，等价于「状态未提交时进程崩溃、事件被重投」
+    await asOwner((c) => c.query(`UPDATE task SET status='S-NEW' WHERE id=$1`, [taskId]))
+    await driver.advance(taskId, { type: 'Dispatch' }, NOW)
+
+    const payload = await skipOf(taskId)
+    expect(payload?.idempotency_key).toBe(`${taskId}/pm/1`)
+    expect(payload?.existing_status).toBe('PENDING')
+  })
+
+  it('既有 run 已终态 → existing_status 为终态（派发丢失，可归因）', async () => {
+    const taskId = await seedNewTask()
+    const driver = new WorkflowDriver(new RuleBasedPolicyEngine(DEFAULT_RULESET))
+
+    await driver.advance(taskId, { type: 'Dispatch' }, NOW)
+    // 人为造出「键说这一轮已经跑完」的状态 —— 表里若误用 firstRun，
+    // 第二次进入算出的就是同一个键，落到这里。
+    await asOwner((c) =>
+      c.query(`UPDATE run SET status='SUCCEEDED' WHERE task_id=$1 AND stage='pm'`, [taskId]),
+    )
+    await asOwner((c) => c.query(`UPDATE task SET status='S-NEW' WHERE id=$1`, [taskId]))
+    await driver.advance(taskId, { type: 'Dispatch' }, NOW)
+
+    const payload = await skipOf(taskId)
+    expect(payload?.idempotency_key).toBe(`${taskId}/pm/1`)
+    expect(payload?.existing_status).toBe('SUCCEEDED')
+  })
+})

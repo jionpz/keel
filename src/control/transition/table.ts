@@ -11,7 +11,16 @@
 import type { Stage } from '../../shared/ids.js'
 import type { SideEffect, TransitionFacts, TransitionRule } from './types.js'
 
-/** 便捷构造：创建某阶段的首个 Run */
+/**
+ * 便捷构造：创建某阶段的首个 Run（attempt 恒为 1）。
+ *
+ * ⚠️ **只在该阶段的一次 Task 生命周期内至多派发一次时才可用。**
+ * 否则第二次进入会算出重键 → `ON CONFLICT DO NOTHING` → 只有一条
+ * `SideEffectSkipped`、没有 `RunCreated` → 驱动无事可做，Task 静默停在原状态
+ * （2026-10-26 修的就是这一类：T-010/T-012/T-017/T-018 漏了 next）。
+ *
+ * 允许的站点见 `transition.test.ts` 的 ALLOWED_FIRST_RUN（双向断言，新增会被拦下）。
+ */
 const firstRun = (stage: Stage): SideEffect => ({ kind: 'CreateRun', stage, attempt: 'first' })
 
 /** 便捷构造：创建某阶段的下一次 Run */
@@ -140,7 +149,9 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
     guard: (_f, e) => e.type === 'RunSucceeded' && e.stage === 'brainstorm',
     guardText: 'stage=brainstorm',
     to: 'S-RFC_DRAFT',
-    effects: [firstRun('rfc_draft')],
+    // next 而非 first：`S-HUMAN_REVIEW --T-016--> S-BRAINSTORM` 之后会再走一次本转移
+    // （人工判定 RFC 方案有问题要回炉）。用 first 会算出重键 → 静默跳过 → 卡住。
+    effects: [nextRun('rfc_draft')],
     ignoresControlMode: false,
   },
   {
@@ -176,7 +187,8 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
     guard: (_f, e) => e.type === 'PolicyEvaluated' && e.decision === 'auto_develop',
     guardText: 'decision=auto_develop',
     to: 'S-DEVELOPING',
-    effects: [{ kind: 'CreateBranch' }, firstRun('develop')],
+    // next：RFC 回炉后会经 T-010 → T-011 再次抵达 S-RFC_READY（见 T-010 的注释）
+    effects: [{ kind: 'CreateBranch' }, nextRun('develop')],
     ignoresControlMode: false,
   },
   {
@@ -230,7 +242,9 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
     guard: null,
     guardText: '—',
     to: 'S-QA',
-    effects: [firstRun('qa')],
+    // next：QA 判 fail 走 T-019 返工后，develop 成功会再次命中本转移。
+    // 用 first 恒算 attempt=1 → 撞 run(qa,1) → 只记 SideEffectSkipped → 无 pending run → 卡住。
+    effects: [nextRun('qa')],
     ignoresControlMode: false,
   },
   {
@@ -240,7 +254,8 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
     guard: (f) => f.verdict === 'pass',
     guardText: 'qa_verdict=pass',
     to: 'S-REVIEW',
-    effects: [firstRun('review')],
+    // next：评审判 fail 走 T-022 返工后，QA 通过会再次命中本转移（理由同 T-017）
+    effects: [nextRun('review')],
     ignoresControlMode: false,
   },
   {

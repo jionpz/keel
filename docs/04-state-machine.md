@@ -91,16 +91,16 @@
 | `T-007` | `S-NEED_CLARIFICATION` | `ClarificationReceived` | — | `S-PM_ANALYZING` | 关联新 feedback；**取消澄清 timer**；创建 `run(pm, n+1)` |
 | `T-008` | `S-NEED_CLARIFICATION` | `TimerFired(clarification_ttl)` | `timer=clarification_ttl` | `S-ABANDONED` ★ | **收割 timer(置 fired,T-008 事务内)** |
 | `T-009` | `S-BRAINSTORM` | `CapabilityRequested(critic)` | `policy=allow` | `S-BRAINSTORM` ⟲ | 创建 `run(critic, n)`；结果写回 `A-CriticReview` |
-| `T-010` | `S-BRAINSTORM` | `RunSucceeded` | `stage=brainstorm` | `S-RFC_DRAFT` | 创建 `run(rfc_draft, 1)` |
+| `T-010` | `S-BRAINSTORM` | `RunSucceeded` | `stage=brainstorm` | `S-RFC_DRAFT` | 创建 `run(rfc_draft, n+1)`（`T-016` 人工回炉后可二次进入） |
 | `T-009b` | `S-BRAINSTORM` | `RunSucceeded` | `stage=critic` | `S-BRAINSTORM` ⟲ | 评审回灌：创建 `run(brainstorm, n+1)`（`A-CriticReview` 经 Context 带入） |
 | `T-011` | `S-RFC_DRAFT` | `ArtifactCommitted(rfc)` | — | `S-RFC_READY` | **冻结 RFC**（不变量 `I7`）；触发 Policy 求值 |
-| `T-012` | `S-RFC_READY` | `PolicyEvaluated` | `decision=auto_develop` | `S-DEVELOPING` | 建工作分支（幂等）；创建 `run(develop, 1)` |
+| `T-012` | `S-RFC_READY` | `PolicyEvaluated` | `decision=auto_develop` | `S-DEVELOPING` | 建工作分支（幂等）；创建 `run(develop, n+1)` |
 | `T-013` | `S-RFC_READY` | `PolicyEvaluated` | `decision != auto_develop` | `S-HUMAN_REVIEW` | 通知人工（`security_review` 同样走这里） |
 | `T-014` | `S-HUMAN_REVIEW` | `HumanApproved` | — | `S-DEVELOPING` | 建工作分支（幂等）；创建 `run(develop, n+1)` |
 | `T-015` | `S-HUMAN_REVIEW` | `HumanRejected` | — | `S-REJECTED` ★ | — |
 | `T-016` | `S-HUMAN_REVIEW` | `HumanRequestedRework` | — | `S-BRAINSTORM` | 创建 `run(brainstorm, n+1)` |
-| `T-017` | `S-DEVELOPING` | `RunSucceeded` | — | `S-QA` | 创建 `run(qa, 1)` |
-| `T-018` | `S-QA` | `RunSucceeded` | `qa_verdict=pass` | `S-REVIEW` | 创建 `run(review, 1)` |
+| `T-017` | `S-DEVELOPING` | `RunSucceeded` | — | `S-QA` | 创建 `run(qa, n+1)`（`T-019` QA 返工后会二次进入） |
+| `T-018` | `S-QA` | `RunSucceeded` | `qa_verdict=pass` | `S-REVIEW` | 创建 `run(review, n+1)`（`T-022` 评审返工后会二次进入） |
 | `T-019` | `S-QA` | `RunSucceeded` | `qa_verdict=fail ∧ dev_attempts < max` | `S-DEVELOPING` | 创建 `run(develop, n+1)`，附 QA 报告 |
 | `T-020` | `S-QA` | `RunSucceeded` | `qa_verdict=fail ∧ dev_attempts ≥ max` | `S-HUMAN_REVIEW` | 通知人工 |
 | `T-021` | `S-REVIEW` | `RunSucceeded` | `review_verdict=pass` | `S-PR_OPEN` | **创建 PR（幂等）** |

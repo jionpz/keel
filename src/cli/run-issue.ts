@@ -20,6 +20,7 @@ import {
   type CiMode,
   DEFAULT_OMP_MODEL,
   parseCiMode,
+  parseWallClock,
   printNonDoneReport,
   printRunResult,
   type RunTaskResult,
@@ -115,17 +116,27 @@ export async function runIssue(opts: RunIssueOptions): Promise<Result<RunIssueRe
   })
 }
 
-export async function runIssueMain(argv: readonly string[]): Promise<void> {
+/** 测试注入点(同 `RunTaskMainDeps`):断言旗标落进 `runIssue` 的 `wallClockS`。 */
+export interface RunIssueMainDeps {
+  readonly runIssue?: typeof runIssue
+}
+
+export async function runIssueMain(
+  argv: readonly string[],
+  deps: RunIssueMainDeps = {},
+): Promise<void> {
   const { positionals, flags } = parseArgs(argv)
   if (flags.help === true || positionals.length === 0) {
     console.log(`用法: keel run-issue <issueUrl> [--label <name>] [--repo <uuid>]
                           [--max-steps N] [--ci passed|failed|real] [--model <id>] [--harness omp|claude]
+                          [--wall-clock <秒>]
 
 ingest 一个 GitHub Issue 并把产生的 task 驱动到终态。
 --ci 缺省 passed(模拟 CI);--ci real 接真实 GitHub PR / CI,需要 KEEL_GITHUB_TOKEN。
 --harness 缺省 omp，也可设 KEEL_HARNESS；非法值拒绝（不静默回退）。
 --model 对 omp 缺省 ${DEFAULT_OMP_MODEL}，也可设 KEEL_MODEL；空白值拒绝（不静默回退）。
-claude 未指定 --model / KEEL_MODEL 时不传 --model。`)
+claude 未指定 --model / KEEL_MODEL 时不传 --model。
+--wall-clock 单次 run 的墙钟上限秒，缺省 180；只接受正整数，非法值拒绝（不静默回退）。`)
     return
   }
   const issueUrl = positionals[0] as string
@@ -155,8 +166,15 @@ claude 未指定 --model / KEEL_MODEL 时不传 --model。`)
     process.exitCode = 1
     return
   }
+  const wallClock = parseWallClock(flags['wall-clock'])
+  if (!wallClock.ok) {
+    console.error(`run-issue: ${wallClock.error.detail}`)
+    process.exitCode = 1
+    return
+  }
 
-  const result = await runIssue({
+  const run = deps.runIssue ?? runIssue
+  const result = await run({
     issueUrl,
     ...(label === undefined ? {} : { label }),
     ...(repoId === undefined ? {} : { repoId }),
@@ -164,6 +182,7 @@ claude 未指定 --model / KEEL_MODEL 时不传 --model。`)
     ci: ci.value,
     harness: harness.value,
     ...(model.value === undefined ? {} : { model: model.value }),
+    ...(wallClock.value === undefined ? {} : { wallClockS: wallClock.value }),
   })
   if (!result.ok) {
     console.error(`run-issue: ${result.error.detail}`)
