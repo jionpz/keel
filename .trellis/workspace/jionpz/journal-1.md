@@ -374,3 +374,26 @@ develop 的 diff 事件与 commitAll 的 commit 对得上。随后修掉 `firstR
   —— 现在的 RUNNING 判据只在单进程前提下成立（已写进 spec）
 - 剩余遗留不变：GitHub-Issue + 真 CI 验收线未验；R4 `occurred_at` 契约；`post_develop` 策略点未接线
 - 未决：`.trellis/.template-hashes.json` 与未跟踪的 `.agents/` `.codex/` `.dsh/` 是否入库
+
+
+## Session 5: 只读控制台 + demo APP 真实闭环
+
+**Date**: 2026-10-27
+**Task**: 只读控制台 + demo APP 真实闭环
+**Branch**: `main`
+
+### Summary
+
+新增只读 Web 控制台（src/cli/console*.ts，pnpm run console，127.0.0.1:4321），补 README 本地部署与控制台用法，记录前端/数据库规范。修复 keel_dev 缺失迁移 0003/0004（keel_ingress 无 schema USAGE 时表现为 relation does not exist）。新建 jionpz/keel-demo-app，用真实 Issue #1 驱动 run-issue --ci real --harness claude，走完 S-NEW→S-DONE，产出真实 PR #2 并合并，CI 全绿；pnpm run check 全绿。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e8c7718` | (see git log) |
+| `9045785` | (see git log) |
+| `1af85b1` | (see git log) |
+
+### Status
+
+[OK] **Completed**
