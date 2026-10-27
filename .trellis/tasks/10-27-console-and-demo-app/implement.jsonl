@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "404/503 与「不静默输出空数据」的防假绿纪律：控制台必须区分「没有任务」和「查不到」"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "角色身份、只读约束、SQL 参数化与测试隔离的既有约定"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试分层与负对照纪律；控制台至少要有一个可复现的端点测试"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "三平面目录与 import 写法；控制台归 src/cli（消费者），不得从 fact/execution 反向依赖"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "当前 frontend spec 为空壳（本项目此前无 UI）；本任务将产生第一批前端代码"}
+{"file": "docs/04-state-machine.md", "reason": "主路径与状态语义；页面状态机条按这份文档的转移顺序渲染"}
+{"file": "docs/09-roadmap.md", "reason": "UI 是 Non-Goal 的原文与边界：只读消费者，不做写操作控制台"}
+{"file": ".trellis/tasks/10-27-console-and-demo-app/research/console-data-model.md", "reason": "已核实的只读数据面（表、角色、查询、现有数据）"}
+{"file": ".trellis/tasks/10-27-console-and-demo-app/research/demo-flow-prereqs.md", "reason": "真实 Issue 闭环的前置条件、凭据与本机环境实测"}

@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "核对：没有「永远绿」的测试、未引入新依赖、查询口径与 CLI 同源"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "核对：task 不存在返回 404、数据库不可用返回 503，不渲染空数据冒充无任务"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "核对：只读角色、无写权限、无新增迁移、SQL 参数化"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "核对：控制台没有破坏平面边界与 import 规则"}
+{"file": "docs/09-roadmap.md", "reason": "核对控制台没有越过 Non-Goal：只读消费者"}
+{"file": ".trellis/tasks/10-27-console-and-demo-app/research/demo-flow-prereqs.md", "reason": "核对：终态证据链（真实 CreatePullRequest + 真实 CI 回读），不把 SideEffectIntent 当成功"}
+{"file": "README.md", "reason": "核对文档新增小节与实际命令、端口一致"}
