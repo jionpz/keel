@@ -4,6 +4,7 @@
  * keel CLI 入口(issue #27)。
  *
  * 子命令:
+ *   console                        只读 Web 控制台(默认 127.0.0.1:4321)
  *   timer-worker [--interval <ms>]  到期收割(单次/常驻)
  *   run-task <taskId> [--max-steps N] [--ci passed|failed|real] [--model <id>] [--harness omp|claude] [--wall-clock <秒>]
  *   status <taskId> [--events N]
@@ -12,6 +13,7 @@
  *   run-issue <issueUrl> [--label <name>] [--max-steps N] [--ci passed|failed|real] [--model <id>] [--harness omp|claude] [--wall-clock <秒>]
  */
 
+import { consoleMain } from './console.js'
 import { ingestIssueMain } from './ingest-issue.js'
 import { registerRepoMain } from './register-repo.js'
 import { runIssueMain } from './run-issue.js'
@@ -27,6 +29,7 @@ const HELP = `keel — AI Engineering Runtime CLI
   keel <command> [args]
 
 命令:
+  console                          只读 Web 控制台(默认 http://127.0.0.1:4321)
   timer-worker [--interval <ms>]   到期收割 timer(默认单次;--interval 常驻)
   run-task <taskId> [--max-steps N] [--ci passed|failed|real] [--model <id>] [--harness omp|claude] [--wall-clock <秒>]   驱动单 task 到终态
   status <taskId> [--events N]     查 task / run / 事件摘要
@@ -47,6 +50,9 @@ async function main(): Promise<void> {
   const [command, ...rest] = process.argv.slice(2)
 
   switch (command) {
+    case 'console':
+      await consoleMain(rest)
+      return
     case 'timer-worker':
       await timerWorkerMain(rest)
       return
