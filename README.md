@@ -71,6 +71,28 @@ Fact 与 Execution 之间只有两条单向通道：`Context` 下行、`Proposal
 Workflow engine 推荐 v0.1 自研最小状态机（[`ADR-0003`](./docs/adr/0003-workflow-engine.md)，
 Accepted —— 2026-08-26 查证：硬约束已自动化强制，迁移路径确证）。
 
+## 本地部署
+
+前置：Node 24（见 `.nvmrc`）、pnpm 10、PostgreSQL 16。
+
+```bash
+# 1. 建库（一次）
+createdb keel_dev
+
+# 2. 安装依赖 + 迁移
+pnpm install
+DATABASE_URL=postgres://localhost/keel_dev pnpm run db:migrate
+
+# 3. 构建（可选；CLI 也可以直接用 tsx 跑源码）
+pnpm run build
+
+# 4. 启动只读控制台
+pnpm run console     # http://127.0.0.1:4321
+```
+
+⚠️ 迁移脚本读 `DATABASE_URL`，而 CLI / 控制台读 `KEEL_DATABASE_URL` 或 `DATABASE_URL`
+（见 `src/fact/db.ts`）。两个变量指向同一个库即可，不要只设一个就以为另一条路径也生效。
+
 ## 开发
 
 ```bash
@@ -79,6 +101,18 @@ pnpm run check     # CI 跑的就是这一条 —— 与本地完全一致
 ```
 
 `check` 聚合了 lint / typecheck / 架构边界 / 类型同步 / 转移表比对 / 纯度 / 测试。
+
+### 控制台（只读）
+
+```bash
+pnpm run console     # http://127.0.0.1:4321
+```
+
+一屏看 task 列表、状态机位置、run、产物与完整事件时间线。
+控制台是 Fact Plane 的**消费者**：只发 `SELECT`、只绑定 `127.0.0.1`、无鉴权，
+因此不要把它暴露到公网。端口可用 `KEEL_CONSOLE_PORT` 覆盖，
+数据库沿用 `KEEL_DATABASE_URL` / `DATABASE_URL`（默认 `postgres://localhost/keel_dev`）。
+
 
 ### 四条被机械化的架构约束
 

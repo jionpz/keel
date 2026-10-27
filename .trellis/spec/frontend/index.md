@@ -4,12 +4,13 @@
 
 ---
 
-## 状态:整体暂缓
+## 状态:部分填充
 
-本项目当前是纯后端(TypeScript / Node,无任何 UI 代码)。
-按「记录现实而非理想」的规则,**本目录全部文件刻意留空**:
-没有前端代码时写约定 = 凭空发明,子 agent 会照着写出与实际不符的代码。
-将来若加入前端(如 Run 观测面板),再以真实代码为来源填写。
+本项目的主体仍是纯后端(TypeScript / Node)。2026-10-27 起多了第一份真实前端代码:
+`src/cli/console.ts` + `src/cli/console-page.ts`(只读 Web 控制台)。
+
+因此**只**填写与它相关的约定;其余文件继续保持留空 ——
+「记录现实而非理想」的规则不变,没有对应代码的地方不凭空发明。
 
 ---
 
@@ -17,6 +18,7 @@
 
 | Guide | Description | Status |
 |-------|-------------|--------|
+| [Console Guidelines](./console-guidelines.md) | 只读控制台:单文件零构建、GET-only、数据口径与 CLI 一致、404/503 纪律 | ✅ 已填（`10-27-console-and-demo-app`） |
 | [Directory Structure](./directory-structure.md) | Module organization and file layout | To fill |
 | [Component Guidelines](./component-guidelines.md) | Component patterns, props, composition | To fill |
 | [Hook Guidelines](./hook-guidelines.md) | Custom hooks, data fetching patterns | To fill |
