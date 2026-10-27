@@ -149,3 +149,38 @@ control 对 feedback 刻意只读，这是矩阵约束。
 这一条有代价高昂的先例：骨架任务的 `check:generated` 因为比较基准写错，
 在主干上一直是绿的却拦不住手改，是反例验证抓出来的。
 **一条写错的 GRANT 和一条正确的 GRANT，日常表现完全一样。**
+
+### `repo.local_path`（10-27-local-project-binding）
+
+`migrations/1000000000005_repo_local_path.sql`：
+
+```sql
+ALTER TABLE repo ADD COLUMN local_path text;
+ALTER TABLE repo ADD CONSTRAINT repo_local_path_absolute
+  CHECK (local_path IS NULL OR local_path LIKE '/%');
+CREATE UNIQUE INDEX repo_local_path_unique
+  ON repo (local_path) WHERE local_path IS NOT NULL;
+```
+
+三条约束各自防的东西：
+
+| 机制 | 防什么 | 不能防什么 |
+|---|---|---|
+| `NULL` = managed | 未绑定的 repo 保持克隆模式，语义由「有没有值」承载 | — |
+| `CHECK LIKE '/%'` | 相对路径 / 空串被写进库 | 符号链接、`..`、重复分隔符 |
+| 部分唯一索引 | 两个 repo 指向同一目录 | 同一目录的**不同写法**（`/a/./b`、`/a/b/`） |
+
+所以**规范化是应用层的前置条件**，不是可选的清洗：
+`register-repo` 先 `canonicalizeDir`（`resolve` → `statSync` 必须是目录 →
+`realpathSync`）再写库。DB 只做第二道防线 —— 期望数据库解决别名问题会把
+真实路径语义（符号链接解析）错误地塞进 SQL。
+
+并发的 `register-repo` 撞同一路径时，靠唯一索引报 `23505`，
+CLI 捕获后查占位者，输出 `[local_path_taken] path="..." repo="<自己>" occupied_by="<对方>"`。
+
+授权矩阵不变：`repo` 对三个运行时角色仍然只读（见上表）。
+绑定更新走 `asOwnerTx`（`src/fact/db.ts`）——**`asOwner` 不开事务**，
+只有 `asOwnerTx` / `asRole` 会 `BEGIN`；`SELECT ... FOR UPDATE` 必须在这两者之内。
+
+已知限制：`repo.remote_url` 没有唯一索引，并发注册同一个 remote 仍可能产生两条
+repo 记录。这是既有问题，不在本任务范围内（见 `prd.md` Open Questions #7）。
