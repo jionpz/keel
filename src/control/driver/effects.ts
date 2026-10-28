@@ -19,11 +19,19 @@ import type { PoolClient } from 'pg'
 import type { PullRequestGateway } from '../../contracts/git-provider.js'
 import type { PolicyEngine } from '../../contracts/policy-engine.js'
 import { commitArtifactOn } from '../../fact/artifact-store.js'
-import { branchFor, type GitWorkspace } from '../../fact/git-workspace.js'
+import { branchFor, type GitWorkspace, type PreparedProject } from '../../fact/git-workspace.js'
 import type { Stage } from '../../shared/ids.js'
 import { TIMER_DURATIONS } from '../../shared/timers.js'
 import type { SideEffect, TransitionEvent } from '../transition/types.js'
 import { loadPolicyFacts } from './facts.js'
+
+/** 工作区绑定 —— 定义在这里而不是 driver.ts：effects 是使用方，定义在这里不会成环 */
+export interface WorkspaceBinding {
+  readonly git: GitWorkspace
+  readonly repoId: string
+  /** 开工前解析好的项目与基线；worktree 从这个 baseSha 长出来 */
+  readonly project: PreparedProject
+}
 
 export interface EffectContext {
   readonly taskId: string
@@ -40,11 +48,7 @@ export interface EffectContext {
    * 保持可选是为了让 driver 的单元测试不必准备 git 仓库 ——
    * 但真实编排必须传，否则事件流里会是 SideEffectIntent 而不是真做了。
    */
-  readonly workspace?: {
-    readonly git: GitWorkspace
-    readonly repoId: string
-    readonly baseBranch: string
-  }
+  readonly workspace?: WorkspaceBinding
   /**
    * Git 托管方网关。**可选**：不传时 CreatePullRequest 退回记录意图。
    * 真实编排要关闭 v0.1 最后空缺时必须传。
@@ -337,6 +341,12 @@ async function recordIntent(
  * 建分支 —— 幂等：worktree 已存在则复用。
  *
  * 分支名由 task_id 决定（非随机），这是重放安全的前提。
+ *
+ * 基线证据（base_ref / base_sha / fetched_at）记在这次转移的事件里：
+ * PR 从哪个 commit 长出来，必须能从事件流直接回答，不能回头去猜
+ * 「当时的 origin/main 是哪一条」。worktree 已存在时，基线是**当初**
+ * 那一次 prepare 定下的 —— 本次 prepare 可能已经 fetch 到更新的 commit，
+ * 但那条分支没有跟着移动，所以证据也必须沿用旧的。
  */
 async function createBranch(c: PoolClient, ctx: EffectContext): Promise<AppliedEffect> {
   if (ctx.workspace === undefined) {
@@ -353,9 +363,13 @@ async function createBranch(c: PoolClient, ctx: EffectContext): Promise<AppliedE
     )
     return { kind: 'CreateBranch', outcome: 'intent', detail: '未注入 workspace' }
   }
-  const { git, repoId, baseBranch } = ctx.workspace
-  const wt = await git.ensureWorktree(repoId, ctx.taskId, baseBranch)
+  const { git, project } = ctx.workspace
+  const wt = await git.ensureWorktree(project, ctx.taskId)
   if (!wt.ok) throw new Error(`建 worktree 失败：${wt.error.detail}`)
+
+  const evidence = wt.value.created
+    ? { base_ref: project.baseRef, base_sha: project.baseSha, fetched_at: project.fetchedAt }
+    : await baselineOfExistingBranch(c, ctx.taskId, project)
 
   await emit(
     c,
@@ -366,16 +380,49 @@ async function createBranch(c: PoolClient, ctx: EffectContext): Promise<AppliedE
       dedupe_key: wt.value.branch,
       branch: wt.value.branch,
       worktree: wt.value.path,
+      ...evidence,
+      reused: !wt.value.created,
     },
     ctx.now,
   )
   return { kind: 'CreateBranch', outcome: 'applied', detail: wt.value.branch }
 }
 
+/**
+ * 复用已有 worktree 时的基线证据。
+ *
+ * 读最近一条 CreateBranch 事件，而不是用本次 project.baseSha ——
+ * 后者是「现在 origin/<base> 在哪」，前者才是「这条分支从哪长出来」。
+ *
+ * 老 task（本功能之前创建、没有该事件）如实写 `base_sha: null`；
+ * 编造一个 SHA 会让事件流看起来比实际更可信。
+ */
+async function baselineOfExistingBranch(
+  c: PoolClient,
+  taskId: string,
+  project: PreparedProject,
+): Promise<{ base_ref: string; base_sha: string | null; fetched_at: string | null }> {
+  const r = await c.query<{ payload: Record<string, unknown> }>(
+    `SELECT payload FROM event
+     WHERE task_id = $1 AND type = 'SideEffectApplied' AND payload->>'kind' = 'CreateBranch'
+     ORDER BY seq DESC LIMIT 1`,
+    [taskId],
+  )
+  const prev = r.rows[0]?.payload
+  if (prev === undefined) {
+    return { base_ref: project.baseRef, base_sha: null, fetched_at: null }
+  }
+  return {
+    base_ref: typeof prev.base_ref === 'string' ? prev.base_ref : project.baseRef,
+    base_sha: typeof prev.base_sha === 'string' ? prev.base_sha : null,
+    fetched_at: typeof prev.fetched_at === 'string' ? prev.fetched_at : null,
+  }
+}
+
 /** 清理工作区。分支保留在裸仓库里 —— 移除的是工作树，不是历史 */
 async function cleanWorkspace(c: PoolClient, ctx: EffectContext): Promise<AppliedEffect> {
   if (ctx.workspace === undefined) return recordIntent(c, ctx, { kind: 'CleanWorkspace' })
-  await ctx.workspace.git.remove(ctx.workspace.repoId, ctx.taskId)
+  await ctx.workspace.git.remove(ctx.workspace.project, ctx.taskId)
   await emit(
     c,
     ctx,
@@ -432,7 +479,7 @@ async function createPullRequest(c: PoolClient, ctx: EffectContext): Promise<App
     return { kind: 'CreatePullRequest', outcome: 'intent', detail: '未注入 github provider' }
   }
 
-  const { git, repoId, baseBranch } = ctx.workspace
+  const { git, repoId, project } = ctx.workspace
   const repo = await c.query<{ remote_url: string; default_branch: string; title: string }>(
     `SELECT r.remote_url, r.default_branch, t.title
      FROM repo r JOIN task t ON t.repo_id = r.id
@@ -443,13 +490,13 @@ async function createPullRequest(c: PoolClient, ctx: EffectContext): Promise<App
   if (row === undefined) throw new Error(`找不到 repo/task：${repoId}/${ctx.taskId}`)
 
   const headBranch = branchFor(ctx.taskId)
-  const push = await git.push(repoId, ctx.taskId, row.remote_url)
+  const push = await git.push(project, ctx.taskId, row.remote_url)
   if (!push.ok) throw new Error(`push 失败：${push.error.detail}`)
 
   const pr = await ctx.github.createPullRequest({
     repoId,
     remoteUrl: row.remote_url,
-    baseBranch: baseBranch || row.default_branch,
+    baseBranch: project.baseBranch || row.default_branch,
     headBranch,
     title: row.title,
     body: `Keel Task ${ctx.taskId}\n\nAutomated PR.`,

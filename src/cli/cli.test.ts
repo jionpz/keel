@@ -89,6 +89,13 @@ describe('命令分发 · switch 分支与 HELP 清单不得漂移', () => {
   it('run-issue(Issue → 终态组合命令)已接线', () => {
     expect(dispatchedCommands()).toContain('run-issue')
   })
+
+  it('register-repo 的 --local-path 出现在 HELP 中', () => {
+    // 参数只加到 parseArgs 而不改 HELP，会让用户以为不能用本地项目绑定
+    const line = source.split('\n').find((l) => l.trimStart().startsWith('register-repo '))
+    expect(line, 'HELP 里找不到 register-repo 行').toBeDefined()
+    expect(line).toContain('--local-path')
+  })
 })
 
 /**

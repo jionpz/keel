@@ -93,6 +93,38 @@ pnpm run console     # http://127.0.0.1:4321
 ⚠️ 迁移脚本读 `DATABASE_URL`，而 CLI / 控制台读 `KEEL_DATABASE_URL` 或 `DATABASE_URL`
 （见 `src/fact/db.ts`）。两个变量指向同一个库即可，不要只设一个就以为另一条路径也生效。
 
+## 本地项目绑定
+
+默认是 **managed** 模式：Keel 自己克隆裸仓库到 `$KEEL_HOME/repos/<repoId>.git`。
+要把某个 repo 绑到你本机已有的项目目录（**attached** 模式），注册时给出路径：
+
+```bash
+# --local-path 必须是 git worktree，且 origin 与注册的 remote 一致
+keel register-repo https://github.com/you/project --local-path ~/code/project
+```
+
+之后每个 Task 仍在 `$KEEL_HOME/worktrees/<taskId>/` 里跑（分支 `ai/task-<前 8 位>`），
+只是对象库换成了你的工作树 —— Keel 只对它执行 `fetch` / `worktree add`，
+不 commit、不 checkout、不改文件。
+
+- `KEEL_HOME` 在进程启动时解析为绝对路径，默认 `<当前目录>/.keel`；
+  项目已绑定后，换目录启动不会改变它的位置。
+- 开工前会 fetch 一次基线分支，并把 **commit SHA** 记进 `CreateBranch` 事件；
+  PR 从哪个 commit 长出来可以直接查。分支名变了不算数 —— 基线是 SHA。
+
+查看绑定与基线：
+
+```bash
+keel status <taskId>
+# workspace:
+#   repo <id> (attached)
+#   local_path /Users/you/code/project
+#   base refs/remotes/origin/main@<40 hex> fetched=... (reused)
+#   local dirty=no diverged=ahead 0 / behind 0
+```
+
+`local` 一行只在 attached 模式出现，且只读（`git status` / `git rev-list`）。
+
 ## 开发
 
 ```bash
