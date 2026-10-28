@@ -12,7 +12,7 @@
   "assignee": "jionpz",
   "createdAt": "2026-10-27",
   "completedAt": null,
-  "branch": null,
+  "branch": "feat/console-ui-redesign",
   "base_branch": "main",
   "worktree_path": null,
   "commit": null,
