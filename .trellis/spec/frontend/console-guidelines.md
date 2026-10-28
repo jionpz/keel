@@ -22,6 +22,36 @@
 - 状态集合与主路径来自代码（`src/shared/ids.ts`、`src/control/transition/table.ts`），
   不要在页面里手抄一份状态表。
 
+### 只读字段范围（`src/cli/console.ts`）
+
+- `GET /api/tasks`（列表）：`id, title, status, control_mode, risk, complexity,
+  work_branch, base_branch, budget_usd, created_at, updated_at, terminal_at,
+  repo, repo_provider`，外加 `LEFT JOIN LATERAL` 聚合出来的
+  `run_count, total_cost_usd, total_tokens, event_count`（只读统计，不写回）。
+- `GET /api/tasks/:id`（详情）：
+  - `task`：列表字段 + `repo_id, current_run_id`；
+  - `runs`：`id, stage, role, attempt, status, harness_id, harness_tier, session_ref,
+    started_at, ended_at, error_kind, error_detail, tokens_in, tokens_out, cost_usd, cost_basis`；
+  - `events`：`seq, run_id, type, payload, trace_id, span_id, occurred_at`（按 `seq` 升序）；
+  - `artifacts`：`id, kind, key, version, schema_version, produced_by_run, committed_at,
+    committed_at_seq, superseded_by, body` —— 返回**全部版本**（`kind, key, version DESC`），
+    由前端用 `superseded_by` 串成版本链，而不是在 SQL 里只挑最新版；
+  - `feedbacks`：`task_feedback JOIN feedback` 取 `id, source, external_ref, body, received_at`；
+  - `timers`：`id, run_id, kind, due_at, state, fired_at, created_at, updated_at`。
+- 以上查询全部走 `asRole('keel_control')` 且只含 `SELECT`；新增字段时同步扩充
+  `src/cli/console.test.ts` 里的注入式 `fakeQuery` 分支，保持可测。
+
+## 无感刷新与状态保持
+
+- 5 秒轮询分两段指纹：列表用 `tasksSig`、详情用 `detailSig`（由 `updated_at`、
+  最大 `event.seq`、run 状态等拼成）。指纹未变时**只更新心跳时间戳，不重绘 DOM**；
+  变化时才整块重渲染，避免无意义的展开态/滚动位置丢失。
+- 重绘前把 `details[data-expand-id]` 的 `open` 集合与滚动容器的 `scrollTop` 存下来，
+  重绘后按同 id 恢复。新增可折叠节点时必须给稳定的 `data-expand-id`
+  （如 `art-raw-<kind>-<version>`），否则刷新后会丢展开态。
+- 选中任务与激活 Tab 同步到 URL Hash：`#task=<id>&tab=<tab>`（`overview|runs|diff|timeline`）。
+  页面加载与 `hashchange` 都从 Hash 恢复；浏览器前进/后退、刷新、直接分享链接都要能定位到原位。
+
 ## 错误纪律
 
 - 不存在的 task → `404`，不返回空对象冒充「没有任务」。
