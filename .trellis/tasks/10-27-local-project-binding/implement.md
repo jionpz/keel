@@ -7,24 +7,24 @@
 
 先确认四个默认值；若评审改选，只影响 Step 2 / Step 3。
 
-- [ ] **D1 命令形态**：默认扩展 `keel register-repo <remoteUrl> --local-path <dir>`，不新增命令。
+- [x] **D1 命令形态**：默认扩展 `keel register-repo <remoteUrl> --local-path <dir>`，不新增命令。
       理由：少一个入口，且绑定本身就是注册的一部分。
-- [ ] **D2 attached 模式对象库**：默认直接使用用户仓库作为 git 目录，
+- [x] **D2 attached 模式对象库**：默认直接使用用户仓库作为 git 目录，
       worktree 放在 `<KEEL_HOME>/worktrees/<task_id>`；不额外维护 bare 镜像。
       理由：不产生第二份克隆；隔离仍由 worktree 保证。
-- [ ] **D3 本地未推送提交**：默认忽略，基线始终取 `origin/<base>`；
+- [x] **D3 本地未推送提交**：默认忽略，基线始终取 `origin/<base>`；
       `keel status` 报告 `diverged`，不自动包含、不自动 rebase。
-- [ ] **D4 离线模式**：v1 不提供 `--no-fetch`；同步失败即 fail-closed。
-- [ ] **D5 并发控制**：用 `<KEEL_HOME>/locks/repo-<id>.lock` 目录的原子 `mkdir` 锁，
+- [x] **D4 离线模式**：v1 不提供 `--no-fetch`；同步失败即 fail-closed。
+- [x] **D5 并发控制**：用 `<KEEL_HOME>/locks/repo-<id>.lock` 目录的原子 `mkdir` 锁，
       粒度为 per-repo，等待 30s，不自动破锁。不引入 `proper-lockfile`。
-- [ ] **D6 路径规范化**：绑定与运行都先 `resolve` 再 `realpath`；DB 只存规范绝对路径。
+- [x] **D6 路径规范化**：绑定与运行都先 `resolve` 再 `realpath`；DB 只存规范绝对路径。
       `KEEL_HOME` 相对值时按进程启动 cwd 解析一次并固化。
-- [ ] **D7 基线锚点**：worktree 用 40 位 `baseSha` 创建，不用 `origin/<base>` ref 名，
+- [x] **D7 基线锚点**：worktree 用 40 位 `baseSha` 创建，不用 `origin/<base>` ref 名，
       防止 prepare 与 add 之间 ref 被并发 fetch 移动。
 
 ## Step 1 · 数据模型与迁移
 
-- [ ] 新增 `migrations/1000000000005_repo_local_path.sql`：
+- [x] 新增 `migrations/1000000000005_repo_local_path.sql`：
   ```sql
   ALTER TABLE repo ADD COLUMN local_path text;
 
@@ -35,13 +35,13 @@
   CREATE UNIQUE INDEX repo_local_path_unique
     ON repo (local_path) WHERE local_path IS NOT NULL;
   ```
-- [ ] 迁移注释写清：唯一索引只能保证「规范化后的字符串不重复」，
+- [x] 迁移注释写清：唯一索引只能保证「规范化后的字符串不重复」，
       规范化由 `src/fact/project-root.ts` 的 `canonicalizeDir` 在写入前完成。
-- [ ] 确认 `repo` 的 GRANT 不变：`keel_control` / `keel_execution` / `keel_ingress`
+- [x] 确认 `repo` 的 GRANT 不变：`keel_control` / `keel_execution` / `keel_ingress`
       仍然只有 `SELECT`；绑定写入继续走 `asOwner`（管理操作，与 `register-repo` 一致）。
-- [ ] 更新读取 `repo` 的查询，至少覆盖：
+- [x] 更新读取 `repo` 的查询，至少覆盖：
       `src/cli/register-repo.ts`、`src/cli/run-task.ts`、`src/cli/console.ts`。
-- [ ] 新增迁移测试或复用 `src/fact/invariants.test.ts` 风格：
+- [x] 新增迁移测试或复用 `src/fact/invariants.test.ts` 风格：
       1. 同一 `local_path` 绑定第二个 repo 必须被唯一索引拒绝；
       2. `local_path` 写入相对路径必须被 `repo_local_path_absolute` 拒绝。
 
@@ -58,7 +58,7 @@ pnpm exec vitest run src/fact
 
 ## Step 2 · 路径基础件与绑定命令
 
-- [ ] 新增 `src/fact/workspace-error.ts`：
+- [x] 新增 `src/fact/workspace-error.ts`：
   ```ts
   type WorkspaceFailureCode =
     | 'local_path_missing' | 'not_a_git_worktree' | 'origin_mismatch'
@@ -68,26 +68,26 @@ pnpm exec vitest run src/fact
   workspaceError(code, fields): KeelError
   // 产出 WORKSPACE_ERROR，detail 固定为 [code] k="v" ... 形式
   ```
-- [ ] 新增 `src/fact/project-root.ts`：
+- [x] 新增 `src/fact/project-root.ts`：
   - `resolveKeelHome(env?, cwd?)`：`resolve` → `mkdir -p` → `realpath`；
   - `canonicalizeDir(input, cwd?)`：`resolve` → 校验目录存在 → `realpath`；
   - 两者失败都返回 `Result`，不抛异常。
-- [ ] 扩展 `src/cli/register-repo.ts`：新增可选参数 `--local-path <dir>`。
-- [ ] 校验全部在**事务外**完成，任一失败即拒绝且零写入：
+- [x] 扩展 `src/cli/register-repo.ts`：新增可选参数 `--local-path <dir>`。
+- [x] 校验全部在**事务外**完成，任一失败即拒绝且零写入：
   1. `canonicalizeDir` 成功（目录存在）；
   2. `git -C <dir> rev-parse --is-inside-work-tree` 为 true；
   3. `git -C <dir> remote get-url origin` 存在；
   4. 归一化后与注册的 `remote_url` 一致（复用 `src/fact/remote-url.ts`）。
-- [ ] 写入语义（`asOwner` 单事务，命中行 `FOR UPDATE`）：
+- [x] 写入语义（`asOwner` 单事务，命中行 `FOR UPDATE`）：
   - remote 不存在 → `INSERT`（含规范化 `local_path`）；
   - remote 存在 + 未传 flag → 原样返回，**不写库**；
   - remote 存在 + 传了 flag → 规范化路径与现值相同则 no-op，否则
     `UPDATE repo SET local_path = $1 WHERE id = $2`。
-- [ ] 捕获唯一索引冲突 `23505`：回滚后反查 `SELECT id FROM repo WHERE local_path = $1`，
+- [x] 捕获唯一索引冲突 `23505`：回滚后反查 `SELECT id FROM repo WHERE local_path = $1`，
       返回 `[local_path_taken] path="..." repo="<当前>" occupied_by="<占用者>"`。
-- [ ] 更新 `src/cli/index.ts` 的顶部文档注释与 `HELP` 模板：
+- [x] 更新 `src/cli/index.ts` 的顶部文档注释与 `HELP` 模板：
       `register-repo <remoteUrl> [--default-branch <name>] [--local-path <dir>]`。
-- [ ] 错误信息必须包含：固定 code、当前路径/URL、下一步命令。
+- [x] 错误信息必须包含：固定 code、当前路径/URL、下一步命令。
 
 **验证**
 
@@ -116,7 +116,7 @@ pnpm exec vitest run src/cli/register-repo.test.ts src/cli/cli.test.ts \
 
 ## Step 3 · GitWorkspace 改为项目绑定模型
 
-- [ ] 在 `src/fact/git-workspace.ts` 引入：
+- [x] 在 `src/fact/git-workspace.ts` 引入：
   ```ts
   type ProjectBinding =
     | { mode: 'managed'; root: string; repoId: string }
@@ -129,35 +129,35 @@ pnpm exec vitest run src/cli/register-repo.test.ts src/cli/cli.test.ts \
     fetchedAt: string
   }
   ```
-- [ ] 构造函数默认 root 从 `'.keel'` 改为 `resolveKeelHome()`，消除 cwd 依赖。
-- [ ] 新增 `src/fact/file-lock.ts`：
+- [x] 构造函数默认 root 从 `'.keel'` 改为 `resolveKeelHome()`，消除 cwd 依赖。
+- [x] 新增 `src/fact/file-lock.ts`：
   ```ts
   withFileLock<T>(lockDir, opName, fn, opts?): Promise<Result<T>>
   // mkdir 原子获取；EEXIST 每 50ms 重试；默认 30s 超时；
   // 锁内写 owner.json { pid, host, started_at, op }；
   // 超时返回 [lock_timeout]，不自动删锁。
   ```
-- [ ] `GitWorkspace` 增加 `withRepoLock(repoId, op, fn)`，锁路径
+- [x] `GitWorkspace` 增加 `withRepoLock(repoId, op, fn)`，锁路径
       `<root>/locks/repo-<repoId>.lock`；`prepareProject` 与 `ensureWorktree`
       各自取锁，锁内不嵌套调用取同一把锁的函数。
-- [ ] 新增 `ensureGitDir(binding, remoteUrl)`（仅 managed）：
+- [x] 新增 `ensureGitDir(binding, remoteUrl)`（仅 managed）：
   - 目标存在 → `git -C <bare> rev-parse --is-bare-repository` 为 `true` 才复用；
     否则 `[git_dir_invalid]`，**不自动删除**；
   - 目标不存在 → clone 到 `<root>/repos/.tmp-<repoId>-<pid>`，成功后 `rename`。
-- [ ] 新增 `syncBase(gitDir, baseBranch)`：显式 refspec + `--prune` + `rev-parse`；
+- [x] 新增 `syncBase(gitDir, baseBranch)`：显式 refspec + `--prune` + `rev-parse`；
       fetch 失败 → `[fetch_failed]`；ref 不存在 → `[base_missing]`。
-- [ ] 新增 `prepareProject(binding, remoteUrl, baseBranch)`：
+- [x] 新增 `prepareProject(binding, remoteUrl, baseBranch)`：
   - `attached`：对 `localPath` 再跑一次 `canonicalizeDir` 与 origin 校验；
   - `managed`：`ensureGitDir`；
   - 两种模式都执行 `syncBase`；
   - 全程在 `withRepoLock` 内。
-- [ ] `ensureWorktree(project, taskId)`：
+- [x] `ensureWorktree(project, taskId)`：
   - 路径存在 → 返回 `created=false`，不 rebase、不移动分支；
   - 不存在 → `git worktree add -b <branch> <wt> <project.baseSha>`
     （**用 commit，不用 `baseRef`**）；
   - 全程在 `withRepoLock` 内。
-- [ ] `push` / `headSha` / `remove` / `preservePath` 全部改用 `gitDir`。
-- [ ] 保留 managed 模式旧行为：没有 `local_path` 的 repo 不改变外部语义。
+- [x] `push` / `headSha` / `remove` / `preservePath` 全部改用 `gitDir`。
+- [x] 保留 managed 模式旧行为：没有 `local_path` 的 repo 不改变外部语义。
 
 **验证**
 
@@ -187,26 +187,26 @@ pnpm exec vitest run src/fact/git-workspace.test.ts src/fact/file-lock.test.ts
 
 ## Step 4 · 接线 run-task / run-issue / orchestrator
 
-- [ ] `src/cli/run-task.ts`：
+- [x] `src/cli/run-task.ts`：
   - 删除 `mkdtempSync(tmpdir(), 'keel-cli-')`；
   - 项目根改用 `resolveKeelHome()`（不再直接读 `process.env.KEEL_HOME`）；
   - 读取 repo 时增加 `local_path`，构造 `ProjectBinding`；
   - 调用 `prepareProject`，把整个 `PreparedProject` 传入 `WorkspaceBinding`；
   - 同步失败直接返回 `WORKSPACE_ERROR`，不创建 run。
-- [ ] `src/control/driver/driver.ts`：`WorkspaceBinding` 从
+- [x] `src/control/driver/driver.ts`：`WorkspaceBinding` 从
       `{ git, repoId, baseBranch }` 改为 `{ git, project, repoId }`。
-- [ ] `src/control/driver/effects.ts`：`CreateBranch` 改用 `ctx.workspace.project`
+- [x] `src/control/driver/effects.ts`：`CreateBranch` 改用 `ctx.workspace.project`
       调 `ensureWorktree`（本步只改调用签名，payload 扩展在 Step 5）。
-- [ ] `src/control/orchestrator/loop.ts`：
+- [x] `src/control/orchestrator/loop.ts`：
   - `OrchestratorWorkspace` 的 `worktree` 分支改为
     `{ mode: 'worktree'; git; repoId; project: PreparedProject }`；
   - `resolveWorkspace`（约 :644）改为 `ensureWorktree(ws.project, taskId)`；
   - `headSha` 调用点（约 :219）改为 `headSha(ws.project, taskId)`。
-- [ ] 更新所有 `mode: 'worktree'` fixture：
+- [x] 更新所有 `mode: 'worktree'` fixture：
       `src/e2e/orchestrator-workspace.test.ts`、`src/e2e/collect-changes.test.ts`、
       `src/control/orchestrator/ci-wiring.test.ts`、`src/cli/run-task.test.ts`。
-- [ ] `src/cli/run-issue.ts`：不重写驱动主体；确认它通过 `runTask` 自动获得新行为。
-- [ ] `.gitignore` 增加 `.keel/`（运行时项目根，不入库）。
+- [x] `src/cli/run-issue.ts`：不重写驱动主体；确认它通过 `runTask` 自动获得新行为。
+- [x] `.gitignore` 增加 `.keel/`（运行时项目根，不入库）。
 
 **验证**
 
@@ -233,7 +233,7 @@ pnpm run typecheck
 
 ## Step 5 · 基线证据与重放
 
-- [ ] `src/control/driver/effects.ts` 的 `CreateBranch` 副作用扩展 payload：
+- [x] `src/control/driver/effects.ts` 的 `CreateBranch` 副作用扩展 payload：
   ```json
   {
     "kind": "CreateBranch",
@@ -246,10 +246,10 @@ pnpm run typecheck
     "reused": false
   }
   ```
-- [ ] 重放语义：`ensureWorktree` 返回 `created=false` 时，读取该 task 最近一条
+- [x] 重放语义：`ensureWorktree` 返回 `created=false` 时，读取该 task 最近一条
       `CreateBranch` 事件，复用其 `base_sha`，并写 `"reused": true`；
       不重新计算基线，不移动分支。
-- [ ] 老 task 没有历史 `CreateBranch` 事件时，`base_sha` 写 `null`，不伪造。
+- [x] 老 task 没有历史 `CreateBranch` 事件时，`base_sha` 写 `null`，不伪造。
 
 **验证**
 
@@ -269,12 +269,12 @@ pnpm exec vitest run src/control/driver/effects.test.ts \
 
 ## Step 6 · `keel status` 展示绑定与基线
 
-- [ ] `src/cli/status.ts` 增加：
+- [x] `src/cli/status.ts` 增加：
   - 绑定模式（`managed` / `attached`）；
   - `local_path`：优先显示 `canonicalizeDir` 后的值；失败则原样显示并标注 `(unresolved)`；
   - 最近一条 `CreateBranch` 的 `base_ref` / `base_sha` / `fetched_at`；
   - 本地状态：`dirty` / `diverged`（attached 模式才计算，只读 `git status` / `git rev-list`）。
-- [ ] 不改变现有 task / run / events 输出格式；新增内容追加在尾部。
+- [x] 不改变现有 task / run / events 输出格式；新增内容追加在尾部。
 
 **验证**
 
@@ -291,20 +291,20 @@ pnpm run status -- <task_id>
 
 ## Step 7 · 规范与文档
 
-- [ ] 更新 `.trellis/spec/backend/git-workspace.md`：
+- [x] 更新 `.trellis/spec/backend/git-workspace.md`：
       managed / attached 两种模式、fetch refspec、worktree 位置、重放语义。
-- [ ] 更新 `.trellis/spec/backend/database-guidelines.md`：
+- [x] 更新 `.trellis/spec/backend/database-guidelines.md`：
       `repo.local_path` 的归属、唯一索引、仍然只读的授权矩阵。
-- [ ] 更新 `README.md` 本地部署段：
+- [x] 更新 `README.md` 本地部署段：
       `register-repo --local-path`、`KEEL_HOME`、`keel status` 新增字段。
-- [ ] 如果实现中改变了任何默认值，同步更新 `prd.md` 的 Open Questions 状态。
+- [x] 如果实现中改变了任何默认值，同步更新 `prd.md` 的 Open Questions 状态。
 
 **Review gate**：文档描述的是**实际实现**，不是设计意图。
 
 ## Step 8 · 全量门禁与验收回归
 
-- [ ] `pnpm run check` 全绿（lint / typecheck / boundaries / generated / transitions / purity / test）。
-- [ ] 负对照逐条验证，确认检查真的会红：
+- [x] `pnpm run check` 全绿（lint / typecheck / boundaries / generated / transitions / purity / test）。
+- [x] 负对照逐条验证，确认检查真的会红：
   1. 去掉 fetch → AC4 红；
   2. worktree 改用本地 `<base>` ref 名（而不是 `baseSha`）→ 锚点用例红；
   3. 去掉 `local_path` 校验 → AC2 红；
@@ -331,11 +331,11 @@ pnpm run status -- <task_id>
 
 ## Step 9 · 提交
 
-- [ ] 更新 spec 与文档后，按 Phase 3.4 提交。
-- [ ] 建议拆成两个 commit：
+- [x] 更新 spec 与文档后，按 Phase 3.4 提交。
+- [x] 建议拆成两个 commit：
   1. `feat(workspace): 本地项目绑定 + 开工前 fetch 基线`
   2. `docs(spec): 记录 managed/attached 工作区与 base_sha 语义`
-- [ ] PR 描述附：绑定命令示例、`keel status` 输出样例、负对照结果。
+- [x] PR 描述附：绑定命令示例、`keel status` 输出样例、负对照结果。
 
 ## 依赖与顺序
 
@@ -406,3 +406,35 @@ NC6 首轮为绿暴露的是**测试缺口**而非实现缺口：`resolve()` 本
 - 未跑：`v01-criterion-github` 与 `five-run`（整条 agent 流水线，单次 50–150s × N，
   属独立战役）。本次改动只触碰工作区准备层，已由单测 / e2e / PR 验收分层覆盖；
   失败项如实记录，不勾选。
+
+### 复选框补勾（2026-10-28）
+
+Step 0–9 的实现在 #66 合并时已全部落地，但计划里的复选框一直是初始的 `[ ]` ——
+合并前没做勾选这一动作。这里按**逐项核对代码**后补勾，不是按「应该做过了」补勾：
+
+| 步骤 | 核对到的落点 |
+|---|---|
+| Step 1 | `migrations/1000000000005_repo_local_path.sql`；约束与索引在 `src/fact/invariants.test.ts` 有断言 |
+| Step 2 | `register-repo.ts` 的 `--local-path` 与 `23505` 反查；`index.ts` 的 `HELP` 含该参数 |
+| Step 3 | `git-workspace.ts` 的 `ProjectBinding` / `withRepoLock`（:408）/ `ensureGitDir` 的 bare 校验（:380）/ `syncBase` 的显式 refspec + `--prune` / `worktree add` 锚 `project.baseSha`（:162） |
+| Step 4 | `loop.ts:652` `ensureWorktree(ws.project, …)`、`loop.ts:220` `headSha(…project…)`；`driver.ts` 不再自定义 `WorkspaceBinding`（移到 `effects.ts`）；5 个 `mode: 'worktree'` fixture 已更新；全仓无 `process.env.KEEL_HOME` 直读 |
+| Step 5 | `effects.ts:371` 写 `base_ref`/`base_sha`/`fetched_at`；重放沿用旧 `base_sha`；老 task 写 `null` |
+| Step 6 | `status.ts` 的 `printWorkspace`：`managed`/`attached`、`(unresolved)`、`dirty`/`diverged` |
+| Step 7 | `git-workspace.md`、`database-guidelines.md`、`README.md` 均已更新 |
+
+**仍保持未勾的两项**（确实没跑，不勾）：
+
+- Step 8 的真实验收 `v01-criterion-github` / `five-run` —— 整条 agent 流水线，
+  单次 50–150s × N，属独立战役；本任务改动只在工作区准备层，已由单测 / e2e /
+  `github-pr` 验收分层覆盖。
+- Step 8 可选的真实 CLI 回归。
+
+另有两处与计划的字面差异，如实记下：
+
+1. 计划写 `run-task.ts` 改用 `resolveKeelHome()`；实现里 `run-task.ts` 直接 `new GitWorkspace()`，
+   由构造函数默认走 `resolveKeelHome()`。效果等价（同样消除 cwd 依赖），落点少一层。
+2. Step 7 计划要求「如果改变了默认值，更新 `prd.md` 的 Open Questions」；默认值没变，
+   但 Open Questions 仍有一条**实质开放**：`git@github.com:a/b` 与 `https://github.com/a/b`
+   归一化后**不等价**（`normalizeRemoteUrl` 只处理尾斜杠与 `.git` 后缀）。
+   后果：用 ssh 地址注册、用 https 地址绑定同一本地仓库，会被判 `origin_mismatch`。
+   v1 未处理，需要时再决定是否把 host/path 提出来比对。
