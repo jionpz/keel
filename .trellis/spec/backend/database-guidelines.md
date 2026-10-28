@@ -125,6 +125,23 @@ control 对 feedback 刻意只读，这是矩阵约束。
 
 ---
 
+## 迁移未跑全的症状
+
+`keel_dev` 曾停在 `1000000000002`（2026-10-27 实测）：
+
+- `keel_ingress` 缺少 `GRANT USAGE ON SCHEMA public`（该语句在 `1000000000003`）；
+- 表现**不是** `permission denied`，而是 **`relation "feedback" does not exist`** ——
+  Postgres 对没有 schema USAGE 的角色隐藏对象，错误信息会把人带向「表不存在」。
+- 排查顺序：
+  1. `SELECT name FROM pgmigrations ORDER BY id`，与 `migrations/` 目录比对；
+  2. `SELECT nspacl FROM pg_namespace WHERE nspname='public'`，确认目标角色在列；
+  3. `SELECT grantee, privilege_type FROM information_schema.role_table_grants WHERE table_name='…'`。
+
+迁移脚本（`node-pg-migrate`）读 `DATABASE_URL`，而运行时读 `KEEL_DATABASE_URL` / `DATABASE_URL`。
+两个变量指向同一个库，**不要只设一个就以为另一条路径也生效**。
+
+---
+
 ## 测试
 
 | 项 | 做法 |

@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "keel-console",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["run", "console"],
+      "port": 4321
+    }
+  ]
+}
