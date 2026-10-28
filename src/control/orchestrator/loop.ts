@@ -24,7 +24,7 @@ import type { Usage } from '../../contracts/types.js'
 import type { HarnessSessionManager } from '../../execution/session/manager.js'
 import { commitArtifactOn } from '../../fact/artifact-store.js'
 import { asRole } from '../../fact/db.js'
-import type { GitWorkspace } from '../../fact/git-workspace.js'
+import type { GitWorkspace, PreparedProject } from '../../fact/git-workspace.js'
 import { ensureTraceId } from '../../fact/trace.js'
 import type { ControlMode, RoleId, Stage, TaskStatus } from '../../shared/ids.js'
 import { isStageStatus } from '../../shared/ids.js'
@@ -57,7 +57,8 @@ export type OrchestratorWorkspace =
       readonly mode: 'worktree'
       readonly git: GitWorkspace
       readonly repoId: string
-      readonly baseBranch: string
+      /** 开工前 prepare 好的项目与基线；worktree 只认这个 baseSha */
+      readonly project: PreparedProject
     }
   /**
    * 固定目录，所有 Task 共用。
@@ -216,7 +217,7 @@ export async function runTaskToCompletion(
         if (deps.workspace.mode !== 'worktree') {
           return err(makeError('WORKSPACE_ERROR', '真实 CI 需要 worktree 模式才能读取 head SHA'))
         }
-        const sha = await deps.workspace.git.headSha(deps.workspace.repoId, taskId)
+        const sha = await deps.workspace.git.headSha(deps.workspace.project, taskId)
         if (!sha.ok) return err(sha.error)
         const remote = await readRemoteUrl(deps.workspace.repoId)
         if (!remote.ok) return err(remote.error)
@@ -648,7 +649,7 @@ async function resolveWorkspace(
   if (ws.mode === 'fixed') {
     return ok({ path: ws.path, repo_id: 'local', branch: 'main' })
   }
-  const wt = await ws.git.ensureWorktree(ws.repoId, taskId, ws.baseBranch)
+  const wt = await ws.git.ensureWorktree(ws.project, taskId)
   if (!wt.ok) return err(wt.error)
   return ok({ path: wt.value.path, repo_id: ws.repoId, branch: wt.value.branch })
 }

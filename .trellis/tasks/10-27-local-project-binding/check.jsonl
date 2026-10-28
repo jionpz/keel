@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "检查测试分层、负对照与验收凭据是否满足"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "检查绑定 / 同步失败的 ErrorKind 与 detail 是否可执行"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "检查迁移、索引与 repo 只读授权是否被破坏"}
+{"file": ".trellis/spec/backend/git-workspace.md", "reason": "检查 worktree 隔离、幂等与 push 边界是否保持"}

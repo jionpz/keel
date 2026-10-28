@@ -1,16 +1,13 @@
 /**
  * keel run-task —— 驱动单 task 到终态(issue #27)。
  *
- * 组装 worktree workspace(临时 git 根 + ensureBareRepo from remote_url),
+ * 组装 worktree workspace(持久项目根 + prepareProject from remote_url),
  * 接线 runTaskToCompletion,输出终态 + 转移轨迹。
  *
  * `--ci real` 接真实 GitHub(PR 网关 + CI 网关);缺省仍是 `passed`(模拟结果)——
  * 缺省值刻意不动:一个不带参数的 run-task 不应该悄悄打真实 API 建 PR。
  */
 
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { err, makeError, ok, type Result } from '../contracts/errors.js'
 import type { HarnessAdapter } from '../contracts/harness-adapter.js'
 import { WorkflowDriver } from '../control/driver/driver.js'
@@ -29,7 +26,7 @@ import {
 import { DEFAULT_OMP_MODEL, OmpAdapter } from '../execution/adapters/omp.js'
 import { HarnessSessionManager } from '../execution/session/manager.js'
 import { asRole } from '../fact/db.js'
-import { GitWorkspace } from '../fact/git-workspace.js'
+import { GitWorkspace, type ProjectBinding } from '../fact/git-workspace.js'
 import { GitHubProvider, readTokenFromEnv } from '../fact/github-provider.js'
 import type { TaskStatus } from '../shared/ids.js'
 import { parseArgs } from './argv.js'
@@ -290,11 +287,16 @@ export async function runTask(
   const model = resolveModelForHarness(harness.value, opts.model, process.env.KEEL_MODEL)
   if (!model.ok) return model
 
-  // 读 task + repo(remote_url)。以 keel_control 身份读 —— asOwner 按 db.ts
+  // 读 task + repo(remote_url + local_path)。以 keel_control 身份读 —— asOwner 按 db.ts
   // 的纪律只留给测试装置与迁移,生产命令不该用属主权限读生产数据。
   const info = await asRole('keel_control', (c) =>
-    c.query<{ repo_id: string; base_branch: string; remote_url: string }>(
-      `SELECT t.repo_id, t.base_branch, r.remote_url
+    c.query<{
+      repo_id: string
+      base_branch: string
+      remote_url: string
+      local_path: string | null
+    }>(
+      `SELECT t.repo_id, t.base_branch, r.remote_url, r.local_path
        FROM task t JOIN repo r ON r.id = t.repo_id WHERE t.id = $1`,
       [taskId],
     ),
@@ -304,13 +306,16 @@ export async function runTask(
     return err(makeError('NOT_FOUND', `找不到 task ${taskId}`))
   }
 
-  // 临时 git 根 → 从 remote 克隆裸仓库 → worktree binding
-  const root = mkdtempSync(join(tmpdir(), 'keel-cli-'))
-  const git = new GitWorkspace({ root })
-  const bare = await git.ensureBareRepo(row.repo_id, row.remote_url)
-  if (!bare.ok) return bare
+  // 持久项目根 → 绑定项目 → 同步基线。失败即不创建 run。
+  const git = new GitWorkspace()
+  const projectBinding: ProjectBinding =
+    row.local_path === null
+      ? { mode: 'managed', repoId: row.repo_id }
+      : { mode: 'attached', repoId: row.repo_id, localPath: row.local_path }
+  const prepared = await git.prepareProject(projectBinding, row.remote_url, row.base_branch)
+  if (!prepared.ok) return prepared
 
-  const binding = { git, repoId: row.repo_id, baseBranch: row.base_branch }
+  const binding = { git, repoId: row.repo_id, project: prepared.value }
   const now = () => new Date().toISOString()
 
   const result = await runTaskToCompletion(

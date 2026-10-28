@@ -7,7 +7,7 @@
  *   timer-worker [--interval <ms>]  到期收割(单次/常驻)
  *   run-task <taskId> [--max-steps N] [--ci passed|failed|real] [--model <id>] [--harness omp|claude] [--wall-clock <秒>]
  *   status <taskId> [--events N]
- *   register-repo <remoteUrl> [--default-branch <name>]
+ *   register-repo <remoteUrl> [--default-branch <name>] [--local-path <dir>]
  *   ingest-issue <issueUrl> [--label <name>] [--repo <uuid>]
  *   run-issue <issueUrl> [--label <name>] [--max-steps N] [--ci passed|failed|real] [--model <id>] [--harness omp|claude] [--wall-clock <秒>]
  */
@@ -30,7 +30,7 @@ const HELP = `keel — AI Engineering Runtime CLI
   timer-worker [--interval <ms>]   到期收割 timer(默认单次;--interval 常驻)
   run-task <taskId> [--max-steps N] [--ci passed|failed|real] [--model <id>] [--harness omp|claude] [--wall-clock <秒>]   驱动单 task 到终态
   status <taskId> [--events N]     查 task / run / 事件摘要
-  register-repo <remoteUrl> [--default-branch <name>]   注册 repo
+  register-repo <remoteUrl> [--default-branch <name>] [--local-path <dir>]   注册 repo；可绑定本地项目目录
   ingest-issue <issueUrl> [--label <name>] [--repo <uuid>]   GitHub Issue → task
   run-issue <issueUrl> [--label <name>] [--max-steps N] [--ci passed|failed|real] [--model <id>] [--harness omp|claude] [--wall-clock <秒>]   Issue → task → 驱动到终态
 

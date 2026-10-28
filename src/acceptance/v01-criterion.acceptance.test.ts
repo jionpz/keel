@@ -104,10 +104,10 @@ describe('v0.1 完成判据（完整）', () => {
     // 每个 Task 一个独立 worktree —— 与生产接线一致（docs/08-cross-cutting.md §4.1）。
     // 裸仓库与工作树都建在临时目录下，测试结束一并清掉。
     const git = new GitWorkspace({ root: mkdtempSync(join(tmpdir(), 'keel-v01-root-')) })
-    const bare = await git.ensureBareRepo(repoId, `file://${ws}`)
-    expect(bare.ok, bare.ok ? '' : `建裸仓库失败：${bare.error.detail}`).toBe(true)
-    if (!bare.ok) return
-    const binding = { git, repoId, baseBranch: 'main' } as const
+    const prepared = await git.prepareProject({ mode: 'managed', repoId }, `file://${ws}`, 'main')
+    expect(prepared.ok, prepared.ok ? '' : `建裸仓库失败：${prepared.error.detail}`).toBe(true)
+    if (!prepared.ok) return
+    const binding = { git, repoId, project: prepared.value } as const
 
     const result = await runTaskToCompletion(
       taskId,
@@ -165,7 +165,7 @@ describe('v0.1 完成判据（完整）', () => {
     const branch = branchFor(taskId)
     const commits = execFileSync(
       'git',
-      ['-C', bare.value, 'log', '--format=%s', `main..${branch}`],
+      ['-C', prepared.value.gitDir, 'log', '--format=%s', `main..${branch}`],
       { encoding: 'utf8' },
     ).trim()
     expect(commits, 'develop 阶段应在该 Task 的分支上留下提交').not.toBe('')

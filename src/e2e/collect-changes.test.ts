@@ -150,11 +150,12 @@ describe('collectChanges 接进编排（真实工作树 · L0 Harness）', () =>
     const { taskId, repoId, ws } = await seed()
     const root = mkdtempSync(join(tmpdir(), 'keel-collect-root-'))
     const git = new GitWorkspace({ root })
-    const bare = await git.ensureBareRepo(repoId, `file://${ws}`)
-    expect(bare.ok, bare.ok ? '' : `建裸仓库失败：${bare.error.detail}`).toBe(true)
-    if (!bare.ok) return
+    const prepared = await git.prepareProject({ mode: 'managed', repoId }, `file://${ws}`, 'main')
+    expect(prepared.ok, prepared.ok ? '' : `建裸仓库失败：${prepared.error.detail}`).toBe(true)
+    if (!prepared.ok) return
+    const project = prepared.value
 
-    const binding = { git, repoId, baseBranch: 'main' } as const
+    const binding = { git, repoId, project } as const
     try {
       const result = await runTaskToCompletion(
         taskId,
@@ -207,12 +208,16 @@ describe('collectChanges 接进编排（真实工作树 · L0 Harness）', () =>
 
       // ── 3. 这一轮的改动真的提交进了 Task 分支（没提交就等于没做）──
       const branch = `ai/task-${taskId.slice(0, 8)}`
-      const stat = execFileSync('git', ['-C', bare.value, 'show', '--stat', '--oneline', branch], {
-        encoding: 'utf8',
-      })
+      const stat = execFileSync(
+        'git',
+        ['-C', project.gitDir, 'show', '--stat', '--oneline', branch],
+        {
+          encoding: 'utf8',
+        },
+      )
       expect(stat).toContain('README.md')
     } finally {
-      await git.remove?.(repoId, taskId)
+      await git.remove(project, taskId)
       rmSync(ws, { recursive: true, force: true })
       rmSync(root, { recursive: true, force: true })
     }

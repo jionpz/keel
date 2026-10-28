@@ -493,3 +493,43 @@ describe('superseded_by 的唯一写入路径', () => {
     expect(msg).toMatch(/CONFLICT/)
   })
 })
+
+// ───────────────────── 本地项目绑定 · repo.local_path ─────────────────────
+
+describe('repo.local_path · 绑定不变量', () => {
+  async function insertRepo(localPath: string | null): Promise<void> {
+    await asOwner((c) =>
+      c.query(
+        `INSERT INTO repo (id, provider, remote_url, default_branch, local_path)
+         VALUES ($1, 'local', $2, 'main', $3)`,
+        [randomUUID(), `file:///tmp/${randomUUID()}`, localPath],
+      ),
+    )
+  }
+
+  it('同一 local_path 不能绑定第二个 repo', async () => {
+    await insertRepo('/tmp/project')
+    const msg = await expectRejected(() => insertRepo('/tmp/project'))
+    expect(msg).toMatch(/repo_local_path_unique|duplicate key/i)
+  })
+
+  it('managed 模式（local_path NULL）可以有任意多个', async () => {
+    await insertRepo(null)
+    await insertRepo(null)
+    const rows = await asOwner((c) => c.query('SELECT id FROM repo WHERE local_path IS NULL'))
+    expect(rows.rows).toHaveLength(2)
+  })
+
+  it('相对路径写入被 CHECK 拒绝 —— 数据库是第二道防线', async () => {
+    const msg = await expectRejected(() => insertRepo('relative/path'))
+    expect(msg).toMatch(/repo_local_path_absolute|check constraint/i)
+  })
+
+  it('新增列不改变授权：keel_control 仍不能 UPDATE repo', async () => {
+    await insertRepo('/tmp/project')
+    const msg = await expectRejected(() =>
+      asRole('keel_control', (c) => c.query(`UPDATE repo SET local_path = '/tmp/other'`)),
+    )
+    expect(msg).toMatch(/permission denied/i)
+  })
+})
