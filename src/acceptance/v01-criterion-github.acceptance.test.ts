@@ -168,9 +168,9 @@ describe('v0.1 完成判据（合并：真实编排 + 真实 GitHub PR/CI）', (
 
     const root = mkdtempSync(join(tmpdir(), 'keel-v01-gh-'))
     const git = new GitWorkspace({ root })
-    const bare = await git.ensureBareRepo(repoId, remote)
-    expect(bare.ok, bare.ok ? '' : `克隆失败：${bare.error.detail}`).toBe(true)
-    if (!bare.ok) return
+    const prepared = await git.prepareProject({ mode: 'managed', repoId }, remote, 'main')
+    expect(prepared.ok, prepared.ok ? '' : `克隆失败：${prepared.error.detail}`).toBe(true)
+    if (!prepared.ok) return
 
     // 同一个 GitHubProvider 兼任两个契约：
     // PullRequestGateway 注入 driver（CreatePullRequest 副作用），
@@ -180,7 +180,7 @@ describe('v0.1 完成判据（合并：真实编排 + 真实 GitHub PR/CI）', (
       pollIntervalMs: 5_000,
       pollTimeoutMs: 300_000,
     })
-    const binding = { git, repoId, baseBranch: 'main' } as const
+    const binding = { git, repoId, project: prepared.value } as const
 
     let prNumber: number | undefined
     try {
@@ -241,7 +241,7 @@ describe('v0.1 完成判据（合并：真实编排 + 真实 GitHub PR/CI）', (
       // ── 4. 分支真的到了远程（cleanup 前验证）──
       const lsRemote = execFileSync(
         'git',
-        ['-C', bare.value, 'ls-remote', remote, `refs/heads/${branchFor(taskId)}`],
+        ['-C', prepared.value.gitDir, 'ls-remote', remote, `refs/heads/${branchFor(taskId)}`],
         { encoding: 'utf8' },
       ).trim()
       expect(lsRemote, '远程应有该 Task 的 ai/* 分支').not.toBe('')
@@ -262,7 +262,7 @@ describe('v0.1 完成判据（合并：真实编排 + 真实 GitHub PR/CI）', (
       // ── 6. develop 阶段在该 Task 的分支上留下真实提交 ──
       const commits = execFileSync(
         'git',
-        ['-C', bare.value, 'log', '--format=%s', `main..${branchFor(taskId)}`],
+        ['-C', prepared.value.gitDir, 'log', '--format=%s', `main..${branchFor(taskId)}`],
         { encoding: 'utf8' },
       ).trim()
       expect(commits, 'develop 阶段应在分支上留下提交').not.toBe('')

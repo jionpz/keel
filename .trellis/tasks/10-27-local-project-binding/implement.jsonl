@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/git-workspace.md", "reason": "worktree 生命周期、隔离与 push 约定，本任务直接改造该模块"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移编号、repo 只读实体与角色授权矩阵，新增 local_path 必须遵守"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "三平面边界，git workspace 归 Fact Plane，避免把执行逻辑放错层"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Result/ErrorKind 与 fail-closed 错误表达，绑定与同步失败路径必须一致"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试分层、防假绿与验收凭据要求"}
+{"file": "docs/03-domain-model.md", "reason": "repo / task 实体定义与 §4 授权矩阵，确认本地路径归属"}
+{"file": "docs/04-state-machine.md", "reason": "task / run 生命周期与幂等语义，重放时基线不得漂移"}

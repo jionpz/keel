@@ -27,7 +27,7 @@ import type { Proposal } from '../../contracts/types.js'
 import { HarnessSessionManager } from '../../execution/session/manager.js'
 import { PgArtifactStore } from '../../fact/artifact-store.js'
 import { asOwner, closePool } from '../../fact/db.js'
-import { branchFor, GitWorkspace } from '../../fact/git-workspace.js'
+import { branchFor, GitWorkspace, type PreparedProject } from '../../fact/git-workspace.js'
 import { WorkflowDriver } from '../driver/driver.js'
 import { RuleBasedPolicyEngine } from '../policy/engine.js'
 import { DEFAULT_RULESET } from '../policy/ruleset.js'
@@ -154,25 +154,32 @@ class NoSessionAdapter implements HarnessAdapter {
   }
 }
 
-function depsFor(repoId: string, git: GitWorkspace) {
+function depsFor(repoId: string, git: GitWorkspace, project: PreparedProject) {
   return {
     driver: new WorkflowDriver(new RuleBasedPolicyEngine(DEFAULT_RULESET), {
       git,
       repoId,
-      baseBranch: 'main',
+      project,
     }),
     sessions: new HarnessSessionManager(),
     adapter: new NoSessionAdapter(),
-    workspace: { mode: 'worktree', git, repoId, baseBranch: 'main' } as const,
+    workspace: { mode: 'worktree', git, repoId, project } as const,
     now: () => '2026-08-23T13:00:00Z',
   }
+}
+
+/** managed 绑定 + 开工前同步 —— 裸仓库落在 `<root>/repos/<repoId>.git` */
+async function prepareFor(git: GitWorkspace, repoId: string): Promise<PreparedProject> {
+  const r = await git.prepareProject({ mode: 'managed', repoId }, `file://${origin}`, 'main')
+  if (!r.ok) throw new Error(r.error.detail)
+  return r.value
 }
 
 describe('编排器 CI 接线(opts.ci 优先)', () => {
   it('waitForCi=passed → CIPassed → T-024 → S-DONE,gateway 收到裸仓库 head SHA', async () => {
     const { taskId, repoId } = await seedTaskAtPrOpen()
     const git = new GitWorkspace({ root })
-    expect((await git.ensureBareRepo(repoId, `file://${origin}`)).ok).toBe(true)
+    const project = await prepareFor(git, repoId)
     // 分支要有 HEAD 才能读 SHA —— 在**裸仓库**(编排器读的就是它)里建出该 Task 的分支
     execFileSync(
       'git',
@@ -181,7 +188,7 @@ describe('编排器 CI 接线(opts.ci 优先)', () => {
     )
 
     const ci = new FakeCi('passed')
-    const result = await runTaskToCompletion(taskId, depsFor(repoId, git), {
+    const result = await runTaskToCompletion(taskId, depsFor(repoId, git, project), {
       maxSteps: 4,
       ci,
       externalCi: async () => {
@@ -210,7 +217,7 @@ describe('编排器 CI 接线(opts.ci 优先)', () => {
   it('waitForCi=failed → CIFailed → T-025 → 回 S-DEVELOPING 并开新 develop run', async () => {
     const { taskId, repoId } = await seedTaskAtPrOpen()
     const git = new GitWorkspace({ root })
-    await git.ensureBareRepo(repoId, `file://${origin}`)
+    const project = await prepareFor(git, repoId)
     execFileSync(
       'git',
       ['-C', join(root, 'repos', `${repoId}.git`), 'branch', branchFor(taskId), 'main'],
@@ -219,7 +226,10 @@ describe('编排器 CI 接线(opts.ci 优先)', () => {
 
     const ci = new FakeCi('failed')
     // maxSteps=1:推进这一步后就停 —— 我们只关心转移与 run 创建
-    const result = await runTaskToCompletion(taskId, depsFor(repoId, git), { maxSteps: 1, ci })
+    const result = await runTaskToCompletion(taskId, depsFor(repoId, git, project), {
+      maxSteps: 1,
+      ci,
+    })
 
     // maxSteps 用尽时循环如实报告「未到终态」—— 这正是我们要的:S-DEVELOPING 非终态
     expect(result.ok).toBe(false)

@@ -77,23 +77,24 @@ describe('真实 GitHub PR / CI(需要凭据与远程仓库)', () => {
     const taskId = randomUUID()
 
     // ── A. 本地裸仓库从真实远程克隆 ──
-    const bare = await git.ensureBareRepo(repoId, remote)
-    expect(bare.ok, bare.ok ? '' : `克隆失败:${bare.error.detail}`).toBe(true)
-    if (!bare.ok) return
+    const prepared = await git.prepareProject({ mode: 'managed', repoId }, remote, 'main')
+    expect(prepared.ok, prepared.ok ? '' : `克隆失败:${prepared.error.detail}`).toBe(true)
+    if (!prepared.ok) return
+    const project = prepared.value
 
     // ── B. worktree + 提交 + push ──
-    const wt = await git.ensureWorktree(repoId, taskId, 'main')
+    const wt = await git.ensureWorktree(project, taskId)
     expect(wt.ok).toBe(true)
     if (!wt.ok) return
     writeFileSync(join(wt.value.path, '.keel-acc.txt'), `keel acceptance ${taskId}\n`)
     const commit = await git.commitAll(taskId, `keel: acceptance ${taskId.slice(0, 8)}`)
     expect(commit.ok && commit.value !== null, '应有真实提交').toBe(true)
 
-    const push = await git.push(repoId, taskId, remote)
+    const push = await git.push(project, taskId, remote)
     expect(push.ok, push.ok ? '' : `push 失败:${push.error.detail}`).toBe(true)
     if (!push.ok) return
 
-    const headSha = await git.headSha(repoId, taskId)
+    const headSha = await git.headSha(project, taskId)
     expect(headSha.ok).toBe(true)
     if (!headSha.ok) return
 

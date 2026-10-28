@@ -70,3 +70,24 @@ export async function asOwner<T>(fn: (client: PoolClient) => Promise<T>): Promis
     client.release()
   }
 }
+
+/**
+ * 以属主身份执行一段**单事务**操作。
+ *
+ * 与 `asRole` 的唯一区别是不降权；与 `asOwner` 的区别是有明确的事务边界。
+ * 用于 repo 绑定这类「先查后写，中途失败必须整体回滚」的管理操作。
+ */
+export async function asOwnerTx<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
+  const client = await getPool().connect()
+  try {
+    await client.query('BEGIN')
+    const result = await fn(client)
+    await client.query('COMMIT')
+    return result
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => undefined)
+    throw e
+  } finally {
+    client.release()
+  }
+}

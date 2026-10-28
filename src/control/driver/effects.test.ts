@@ -26,11 +26,13 @@ import type {
 } from '../../contracts/git-provider.js'
 import type { Proposal } from '../../contracts/types.js'
 import { PgArtifactStore } from '../../fact/artifact-store.js'
-import { asOwner, closePool } from '../../fact/db.js'
-import { branchFor, GitWorkspace } from '../../fact/git-workspace.js'
+import { asOwner, asRole, closePool } from '../../fact/db.js'
+import { branchFor, GitWorkspace, type PreparedProject } from '../../fact/git-workspace.js'
 import { RuleBasedPolicyEngine } from '../policy/engine.js'
 import { DEFAULT_RULESET } from '../policy/ruleset.js'
+import type { TransitionEvent } from '../transition/types.js'
 import { WorkflowDriver } from './driver.js'
+import { applyEffects } from './effects.js'
 
 const NOW = '2026-08-23T12:00:00Z'
 const store = new PgArtifactStore()
@@ -152,18 +154,26 @@ async function eventsOf(
   return r.value.map((e) => ({ type: e.type, payload: e.payload as Record<string, unknown> }))
 }
 
+/** managed 绑定 + 开工前同步 —— 与 run-task 的接线保持同一条路径 */
+async function prepareFor(
+  git: GitWorkspace,
+  repoId: string,
+  baseBranch = 'main',
+): Promise<PreparedProject> {
+  const r = await git.prepareProject({ mode: 'managed', repoId }, `file://${origin}`, baseBranch)
+  if (!r.ok) throw new Error(r.error.detail)
+  return r.value
+}
+
 describe('CreatePullRequest 副作用记账', () => {
   it('注入 gateway → 真实执行,SideEffectApplied 含 pr_number / pr_url / head_branch', async () => {
     const { taskId, repoId } = await seedTaskWithRemote()
-    const git = await (async () => {
-      const g = new GitWorkspace({ root })
-      expect((await g.ensureBareRepo(repoId, `file://${origin}`)).ok).toBe(true)
-      return g
-    })()
+    const git = new GitWorkspace({ root })
+    const project = await prepareFor(git, repoId)
     const gateway = firstTimeCreated()
     const driver = new WorkflowDriver(
       new RuleBasedPolicyEngine(DEFAULT_RULESET),
-      { git, repoId, baseBranch: 'main' },
+      { git, repoId, project },
       gateway,
     )
 
@@ -199,7 +209,7 @@ describe('CreatePullRequest 副作用记账', () => {
   it('gateway 报已存在 → SideEffectSkipped,不重复创建', async () => {
     const { taskId, repoId } = await seedTaskWithRemote()
     const git = new GitWorkspace({ root })
-    await git.ensureBareRepo(repoId, `file://${origin}`)
+    const project = await prepareFor(git, repoId)
     const gateway = new FakeGateway((n) =>
       n === 1
         ? ok({ number: 7, url: 'u7', created: false })
@@ -207,7 +217,7 @@ describe('CreatePullRequest 副作用记账', () => {
     )
     const driver = new WorkflowDriver(
       new RuleBasedPolicyEngine(DEFAULT_RULESET),
-      { git, repoId, baseBranch: 'main' },
+      { git, repoId, project },
       gateway,
     )
 
@@ -226,11 +236,11 @@ describe('CreatePullRequest 副作用记账', () => {
   it('未注入 gateway → SideEffectIntent,不报错也不假装成功', async () => {
     const { taskId, repoId } = await seedTaskWithRemote()
     const git = new GitWorkspace({ root })
-    await git.ensureBareRepo(repoId, `file://${origin}`)
+    const project = await prepareFor(git, repoId)
     const driver = new WorkflowDriver(new RuleBasedPolicyEngine(DEFAULT_RULESET), {
       git,
       repoId,
-      baseBranch: 'main',
+      project,
     })
 
     const r = await driver.advance(taskId, { type: 'RunSucceeded', stage: 'review' }, NOW)
@@ -354,12 +364,12 @@ describe('幂等重放（at-least-once 投递）', () => {
   it('提交前重放:转移再次命中 → 第二次 SideEffectSkipped,无重复 PR', async () => {
     const { taskId, repoId } = await seedTaskWithRemote()
     const git = new GitWorkspace({ root })
-    await git.ensureBareRepo(repoId, `file://${origin}`)
+    const project = await prepareFor(git, repoId)
     // 模拟 GitHub 的幂等语义:同一 head 第二次返回已有 PR（created:false）
     const gateway = firstTimeCreated()
     const driver = new WorkflowDriver(
       new RuleBasedPolicyEngine(DEFAULT_RULESET),
-      { git, repoId, baseBranch: 'main' },
+      { git, repoId, project },
       gateway,
     )
 
@@ -397,11 +407,11 @@ describe('幂等重放（at-least-once 投递）', () => {
   it('提交后重复投递:NoTransition,不再触碰任何副作用', async () => {
     const { taskId, repoId } = await seedTaskWithRemote()
     const git = new GitWorkspace({ root })
-    await git.ensureBareRepo(repoId, `file://${origin}`)
+    const project = await prepareFor(git, repoId)
     const gateway = firstTimeCreated()
     const driver = new WorkflowDriver(
       new RuleBasedPolicyEngine(DEFAULT_RULESET),
-      { git, repoId, baseBranch: 'main' },
+      { git, repoId, project },
       gateway,
     )
 
@@ -494,5 +504,103 @@ describe('CreateRun 撞键：existing_status 区分重放与派发丢失', () =>
     const payload = await skipOf(taskId)
     expect(payload?.idempotency_key).toBe(`${taskId}/pm/1`)
     expect(payload?.existing_status).toBe('SUCCEEDED')
+  })
+})
+
+// ──────────────────── CreateBranch 的基线证据（Step 5）────────────────────
+
+describe('CreateBranch 基线证据', () => {
+  /** 直接跑这一个副作用：本层要验的是「记了什么」，不是哪条转移触发的 */
+  async function applyCreateBranch(
+    taskId: string,
+    git: GitWorkspace,
+    project: PreparedProject,
+  ): Promise<void> {
+    const event: TransitionEvent = { type: 'PolicyEvaluated', decision: 'auto_develop' }
+    const r = await asRole('keel_control', (c) =>
+      applyEffects(
+        c,
+        {
+          taskId,
+          traceId: 'trace-baseline-test',
+          event,
+          transitionId: 'T-013',
+          now: NOW,
+          policy: new RuleBasedPolicyEngine(DEFAULT_RULESET),
+          workspace: { git, repoId: project.repoId, project },
+        },
+        [{ kind: 'CreateBranch' }],
+      ),
+    )
+    expect(r.length).toBe(1)
+  }
+
+  async function branchEvents(taskId: string): Promise<Record<string, unknown>[]> {
+    const evs = await eventsOf(taskId)
+    return evs
+      .filter((e) => e.type === 'SideEffectApplied' && e.payload.kind === 'CreateBranch')
+      .map((e) => e.payload)
+  }
+
+  it('首次建分支：payload 含 base_ref / base_sha / fetched_at，reused=false', async () => {
+    const { taskId, repoId } = await seedTaskWithRemote()
+    const git = new GitWorkspace({ root })
+    const project = await prepareFor(git, repoId)
+
+    await applyCreateBranch(taskId, git, project)
+
+    const [ev] = await branchEvents(taskId)
+    expect(ev, '应有 CreateBranch 事件').toBeDefined()
+    expect(ev?.base_ref).toBe('refs/remotes/origin/main')
+    expect(ev?.base_sha).toBe(project.baseSha)
+    expect(String(ev?.base_sha)).toMatch(/^[0-9a-f]{40}$/)
+    expect(ev?.fetched_at).toBe(project.fetchedAt)
+    expect(ev?.reused).toBe(false)
+  })
+
+  it('重放：reused=true，base_sha 与首次一致（不按本次 prepare 重算）', async () => {
+    const { taskId, repoId } = await seedTaskWithRemote()
+    const git = new GitWorkspace({ root })
+    const project = await prepareFor(git, repoId)
+
+    await applyCreateBranch(taskId, git, project)
+    // 第二次 prepare 可能已经 fetch 到更新的 origin/main —— 但 worktree 没动
+    const again = await prepareFor(git, repoId)
+    await applyCreateBranch(taskId, git, again)
+
+    const evs = await branchEvents(taskId)
+    expect(evs.length).toBe(2)
+    expect(evs[1]?.reused).toBe(true)
+    expect(evs[1]?.base_sha).toBe(evs[0]?.base_sha)
+    expect(evs[1]?.fetched_at).toBe(evs[0]?.fetched_at)
+  })
+
+  it('基线前进后重跑：仍复用旧 base_sha，不把旧分支改基', async () => {
+    const { taskId, repoId } = await seedTaskWithRemote()
+    const git = new GitWorkspace({ root })
+    const first = await prepareFor(git, repoId)
+    await applyCreateBranch(taskId, git, first)
+
+    // 远端 main 前进
+    writeFileSync(join(origin, 'README.md'), '# base\n\nsecond\n')
+    execFileSync('git', ['-C', origin, 'commit', '-qam', 'advance main'], { stdio: 'pipe' })
+
+    const second = await prepareFor(git, repoId)
+    expect(second.baseSha, '文档化前提：第二次 prepare 的基线确实前进了').not.toBe(first.baseSha)
+
+    await applyCreateBranch(taskId, git, second)
+
+    const evs = await branchEvents(taskId)
+    expect(evs[1]?.reused).toBe(true)
+    expect(evs[1]?.base_sha, '证据必须是分支真正的起点，不是此刻的 origin/main').toBe(first.baseSha)
+    // 分支本身也没被改基
+    const wtHead = execFileSync(
+      'git',
+      ['-C', join(root, 'worktrees', taskId), 'rev-parse', 'HEAD'],
+      {
+        encoding: 'utf8',
+      },
+    ).trim()
+    expect(wtHead).toBe(first.baseSha)
   })
 })

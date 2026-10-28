@@ -17,13 +17,13 @@ import { err, makeError, ok, type Result } from '../../contracts/errors.js'
 import type { PullRequestGateway } from '../../contracts/git-provider.js'
 import type { PolicyEngine } from '../../contracts/policy-engine.js'
 import { asRole } from '../../fact/db.js'
-import { branchFor, type GitWorkspace } from '../../fact/git-workspace.js'
+import { branchFor } from '../../fact/git-workspace.js'
 import { ensureTraceId } from '../../fact/trace.js'
 import type { ControlMode, TaskStatus } from '../../shared/ids.js'
 import { transition } from '../transition/index.js'
 import { TASK_TRANSITIONS } from '../transition/table.js'
 import type { TransitionEvent } from '../transition/types.js'
-import { type AppliedEffect, applyEffects } from './effects.js'
+import { type AppliedEffect, applyEffects, type WorkspaceBinding } from './effects.js'
 import { loadTransitionFacts } from './facts.js'
 
 const TITLE_MAX_LEN = 500
@@ -72,12 +72,6 @@ export interface AdvanceOutcome {
   readonly effects: readonly AppliedEffect[]
   /** 未推进时说明原因 */
   readonly reason: string | null
-}
-
-export interface WorkspaceBinding {
-  readonly git: GitWorkspace
-  readonly repoId: string
-  readonly baseBranch: string
 }
 
 export class WorkflowDriver {

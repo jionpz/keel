@@ -20,6 +20,9 @@ venv/
 # Editors
 .idea/
 .vscode/
+# Keel 本机工作区（KEEL_HOME，默认 ./.keel）
+.keel/
+
 # 本机 harness 状态（OMP / OMC），不属于项目
 .omo/
 .omc/

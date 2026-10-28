@@ -7,12 +7,18 @@
  *   - 并发：多个 Task 改同一仓库时互不可见（N1）
  *   - 安全：Agent 污染工作区后，销毁 worktree 即完全清理（S1）
  *
- * 成本只是一条 `git worktree add`，因此在 v0.1 就是**必须**而非可选。
+ * 两种项目绑定（.trellis/tasks/10-27-local-project-binding/design.md §4）：
  *
  * ```
- * <root>/repos/<repo_id>.git      裸仓库，共享对象存储
- * <root>/worktrees/<task_id>/     每 Task 独立工作树，独立分支
+ * managed   <root>/repos/<repo_id>.git        Keel 维护的裸仓库
+ * attached  用户已有的本地 git 工作树          只用其对象库，不改其工作树
+ *
+ * 两种模式的 worktree 都在 <root>/worktrees/<task_id>/。
  * ```
+ *
+ * **基线锚点是 commit，不是 ref 名**：prepare 解析出 `baseSha` 后，
+ * worktree 直接用这个 40 位 SHA 创建。中间即使有另一个进程 fetch 移动了
+ * `origin/<base>`，新 worktree 的起点仍是证据里记录的那个 commit。
  *
  * **为什么放在 src/fact/**：git 仓库是崩溃后仍存在的状态，
  * 符合 Fact Plane 的定义性属性（docs/02-glossary.md §1）。
@@ -22,22 +28,46 @@
 
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdir, rm } from 'node:fs/promises'
+import { mkdir, rename, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { err, makeError, ok, type Result } from '../contracts/errors.js'
+import { withFileLock } from './file-lock.js'
+import { resolveKeelHome, validateAttachedDir } from './project-root.js'
+import { workspaceError } from './workspace-error.js'
 
 const exec = promisify(execFile)
 
 export interface GitWorkspaceOptions {
-  /** 根目录。默认 .keel */
+  /** 根目录。默认从 KEEL_HOME 解析为绝对路径 */
   readonly root?: string
 }
 
 export interface WorktreeInfo {
   readonly path: string
   readonly branch: string
-  readonly bareRepo: string
+  /** 执行 git 命令的目录：managed 是裸仓库，attached 是用户工作树 */
+  readonly gitDir: string
+}
+
+export interface WorktreeResult extends WorktreeInfo {
+  /** 本次调用是否真的创建了 worktree；false 表示幂等复用 */
+  readonly created: boolean
+}
+
+export type ProjectBinding =
+  | { readonly mode: 'managed'; readonly repoId: string }
+  | { readonly mode: 'attached'; readonly repoId: string; readonly localPath: string }
+
+export interface PreparedProject {
+  readonly repoId: string
+  readonly gitDir: string
+  readonly baseBranch: string
+  /** 固定的远端跟踪 ref，例如 refs/remotes/origin/main */
+  readonly baseRef: string
+  /** 本次基线的唯一锚点 */
+  readonly baseSha: string
+  readonly fetchedAt: string
 }
 
 /** 分支名由 task_id 决定 —— 幂等的前提（docs/04-state-machine.md §5.2） */
@@ -49,7 +79,7 @@ export class GitWorkspace {
   private readonly root: string
 
   constructor(opts: GitWorkspaceOptions = {}) {
-    this.root = opts.root ?? '.keel'
+    this.root = opts.root ?? resolveKeelHome()
   }
 
   private bareRepoPath(repoId: string): string {
@@ -61,67 +91,81 @@ export class GitWorkspace {
   }
 
   /**
-   * 准备裸仓库。
+   * 兼容入口：只准备托管模式的裸仓库，不做 fetch。
    *
-   * 幂等：已存在则直接返回。
-   * `remoteUrl` 为 `file://` 时克隆本地仓库 —— v0.1 的验证路径。
+   * 保留它是为了测试装置先建仓库、再单独验证 prepare 的增量部分。
+   * 生产入口一律用 `prepareProject` —— 它保证 fetch 与基线解析。
    */
   async ensureBareRepo(repoId: string, remoteUrl: string): Promise<Result<string>> {
-    const bare = this.bareRepoPath(repoId)
-    if (existsSync(bare)) return ok(bare)
+    return this.withRepoLock(repoId, 'clone', () => this.ensureGitDir(repoId, remoteUrl))
+  }
 
-    await mkdir(join(this.root, 'repos'), { recursive: true })
-    try {
-      await exec('git', ['clone', '--bare', remoteUrl, bare])
-      return ok(bare)
-    } catch (e) {
-      return err(makeError('WORKSPACE_ERROR', `克隆裸仓库失败（${remoteUrl}）：${msg(e)}`))
-    }
+  /**
+   * 准备项目：确定 git 目录、同步基线、返回锚点。
+   *
+   * 全程持 per-repo 锁：clone / fetch 是共享 git 状态，并发执行会互相破坏。
+   */
+  async prepareProject(
+    binding: ProjectBinding,
+    remoteUrl: string,
+    baseBranch: string,
+  ): Promise<Result<PreparedProject>> {
+    return this.withRepoLock(binding.repoId, 'prepare', async () => {
+      let gitDir: string
+
+      if (binding.mode === 'attached') {
+        const validated = await validateAttachedDir(binding.localPath, remoteUrl)
+        if (!validated.ok) return err(validated.error)
+        gitDir = validated.value.path
+      } else {
+        const ensured = await this.ensureGitDir(binding.repoId, remoteUrl)
+        if (!ensured.ok) return ensured
+        gitDir = ensured.value
+      }
+
+      const synced = await this.syncBase(gitDir, baseBranch)
+      if (!synced.ok) return synced
+
+      return ok({
+        repoId: binding.repoId,
+        gitDir,
+        baseBranch,
+        baseRef: `refs/remotes/origin/${baseBranch}`,
+        baseSha: synced.value,
+        fetchedAt: new Date().toISOString(),
+      })
+    })
   }
 
   /**
    * 幂等创建 worktree 与分支。
    *
-   * 重复调用返回已有的 —— 这是 `CreateBranch` 副作用可以安全重放的原因
-   * （docs/04-state-machine.md §5.2）。
+   * 重复调用返回已有的（`created=false`）—— 这是 `CreateBranch` 副作用
+   * 可以安全重放的原因（docs/04-state-machine.md §5.2）。
+   *
+   * 创建时锚定 `project.baseSha` 而不是 `baseRef`：ref 会被并发 fetch 移动。
    */
-  async ensureWorktree(
-    repoId: string,
-    taskId: string,
-    baseBranch: string,
-  ): Promise<Result<WorktreeInfo>> {
-    const bare = this.bareRepoPath(repoId)
-    if (!existsSync(bare)) {
-      return err(makeError('WORKSPACE_ERROR', `裸仓库不存在：${bare}，请先 ensureBareRepo`))
-    }
+  async ensureWorktree(project: PreparedProject, taskId: string): Promise<Result<WorktreeResult>> {
+    return this.withRepoLock(project.repoId, 'worktree', async () => {
+      const branch = branchFor(taskId)
+      const wt = this.worktreePath(taskId)
+      const info = { path: wt, branch, gitDir: project.gitDir }
 
-    const branch = branchFor(taskId)
-    const wt = this.worktreePath(taskId)
-    const info: WorktreeInfo = { path: wt, branch, bareRepo: bare }
+      if (existsSync(wt)) return ok({ ...info, created: false })
 
-    if (existsSync(wt)) return ok(info)
-
-    await mkdir(join(this.root, 'worktrees'), { recursive: true })
-    try {
-      // 分支已存在则复用，否则从 baseBranch 建
-      const exists = await this.branchExists(bare, branch)
-      const args = exists
-        ? ['worktree', 'add', wt, branch]
-        : ['worktree', 'add', '-b', branch, wt, baseBranch]
-      await exec('git', ['-C', bare, ...args])
-      return ok(info)
-    } catch (e) {
-      return err(makeError('WORKSPACE_ERROR', `创建 worktree 失败：${msg(e)}`))
-    }
-  }
-
-  private async branchExists(bare: string, branch: string): Promise<boolean> {
-    try {
-      await exec('git', ['-C', bare, 'rev-parse', '--verify', `refs/heads/${branch}`])
-      return true
-    } catch {
-      return false
-    }
+      await mkdir(join(this.root, 'worktrees'), { recursive: true })
+      try {
+        // 分支已存在（worktree 被清理后又被重放）则复用，否则从基线建
+        const exists = await this.branchExists(project.gitDir, branch)
+        const args = exists
+          ? ['worktree', 'add', wt, branch]
+          : ['worktree', 'add', '-b', branch, wt, project.baseSha]
+        await exec('git', ['-C', project.gitDir, ...args])
+        return ok({ ...info, created: true })
+      } catch (e) {
+        return err(workspaceError('worktree_failed', { path: wt, branch, reason: msg(e) }))
+      }
+    })
   }
 
   /**
@@ -165,15 +209,16 @@ export class GitWorkspace {
     }
   }
 
-  /** 读该 Task 分支在裸仓库中的 HEAD SHA */
-  async headSha(repoId: string, taskId: string): Promise<Result<string>> {
-    const bare = this.bareRepoPath(repoId)
+  /** 读该 Task 分支的 HEAD SHA（分支在 git 目录里，与 worktree 是否还在无关） */
+  async headSha(project: PreparedProject, taskId: string): Promise<Result<string>> {
     const branch = branchFor(taskId)
-    if (!existsSync(bare)) {
-      return err(makeError('WORKSPACE_ERROR', `裸仓库不存在：${bare}`))
-    }
     try {
-      const { stdout } = await exec('git', ['-C', bare, 'rev-parse', `refs/heads/${branch}`])
+      const { stdout } = await exec('git', [
+        '-C',
+        project.gitDir,
+        'rev-parse',
+        `refs/heads/${branch}`,
+      ])
       return ok(stdout.trim())
     } catch (e) {
       return err(makeError('WORKSPACE_ERROR', `读取分支 ${branch} HEAD 失败：${msg(e)}`))
@@ -186,20 +231,22 @@ export class GitWorkspace {
    * 只允许 `ai/*` 分支；不使用 `--force`。
    * 幂等由 git 自身保证：远程已是最新时输出 "Everything up-to-date"。
    */
-  async push(repoId: string, taskId: string, remoteUrl: string): Promise<Result<string>> {
-    const bare = this.bareRepoPath(repoId)
+  async push(project: PreparedProject, taskId: string, remoteUrl: string): Promise<Result<string>> {
     const branch = branchFor(taskId)
-    if (!existsSync(bare)) {
-      return err(makeError('WORKSPACE_ERROR', `裸仓库不存在：${bare}`))
-    }
     if (!branch.startsWith('ai/')) {
       return err(makeError('WORKSPACE_ERROR', `拒绝 push 非 ai/* 分支：${branch}`))
     }
-    if (!(await this.branchExists(bare, branch))) {
+    if (!(await this.branchExists(project.gitDir, branch))) {
       return err(makeError('WORKSPACE_ERROR', `分支不存在：${branch}`))
     }
     try {
-      const { stdout } = await exec('git', ['-C', bare, 'push', remoteUrl, `${branch}:${branch}`])
+      const { stdout } = await exec('git', [
+        '-C',
+        project.gitDir,
+        'push',
+        remoteUrl,
+        `${branch}:${branch}`,
+      ])
       return ok(stdout.trim())
     } catch (e) {
       return err(makeError('WORKSPACE_ERROR', `push ${branch} 到 ${remoteUrl} 失败：${msg(e)}`))
@@ -220,23 +267,23 @@ export class GitWorkspace {
   /**
    * 移除 worktree。
    *
-   * **分支保留在裸仓库里** —— 移除的是工作树，不是历史。
+   * **分支保留在 git 目录里** —— 移除的是工作树，不是历史。
    * 用于 S-DONE / S-REJECTED / S-ABANDONED。
    */
-  async remove(repoId: string, taskId: string): Promise<Result<void>> {
-    const wt = this.worktreePath(taskId)
-    if (!existsSync(wt)) return ok(undefined)
-    try {
-      await exec('git', ['-C', this.bareRepoPath(repoId), 'worktree', 'remove', '--force', wt])
-      return ok(undefined)
-    } catch {
-      // worktree 元数据可能已损坏；直接删目录并 prune
-      await rm(wt, { recursive: true, force: true })
-      await exec('git', ['-C', this.bareRepoPath(repoId), 'worktree', 'prune']).catch(
-        () => undefined,
-      )
-      return ok(undefined)
-    }
+  async remove(project: PreparedProject, taskId: string): Promise<Result<void>> {
+    return this.withRepoLock(project.repoId, 'remove', async () => {
+      const wt = this.worktreePath(taskId)
+      if (!existsSync(wt)) return ok(undefined)
+      try {
+        await exec('git', ['-C', project.gitDir, 'worktree', 'remove', '--force', wt])
+        return ok(undefined)
+      } catch {
+        // worktree 元数据可能已损坏；直接删目录并 prune
+        await rm(wt, { recursive: true, force: true })
+        await exec('git', ['-C', project.gitDir, 'worktree', 'prune']).catch(() => undefined)
+        return ok(undefined)
+      }
+    })
   }
 
   /**
@@ -248,6 +295,117 @@ export class GitWorkspace {
    */
   preservePath(taskId: string): string {
     return this.worktreePath(taskId)
+  }
+
+  // ─────────────────────────────── 内部 ───────────────────────────────
+
+  /**
+   * 确保托管模式的裸仓库可用。
+   *
+   * 目录存在不等于仓库可用：上次 clone 可能中途崩溃，留下一个没有 refs 的目录。
+   * 先 `rev-parse --is-bare-repository` 验证，避免把半成品当成缓存。
+   *
+   * 新建时先 clone 到 `.tmp-*` 再 rename：崩溃最多留下临时目录，不污染正式路径。
+   */
+  private async ensureGitDir(repoId: string, remoteUrl: string): Promise<Result<string>> {
+    const bare = this.bareRepoPath(repoId)
+
+    if (existsSync(bare)) {
+      if (await this.isBareRepo(bare)) return ok(bare)
+      return err(
+        workspaceError('git_dir_invalid', {
+          path: bare,
+          detail: '不是有效的裸仓库（可能是上次 clone 中断）；确认后可手动删除',
+        }),
+      )
+    }
+
+    await mkdir(join(this.root, 'repos'), { recursive: true })
+    const tmp = join(this.root, 'repos', `.tmp-${repoId}-${process.pid}`)
+    await rm(tmp, { recursive: true, force: true })
+
+    try {
+      await exec('git', ['clone', '--bare', remoteUrl, tmp])
+      // 持锁期间不会有两个进程同时 rename；目标已存在说明锁失效，宁可报错
+      await rename(tmp, bare)
+      return ok(bare)
+    } catch (e) {
+      await rm(tmp, { recursive: true, force: true }).catch(() => undefined)
+      return err(workspaceError('git_dir_invalid', { path: bare, detail: msg(e) }))
+    }
+  }
+
+  /** fetch 基线分支并解析成 commit。只同步 base，不 fetch 全部分支。 */
+  private async syncBase(gitDir: string, baseBranch: string): Promise<Result<string>> {
+    try {
+      await exec('git', [
+        '-C',
+        gitDir,
+        'fetch',
+        '--prune',
+        'origin',
+        `+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`,
+      ])
+    } catch (e) {
+      // 远端没有该分支时 fetch 本身就失败（couldn't find remote ref）。
+      // 对用户来说这与「ref 解析不到」是同一件事：base 配错了，改 base 或建分支。
+      const reason = msg(e)
+      if (/couldn't find remote ref|unknown revision|not our ref/i.test(reason)) {
+        return err(workspaceError('base_missing', { remote: 'origin', base: baseBranch }))
+      }
+      return err(
+        workspaceError('fetch_failed', {
+          git_dir: gitDir,
+          base: baseBranch,
+          reason,
+        }),
+      )
+    }
+
+    try {
+      const { stdout } = await exec('git', [
+        '-C',
+        gitDir,
+        'rev-parse',
+        `refs/remotes/origin/${baseBranch}`,
+      ])
+      return ok(stdout.trim())
+    } catch {
+      return err(workspaceError('base_missing', { remote: 'origin', base: baseBranch }))
+    }
+  }
+
+  private async isBareRepo(path: string): Promise<boolean> {
+    try {
+      const { stdout } = await exec('git', ['-C', path, 'rev-parse', '--is-bare-repository'])
+      return stdout.trim() === 'true'
+    } catch {
+      return false
+    }
+  }
+
+  private async branchExists(gitDir: string, branch: string): Promise<boolean> {
+    try {
+      await exec('git', ['-C', gitDir, 'rev-parse', '--verify', `refs/heads/${branch}`])
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  /** per-repo 锁：clone / fetch / worktree 共用一把，避免共享 git 状态被并发写 */
+  private async withRepoLock<T>(
+    repoId: string,
+    op: string,
+    fn: () => Promise<Result<T>>,
+  ): Promise<Result<T>> {
+    const locks = join(this.root, 'locks')
+    try {
+      await mkdir(locks, { recursive: true })
+    } catch (e) {
+      return err(workspaceError('lock_failed', { lock: locks, op, detail: msg(e) }))
+    }
+    return withFileLock(join(locks, `repo-${repoId}.lock`), op, fn)
   }
 }
 

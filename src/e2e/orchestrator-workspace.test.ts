@@ -32,7 +32,7 @@ import { RuleBasedPolicyEngine } from '../control/policy/engine.js'
 import { DEFAULT_RULESET } from '../control/policy/ruleset.js'
 import { HarnessSessionManager } from '../execution/session/manager.js'
 import { asOwner, closePool } from '../fact/db.js'
-import { branchFor, GitWorkspace } from '../fact/git-workspace.js'
+import { branchFor, GitWorkspace, type PreparedProject } from '../fact/git-workspace.js'
 
 /**
  * 桩 Adapter：记录每次 session 拿到的工作目录，并在其中留下一个可辨认的文件。
@@ -146,6 +146,13 @@ async function seedTask(repoId: string): Promise<string> {
   return taskId
 }
 
+/** managed 绑定 + 开工前同步 —— 与 run-task 的接线保持同一条路径 */
+async function prepareFor(git: GitWorkspace, repoId: string): Promise<PreparedProject> {
+  const r = await git.prepareProject({ mode: 'managed', repoId }, `file://${origin}`, 'main')
+  if (!r.ok) throw new Error(r.error.detail)
+  return r.value
+}
+
 describe('N1 · 编排器为每个 Task 用独立 worktree', () => {
   it('两个 Task 的 session 拿到不同目录，且写入互不可见', async () => {
     const git = new GitWorkspace({ root })
@@ -156,18 +163,18 @@ describe('N1 · 编排器为每个 Task 用独立 worktree', () => {
         [repoId, `file://${origin}`],
       ),
     )
-    expect((await git.ensureBareRepo(repoId, `file://${origin}`)).ok).toBe(true)
+    const project = await prepareFor(git, repoId)
 
     const adapter = new RecordingAdapter()
     const deps = {
       driver: new WorkflowDriver(new RuleBasedPolicyEngine(DEFAULT_RULESET), {
         git,
         repoId,
-        baseBranch: 'main',
+        project,
       }),
       sessions: new HarnessSessionManager(),
       adapter,
-      workspace: { mode: 'worktree', git, repoId, baseBranch: 'main' } as const,
+      workspace: { mode: 'worktree', git, repoId, project } as const,
       now: () => '2026-08-23T13:00:00Z',
     }
 
@@ -209,7 +216,7 @@ describe('N1 · 编排器为每个 Task 用独立 worktree', () => {
         [repoId, `file://${origin}`],
       ),
     )
-    await git.ensureBareRepo(repoId, `file://${origin}`)
+    const project = await prepareFor(git, repoId)
 
     const taskId = await seedTask(repoId)
     await runTaskToCompletion(
@@ -218,11 +225,11 @@ describe('N1 · 编排器为每个 Task 用独立 worktree', () => {
         driver: new WorkflowDriver(new RuleBasedPolicyEngine(DEFAULT_RULESET), {
           git,
           repoId,
-          baseBranch: 'main',
+          project,
         }),
         sessions: new HarnessSessionManager(),
         adapter: new RecordingAdapter(true),
-        workspace: { mode: 'worktree', git, repoId, baseBranch: 'main' } as const,
+        workspace: { mode: 'worktree', git, repoId, project } as const,
         now: () => '2026-08-23T13:00:00Z',
       },
       { maxSteps: 4 },
