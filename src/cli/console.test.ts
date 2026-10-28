@@ -33,6 +33,8 @@ function fakeQuery(rows: {
   runs?: readonly Row[]
   events?: readonly Row[]
   artifacts?: readonly Row[]
+  feedbacks?: readonly Row[]
+  timers?: readonly Row[]
 }): QueryFn {
   return async (sql: string) => {
     if (sql.includes('FROM task t JOIN repo r') && sql.includes('WHERE t.id = $1')) {
@@ -42,6 +44,8 @@ function fakeQuery(rows: {
     if (sql.includes('FROM run')) return rows.runs ?? []
     if (sql.includes('FROM event')) return rows.events ?? []
     if (sql.includes('FROM artifact')) return rows.artifacts ?? []
+    if (sql.includes('FROM task_feedback')) return rows.feedbacks ?? []
+    if (sql.includes('FROM timer')) return rows.timers ?? []
     return []
   }
 }
@@ -52,7 +56,12 @@ describe('keel console', () => {
       const res = await fetch(`${base}/`)
       expect(res.status).toBe(200)
       expect(res.headers.get('content-type')).toContain('text/html')
-      expect(await res.text()).toContain('Keel')
+      const html = await res.text()
+      expect(html).toContain('Keel')
+      expect(html).toContain('OBSERVATORY')
+      expect(html).toContain('kpi-strip')
+      expect(html).toContain('task-search')
+      expect(html).toContain('status-filters')
     })
   })
 
@@ -69,12 +78,14 @@ describe('keel console', () => {
     })
   })
 
-  it('GET /api/tasks/:id 组装 task / runs / events / artifacts', async () => {
+  it('GET /api/tasks/:id 组装 task / runs / events / artifacts / feedbacks / timers', async () => {
     const query = fakeQuery({
       task: [{ id: TASK_ID, title: 'demo', status: 'S-DONE' }],
       runs: [{ stage: 'pm', attempt: 1, status: 'SUCCEEDED' }],
       events: [{ seq: 1, type: 'TaskCreated', payload: {} }],
       artifacts: [{ kind: 'rfc', key: '', version: 1, body: {} }],
+      feedbacks: [{ id: 'f1', source: 'github_issue', external_ref: 'o/r#1', body: '需求正文' }],
+      timers: [{ id: 't1', kind: 'gate_timeout', state: 'PENDING' }],
     })
     await withServer(query, async (base) => {
       const res = await fetch(`${base}/api/tasks/${TASK_ID}`)
@@ -84,11 +95,17 @@ describe('keel console', () => {
         runs: Row[]
         events: Row[]
         artifacts: Row[]
+        feedbacks: Row[]
+        timers: Row[]
       }
       expect(body.task.id).toBe(TASK_ID)
       expect(body.runs).toHaveLength(1)
       expect(body.events).toHaveLength(1)
       expect(body.artifacts).toHaveLength(1)
+      expect(body.feedbacks).toHaveLength(1)
+      expect(body.feedbacks[0]?.source).toBe('github_issue')
+      expect(body.timers).toHaveLength(1)
+      expect(body.timers[0]?.kind).toBe('gate_timeout')
     })
   })
 

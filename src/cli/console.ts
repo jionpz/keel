@@ -126,9 +126,25 @@ export function createConsoleHandler(
     if (path === '/api/tasks') {
       try {
         const rows = await deps.query(
-          `SELECT t.id, t.title, t.status, t.control_mode, t.created_at, t.updated_at,
-                  t.terminal_at, r.remote_url AS repo
+          `SELECT t.id, t.title, t.status, t.control_mode, t.risk, t.complexity,
+                  t.work_branch, t.base_branch, t.budget_usd,
+                  t.created_at, t.updated_at, t.terminal_at,
+                  r.remote_url AS repo, r.provider AS repo_provider,
+                  COALESCE(rs.run_count, 0)::int AS run_count,
+                  COALESCE(rs.total_cost_usd, 0)::text AS total_cost_usd,
+                  COALESCE(rs.total_tokens, 0)::text AS total_tokens,
+                  COALESCE(es.event_count, 0)::int AS event_count
            FROM task t JOIN repo r ON r.id = t.repo_id
+           LEFT JOIN LATERAL (
+             SELECT COUNT(*) AS run_count,
+                    SUM(COALESCE(run.cost_usd, 0)) AS total_cost_usd,
+                    SUM(COALESCE(run.tokens_in, 0) + COALESCE(run.tokens_out, 0)) AS total_tokens
+             FROM run WHERE run.task_id = t.id
+           ) rs ON true
+           LEFT JOIN LATERAL (
+             SELECT COUNT(*) AS event_count
+             FROM event WHERE event.task_id = t.id
+           ) es ON true
            ORDER BY t.updated_at DESC`,
           [],
         )
@@ -174,8 +190,9 @@ export function createConsoleHandler(
 async function loadTaskDetail(query: QueryFn, id: string): Promise<unknown | undefined> {
   const tasks = await query(
     `SELECT t.id, t.title, t.status, t.control_mode, t.repo_id, t.base_branch, t.work_branch,
-            t.risk, t.complexity, t.created_at, t.updated_at, t.terminal_at,
-            r.remote_url AS repo
+            t.risk, t.complexity, t.budget_usd, t.current_run_id,
+            t.created_at, t.updated_at, t.terminal_at,
+            r.remote_url AS repo, r.provider AS repo_provider
      FROM task t JOIN repo r ON r.id = t.repo_id
      WHERE t.id = $1`,
     [id],
@@ -184,27 +201,44 @@ async function loadTaskDetail(query: QueryFn, id: string): Promise<unknown | und
   if (task === undefined) return undefined
 
   const runs = await query(
-    `SELECT stage, role, attempt, status, harness_id, harness_tier,
-            started_at, ended_at, error_kind, error_detail
+    `SELECT id, stage, role, attempt, status, harness_id, harness_tier, session_ref,
+            started_at, ended_at, error_kind, error_detail,
+            tokens_in, tokens_out, cost_usd, cost_basis
      FROM run WHERE task_id = $1
      ORDER BY started_at NULLS LAST, attempt`,
     [id],
   )
 
   const events = await query(
-    `SELECT seq, run_id, type, payload, occurred_at
+    `SELECT seq, run_id, type, payload, trace_id, span_id, occurred_at
      FROM event WHERE task_id = $1 ORDER BY seq`,
     [id],
   )
 
   const artifacts = await query(
-    `SELECT DISTINCT ON (kind, key) kind, key, version, committed_at, body
+    `SELECT id, kind, key, version, schema_version, produced_by_run,
+            committed_at, committed_at_seq, superseded_by, body
      FROM artifact WHERE task_id = $1
      ORDER BY kind, key, version DESC`,
     [id],
   )
 
-  return { task, runs, events, artifacts }
+  const feedbacks = await query(
+    `SELECT f.id, f.source, f.external_ref, f.body, f.received_at
+     FROM task_feedback tf JOIN feedback f ON f.id = tf.feedback_id
+     WHERE tf.task_id = $1
+     ORDER BY f.received_at`,
+    [id],
+  )
+
+  const timers = await query(
+    `SELECT id, run_id, kind, due_at, state, fired_at, created_at, updated_at
+     FROM timer WHERE task_id = $1
+     ORDER BY created_at`,
+    [id],
+  )
+
+  return { task, runs, events, artifacts, feedbacks, timers }
 }
 
 function message(e: unknown): string {
