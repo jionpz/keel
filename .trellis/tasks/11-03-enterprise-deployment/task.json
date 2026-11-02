@@ -1,0 +1,31 @@
+{
+  "id": "enterprise-deployment",
+  "name": "enterprise-deployment",
+  "title": "生产部署企业内落位",
+  "description": "对应 #70：GHES 支持 + 常驻 poller + git 传输认证 + 执行面模型对接，让 keel 在企业内网无人值守运行",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P0",
+  "creator": "jionpz",
+  "assignee": "jionpz",
+  "createdAt": "2026-11-03",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "11-03-git-transport-auth",
+    "11-03-execution-model-routing",
+    "11-03-ghes-host-support",
+    "08-29-ingress-poller"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}

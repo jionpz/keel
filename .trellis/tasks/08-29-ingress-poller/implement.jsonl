@@ -1,1 +1,5 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "接入层与 control plane 的边界"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "幂等查询、角色身份读取"}
+{"file": ".trellis/spec/backend/orchestrator-loop.md", "reason": "停止原因与单进程前提"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试分层与 check 门槛"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "结构化日志约定（当前暂缓，仍需避免敏感值）"}

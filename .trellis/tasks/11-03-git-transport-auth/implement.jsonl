@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/git-workspace.md", "reason": "git 子进程行为配置与凭据边界"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "认证失败映射 WORKSPACE_ERROR"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试分层与质量门槛"}
+{"file": "docs/08-cross-cutting.md", "reason": "§1.3 token 三条纪律"}

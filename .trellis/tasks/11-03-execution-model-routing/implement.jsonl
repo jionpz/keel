@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/harness-adapter.md", "reason": "RunSpec 扩展与 adapter argv 约定"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移与 run 表写入"}
+{"file": ".trellis/spec/backend/orchestrator-loop.md", "reason": "run 构造与失败流转"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "向后兼容测试与 check 门槛"}

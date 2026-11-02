@@ -1,1 +1,3 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/orchestrator-loop.md", "reason": "确认 poller 不参与状态机决策"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "检查命令与不引入 flaky"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "去重查询与角色权限"}
