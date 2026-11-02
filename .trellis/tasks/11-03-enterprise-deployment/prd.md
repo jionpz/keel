@@ -5,7 +5,7 @@
 
 ## Goal
 
-让 keel（github.com 谱系，基线 `175b9e9`）在企业内网生产机（生产机）**无人值守**跑通
+让 keel（github.com 谱系，基线 `175b9e9`）在企业内网的生产机**无人值守**跑通
 「注册企业仓库 → 提带 label 的 issue → 自动拾取 → 驱动到 PR + CI」的闭环，
 全程不需要人工反复执行 CLI。
 
@@ -34,7 +34,7 @@
 - [ ] `pnpm run check` 全绿（lint / typecheck / boundaries / generated / transitions / purity / test）。
 - [ ] 不设任何新增环境变量时，github.com 路径的行为与 `175b9e9` 完全一致。
 - [ ] token 不出现在事件表、日志、错误 detail、git argv 的可读输出中。
-- [ ] 四项合入后，在 生产机上能用一条命令启动 poller，并在一个 interval 内把带 label 的 GHES issue 驱动到 PR + CI。
+- [ ] 四项合入后，在生产机上能用一条命令启动 poller，并在一个 interval 内把带 label 的 GHES issue 驱动到 PR + CI。
 
 ## Out of Scope
 
