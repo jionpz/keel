@@ -14,7 +14,13 @@
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { GitHubProvider, ownerRepo, parseIssueUrl } from './github-provider.js'
+import {
+  apiRootForHost,
+  GitHubProvider,
+  ownerRepo,
+  parseIssueUrl,
+  parseRemoteUrl,
+} from './github-provider.js'
 
 let server: Server
 let baseUrl: string
@@ -470,5 +476,132 @@ describe('getIssue', () => {
     expect(r.ok).toBe(false)
     if (r.ok) return
     expect(r.error.kind).toBe('NOT_FOUND')
+  })
+})
+
+// ──────────────────── GHES host（issue #69）────────────────────
+
+describe('GHES host 解析', () => {
+  it('https GHES remote → owner/repo', () => {
+    const r = ownerRepo('https://github.example.com/acme/widget.git')
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.value).toBe('acme/widget')
+  })
+
+  it('ssh SCP-like GHES remote → owner/repo', () => {
+    const r = ownerRepo('git@github.example.com:acme/widget.git')
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.value).toBe('acme/widget')
+  })
+
+  it('ssh:// GHES remote → owner/repo', () => {
+    const r = ownerRepo('ssh://git@github.example.com/acme/widget')
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.value).toBe('acme/widget')
+  })
+
+  it('http GHES remote 也接受', () => {
+    const r = ownerRepo('http://github.corp.example/acme/widget')
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.value).toBe('acme/widget')
+  })
+
+  it('parseRemoteUrl 保留 host 并归一化 remoteUrl', () => {
+    const r = parseRemoteUrl('git@github.example.com:acme/widget.git')
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value.host).toBe('github.example.com')
+    expect(r.value.remoteUrl).toBe('https://github.example.com/acme/widget.git')
+  })
+
+  it('parseIssueUrl 保留 GHES host', () => {
+    const r = parseIssueUrl('https://github.example.com/acme/widget/issues/7/')
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value.remoteUrl).toBe('https://github.example.com/acme/widget.git')
+    expect(r.value.number).toBe(7)
+  })
+
+  it('apiRootForHost: 公网与 GHES', () => {
+    expect(apiRootForHost('github.com')).toBe('https://api.github.com')
+    expect(apiRootForHost('GitHub.com')).toBe('https://api.github.com')
+    expect(apiRootForHost('github.example.com')).toBe('https://github.example.com/api/v3')
+  })
+
+  it('非 github.* host 仍拒绝', () => {
+    expect(ownerRepo('https://gitlab.com/a/b.git').ok).toBe(false)
+    expect(parseIssueUrl('https://gitlab.com/a/b/issues/1').ok).toBe(false)
+  })
+})
+
+describe('API root 按 host 推导', () => {
+  const saved = process.env.KEEL_GITHUB_API_ROOT
+
+  afterEach(() => {
+    if (saved === undefined) delete process.env.KEEL_GITHUB_API_ROOT
+    else process.env.KEEL_GITHUB_API_ROOT = saved
+    vi.restoreAllMocks()
+  })
+
+  const issueJson = JSON.stringify({
+    number: 1,
+    title: 't',
+    body: '',
+    labels: [],
+    state: 'open',
+  })
+
+  it('未设环境变量: GHES host → https://<host>/api/v3', async () => {
+    delete process.env.KEEL_GITHUB_API_ROOT
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(issueJson, { status: 200 }))
+
+    const p = new GitHubProvider({ token: 't' })
+    const r = await p.getIssue('https://github.example.com/acme/widget.git', 1)
+    expect(r.ok).toBe(true)
+    expect(String(fetchSpy.mock.calls[0]?.[0])).toBe(
+      'https://github.example.com/api/v3/repos/acme/widget/issues/1',
+    )
+  })
+
+  it('KEEL_GITHUB_API_ROOT 覆盖 host 推导', async () => {
+    process.env.KEEL_GITHUB_API_ROOT = 'https://gateway.example/api/v3/'
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(issueJson, { status: 200 }))
+
+    const p = new GitHubProvider({ token: 't' })
+    const r = await p.getIssue('https://github.example.com/acme/widget.git', 1)
+    expect(r.ok).toBe(true)
+    expect(String(fetchSpy.mock.calls[0]?.[0])).toBe(
+      'https://gateway.example/api/v3/repos/acme/widget/issues/1',
+    )
+  })
+
+  it('空白 KEEL_GITHUB_API_ROOT → WORKSPACE_ERROR 且不发请求', async () => {
+    process.env.KEEL_GITHUB_API_ROOT = '   '
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+
+    const p = new GitHubProvider({ token: 't' })
+    const r = await p.getIssue('https://github.com/acme/widget.git', 1)
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('WORKSPACE_ERROR')
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('github.com 缺省仍打 api.github.com', async () => {
+    delete process.env.KEEL_GITHUB_API_ROOT
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(issueJson, { status: 200 }))
+
+    const p = new GitHubProvider({ token: 't' })
+    const r = await p.getIssue('https://github.com/acme/widget.git', 1)
+    expect(r.ok).toBe(true)
+    expect(String(fetchSpy.mock.calls[0]?.[0])).toBe(
+      'https://api.github.com/repos/acme/widget/issues/1',
+    )
   })
 })

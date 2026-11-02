@@ -70,14 +70,13 @@ describe('collectGitDiff · 读真实 git 脏树', () => {
       if (args[0] === 'status') {
         return {
           code: 0,
-          stdout:
-            [
-              'AD staged-deleted.txt', // 暂存新增 + 工作区删除 → 工作区 D 说了算 → deleted
-              'MM both-modified.txt', // 暂存改 + 工作区改 → modified
-              '?? untracked.txt', // 未跟踪 → added
-              'AM add-mod.txt', // 暂存新增 + 工作区改 → modified
-              'A  staged-added.txt', // X=A,Y=空格:暂存新增,工作区未动 → added
-            ].join('\n') + '\n',
+          stdout: `${[
+            'AD staged-deleted.txt', // 暂存新增 + 工作区删除 → 工作区 D 说了算 → deleted
+            'MM both-modified.txt', // 暂存改 + 工作区改 → modified
+            '?? untracked.txt', // 未跟踪 → added
+            'AM add-mod.txt', // 暂存新增 + 工作区改 → modified
+            'A  staged-added.txt', // X=A,Y=空格:暂存新增,工作区未动 → added
+          ].join('\n')}\n`,
           stderr: '',
         }
       }

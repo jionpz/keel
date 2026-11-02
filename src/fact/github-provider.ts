@@ -22,7 +22,96 @@ import type {
   PullRequestInput,
 } from '../contracts/git-provider.js'
 
-const API_ROOT = 'https://api.github.com'
+/** 公网 GitHub 的 API 根。企业 host 由 apiRootForHost 推导。 */
+export const DEFAULT_API_ROOT = 'https://api.github.com'
+
+const OWNER_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/
+const REPO_RE = /^[A-Za-z0-9._-]+$/
+
+/**
+ * 接受 github.com 与企业 GHES 的常见域名 `github.*`（如 github.example.com、
+ * github.example.com）。刻意不接受任意 host：本 provider 是 GitHub 专用，
+ * 把 gitlab.com 之类当成 GHES 只会把请求打到错误的服务。
+ */
+export function isGitHubHost(host: string): boolean {
+  const h = host.toLowerCase()
+  return h === 'github.com' || (h.startsWith('github.') && !h.startsWith('github.com.'))
+}
+
+/**
+ * 公网走 api.github.com；GHES 3.x 的 REST 根在 `/api/v3`。
+ * 未设 KEEL_GITHUB_API_ROOT 时的缺省推导。
+ */
+export function apiRootForHost(host: string): string {
+  return host.toLowerCase() === 'github.com'
+    ? DEFAULT_API_ROOT
+    : `https://${host.toLowerCase()}/api/v3`
+}
+
+export interface ParsedRemote {
+  readonly host: string
+  readonly owner: string
+  readonly repo: string
+  /** 归一化后的 https remote，用于事件与 repo 查找 */
+  readonly remoteUrl: string
+}
+
+/**
+ * 解析 remote URL —— owner/repo 与 host 的唯一事实源。
+ *
+ * 支持 https / http / ssh 与 SCP-like（git@host:owner/repo.git）。
+ * 不接受 file:// 等本地路径：它们不是 GitHub remote。
+ */
+export function parseRemoteUrl(remoteUrl: string): Result<ParsedRemote> {
+  const trimmed = remoteUrl.trim()
+  let host: string
+  let path: string
+
+  // SCP-like 语法不会被 new URL() 正确解析，先单独处理
+  const scp = /^[^@/\s]+@([^:/\s]+):(.+)$/.exec(trimmed)
+  if (scp !== null) {
+    host = scp[1] as string
+    path = scp[2] as string
+  } else {
+    let url: URL
+    try {
+      url = new URL(trimmed)
+    } catch {
+      return err(makeError('WORKSPACE_ERROR', `无法解析 remote URL:${remoteUrl}`))
+    }
+    if (url.protocol !== 'https:' && url.protocol !== 'http:' && url.protocol !== 'ssh:') {
+      return err(makeError('WORKSPACE_ERROR', `不支持的 remote 协议:${url.protocol}`))
+    }
+    host = url.hostname
+    path = url.pathname
+  }
+
+  if (!isGitHubHost(host)) {
+    return err(makeError('WORKSPACE_ERROR', `不是 GitHub host:${host}(${remoteUrl})`))
+  }
+
+  const normalized = path
+    .replace(/^\/+/, '')
+    .replace(/\/+$/, '')
+    .replace(/\.git$/i, '')
+  const parts = normalized.split('/')
+  if (parts.length !== 2) {
+    return err(makeError('WORKSPACE_ERROR', `无法从 remote URL 解析 owner/repo:${remoteUrl}`))
+  }
+  const owner = parts[0] as string
+  const repo = parts[1] as string
+  if (!OWNER_RE.test(owner) || !REPO_RE.test(repo) || repo === '.' || repo === '..') {
+    return err(makeError('WORKSPACE_ERROR', `owner/repo 非法:${owner}/${repo}`))
+  }
+
+  const normalizedHost = host.toLowerCase()
+  return ok({
+    host: normalizedHost,
+    owner,
+    repo,
+    remoteUrl: `https://${normalizedHost}/${owner}/${repo}.git`,
+  })
+}
 
 const POLL_INTERVAL_MS = 10_000
 const POLL_TIMEOUT_MS = 30 * 60_000
@@ -53,16 +142,14 @@ export function readTokenFromEnv(): string | undefined {
 /**
  * 从远程 URL 解析 owner/repo（`owner/repo`）。
  *
- * 支持 https://github.com/owner/repo(.git) 与 git@github.com:owner/repo.git。
+ * 支持 https://<host>/owner/repo(.git)、http://、git@<host>:owner/repo.git
+ * 与 ssh://git@<host>/owner/repo(.git)，host 限 github.com / github.*。
  * 验收测试的 cleanup 也用它 —— 单一事实源,不写第二份正则(#1-11)。
  */
 export function ownerRepo(remoteUrl: string): Result<string> {
-  // 支持 https://github.com/owner/repo(.git) 与 git@github.com:owner/repo.git
-  const m = remoteUrl.match(/github\.com[/:]([^/]+)\/(.+?)(?:\.git)?\/?$/)
-  if (m === null || m[1] === undefined || m[2] === undefined) {
-    return err(makeError('WORKSPACE_ERROR', `无法从 remote URL 解析 owner/repo:${remoteUrl}`))
-  }
-  return ok(`${m[1]}/${m[2]}`)
+  const parsed = parseRemoteUrl(remoteUrl)
+  if (!parsed.ok) return parsed
+  return ok(`${parsed.value.owner}/${parsed.value.repo}`)
 }
 
 export interface IssueInfo {
@@ -79,26 +166,76 @@ export interface ParsedIssueUrl {
   readonly number: number
 }
 
-/** 从 GitHub Issue URL 解析 remoteUrl 与 issue 编号 */
+/** 从 GitHub Issue URL 解析 remoteUrl 与 issue 编号（公网与 GHES 同一套规则） */
 export function parseIssueUrl(url: string): Result<ParsedIssueUrl> {
-  const m = url.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/issues\/(\d+)\/?$/)
-  if (m === null || m[1] === undefined || m[2] === undefined || m[3] === undefined) {
+  let parsedUrl: URL
+  try {
+    parsedUrl = new URL(url)
+  } catch {
     return err(makeError('WORKSPACE_ERROR', `无法解析 Issue URL:${url}`))
   }
-  const remoteUrl = `https://github.com/${m[1]}/${m[2]}.git`
-  return ok({ remoteUrl, number: Number(m[3]) })
+  if (parsedUrl.protocol !== 'https:' && parsedUrl.protocol !== 'http:') {
+    return err(makeError('WORKSPACE_ERROR', `不支持的 Issue URL 协议:${parsedUrl.protocol}`))
+  }
+  if (!isGitHubHost(parsedUrl.hostname)) {
+    return err(makeError('WORKSPACE_ERROR', `不是 GitHub host:${parsedUrl.hostname}(${url})`))
+  }
+
+  const m = /^\/([^/]+)\/([^/]+)\/issues\/(\d+)\/?$/.exec(parsedUrl.pathname)
+  if (m === null) {
+    return err(makeError('WORKSPACE_ERROR', `无法解析 Issue URL:${url}`))
+  }
+  const owner = m[1] as string
+  const repo = m[2] as string
+  const number = Number(m[3])
+  if (!OWNER_RE.test(owner) || !REPO_RE.test(repo) || repo === '.' || repo === '..') {
+    return err(makeError('WORKSPACE_ERROR', `Issue URL 的 owner/repo 非法:${owner}/${repo}`))
+  }
+
+  const host = parsedUrl.hostname.toLowerCase()
+  return ok({ remoteUrl: `https://${host}/${owner}/${repo}.git`, number })
 }
 
 export class GitHubProvider implements PullRequestGateway, CiGateway {
-  private readonly root: string
+  private readonly apiRootOverride: string | undefined
+  private readonly apiRootEnv: string | undefined
   private readonly token: string | undefined
 
   constructor(opts: GitHubProviderOptions = {}) {
-    this.root = opts.apiRoot ?? API_ROOT
+    this.apiRootOverride = opts.apiRoot
+    // 环境变量在构造时读一次，与 token 一致：进程生命周期内不变
+    this.apiRootEnv = process.env.KEEL_GITHUB_API_ROOT
     this.token = opts.token === undefined ? readTokenFromEnv() : (opts.token ?? undefined)
     this.pollIntervalMs = opts.pollIntervalMs ?? POLL_INTERVAL_MS
     this.pollTimeoutMs = opts.pollTimeoutMs ?? POLL_TIMEOUT_MS
     this.emptySettleMs = opts.emptySettleMs ?? EMPTY_SETTLE_MS
+  }
+
+  /**
+   * 按 host 选 API 根：显式注入 > KEEL_GITHUB_API_ROOT > apiRootForHost。
+   *
+   * 空白或非 http(s) 的配置**不是「未设置」**：返回错误而不是静默回退。
+   * 企业部署里把内网 remote 静默打到 api.github.com 是数据外流，不是便利。
+   */
+  private rootFor(host: string): Result<string> {
+    const explicit = this.apiRootOverride
+    if (explicit !== undefined) {
+      const trimmed = explicit.trim()
+      if (trimmed === '' || !/^https?:\/\//i.test(trimmed)) {
+        return err(makeError('WORKSPACE_ERROR', 'apiRoot 非法:必须是非空的 http(s) 地址'))
+      }
+      return ok(trimmed.replace(/\/+$/, ''))
+    }
+    if (this.apiRootEnv !== undefined) {
+      const trimmed = this.apiRootEnv.trim()
+      if (trimmed === '' || !/^https?:\/\//i.test(trimmed)) {
+        return err(
+          makeError('WORKSPACE_ERROR', 'KEEL_GITHUB_API_ROOT 非法:必须是非空的 http(s) 地址'),
+        )
+      }
+      return ok(trimmed.replace(/\/+$/, ''))
+    }
+    return ok(apiRootForHost(host))
   }
 
   private readonly pollIntervalMs: number
@@ -121,16 +258,19 @@ export class GitHubProvider implements PullRequestGateway, CiGateway {
    *   429/5xx → HARNESS_UNAVAILABLE(可重试);网络层失败 → HARNESS_UNAVAILABLE。
    */
   private async request(
+    host: string,
     path: string,
     init: { method?: string; body?: unknown } = {},
   ): Promise<Result<{ status: number; json: unknown }>> {
     if (this.token === undefined) {
       return err(makeError('AUTH_FAILED', '缺少 GitHub token(KEEL_GITHUB_TOKEN / GITHUB_TOKEN)'))
     }
+    const root = this.rootFor(host)
+    if (!root.ok) return root
     let res: Response
     try {
       res = await fetch(
-        `${this.root}${path}`,
+        `${root.value}${path}`,
         init.body === undefined
           ? {
               method: init.method ?? 'GET',
@@ -170,11 +310,13 @@ export class GitHubProvider implements PullRequestGateway, CiGateway {
    * 导致幂等查询永远落空、重复调用撞 422。
    */
   private async findExistingPr(
+    host: string,
     slug: string,
     headBranch: string,
   ): Promise<Result<PullRequestInfo | null>> {
     const owner = slug.split('/')[0] ?? slug
     const r = await this.request(
+      host,
       `/repos/${slug}/pulls?head=${encodeURIComponent(owner)}:${encodeURIComponent(headBranch)}&state=open`,
     )
     if (!r.ok) return r
@@ -190,14 +332,16 @@ export class GitHubProvider implements PullRequestGateway, CiGateway {
         makeError('PERMISSION_DENIED', `只允许为 ai/* 分支创建 PR,收到:${input.headBranch}`),
       )
     }
-    const slug = ownerRepo(input.remoteUrl)
-    if (!slug.ok) return slug
+    const parsed = parseRemoteUrl(input.remoteUrl)
+    if (!parsed.ok) return parsed
+    const { host, owner, repo } = parsed.value
+    const slug = `${owner}/${repo}`
 
-    const existing = await this.findExistingPr(slug.value, input.headBranch)
+    const existing = await this.findExistingPr(host, slug, input.headBranch)
     if (!existing.ok) return existing
     if (existing.value !== null) return ok(existing.value)
 
-    const created = await this.request(`/repos/${slug.value}/pulls`, {
+    const created = await this.request(host, `/repos/${slug}/pulls`, {
       method: 'POST',
       body: {
         title: input.title,
@@ -224,13 +368,15 @@ export class GitHubProvider implements PullRequestGateway, CiGateway {
    *   - 硬超时 → 按失败返回,由编排器转成 CIFailed(T-025),人可介入。
    */
   async waitForCi(input: CiWaitInput): Promise<Result<'passed' | 'failed'>> {
-    const slug = ownerRepo(input.remoteUrl)
-    if (!slug.ok) return slug
+    const parsed = parseRemoteUrl(input.remoteUrl)
+    if (!parsed.ok) return parsed
+    const { host, owner, repo } = parsed.value
+    const slug = `${owner}/${repo}`
 
     const start = Date.now()
     const deadline = start + this.pollTimeoutMs
     for (;;) {
-      const combined = await this.combinedStatus(slug.value, input.headSha)
+      const combined = await this.combinedStatus(host, slug, input.headSha)
       if (!combined.ok) return combined
 
       if (combined.value === 'passed' || combined.value === 'failed') return ok(combined.value)
@@ -266,12 +412,13 @@ export class GitHubProvider implements PullRequestGateway, CiGateway {
    * 是策略,归 waitForCi 的静默期;本函数只负责如实分辨两者。
    */
   private async combinedStatus(
+    host: string,
     slug: string,
     sha: string,
   ): Promise<Result<'passed' | 'failed' | 'pending' | 'unreported'>> {
-    const checks = await this.request(`/repos/${slug}/commits/${sha}/check-runs`)
+    const checks = await this.request(host, `/repos/${slug}/commits/${sha}/check-runs`)
     if (!checks.ok) return checks
-    const statuses = await this.request(`/repos/${slug}/commits/${sha}/status`)
+    const statuses = await this.request(host, `/repos/${slug}/commits/${sha}/status`)
     if (!statuses.ok) return statuses
 
     const cj = checks.value.json as {
@@ -304,10 +451,12 @@ export class GitHubProvider implements PullRequestGateway, CiGateway {
   }
 
   async getIssue(remoteUrl: string, issueNumber: number): Promise<Result<IssueInfo>> {
-    const slug = ownerRepo(remoteUrl)
-    if (!slug.ok) return slug
+    const parsed = parseRemoteUrl(remoteUrl)
+    if (!parsed.ok) return parsed
+    const { host, owner, repo } = parsed.value
+    const slug = `${owner}/${repo}`
 
-    const r = await this.request(`/repos/${slug.value}/issues/${issueNumber}`)
+    const r = await this.request(host, `/repos/${slug}/issues/${issueNumber}`)
     if (!r.ok) return r
     if (r.value.status !== 200) {
       return err(makeError('WORKSPACE_ERROR', `读取 Issue 返回非预期状态 HTTP ${r.value.status}`))
@@ -325,7 +474,7 @@ export class GitHubProvider implements PullRequestGateway, CiGateway {
     // 200 但形状不对 = 契约被破坏,不是「没有这个 Issue」。
     // 不做乐观解构:labels 缺失时 .map 会以 TypeError 冒泡,吞掉真实原因。
     if (raw === null || typeof raw.number !== 'number' || typeof raw.title !== 'string') {
-      return err(makeError('PROTOCOL_ERROR', `Issue 响应缺少 number/title:${slug.value}`))
+      return err(makeError('PROTOCOL_ERROR', `Issue 响应缺少 number/title:${slug}`))
     }
 
     return ok({
