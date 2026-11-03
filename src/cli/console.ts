@@ -86,6 +86,56 @@ const EVENT_LABELS: Record<string, string> = {
   UnrecoverableError: '不可恢复错误',
 }
 
+/**
+ * 概览统计：近 14 天按天聚合 + 全量累计。
+ *
+ * 口径（与 `keel status` 一致，只读聚合）：
+ *  - 运行次数 = run.started_at 落在当天的 Run（含成功 / 失败 / 取消）；
+ *  - 完成任务 = terminal_at 落在当天且状态为 S-DONE；
+ *  - 问题闭环 = 当天完成、且挂了 feedback 的任务所关联的去重 feedback 数；
+ *  - 成本 = 当天启动的 Run 的成本合计（unavailable 记 0，不臆造）。
+ * 日期边界用数据库会话时区（当前 Asia/Shanghai）的 00:00，不做二次换算。
+ */
+const STATS_DAYS_SQL = `
+  WITH days AS (
+    SELECT generate_series(date_trunc('day', now()) - interval '13 days',
+                           date_trunc('day', now()), interval '1 day') AS day
+  )
+  SELECT to_char(d.day, 'YYYY-MM-DD') AS date,
+         COALESCE(r.runs, 0)::int AS runs,
+         COALESCE(r.ok, 0)::int AS runs_ok,
+         COALESCE(r.failed, 0)::int AS runs_failed,
+         COALESCE(r.cost, 0)::text AS cost_usd,
+         COALESCE(t.done, 0)::int AS tasks_done,
+         COALESCE(t.failed, 0)::int AS tasks_failed,
+         COALESCE(f.solved, 0)::int AS issues_solved
+  FROM days d
+  LEFT JOIN LATERAL (
+    SELECT count(*) AS runs,
+           count(*) FILTER (WHERE status = 'SUCCEEDED') AS ok,
+           count(*) FILTER (WHERE status IN ('FAILED', 'TIMEOUT')) AS failed,
+           SUM(COALESCE(cost_usd, 0)) AS cost
+    FROM run WHERE started_at >= d.day AND started_at < d.day + interval '1 day'
+  ) r ON true
+  LEFT JOIN LATERAL (
+    SELECT count(*) FILTER (WHERE status = 'S-DONE') AS done,
+           count(*) FILTER (WHERE status IN ('S-FAILED', 'S-REJECTED', 'S-ABANDONED')) AS failed
+    FROM task WHERE terminal_at >= d.day AND terminal_at < d.day + interval '1 day'
+  ) t ON true
+  LEFT JOIN LATERAL (
+    SELECT count(DISTINCT tf.feedback_id) AS solved
+    FROM task_feedback tf JOIN task tk ON tk.id = tf.task_id
+    WHERE tk.status = 'S-DONE'
+      AND tk.terminal_at >= d.day AND tk.terminal_at < d.day + interval '1 day'
+  ) f ON true
+  ORDER BY d.day`
+
+const STATS_TOTALS_SQL = `
+  SELECT (SELECT count(*) FROM task)::int AS tasks,
+         (SELECT count(*) FROM task WHERE status = 'S-DONE')::int AS tasks_done,
+         (SELECT count(*) FROM run)::int AS runs,
+         (SELECT COALESCE(SUM(cost_usd), 0) FROM run)::text AS cost_usd`
+
 export type Row = Record<string, unknown>
 export type QueryFn = (sql: string, params: readonly unknown[]) => Promise<readonly Row[]>
 
@@ -165,6 +215,27 @@ export function createConsoleHandler(
         sendJson(res, 503, {
           ok: false,
           error: e instanceof Error ? e.message : String(e),
+          connection: connectionString(),
+        })
+      }
+      return
+    }
+
+    if (path === '/api/stats') {
+      try {
+        const [days, totals] = await Promise.all([
+          deps.query(STATS_DAYS_SQL, []),
+          deps.query(STATS_TOTALS_SQL, []),
+        ])
+        sendJson(res, 200, {
+          days,
+          totals: totals[0] ?? { tasks: 0, tasks_done: 0, runs: 0, cost_usd: '0' },
+          generated_at: new Date().toISOString(),
+        })
+      } catch (e) {
+        sendJson(res, 503, {
+          error: '数据库不可用',
+          detail: message(e),
           connection: connectionString(),
         })
       }

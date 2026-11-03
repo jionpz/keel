@@ -35,8 +35,12 @@ function fakeQuery(rows: {
   artifacts?: readonly Row[]
   feedbacks?: readonly Row[]
   timers?: readonly Row[]
+  statsDays?: readonly Row[]
+  statsTotals?: readonly Row[]
 }): QueryFn {
   return async (sql: string) => {
+    if (sql.includes('WITH days AS')) return rows.statsDays ?? []
+    if (sql.includes('AS tasks_done')) return rows.statsTotals ?? []
     if (sql.includes('FROM task t JOIN repo r') && sql.includes('WHERE t.id = $1')) {
       return rows.task ?? []
     }
@@ -58,10 +62,15 @@ describe('keel console', () => {
       expect(res.headers.get('content-type')).toContain('text/html')
       const html = await res.text()
       expect(html).toContain('Keel')
-      expect(html).toContain('OBSERVATORY')
+      expect(html).toContain('brand-bar')
       expect(html).toContain('mode-switch')
       expect(html).toContain('task-search')
       expect(html).toContain('status-filters')
+      // 三个视图 + 底部状态栏是页面骨架的一部分，掉一个就是回归
+      expect(html).toContain('data-mode="overview"')
+      expect(html).toContain('data-mode="projects"')
+      expect(html).toContain('id="statusbar"')
+      expect(html).toContain("fetchJSON('/api/stats')")
     })
   })
 
@@ -129,6 +138,30 @@ describe('keel console', () => {
     await withServer(fakeQuery({}), async (base) => {
       const res = await fetch(`${base}/api/tasks`, { method: 'POST' })
       expect(res.status).toBe(405)
+    })
+  })
+
+  it('GET /api/stats 返回按天序列与累计', async () => {
+    const statsDays: Row[] = [
+      {
+        date: '2026-10-27',
+        runs: 5,
+        runs_ok: 5,
+        runs_failed: 0,
+        cost_usd: '0.77',
+        tasks_done: 1,
+        tasks_failed: 0,
+        issues_solved: 1,
+      },
+    ]
+    const statsTotals: Row[] = [{ tasks: 8, tasks_done: 3, runs: 28, cost_usd: '3.21' }]
+    await withServer(fakeQuery({ statsDays, statsTotals }), async (base) => {
+      const res = await fetch(`${base}/api/stats`)
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as { days: Row[]; totals: Row }
+      expect(body.days).toHaveLength(1)
+      expect(body.days[0]?.runs).toBe(5)
+      expect(body.totals.tasks_done).toBe(3)
     })
   })
 

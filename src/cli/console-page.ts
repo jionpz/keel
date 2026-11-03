@@ -17,104 +17,99 @@ export const CONSOLE_HTML = `<!doctype html>
 <style>
   :root {
     color-scheme: light dark;
-    --bg: #f3f5f9;
-    --bg-elev: #ffffff;
+    /* macOS 系统色板：窗口 / 侧栏 / 内容面用同一套中性灰，强调色只出现在选中与运行态 */
+    --bg: #f5f5f7;
+    --bg-elev: #f2f2f4;
     --panel: #ffffff;
-    --panel-alt: #f8fafc;
-    --code-bg: #f1f5f9;
-    --text: #0f172a;
-    --text-sec: #334155;
-    --muted: #64748b;
-    --line: #e2e8f0;
-    --line-strong: #cbd5e1;
-    --accent: #2563eb;
-    --accent-soft: rgba(37, 99, 235, 0.10);
-    --stage: #0284c7;
-    --stage-soft: rgba(2, 132, 199, 0.12);
-    --gate: #d97706;
-    --gate-soft: rgba(217, 119, 6, 0.13);
-    --done: #059669;
-    --done-soft: rgba(5, 150, 105, 0.12);
-    --bad: #e11d48;
-    --bad-soft: rgba(225, 29, 72, 0.12);
-    --purple: #7c3aed;
-    --purple-soft: rgba(124, 58, 237, 0.11);
-    --diff-add-bg: rgba(16, 185, 129, 0.14);
-    --diff-add-text: #065f46;
-    --diff-del-bg: rgba(244, 63, 94, 0.14);
-    --diff-del-text: #9f1239;
-    --diff-hunk-bg: rgba(59, 130, 246, 0.10);
-    --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04);
-    --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.06);
+    --panel-alt: #f7f7f9;
+    --code-bg: #f2f2f5;
+    --text: #1d1d1f;
+    --text-sec: #48484a;
+    --muted: #86868b;
+    --line: rgba(0, 0, 0, 0.085);
+    --line-strong: rgba(0, 0, 0, 0.16);
+    --accent: #0a7aff;
+    --accent-soft: rgba(10, 122, 255, 0.10);
+    --stage: #0a7aff;
+    --stage-soft: rgba(10, 122, 255, 0.10);
+    --gate: #c93400;
+    --gate-soft: rgba(255, 149, 0, 0.14);
+    --done: #1d7d36;
+    --done-soft: rgba(52, 199, 89, 0.14);
+    --bad: #d70015;
+    --bad-soft: rgba(255, 59, 48, 0.12);
+    --purple: #5e5ce6;
+    --purple-soft: rgba(94, 92, 230, 0.12);
+    --diff-add-bg: rgba(52, 199, 89, 0.14);
+    --diff-add-text: #196c30;
+    --diff-del-bg: rgba(255, 59, 48, 0.12);
+    --diff-del-text: #a80012;
+    --diff-hunk-bg: rgba(10, 122, 255, 0.08);
     --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   }
 
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-      --bg: #090c12;
-      --bg-elev: #0e131d;
-      --panel: #131926;
-      --panel-alt: #182030;
-      --code-bg: #0b0f17;
-      --text: #f1f5f9;
-      --text-sec: #cbd5e1;
-      --muted: #7e8da4;
-      --line: #212b3d;
-      --line-strong: #31405a;
-      --accent: #3b82f6;
-      --accent-soft: rgba(59, 130, 246, 0.15);
-      --stage: #38bdf8;
-      --stage-soft: rgba(56, 189, 248, 0.15);
-      --gate: #fbbf24;
-      --gate-soft: rgba(251, 191, 36, 0.15);
-      --done: #34d399;
-      --done-soft: rgba(52, 211, 153, 0.15);
-      --bad: #fb7185;
-      --bad-soft: rgba(251, 113, 133, 0.15);
-      --purple: #a78bfa;
-      --purple-soft: rgba(167, 139, 250, 0.15);
-      --diff-add-bg: rgba(16, 185, 129, 0.16);
-      --diff-add-text: #6ee7b7;
-      --diff-del-bg: rgba(244, 63, 94, 0.16);
-      --diff-del-text: #fda4af;
-      --diff-hunk-bg: rgba(56, 189, 248, 0.12);
-      --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3);
-      --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.35);
+      --bg: #161618;
+      --bg-elev: #1d1d1f;
+      --panel: #1c1c1e;
+      --panel-alt: #2c2c2e;
+      --code-bg: #111113;
+      --text: #f5f5f7;
+      --text-sec: #c7c7cc;
+      --muted: #8e8e93;
+      --line: rgba(255, 255, 255, 0.10);
+      --line-strong: rgba(255, 255, 255, 0.20);
+      --accent: #0a84ff;
+      --accent-soft: rgba(10, 132, 255, 0.18);
+      --stage: #0a84ff;
+      --stage-soft: rgba(10, 132, 255, 0.18);
+      --gate: #ff9f0a;
+      --gate-soft: rgba(255, 159, 10, 0.16);
+      --done: #30d158;
+      --done-soft: rgba(48, 209, 88, 0.16);
+      --bad: #ff453a;
+      --bad-soft: rgba(255, 69, 58, 0.16);
+      --purple: #bf5af2;
+      --purple-soft: rgba(191, 90, 242, 0.16);
+      --diff-add-bg: rgba(48, 209, 88, 0.16);
+      --diff-add-text: #7ee2a0;
+      --diff-del-bg: rgba(255, 69, 58, 0.16);
+      --diff-del-text: #ffa8a2;
+      --diff-hunk-bg: rgba(10, 132, 255, 0.12);
     }
   }
 
   :root[data-theme="dark"] {
     color-scheme: dark;
-    --bg: #090c12;
-    --bg-elev: #0e131d;
-    --panel: #131926;
-    --panel-alt: #182030;
-    --code-bg: #0b0f17;
-    --text: #f1f5f9;
-    --text-sec: #cbd5e1;
-    --muted: #7e8da4;
-    --line: #212b3d;
-    --line-strong: #31405a;
-    --accent: #3b82f6;
-    --accent-soft: rgba(59, 130, 246, 0.15);
-    --stage: #38bdf8;
-    --stage-soft: rgba(56, 189, 248, 0.15);
-    --gate: #fbbf24;
-    --gate-soft: rgba(251, 191, 36, 0.15);
-    --done: #34d399;
-    --done-soft: rgba(52, 211, 153, 0.15);
-    --bad: #fb7185;
-    --bad-soft: rgba(251, 113, 133, 0.15);
-    --purple: #a78bfa;
-    --purple-soft: rgba(167, 139, 250, 0.15);
-    --diff-add-bg: rgba(16, 185, 129, 0.16);
-    --diff-add-text: #6ee7b7;
-    --diff-del-bg: rgba(244, 63, 94, 0.16);
-    --diff-del-text: #fda4af;
-    --diff-hunk-bg: rgba(56, 189, 248, 0.12);
-    --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3);
-    --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.35);
+    --bg: #161618;
+    --bg-elev: #1d1d1f;
+    --panel: #1c1c1e;
+    --panel-alt: #2c2c2e;
+    --code-bg: #111113;
+    --text: #f5f5f7;
+    --text-sec: #c7c7cc;
+    --muted: #8e8e93;
+    --line: rgba(255, 255, 255, 0.10);
+    --line-strong: rgba(255, 255, 255, 0.20);
+    --accent: #0a84ff;
+    --accent-soft: rgba(10, 132, 255, 0.18);
+    --stage: #0a84ff;
+    --stage-soft: rgba(10, 132, 255, 0.18);
+    --gate: #ff9f0a;
+    --gate-soft: rgba(255, 159, 10, 0.16);
+    --done: #30d158;
+    --done-soft: rgba(48, 209, 88, 0.16);
+    --bad: #ff453a;
+    --bad-soft: rgba(255, 69, 58, 0.16);
+    --purple: #bf5af2;
+    --purple-soft: rgba(191, 90, 242, 0.16);
+    --diff-add-bg: rgba(48, 209, 88, 0.16);
+    --diff-add-text: #7ee2a0;
+    --diff-del-bg: rgba(255, 69, 58, 0.16);
+    --diff-del-text: #ffa8a2;
+    --diff-hunk-bg: rgba(10, 132, 255, 0.12);
   }
 
   :root[data-theme="light"] {
@@ -128,18 +123,21 @@ export const CONSOLE_HTML = `<!doctype html>
   body {
     background: var(--bg);
     color: var(--text);
-    font: 13.5px/1.55 var(--sans);
+    font: 13px/1.45 var(--sans);
     -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
   }
 
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
-  code, pre, .mono { font-family: var(--mono); font-size: 12px; }
+  code, pre, .mono { font-family: var(--mono); font-size: 11.5px; }
+  .num, .stat-value, .pill-n, .mode-count, .tab-count { font-variant-numeric: tabular-nums; }
 
   /* ─── Layout Shell ─── */
   #app {
     display: grid;
-    grid-template-columns: 360px minmax(0, 1fr);
+    grid-template-columns: 288px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) 26px;
     height: 100vh;
     overflow: hidden;
   }
@@ -150,143 +148,135 @@ export const CONSOLE_HTML = `<!doctype html>
     background: var(--bg-elev);
     display: flex;
     flex-direction: column;
-    height: 100vh;
+    height: 100%;
     overflow: hidden;
     user-select: none;
+    grid-row: 1;
   }
 
   .brand-bar {
-    padding: 14px 16px 12px;
-    border-bottom: 1px solid var(--line);
+    height: 44px;
+    padding: 0 12px 0 14px;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 8px;
+    flex: 0 0 auto;
   }
   .brand-left {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 9px;
+    min-width: 0;
   }
+  /* 单色应用图标，避免渐变图标那种装饰感 */
   .brand-logo {
-    width: 28px;
-    height: 28px;
-    border-radius: 7px;
-    background: linear-gradient(135deg, var(--accent), var(--stage));
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    background: var(--text);
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    color: #fff;
-    font-weight: 800;
-    font-size: 15px;
-    letter-spacing: -0.5px;
-    box-shadow: 0 2px 8px rgba(37, 99, 235, 0.3);
+    color: var(--bg-elev);
+    font-weight: 700;
+    font-size: 12px;
+    letter-spacing: -0.2px;
   }
   .brand-title {
     display: flex;
-    flex-direction: column;
-    line-height: 1.15;
+    align-items: baseline;
+    gap: 7px;
+    min-width: 0;
   }
   .brand-title h1 {
-    font-size: 15px;
-    font-weight: 700;
+    font-size: 13px;
+    font-weight: 600;
     margin: 0;
-    letter-spacing: 0.2px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
+    letter-spacing: -0.1px;
   }
   .brand-sub {
     font-size: 11px;
     color: var(--muted);
-    font-family: var(--mono);
-  }
-  .ro-pill {
-    font-size: 10px;
-    font-weight: 600;
-    padding: 1px 6px;
-    border-radius: 4px;
-    background: var(--accent-soft);
-    color: var(--accent);
-    letter-spacing: 0.4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .brand-actions {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 2px;
+    flex: 0 0 auto;
   }
 
   .icon-btn {
-    border: 1px solid var(--line);
-    background: var(--panel);
+    border: 0;
+    background: transparent;
     color: var(--text-sec);
-    border-radius: 6px;
-    padding: 5px 8px;
+    border-radius: 5px;
+    padding: 3px 7px;
     cursor: pointer;
-    font-size: 12px;
+    font-size: 11.5px;
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    transition: all 0.15s ease;
+    transition: background 0.12s;
   }
   .icon-btn:hover {
-    border-color: var(--accent);
-    color: var(--accent);
-    background: var(--accent-soft);
+    color: var(--text);
+    background: rgba(128, 128, 128, 0.14);
   }
+  .icon-btn:active { background: rgba(128, 128, 128, 0.22); }
 
-  /* ─── 视图模式切换 ─── */
+  /* ─── 视图导航（macOS 侧栏式） ─── */
   .mode-switch {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 4px;
-    padding: 8px 12px;
-    border-bottom: 1px solid var(--line);
-    background: var(--panel-alt);
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 2px 8px 8px;
+    flex: 0 0 auto;
   }
   .mode-btn {
-    display: inline-flex;
+    display: flex;
     align-items: center;
-    justify-content: center;
-    gap: 6px;
-    padding: 6px 10px;
-    border-radius: 7px;
-    border: 1px solid transparent;
+    gap: 8px;
+    width: 100%;
+    height: 28px;
+    padding: 0 8px;
+    border-radius: 6px;
+    border: 0;
     background: transparent;
-    color: var(--muted);
+    color: var(--text-sec);
     font: inherit;
     font-size: 12.5px;
-    font-weight: 600;
+    font-weight: 500;
+    text-align: left;
     cursor: pointer;
-    transition: all 0.15s;
+    transition: background 0.12s, color 0.12s;
   }
-  .mode-btn:hover { color: var(--text); }
+  .mode-btn svg { flex: 0 0 auto; opacity: 0.75; }
+  .mode-btn:hover { color: var(--text); background: rgba(128, 128, 128, 0.12); }
   .mode-btn.active {
-    background: var(--panel);
-    border-color: var(--line);
-    color: var(--text);
-    box-shadow: var(--shadow-sm);
-  }
-  .mode-count {
-    font-family: var(--mono);
-    font-size: 11px;
-    padding: 0 5px;
-    border-radius: 999px;
-    background: rgba(128, 128, 128, 0.16);
-    color: var(--muted);
-  }
-  .mode-btn.active .mode-count {
     background: var(--accent-soft);
     color: var(--accent);
+    font-weight: 600;
   }
+  .mode-btn.active svg { opacity: 1; }
+  .mode-label { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mode-count {
+    font-size: 11.5px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .mode-btn.active .mode-count { color: var(--accent); opacity: 0.8; }
 
   /* ─── Sidebar Search & Filter Bar ─── */
   .explorer-controls {
-    padding: 10px 12px 8px;
-    border-bottom: 1px solid var(--line);
+    padding: 0 8px 8px;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 6px;
+    flex: 0 0 auto;
   }
   .search-box {
     position: relative;
@@ -295,34 +285,45 @@ export const CONSOLE_HTML = `<!doctype html>
   }
   .search-box input {
     width: 100%;
-    padding: 6px 26px 6px 10px;
+    height: 26px;
+    padding: 0 24px 0 24px;
     border-radius: 6px;
-    border: 1px solid var(--line);
-    background: var(--panel-alt);
+    border: 1px solid transparent;
+    background: rgba(128, 128, 128, 0.12);
     color: var(--text);
     font: inherit;
-    font-size: 12.5px;
+    font-size: 12px;
     outline: none;
-    transition: border-color 0.15s;
+    transition: background 0.12s, border-color 0.12s, box-shadow 0.12s;
   }
+  .search-box input::placeholder { color: var(--muted); }
   .search-box input:focus {
-    border-color: var(--accent);
     background: var(--panel);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  .search-icon {
+    position: absolute;
+    left: 7px;
+    color: var(--muted);
+    pointer-events: none;
+    display: inline-flex;
   }
   .search-clear {
     position: absolute;
-    right: 6px;
+    right: 5px;
     border: 0;
     background: transparent;
     color: var(--muted);
     cursor: pointer;
-    font-size: 13px;
-    padding: 2px 4px;
+    font-size: 11px;
+    padding: 2px 3px;
     display: none;
   }
+  .search-clear:hover { color: var(--text); }
   .filter-pills {
     display: flex;
-    gap: 4px;
+    gap: 1px;
     flex-wrap: wrap;
   }
   /* 项目筛选：仓库可能很多，用下拉而不是 chip，避免侧栏被撑散 */
@@ -330,6 +331,7 @@ export const CONSOLE_HTML = `<!doctype html>
     display: flex;
     align-items: center;
     gap: 6px;
+    padding: 0 2px;
   }
   .repo-filter label {
     font-size: 11.5px;
@@ -339,255 +341,317 @@ export const CONSOLE_HTML = `<!doctype html>
   .repo-select {
     flex: 1 1 auto;
     min-width: 0;
-    padding: 4px 8px;
-    border-radius: 6px;
-    border: 1px solid var(--line);
-    background: var(--panel-alt);
-    color: var(--text);
+    height: 24px;
+    padding: 0 6px;
+    border-radius: 5px;
+    border: 1px solid transparent;
+    background: rgba(128, 128, 128, 0.10);
+    color: var(--text-sec);
     font: inherit;
-    font-size: 12.5px;
+    font-size: 11.5px;
     outline: none;
     cursor: pointer;
   }
-  .repo-select:focus { border-color: var(--accent); }
-  .repo-select.active { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .repo-select:focus { border-color: var(--accent); background: var(--panel); }
+  .repo-select.active { color: var(--accent); font-weight: 600; }
   .filter-pill {
-    border: 1px solid var(--line);
+    border: 0;
     background: transparent;
     color: var(--muted);
-    border-radius: 999px;
-    padding: 2px 9px;
+    border-radius: 5px;
+    padding: 2px 7px;
     font-size: 11.5px;
     cursor: pointer;
-    transition: all 0.15s;
+    transition: background 0.12s, color 0.12s;
   }
-  .filter-pill:hover { color: var(--text); border-color: var(--line-strong); }
+  .filter-pill:hover { color: var(--text); background: rgba(128, 128, 128, 0.12); }
   .filter-pill.active {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: #fff;
+    background: var(--accent-soft);
+    color: var(--accent);
     font-weight: 600;
   }
   /* 计数并入筛选 chip（原来那排 KPI 方块和它们是同一件事，占了两行高度） */
   .filter-pill .pill-n {
-    font-family: var(--mono);
-    font-size: 10.5px;
-    opacity: 0.85;
-    margin-left: 2px;
+    font-size: 11px;
+    opacity: 0.7;
+    margin-left: 3px;
   }
   .filter-pill.active .pill-n { opacity: 1; }
 
-  .toolbar {
+  /* ─── 底部状态栏（VS Code 式，贯穿两栏） ─── */
+  .statusbar {
+    grid-column: 1 / -1;
+    grid-row: 2;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 6px 12px;
-    border-bottom: 1px solid var(--line);
-    font-size: 11.5px;
-    color: var(--muted);
+    gap: 12px;
+    padding: 0 12px;
+    border-top: 1px solid var(--line);
     background: var(--bg-elev);
+    font-size: 11px;
+    color: var(--muted);
+    user-select: none;
   }
-  .toolbar-left {
+  .statusbar-left,
+  .statusbar-right {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 12px;
+    min-width: 0;
   }
-  .toolbar label {
+  .statusbar .sb-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+  }
+  .statusbar .sb-sep {
+    width: 1px;
+    height: 12px;
+    background: var(--line-strong);
+    opacity: 0.6;
+  }
+  .statusbar label {
     display: inline-flex;
     align-items: center;
     gap: 5px;
     cursor: pointer;
+    white-space: nowrap;
+  }
+  .statusbar input[type="checkbox"] {
+    appearance: none;
+    width: 11px;
+    height: 11px;
+    margin: 0;
+    border-radius: 3px;
+    border: 1px solid var(--line-strong);
+    background: transparent;
+    cursor: pointer;
+    position: relative;
+  }
+  .statusbar input[type="checkbox"]:checked {
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+  .statusbar input[type="checkbox"]:checked::after {
+    content: "";
+    position: absolute;
+    left: 2.5px;
+    top: 0.5px;
+    width: 3px;
+    height: 6px;
+    border: solid #fff;
+    border-width: 0 1.5px 1.5px 0;
+    transform: rotate(45deg);
   }
   .health-dot {
-    width: 7px;
-    height: 7px;
+    width: 6px;
+    height: 6px;
     border-radius: 50%;
     background: var(--done);
     display: inline-block;
+    flex: 0 0 auto;
   }
   .health-dot.err { background: var(--bad); }
+  .sb-live { color: var(--text-sec); font-variant-numeric: tabular-nums; }
+  .sb-live b { font-weight: 600; }
+  .sb-live.run b { color: var(--stage); }
+  .sb-live.wait b { color: var(--gate); }
 
   /* ─── Task List ─── */
   #task-list {
     list-style: none;
     margin: 0;
-    padding: 8px;
+    padding: 0 6px 8px;
     overflow-y: auto;
     flex: 1;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 1px;
   }
   #task-list li.task-item {
-    padding: 10px 12px;
-    border-radius: 8px;
+    padding: 5px 8px;
+    border-radius: 6px;
     cursor: pointer;
-    border: 1px solid var(--line);
-    background: var(--panel);
-    transition: all 0.15s ease;
-    position: relative;
-  }
-  #task-list li.task-item:hover {
-    border-color: var(--line-strong);
-    background: var(--panel-alt);
-  }
-  #task-list li.task-item.active {
-    border-color: var(--accent);
-    background: var(--accent-soft);
-    box-shadow: inset 3px 0 0 var(--accent);
-  }
-  .task-item-top {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
+    align-items: flex-start;
+    gap: 8px;
+    transition: background 0.1s;
+  }
+  #task-list li.task-item:hover { background: rgba(128, 128, 128, 0.10); }
+  #task-list li.task-item.active { background: var(--accent-soft); }
+  #task-list li.task-item.active .task-title { color: var(--accent); }
+
+  /* 状态只用一个圆点表达；中文短名放在第二行，机器码留给详情页 */
+  .task-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    margin-top: 6px;
+    flex: 0 0 auto;
+    background: var(--muted);
+  }
+  .task-dot.stage { background: var(--stage); }
+  .task-dot.gate { background: var(--gate); }
+  .task-dot.done { background: var(--done); }
+  .task-dot.bad { background: var(--bad); }
+  .task-body { min-width: 0; flex: 1 1 auto; }
+  .task-title-row {
+    display: flex;
+    align-items: baseline;
     gap: 6px;
-    margin-bottom: 5px;
   }
-  .task-item-badges {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    flex-wrap: wrap;
-  }
-  .task-item .title {
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-    font-weight: 600;
-    font-size: 13px;
+  .task-title {
+    font-size: 12.5px;
+    font-weight: 500;
     color: var(--text);
-    line-height: 1.4;
-    margin-bottom: 6px;
-  }
-  .task-item-foot {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 6px;
-    font-size: 11.5px;
-    color: var(--muted);
-    font-family: var(--mono);
-  }
-  .task-item-repo {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    max-width: 170px;
+    flex: 1 1 auto;
   }
+  .task-id {
+    font-size: 10.5px;
+    color: var(--muted);
+    font-family: var(--mono);
+    flex: 0 0 auto;
+  }
+  .task-sub {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 1px;
+    font-size: 11px;
+    color: var(--muted);
+    min-width: 0;
+    font-variant-numeric: tabular-nums;
+  }
+  .task-sub .task-status { flex: 0 0 auto; }
+  .task-sub .task-status.stage { color: var(--stage); }
+  .task-sub .task-status.gate { color: var(--gate); }
+  .task-sub .task-status.done { color: var(--done); }
+  .task-sub .task-status.bad { color: var(--bad); }
+  .task-sub .task-mode { flex: 0 0 auto; color: var(--gate); }
+  .task-sub .task-repo {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+    flex: 0 1 auto;
+  }
+  .task-sub .task-time { flex: 0 0 auto; margin-left: auto; }
 
   /* ─── Project List（项目模式侧栏） ─── */
   #project-list {
     list-style: none;
     margin: 0;
-    padding: 8px;
+    padding: 0 6px 8px;
     overflow-y: auto;
     flex: 1;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 1px;
   }
   #project-list li.proj-item {
-    padding: 10px 12px;
-    border-radius: 8px;
+    padding: 6px 8px;
+    border-radius: 6px;
     cursor: pointer;
-    border: 1px solid var(--line);
-    background: var(--panel);
-    transition: all 0.15s ease;
+    transition: background 0.1s;
   }
-  #project-list li.proj-item:hover {
-    border-color: var(--line-strong);
-    background: var(--panel-alt);
-  }
-  #project-list li.proj-item.active {
-    border-color: var(--accent);
-    background: var(--accent-soft);
-    box-shadow: inset 3px 0 0 var(--accent);
-  }
+  #project-list li.proj-item:hover { background: rgba(128, 128, 128, 0.10); }
+  #project-list li.proj-item.active { background: var(--accent-soft); }
+  #project-list li.proj-item.active .proj-item-name > span:first-child { color: var(--accent); }
   .proj-item-name {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 6px;
-    font-weight: 700;
-    font-size: 13px;
-    margin-bottom: 2px;
+    font-weight: 500;
+    font-size: 12.5px;
+    color: var(--text);
+    margin-bottom: 1px;
+    min-width: 0;
+  }
+  .proj-item-name > span:first-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .proj-item-url {
-    font-family: var(--mono);
-    font-size: 11px;
+    font-size: 10.5px;
     color: var(--muted);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     direction: rtl;
     text-align: left;
-    margin-bottom: 6px;
+    margin-bottom: 2px;
   }
   .proj-item-counts {
     display: flex;
-    gap: 4px;
+    gap: 8px;
     flex-wrap: wrap;
-    margin-bottom: 6px;
-  }
-  .proj-count {
     font-size: 11px;
-    font-weight: 600;
-    padding: 0 7px;
-    border-radius: 999px;
-    font-family: var(--mono);
-    border: 1px solid var(--line);
     color: var(--muted);
+    margin-bottom: 1px;
+    font-variant-numeric: tabular-nums;
   }
-  .proj-count.stage { color: var(--stage); border-color: rgba(56, 189, 248, 0.35); }
-  .proj-count.gate { color: var(--gate); border-color: rgba(245, 158, 11, 0.4); }
-  .proj-count.done { color: var(--done); border-color: rgba(16, 185, 129, 0.35); }
-  .proj-count.bad { color: var(--bad); border-color: rgba(244, 63, 94, 0.4); }
+  .proj-count { font-size: 11px; font-weight: 500; color: var(--muted); }
+  .proj-count.stage { color: var(--stage); }
+  .proj-count.gate { color: var(--gate); }
+  .proj-count.done { color: var(--done); }
+  .proj-count.bad { color: var(--bad); }
   .proj-item-foot {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 6px;
-    font-size: 11.5px;
+    font-size: 11px;
     color: var(--muted);
     font-family: var(--mono);
   }
 
   /* ─── Project Overview（项目模式主区） ─── */
-  .proj-header h2 {
-    margin: 6px 0 4px;
-    font-size: 22px;
-    letter-spacing: -0.2px;
-  }
-  .proj-header .proj-url {
+  .proj-url {
     font-family: var(--mono);
-    font-size: 12px;
+    font-size: 11px;
     color: var(--muted);
     word-break: break-all;
   }
+  /* 项目指标与任务详情共用一条发丝指标带，不再摆一排圆角卡片 */
   .proj-stats {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-    gap: 10px;
-    margin: 16px 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0;
+    margin: 0 0 2px;
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
   }
   .proj-stat {
-    border: 1px solid var(--line);
-    background: var(--panel);
-    border-radius: 9px;
-    padding: 9px 12px;
+    flex: 1 1 132px;
+    border: 0;
+    background: transparent;
+    border-radius: 0;
+    padding: 10px 14px 10px 0;
+    margin-right: 14px;
+  }
+  .proj-stat + .proj-stat {
+    border-left: 1px solid var(--line);
+    padding-left: 14px;
   }
   .proj-stat-lbl {
     font-size: 11px;
     color: var(--muted);
-    letter-spacing: 0.3px;
-    text-transform: uppercase;
+    letter-spacing: 0;
+    text-transform: none;
   }
   .proj-stat-val {
-    font-family: var(--mono);
-    font-size: 18px;
-    font-weight: 700;
-    margin-top: 3px;
+    font-family: var(--sans);
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: -0.2px;
+    margin-top: 2px;
   }
   .proj-stat-sub {
     font-size: 11.5px;
@@ -699,28 +763,280 @@ export const CONSOLE_HTML = `<!doctype html>
   }
   .proj-budget-bar.over i { background: var(--bad); }
 
+  /* ─── 概览（Overview） ─── */
+  .ov-periods {
+    display: inline-flex;
+    align-items: center;
+    gap: 1px;
+    padding: 1px;
+    border-radius: 6px;
+    background: rgba(128, 128, 128, 0.10);
+  }
+  .ov-period {
+    border: 0;
+    background: transparent;
+    color: var(--text-sec);
+    font: inherit;
+    font-size: 11.5px;
+    padding: 2px 9px;
+    border-radius: 5px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .ov-period:hover { color: var(--text); }
+  .ov-period.active {
+    background: var(--panel);
+    color: var(--text);
+    font-weight: 600;
+    box-shadow: 0 0 0 1px var(--line), 0 1px 2px rgba(0, 0, 0, 0.06);
+  }
+  .ov-head-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .ov-head-title {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+  }
+  .ov-head-title h2 {
+    font-size: 17px;
+    font-weight: 600;
+    margin: 0;
+    letter-spacing: -0.2px;
+  }
+
+  /* 一句话摘要：概览的主角，一行说完这段时间发生了什么 */
+  .ov-digest {
+    font-size: 15px;
+    line-height: 1.6;
+    color: var(--text);
+    margin: 2px 0 14px;
+    max-width: 72ch;
+  }
+  .ov-digest .ov-when { color: var(--muted); }
+  .ov-digest b { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .ov-digest .bad { color: var(--bad); }
+  .ov-digest .done { color: var(--done); }
+
+  .ov-cum {
+    font-size: 11.5px;
+    color: var(--muted);
+    margin: 8px 0 0;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* 14 天活动条：一列 = 一天，成功在下、失败在上，点一天就切到那天的口径 */
+  .ov-strip {
+    display: flex;
+    align-items: flex-end;
+    gap: 3px;
+    padding: 6px 0 2px;
+  }
+  .ov-day {
+    flex: 1 1 0;
+    min-width: 0;
+    border: 0;
+    background: transparent;
+    padding: 2px 0 0;
+    border-radius: 4px;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    font: inherit;
+  }
+  .ov-day:hover { background: rgba(128, 128, 128, 0.10); }
+  .ov-day.in-range { background: rgba(128, 128, 128, 0.08); }
+  .ov-day.active { background: var(--accent-soft); }
+  .ov-day.active .ov-day-label { color: var(--accent); font-weight: 600; }
+  .ov-col {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    width: 100%;
+    max-width: 22px;
+    height: 46px;
+    gap: 1px;
+  }
+  .ov-col i {
+    display: block;
+    width: 100%;
+    border-radius: 2px;
+    min-height: 0;
+  }
+  .ov-col i.ok { background: var(--stage); opacity: 0.9; }
+  .ov-col i.bad { background: var(--bad); opacity: 0.85; }
+  .ov-col i.zero { background: rgba(128, 128, 128, 0.18); height: 2px !important; }
+  .ov-day-label {
+    font-size: 9.5px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .ov-strip-legend {
+    display: flex;
+    gap: 12px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .ov-strip-legend span { display: inline-flex; align-items: center; gap: 4px; }
+  .ov-strip-legend i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+
+  /* 进行中任务：一行一个任务，右侧 10 段阶梯表示走到哪一步 */
+  .ov-tasks, .ov-projects {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .ov-task {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 7px 8px;
+    margin: 0 -8px;
+    border-radius: 6px;
+    border-bottom: 1px solid var(--line);
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+  .ov-task:last-child { border-bottom: 0; }
+  .ov-task:hover { background: rgba(128, 128, 128, 0.08); }
+  .ov-task-main { flex: 1 1 auto; min-width: 0; }
+  .ov-task-title {
+    display: block;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ov-task-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 1px;
+    font-size: 11px;
+    color: var(--muted);
+    min-width: 0;
+    font-variant-numeric: tabular-nums;
+  }
+  .ov-task-meta .task-repo {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ov-task-meta .task-status.stage { color: var(--stage); }
+  .ov-task-meta .task-status.gate { color: var(--gate); }
+  .ov-task-meta .task-status.done { color: var(--done); }
+  .ov-task-meta .task-status.bad { color: var(--bad); }
+  .ov-task-meta .ov-when { margin-left: auto; flex: 0 0 auto; }
+  .ladder {
+    list-style: none;
+    display: flex;
+    gap: 3px;
+    margin: 0;
+    padding: 0;
+    flex: 0 0 auto;
+  }
+  .ladder li {
+    width: 9px;
+    height: 5px;
+    border-radius: 1.5px;
+    background: rgba(128, 128, 128, 0.20);
+  }
+  .ladder li.done { background: var(--stage); opacity: 0.5; }
+  .ladder li.cur { background: var(--stage); }
+  .ladder.gate li.cur { background: var(--gate); }
+  .ladder.bad li.done { background: var(--bad); opacity: 0.5; }
+  .ladder.bad li.cur { background: var(--bad); }
+  .ladder.done li.done { background: var(--done); opacity: 0.75; }
+
+  /* 项目行：名字 + 状态计数 + 体量，一行读一个项目 */
+  .ov-proj {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: baseline;
+    gap: 2px 12px;
+    padding: 8px;
+    margin: 0 -8px;
+    border-radius: 6px;
+    border-bottom: 1px solid var(--line);
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+  .ov-proj:last-child { border-bottom: 0; }
+  .ov-proj:hover { background: rgba(128, 128, 128, 0.08); }
+  .ov-proj-name {
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ov-proj-counts {
+    display: flex;
+    gap: 10px;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+  .ov-proj-foot {
+    grid-column: 1 / -1;
+    font-size: 11px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* 统计还没到位时的占位，不要让页面跳一下空白 */
+  .ov-skeleton {
+    height: 12px;
+    border-radius: 3px;
+    background: rgba(128, 128, 128, 0.12);
+    margin: 10px 0;
+    width: 40%;
+  }
+
+  /* 窄屏优先保住状态/标题/成本/时间，分支在任务模式里仍能看 */
   @media (max-width: 1280px) {
-    #app { grid-template-columns: 320px minmax(0, 1fr); }
+    #app { grid-template-columns: 288px minmax(0, 1fr); }
     .proj-table { min-width: 0; }
     .proj-table .ct-title { max-width: 240px; }
-    /* 窄屏优先保住状态/标题/成本/时间，分支在任务模式里仍能看 */
     .proj-table th:nth-child(3), .proj-table td:nth-child(3) { display: none; }
   }
 
   /* ─── Main Detail Area ─── */
   main#detail {
-    height: 100vh;
+    height: 100%;
     overflow-y: auto;
-    padding: 20px 28px 64px;
+    background: var(--panel);
+    position: relative;
   }
+  .view { min-height: 100%; display: flex; flex-direction: column; }
+  .view-head {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    padding: 10px 22px 11px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 0 0 auto;
+  }
+  .view-body { padding: 18px 22px 72px; }
 
   .empty {
     color: var(--muted);
-    padding: 48px 20px;
+    padding: 64px 20px;
     text-align: center;
-    border: 1px dashed var(--line);
-    border-radius: 10px;
-    background: var(--panel-alt);
     font-size: 13px;
   }
 
@@ -737,12 +1053,12 @@ export const CONSOLE_HTML = `<!doctype html>
     border: 1px solid transparent;
     white-space: nowrap;
   }
-  .badge.stage { color: var(--stage); background: var(--stage-soft); border-color: rgba(56, 189, 248, 0.3); }
-  .badge.gate { color: var(--gate); background: var(--gate-soft); border-color: rgba(245, 158, 11, 0.35); }
-  .badge.done { color: var(--done); background: var(--done-soft); border-color: rgba(16, 185, 129, 0.3); }
-  .badge.bad { color: var(--bad); background: var(--bad-soft); border-color: rgba(244, 63, 94, 0.3); }
-  .badge.neutral { color: var(--muted); background: var(--panel-alt); border-color: var(--line); }
-  .badge.purple { color: var(--purple); background: var(--purple-soft); border-color: rgba(167, 139, 250, 0.3); }
+  .badge.stage { color: var(--stage); background: var(--stage-soft); }
+  .badge.gate { color: var(--gate); background: var(--gate-soft); }
+  .badge.done { color: var(--done); background: var(--done-soft); }
+  .badge.bad { color: var(--bad); background: var(--bad-soft); }
+  .badge.neutral { color: var(--muted); background: var(--panel-alt); }
+  .badge.purple { color: var(--purple); background: var(--purple-soft); }
   /* 人话在前、机器码在后：中文短名常驻，编号降为次要视觉层级 */
   .badge-zh {
     font-family: var(--sans);
@@ -786,159 +1102,161 @@ export const CONSOLE_HTML = `<!doctype html>
     color: var(--gate);
     background: var(--gate-soft);
   }
-
-  /* ─── Cockpit Header ─── */
-  .cockpit-header {
-    background: var(--panel);
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    padding: 18px 20px;
-    margin-bottom: 16px;
-    box-shadow: var(--shadow-sm);
+  /* 驾驶模式用中文标签，机器码留在 title 里 —— 头部不该出现 control_mode: auto 这种半成品 */
+  .mode-pill.drive {
+    font-family: var(--sans);
+    font-size: 11.5px;
   }
+
+  /* ─── Cockpit Header（详情页常驻头） ─── */
   .cockpit-top-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
     flex-wrap: wrap;
-    gap: 10px;
-    margin-bottom: 10px;
+    gap: 8px;
+    margin: 0;
   }
   .cockpit-badges {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-  .cockpit-actions {
     display: flex;
     align-items: center;
     gap: 6px;
     flex-wrap: wrap;
   }
+  .cockpit-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex-wrap: wrap;
+  }
   .copy-btn {
-    border: 1px solid var(--line);
-    background: var(--panel-alt);
-    color: var(--text-sec);
-    border-radius: 6px;
-    padding: 4px 9px;
-    font-size: 11.5px;
-    font-family: var(--mono);
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    border-radius: 5px;
+    padding: 3px 7px;
+    font-size: 11px;
+    font-family: var(--sans);
     cursor: pointer;
     display: inline-flex;
     align-items: center;
-    gap: 5px;
-    transition: all 0.15s;
+    gap: 4px;
+    transition: background 0.12s, color 0.12s;
   }
   .copy-btn:hover {
-    border-color: var(--accent);
-    color: var(--accent);
-    background: var(--accent-soft);
+    color: var(--text);
+    background: rgba(128, 128, 128, 0.12);
   }
-  .copy-btn.copied {
-    border-color: var(--done);
-    color: var(--done);
-    background: var(--done-soft);
-  }
+  .copy-btn.copied { color: var(--done); }
 
   .cockpit-title {
-    font-size: 20px;
-    font-weight: 700;
-    margin: 0 0 10px;
-    line-height: 1.35;
+    font-size: 17px;
+    font-weight: 600;
+    margin: 0;
+    line-height: 1.3;
+    letter-spacing: -0.2px;
     color: var(--text);
+    padding-right: 12px;
   }
   .cockpit-meta {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 8px 16px;
-    font-size: 12px;
+    gap: 4px 14px;
+    font-size: 11.5px;
     color: var(--muted);
-    padding-bottom: 14px;
-    border-bottom: 1px solid var(--line);
+    padding-bottom: 0;
+    border-bottom: 0;
   }
+  .cockpit-meta code { font-size: 11px; }
   .cockpit-meta-item {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: 4px;
+    white-space: nowrap;
   }
   .pr-link-pill {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: 4px;
     background: var(--done-soft);
     color: var(--done);
-    border: 1px solid rgba(16, 185, 129, 0.35);
-    padding: 2px 9px;
-    border-radius: 999px;
-    font-family: var(--mono);
+    border: 0;
+    padding: 1px 7px;
+    border-radius: 4px;
     font-weight: 600;
-    font-size: 12px;
+    font-size: 11.5px;
   }
-  .pr-link-pill:hover {
-    text-decoration: none;
-    filter: brightness(1.1);
-  }
+  .pr-link-pill:hover { text-decoration: none; filter: brightness(0.95); }
 
   .summary-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
-    gap: 10px;
-    margin-top: 14px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0;
+    margin: 14px 0 2px;
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
   }
   .stat-box {
-    background: var(--panel-alt);
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    padding: 10px 12px;
+    flex: 1 1 132px;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    padding: 10px 14px 10px 0;
+    margin-right: 14px;
+  }
+  .stat-box + .stat-box {
+    border-left: 1px solid var(--line);
+    padding-left: 14px;
+    margin-right: 14px;
   }
   .stat-label {
     font-size: 11px;
     color: var(--muted);
-    text-transform: uppercase;
-    letter-spacing: 0.4px;
-    margin-bottom: 3px;
+    text-transform: none;
+    letter-spacing: 0;
+    margin-bottom: 2px;
   }
   .stat-value {
     font-size: 16px;
-    font-weight: 700;
-    font-family: var(--mono);
+    font-weight: 600;
+    font-family: var(--sans);
+    letter-spacing: -0.2px;
     color: var(--text);
   }
   .stat-sub {
     font-size: 11px;
     color: var(--muted);
-    margin-top: 2px;
-    font-family: var(--mono);
+    margin-top: 1px;
+    font-family: var(--sans);
   }
 
-  /* ─── Cards ─── */
+  /* ─── Cards → 分组区块（发丝分隔，不做卡片堆） ─── */
   .card {
-    background: var(--panel);
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    padding: 16px 18px;
-    margin-bottom: 16px;
-    box-shadow: var(--shadow-sm);
+    border-top: 1px solid var(--line);
+    padding: 14px 0 2px;
+    margin: 0 0 4px;
+    background: transparent;
   }
+  .view-body > .card:first-child,
+  #tab-content > .card:first-child { border-top: 0; padding-top: 2px; }
   .card-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    margin-bottom: 12px;
+    margin-bottom: 10px;
     flex-wrap: wrap;
   }
   .card h3 {
-    font-size: 13px;
+    font-size: 12.5px;
     margin: 0;
-    color: var(--text-sec);
-    font-weight: 700;
-    letter-spacing: 0.3px;
+    color: var(--text);
+    font-weight: 600;
+    letter-spacing: 0;
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 7px;
   }
   .legend-bar {
     display: flex;
@@ -1141,12 +1459,12 @@ export const CONSOLE_HTML = `<!doctype html>
     display: flex;
     align-items: flex-start;
     gap: 10px;
-    margin-top: 12px;
-    padding: 11px 14px;
-    border: 1px solid var(--line);
-    border-left: 3px solid var(--accent);
-    border-radius: 8px;
-    background: var(--panel-alt);
+    margin: 2px 0 4px;
+    padding: 9px 12px;
+    border: 0;
+    border-left: 2px solid var(--accent);
+    border-radius: 0;
+    background: var(--accent-soft);
   }
   .status-summary.term {
     border-left-color: var(--done);
@@ -1156,14 +1474,15 @@ export const CONSOLE_HTML = `<!doctype html>
   }
   .status-summary .ss-tag {
     flex: 0 0 auto;
-    margin-top: 1px;
-    font-size: 11px;
-    font-weight: 700;
+    margin-top: 2px;
+    font-size: 10.5px;
+    font-weight: 600;
     color: var(--accent);
-    border: 1px solid currentColor;
-    border-radius: 999px;
-    padding: 1px 8px;
-    opacity: 0.85;
+    border: 0;
+    border-radius: 0;
+    padding: 0;
+    opacity: 0.9;
+    letter-spacing: 0.2px;
   }
   .status-summary.term .ss-tag { color: var(--done); }
   .status-summary.bad .ss-tag { color: var(--bad); }
@@ -1214,13 +1533,13 @@ export const CONSOLE_HTML = `<!doctype html>
   }
   .tab-btn {
     border: 0;
-    border-bottom: 2px solid transparent;
+    border-bottom: 1px solid transparent;
     background: transparent;
     color: var(--muted);
-    padding: 10px 14px;
+    padding: 9px 10px;
     font: inherit;
-    font-size: 13px;
-    font-weight: 600;
+    font-size: 12.5px;
+    font-weight: 500;
     cursor: pointer;
     display: inline-flex;
     align-items: center;
@@ -1235,12 +1554,11 @@ export const CONSOLE_HTML = `<!doctype html>
   }
   .tab-count {
     font-size: 11px;
-    font-family: var(--mono);
-    padding: 1px 6px;
-    border-radius: 999px;
-    background: var(--panel-alt);
-    border: 1px solid var(--line);
-    color: var(--text-sec);
+    padding: 0;
+    border-radius: 0;
+    background: transparent;
+    border: 0;
+    color: var(--muted);
   }
   .tab-btn.active .tab-count {
     background: var(--accent-soft);
@@ -1257,18 +1575,22 @@ export const CONSOLE_HTML = `<!doctype html>
     padding: 12px 14px;
     white-space: pre-wrap;
     word-break: break-word;
-    font-size: 14px;
-    line-height: 1.7;
+    font-size: 13.5px;
+    line-height: 1.65;
     max-width: 78ch;
+    /* 需求正文可能很长，超过一屏就自己滚，别把后面的评审结论挤到看不见 */
+    max-height: 520px;
+    overflow: auto;
     color: var(--text);
   }
   .outcomes-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    align-items: start;
     gap: 10px;
   }
   .outcome-card {
-    background: var(--panel-alt);
+    background: transparent;
     border: 1px solid var(--line);
     border-radius: 8px;
     padding: 12px 14px;
@@ -1284,9 +1606,8 @@ export const CONSOLE_HTML = `<!doctype html>
   }
   .outcome-stage {
     font-family: var(--mono);
-    font-weight: 700;
+    font-weight: 600;
     font-size: 12.5px;
-    text-transform: uppercase;
     color: var(--text);
   }
   .outcome-reason {
@@ -1307,9 +1628,7 @@ export const CONSOLE_HTML = `<!doctype html>
   }
   .rfc-sec-title {
     font-size: 12px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.4px;
+    font-weight: 600;
     color: var(--muted);
     margin: 0 0 8px;
   }
@@ -1369,12 +1688,14 @@ export const CONSOLE_HTML = `<!doctype html>
 
   /* ─── Runs & Context Builder ─── */
   .run-card {
-    background: var(--panel-alt);
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    padding: 14px 16px;
-    margin-bottom: 12px;
+    background: transparent;
+    border: 0;
+    border-top: 1px solid var(--line);
+    border-radius: 0;
+    padding: 12px 0;
+    margin-bottom: 0;
   }
+  .run-card:first-child { border-top: 0; padding-top: 2px; }
   .run-card:last-child { margin-bottom: 0; }
   .run-card-head {
     display: flex;
@@ -1433,7 +1754,7 @@ export const CONSOLE_HTML = `<!doctype html>
   }
   .progress-fill {
     height: 100%;
-    background: linear-gradient(90deg, var(--accent), var(--stage));
+    background: var(--accent);
     border-radius: 999px;
   }
   .ctx-sections {
@@ -1535,7 +1856,7 @@ export const CONSOLE_HTML = `<!doctype html>
   /* ─── Tables & Event Timeline ─── */
   table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
   th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
-  th { color: var(--muted); font-weight: 600; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.3px; }
+  th { color: var(--muted); font-weight: 600; font-size: 11.5px; }
   tr:last-child td { border-bottom: 0; }
 
   .timeline-toolbar {
@@ -1596,6 +1917,24 @@ export const CONSOLE_HTML = `<!doctype html>
 
   .muted { color: var(--muted); }
 
+  /* 窄屏收口放在全部组件规则之后 —— 同样的选择器只有写在后边才盖得住基础样式 */
+  @media (max-width: 1024px) {
+    .ov-task .ladder { display: none; }
+    /* 把宽度还给详情区：侧栏收窄，指标条不落单块，状态机轨迹压到一屏 */
+    #app { grid-template-columns: 260px minmax(0, 1fr); }
+    .stat-box { flex: 1 1 96px; margin-right: 10px; padding-right: 10px; }
+    .stat-box + .stat-box { padding-left: 10px; margin-right: 10px; }
+    .stat-value { font-size: 15px; }
+    /* 窄屏去掉阶段之间的箭头，10 段主路径才能一屏读完，不必横向滚动 */
+    .pipeline .arrow { display: none; }
+    .pipeline .step { min-width: 64px; padding: 7px 6px 9px; }
+    .pipeline .step-name { font-size: 11px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+  }
+
   @media (max-width: 900px) {
     #app { grid-template-columns: 1fr; height: auto; overflow: visible; }
     aside { height: auto; max-height: 48vh; border-right: 0; border-bottom: 1px solid var(--line); }
@@ -1610,7 +1949,7 @@ export const CONSOLE_HTML = `<!doctype html>
       <div class="brand-left">
         <div class="brand-logo" aria-hidden="true">K</div>
         <div class="brand-title">
-          <h1>Keel <span class="ro-pill">OBSERVATORY</span></h1>
+          <h1>Keel</h1>
           <span class="brand-sub" id="count">加载中…</span>
         </div>
       </div>
@@ -1621,12 +1960,23 @@ export const CONSOLE_HTML = `<!doctype html>
     </div>
 
     <div class="mode-switch" id="mode-switch" role="tablist" aria-label="视图模式">
-      <button type="button" class="mode-btn active" data-mode="tasks" role="tab" aria-selected="true">任务 <span class="mode-count" id="mode-count-tasks">0</span></button>
-      <button type="button" class="mode-btn" data-mode="projects" role="tab" aria-selected="false">项目 <span class="mode-count" id="mode-count-projects">0</span></button>
+      <button type="button" class="mode-btn" data-mode="overview" role="tab" aria-selected="false">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="1.8" y="1.8" width="5.2" height="5.2" rx="1.2"/><rect x="9" y="1.8" width="5.2" height="5.2" rx="1.2"/><rect x="1.8" y="9" width="5.2" height="5.2" rx="1.2"/><rect x="9" y="9" width="5.2" height="5.2" rx="1.2"/></svg>
+        <span class="mode-label">概览</span><span class="mode-count" id="mode-count-overview">0</span>
+      </button>
+      <button type="button" class="mode-btn active" data-mode="tasks" role="tab" aria-selected="true">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h8" stroke-linecap="round"/></svg>
+        <span class="mode-label">任务</span><span class="mode-count" id="mode-count-tasks">0</span>
+      </button>
+      <button type="button" class="mode-btn" data-mode="projects" role="tab" aria-selected="false">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><path d="M1.8 4.2c0-.7.6-1.2 1.2-1.2h3l1.3 1.5h5.7c.7 0 1.2.6 1.2 1.2v5.9c0 .7-.6 1.2-1.2 1.2H3c-.7 0-1.2-.6-1.2-1.2V4.2z" stroke-linejoin="round"/></svg>
+        <span class="mode-label">项目</span><span class="mode-count" id="mode-count-projects">0</span>
+      </button>
     </div>
 
-    <div class="explorer-controls">
+    <div class="explorer-controls" id="explorer-controls">
       <div class="search-box">
+        <span class="search-icon" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="6.8" cy="6.8" r="4.4"/><path d="M10.2 10.2l3.2 3.2" stroke-linecap="round"/></svg></span>
         <input id="task-search" type="text" placeholder="搜索任务标题、ID、仓库、分支…" autocomplete="off" />
         <button id="search-clear" class="search-clear" type="button" title="清空搜索">✕</button>
       </div>
@@ -1643,14 +1993,6 @@ export const CONSOLE_HTML = `<!doctype html>
       </div>
     </div>
 
-    <div class="toolbar">
-      <div class="toolbar-left">
-        <span class="health-dot" id="health-dot"></span>
-        <label><input type="checkbox" id="auto" checked /> 自动刷新 5s</label>
-      </div>
-      <span id="pulse" class="muted"></span>
-    </div>
-
     <ul id="task-list"></ul>
     <ul id="project-list" hidden></ul>
   </aside>
@@ -1658,6 +2000,23 @@ export const CONSOLE_HTML = `<!doctype html>
   <main id="detail">
     <div class="empty">正在连接 Keel Fact Plane…</div>
   </main>
+
+  <div class="statusbar" id="statusbar">
+    <div class="statusbar-left">
+      <span class="sb-item"><span class="health-dot" id="health-dot"></span><span id="sb-health">已连接</span></span>
+      <span class="sb-sep"></span>
+      <span class="sb-item sb-live run"><b id="sb-running">0</b> 运行中</span>
+      <span class="sb-item sb-live wait"><b id="sb-waiting">0</b> 待介入</span>
+      <span class="sb-item" id="sb-done">0 已完成</span>
+    </div>
+    <div class="statusbar-right">
+      <label><input type="checkbox" id="auto" checked /> 自动刷新 5s</label>
+      <span class="sb-sep"></span>
+      <span class="sb-item" id="pulse"></span>
+      <span class="sb-sep"></span>
+      <span class="sb-item">只读</span>
+    </div>
+  </div>
 </div>
 <script>
 (function () {
@@ -1692,7 +2051,8 @@ export const CONSOLE_HTML = `<!doctype html>
   var state = {
     tasks: [],
     meta: null,
-    mode: 'tasks',
+    // 默认落点：概览先回答「最近怎么样」，再往里点任务 / 项目
+    mode: 'overview',
     selectedRepo: null,
     repoFilter: 'all',
     selectedId: null,
@@ -1708,6 +2068,11 @@ export const CONSOLE_HTML = `<!doctype html>
     glossaryOpen: false,
     tasksSig: '',
     detailSig: '',
+    stats: null,
+    statsSig: '',
+    statsError: false,
+    // 概览默认落在「昨天」：最常见的问题是「昨天跑了什么」
+    overviewPeriod: 'yesterday',
     timer: null,
     theme: localStorage.getItem('keel-theme') || 'auto'
   };
@@ -1723,7 +2088,7 @@ export const CONSOLE_HTML = `<!doctype html>
     }
     var btn = document.getElementById('theme-btn');
     if (btn) {
-      var label = t === 'dark' ? '🌙 暗色' : (t === 'light' ? '☀️ 亮色' : '🌓 自动');
+      var label = t === 'dark' ? '暗色' : (t === 'light' ? '亮色' : '自动');
       btn.textContent = label;
     }
   }
@@ -1744,7 +2109,7 @@ export const CONSOLE_HTML = `<!doctype html>
       var k = decodeURIComponent(kv[0] || '');
       var v = decodeURIComponent(kv[1] || '');
       if (k === 'task' && v) { state.selectedId = v; hasTask = true; }
-      if (k === 'mode' && (v === 'tasks' || v === 'projects')) explicitMode = v;
+      if (k === 'mode' && (v === 'tasks' || v === 'projects' || v === 'overview')) explicitMode = v;
       if (k === 'repo' && v) state.selectedRepo = v;
       if (k === 'tab' && (v === 'overview' || v === 'runs' || v === 'diff' || v === 'timeline')) {
         state.activeTab = v;
@@ -1757,7 +2122,9 @@ export const CONSOLE_HTML = `<!doctype html>
 
   function syncHash() {
     var nextHash;
-    if (state.mode === 'projects') {
+    if (state.mode === 'overview') {
+      nextHash = '#mode=overview';
+    } else if (state.mode === 'projects') {
       nextHash = '#mode=projects' + (state.selectedRepo ? '&repo=' + encodeURIComponent(state.selectedRepo) : '');
     } else if (state.selectedId) {
       nextHash = '#task=' + encodeURIComponent(state.selectedId) + '&tab=' + encodeURIComponent(state.activeTab);
@@ -2021,7 +2388,7 @@ export const CONSOLE_HTML = `<!doctype html>
     var clearBtn = document.getElementById('search-clear');
     if (clearBtn) clearBtn.style.display = state.searchQuery ? 'block' : 'none';
 
-    var filtered = getFilteredTasks();
+    var filtered = state.mode === 'overview' ? state.tasks : getFilteredTasks();
     var list = document.getElementById('task-list');
     var html = '';
     for (var i = 0; i < filtered.length; i++) {
@@ -2029,21 +2396,26 @@ export const CONSOLE_HTML = `<!doctype html>
       var isAct = t.id === state.selectedId;
       var runCount = t.run_count != null ? Number(t.run_count) : null;
       var costNum = t.total_cost_usd != null ? Number(t.total_cost_usd) : 0;
+      var cat = statusKind(t.status);
+      var zh = statusLabel(t.status) || t.status;
       html += '<li data-id="' + esc(t.id) + '" class="task-item' + (isAct ? ' active' : '') + '">' +
-        '<div class="task-item-top">' +
-          '<div class="task-item-badges">' + badge(t.status, true) +
-            '<span class="mode-pill ' + esc(t.control_mode || 'auto') + '">' + esc(t.control_mode || 'auto') + '</span>' +
+        '<span class="task-dot ' + cat + '" title="' + esc(t.status) + '"></span>' +
+        '<div class="task-body">' +
+          '<div class="task-title-row">' +
+            '<span class="task-title" title="' + esc(t.title) + '">' + esc(t.title) + '</span>' +
+            '<span class="task-id">' + esc(shortId(t.id)) + '</span>' +
           '</div>' +
-          '<span class="mono muted">#' + esc(shortId(t.id)) + '</span>' +
-        '</div>' +
-        '<span class="title">' + esc(t.title) + '</span>' +
-        '<div class="task-item-foot">' +
-          '<span class="task-item-repo" title="' + esc(t.repo) + '">' + esc(shortRepo(t.repo)) + '</span>' +
-          '<span>' +
-            (runCount != null ? runCount + ' 轮 · ' : '') +
-            (costNum > 0 ? fmtCost(costNum) + ' · ' : '') +
-            esc(fmtShortTime(t.updated_at)) +
-          '</span>' +
+          '<div class="task-sub">' +
+            '<span class="task-status ' + cat + '">' + esc(zh) + '</span>' +
+            (t.control_mode && t.control_mode !== 'auto'
+              ? '<span class="task-mode">' + (t.control_mode === 'paused' ? '已暂停' : '人工') + '</span>' : '') +
+            '<span class="task-repo" title="' + esc(t.repo) + '">' + esc(shortRepo(t.repo)) + '</span>' +
+            '<span class="task-time">' +
+              (runCount ? runCount + ' 轮 · ' : '') +
+              (costNum > 0 ? fmtCost(costNum) + ' · ' : '') +
+              esc(fmtShortTime(t.updated_at)) +
+            '</span>' +
+          '</div>' +
         '</div>' +
       '</li>';
     }
@@ -2189,44 +2561,48 @@ export const CONSOLE_HTML = `<!doctype html>
     var tableHint = state.statusCat === 'all'
       ? '点击行进入任务模式'
       : '显示 ' + visible.length + ' / ' + p.tasks.length + ' 个任务 · 状态筛选生效中';
-    var html = '<div class="proj-header">' +
-      '<div class="cockpit-badges">' +
-        '<span class="badge stage"><span class="dot"></span>项目</span>' +
-        (p.provider ? '<span class="mode-pill">' + esc(p.provider) + '</span>' : '') +
-        '<span class="mode-pill">' + c.all + ' 个任务</span>' +
+    var html = '<div class="view">' +
+      '<div class="view-head">' +
+        '<div class="cockpit-top-row">' +
+          '<div class="cockpit-badges">' +
+            '<span class="badge stage"><span class="dot"></span>项目</span>' +
+            (p.provider ? '<span class="mode-pill">' + esc(p.provider) + '</span>' : '') +
+            '<span class="mode-pill">' + c.all + ' 个任务</span>' +
+          '</div>' +
+        '</div>' +
+        '<h2 class="cockpit-title">' + esc(shortRepo(p.repo)) + '</h2>' +
+        '<div class="proj-url">' + esc(p.repo || '—') + '</div>' +
       '</div>' +
-      '<h2>' + esc(shortRepo(p.repo)) + '</h2>' +
-      '<div class="proj-url">' + esc(p.repo || '—') + '</div>' +
-    '</div>' +
-    '<div class="proj-stats">' +
-      '<div class="proj-stat"><div class="proj-stat-lbl">任务</div><div class="proj-stat-val">' + c.all + '</div>' +
-        '<div class="proj-stat-sub">' + (c.stage + c.gate) + ' 个未完成</div></div>' +
-      '<div class="proj-stat stage"><div class="proj-stat-lbl">运行中</div><div class="proj-stat-val">' + c.stage + '</div>' +
-        '<div class="proj-stat-sub">阶段态有 Run 在跑</div></div>' +
-      '<div class="proj-stat gate"><div class="proj-stat-lbl">待介入</div><div class="proj-stat-val">' + c.gate + '</div>' +
-        '<div class="proj-stat-sub">等人或等条件</div></div>' +
-      '<div class="proj-stat done"><div class="proj-stat-lbl">已完成</div><div class="proj-stat-val">' + c.done + '</div>' +
-        '<div class="proj-stat-sub">终态不可再变更（I8）</div></div>' +
-      (c.bad > 0 ? '<div class="proj-stat bad"><div class="proj-stat-lbl">异常终态</div><div class="proj-stat-val">' + c.bad + '</div>' +
-        '<div class="proj-stat-sub">失败 / 驳回 / 放弃</div></div>' : '') +
-      '<div class="proj-stat"><div class="proj-stat-lbl">Run 轮次</div><div class="proj-stat-val">' + p.runs + '</div>' +
-        '<div class="proj-stat-sub">跨 ' + c.all + ' 个任务</div></div>' +
-      '<div class="proj-stat"><div class="proj-stat-lbl">累计成本</div><div class="proj-stat-val">' + fmtCost(p.cost) + '</div>' +
-        '<div class="proj-stat-sub">' + (p.budget > 0 ? '预算 ' + fmtCost(p.budget) : '未设预算') + '</div>' +
-        (p.budget > 0 ? '<div class="proj-budget-bar' + (p.cost > p.budget ? ' over' : '') + '">' +
-          '<i style="width:' + Math.min(100, Math.round((p.cost / p.budget) * 100)) + '%"></i></div>' : '') +
-      '</div>' +
-    '</div>' +
-    '<div class="card">' +
-      '<div class="card-header"><h3>状态分布</h3><span class="muted">按任务当前状态</span></div>' +
-      '<div class="proj-dist">' + dist + '</div>' +
-      '<div class="proj-dist-legend">' + legend + '</div>' +
-    '</div>' +
-    '<div class="card">' +
-      '<div class="card-header"><h3>项目任务</h3><span class="muted">' + esc(tableHint) + '</span></div>' +
-      '<div class="proj-table-wrap"><table class="proj-table"><thead><tr>' +
-        '<th>状态</th><th>标题</th><th>分支</th><th>轮次</th><th>成本</th><th>更新</th>' +
-      '</tr></thead><tbody>';
+      '<div class="view-body">' +
+        '<div class="proj-stats">' +
+          '<div class="proj-stat"><div class="proj-stat-lbl">任务</div><div class="proj-stat-val">' + c.all + '</div>' +
+            '<div class="proj-stat-sub">' + (c.stage + c.gate) + ' 个未完成</div></div>' +
+          '<div class="proj-stat stage"><div class="proj-stat-lbl">运行中</div><div class="proj-stat-val">' + c.stage + '</div>' +
+            '<div class="proj-stat-sub">阶段态有 Run 在跑</div></div>' +
+          '<div class="proj-stat gate"><div class="proj-stat-lbl">待介入</div><div class="proj-stat-val">' + c.gate + '</div>' +
+            '<div class="proj-stat-sub">等人或等条件</div></div>' +
+          '<div class="proj-stat done"><div class="proj-stat-lbl">已完成</div><div class="proj-stat-val">' + c.done + '</div>' +
+            '<div class="proj-stat-sub">终态不可再变更（I8）</div></div>' +
+          (c.bad > 0 ? '<div class="proj-stat bad"><div class="proj-stat-lbl">异常终态</div><div class="proj-stat-val">' + c.bad + '</div>' +
+            '<div class="proj-stat-sub">失败 / 驳回 / 放弃</div></div>' : '') +
+          '<div class="proj-stat"><div class="proj-stat-lbl">Run 轮次</div><div class="proj-stat-val">' + p.runs + '</div>' +
+            '<div class="proj-stat-sub">跨 ' + c.all + ' 个任务</div></div>' +
+          '<div class="proj-stat"><div class="proj-stat-lbl">累计成本</div><div class="proj-stat-val">' + fmtCost(p.cost) + '</div>' +
+            '<div class="proj-stat-sub">' + (p.budget > 0 ? '预算 ' + fmtCost(p.budget) : '未设预算') + '</div>' +
+            (p.budget > 0 ? '<div class="proj-budget-bar' + (p.cost > p.budget ? ' over' : '') + '">' +
+              '<i style="width:' + Math.min(100, Math.round((p.cost / p.budget) * 100)) + '%"></i></div>' : '') +
+          '</div>' +
+        '</div>' +
+        '<div class="card">' +
+          '<div class="card-header"><h3>状态分布</h3><span class="muted">按任务当前状态</span></div>' +
+          '<div class="proj-dist">' + dist + '</div>' +
+          '<div class="proj-dist-legend">' + legend + '</div>' +
+        '</div>' +
+        '<div class="card">' +
+          '<div class="card-header"><h3>项目任务</h3><span class="muted">' + esc(tableHint) + '</span></div>' +
+          '<div class="proj-table-wrap"><table class="proj-table"><thead><tr>' +
+            '<th>状态</th><th>标题</th><th>分支</th><th>轮次</th><th>成本</th><th>更新</th>' +
+          '</tr></thead><tbody>';
     for (var j = 0; j < visible.length; j++) {
       var t = visible[j];
       html += '<tr data-task-id="' + esc(t.id) + '">' +
@@ -2242,7 +2618,8 @@ export const CONSOLE_HTML = `<!doctype html>
       html += '<tr class="proj-empty"><td colspan="6">' +
         (p.tasks.length === 0 ? '这个项目还没有任务' : '当前状态筛选下没有任务') + '</td></tr>';
     }
-    html += '</tbody></table></div></div>';
+    html += '</tbody></table></div></div>' +
+      '</div></div>';
     detailEl.innerHTML = html;
     syncHash();
   }
@@ -2257,18 +2634,356 @@ export const CONSOLE_HTML = `<!doctype html>
       buttons[i].setAttribute('aria-selected', on ? 'true' : 'false');
     }
     var isProjects = mode === 'projects';
+    var isOverview = mode === 'overview';
     document.getElementById('task-list').hidden = isProjects;
     document.getElementById('project-list').hidden = !isProjects;
-    // 项目下拉只属于任务模式；状态 chip 两种模式都留着 —— 项目模式下它筛的是项目内的任务表
+    // 概览看的是全量，搜索/筛选在这里没有作用对象，整块收起来
+    var controls = document.getElementById('explorer-controls');
+    if (controls) controls.hidden = isOverview;
+    // 项目下拉只属于任务模式；状态 chip 在项目模式下筛的是项目内的任务表
     var row = document.getElementById('repo-filter-row');
-    if (row) row.hidden = isProjects;
+    if (row) row.hidden = isProjects || isOverview;
     var filters = document.getElementById('status-filters');
-    if (filters) filters.hidden = false;
+    if (filters) filters.hidden = isOverview;
     var search = document.getElementById('task-search');
     if (search) {
       search.placeholder = isProjects ? '搜索项目名或仓库地址…' : '搜索任务标题、ID、仓库、分支…';
       search.value = state.searchQuery;
     }
+  }
+
+  // ─── 概览：统计口径与渲染 ───
+
+  var WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+
+  /** '2026-11-02' → '11 月 2 日 周一' */
+  function fmtDayCN(date) {
+    if (!date) return '—';
+    var d = new Date(date + 'T00:00:00');
+    if (isNaN(d.getTime())) return String(date);
+    return (d.getMonth() + 1) + ' 月 ' + d.getDate() + ' 日 ' + WEEKDAYS[d.getDay()];
+  }
+
+  /** '2026-11-02' → '11/02'，活动条下的短标签 */
+  function fmtDayShort(date) {
+    var parts = String(date || '').split('-');
+    return parts.length === 3 ? parts[1] + '/' + parts[2] : String(date || '');
+  }
+
+  function statsDays() {
+    return (state.stats && state.stats.days) || [];
+  }
+
+  function sumDays(days) {
+    var s = { runs: 0, runs_ok: 0, runs_failed: 0, tasks_done: 0, tasks_failed: 0, issues_solved: 0, cost: 0 };
+    for (var i = 0; i < days.length; i++) {
+      var d = days[i];
+      s.runs += Number(d.runs || 0);
+      s.runs_ok += Number(d.runs_ok || 0);
+      s.runs_failed += Number(d.runs_failed || 0);
+      s.tasks_done += Number(d.tasks_done || 0);
+      s.tasks_failed += Number(d.tasks_failed || 0);
+      s.issues_solved += Number(d.issues_solved || 0);
+      s.cost += Number(d.cost_usd || 0);
+    }
+    return s;
+  }
+
+  /** 当前口径对应的天：today / yesterday / 7d / 14d / date:YYYY-MM-DD */
+  function overviewPeriodDays() {
+    var days = statsDays();
+    var p = state.overviewPeriod;
+    if (p === 'today') return days.slice(-1);
+    if (p === '7d') return days.slice(-7);
+    if (p === '14d') return days;
+    if (p.indexOf('date:') === 0) {
+      var want = p.slice(5);
+      var out = [];
+      for (var i = 0; i < days.length; i++) if (days[i].date === want) out.push(days[i]);
+      return out;
+    }
+    return days.length >= 2 ? days.slice(-2, -1) : [];
+  }
+
+  function overviewPeriodName() {
+    var p = state.overviewPeriod;
+    if (p === 'today') return '今天';
+    if (p === '7d') return '近 7 天';
+    if (p === '14d') return '近 14 天';
+    if (p.indexOf('date:') === 0) return fmtDayCN(p.slice(5));
+    return '昨天';
+  }
+
+  /** 摘要开头带日期：昨天 11 月 2 日周一，…；区间则给起止 */
+  function overviewPeriodLong() {
+    var days = overviewPeriodDays();
+    var name = overviewPeriodName();
+    var p = state.overviewPeriod;
+    if (p === 'today' || p === 'yesterday') {
+      return days.length > 0 ? name + ' ' + fmtDayCN(days[0].date) : name;
+    }
+    if (p === '7d' || p === '14d') {
+      if (days.length === 0) return name;
+      return name + '（' + fmtDayCN(days[0].date) + ' 至 ' + fmtDayCN(days[days.length - 1].date) + '）';
+    }
+    return name;
+  }
+
+  function statBox(label, value, sub) {
+    return '<div class="stat-box"><div class="stat-label">' + esc(label) + '</div>' +
+      '<div class="stat-value">' + value + '</div>' +
+      '<div class="stat-sub">' + esc(sub) + '</div></div>';
+  }
+
+  function renderDigest(s) {
+    var pieces = [];
+    if (s.runs > 0) {
+      var t = '跑了 <b>' + s.runs + '</b> 次';
+      if (s.runs_failed > 0) {
+        t += '（<b>' + s.runs_ok + '</b> 成功，<b class="bad">' + s.runs_failed + '</b> 失败）';
+      } else {
+        t += '，全部成功';
+      }
+      pieces.push(t);
+    }
+    if (s.tasks_done > 0) pieces.push('完成 <b class="done">' + s.tasks_done + '</b> 个任务');
+    if (s.tasks_failed > 0) pieces.push('<b class="bad">' + s.tasks_failed + '</b> 个任务失败');
+    if (s.issues_solved > 0) pieces.push('<b>' + s.issues_solved + '</b> 个问题闭环');
+    var body = pieces.length > 0 ? pieces.join('，') + '。' : '没有运行记录，也没有任务完成。';
+    // 空白的一天最需要一句指向：最近一次运行在哪天
+    if (pieces.length === 0) {
+      var all = statsDays();
+      for (var i = all.length - 1; i >= 0; i--) {
+        if (Number(all[i].runs || 0) > 0) {
+          body += '最近一次运行在 ' + fmtDayCN(all[i].date) + '。';
+          break;
+        }
+      }
+    }
+    return '<span class="ov-when">' + esc(overviewPeriodLong()) + '</span>，' + body;
+  }
+
+  function renderOverviewMetrics(s) {
+    var html = '<div class="summary-grid">' +
+      statBox('运行次数', String(s.runs), s.runs > 0 ? s.runs_ok + ' 成功 · ' + s.runs_failed + ' 失败' : '这段时间没有 Run') +
+      statBox('完成任务', String(s.tasks_done), s.tasks_failed > 0 ? s.tasks_failed + ' 个失败 / 驳回 / 放弃' : '全部走到 S-DONE') +
+      statBox('问题闭环', String(s.issues_solved), '完成任务的关联 feedback 去重数') +
+      statBox('成本', fmtCost(s.cost), s.runs > 0 ? '平均每次 ' + fmtCost(s.cost / s.runs) : '—') +
+    '</div>';
+    var totals = (state.stats && state.stats.totals) || null;
+    if (totals) {
+      html += '<p class="ov-cum">累计 ' + (totals.tasks || 0) + ' 个任务，其中 ' + (totals.tasks_done || 0) +
+        ' 个已完成；共 ' + (totals.runs || 0) + ' 次运行，花费 ' + fmtCost(totals.cost_usd) + '。</p>';
+    }
+    return html;
+  }
+
+  function isPeriodDay(date, idx, total) {
+    var p = state.overviewPeriod;
+    if (p === 'today') return idx === total - 1;
+    if (p === 'yesterday') return idx === total - 2;
+    if (p === '7d') return idx >= total - 7;
+    if (p === '14d') return true;
+    if (p.indexOf('date:') === 0) return p.slice(5) === date;
+    return false;
+  }
+
+  function renderOverviewStrip() {
+    var days = statsDays();
+    if (days.length === 0) return '';
+    var max = 1;
+    for (var m = 0; m < days.length; m++) max = Math.max(max, Number(days[m].runs || 0));
+    var html = '<div class="card">' +
+      '<div class="card-header"><h3>近 14 天运行</h3>' +
+        '<div class="ov-strip-legend">' +
+          '<span><i style="background:var(--stage)"></i>成功</span>' +
+          '<span><i style="background:var(--bad)"></i>失败</span>' +
+        '</div>' +
+      '</div>' +
+      '<div class="ov-strip">';
+    for (var i = 0; i < days.length; i++) {
+      var d = days[i];
+      var runs = Number(d.runs || 0);
+      var ok = Number(d.runs_ok || 0);
+      var bad = Number(d.runs_failed || 0);
+      var inRange = isPeriodDay(d.date, i, days.length);
+      var single = state.overviewPeriod === 'today' || state.overviewPeriod === 'yesterday' || state.overviewPeriod.indexOf('date:') === 0;
+      var title = fmtDayCN(d.date) + '：' + runs + ' 次运行（' + ok + ' 成功，' + bad + ' 失败），完成 ' +
+        Number(d.tasks_done || 0) + ' 个任务，' + Number(d.issues_solved || 0) + ' 个问题闭环';
+      html += '<button type="button" class="ov-day' + (single && inRange ? ' active' : '') + (inRange ? ' in-range' : '') +
+          '" data-date="' + esc(d.date) + '" title="' + esc(title) + '">' +
+        '<span class="ov-col">' +
+          (bad > 0 ? '<i class="bad" style="height:' + Math.max(3, Math.round((bad / max) * 100)) + '%"></i>' : '') +
+          (ok > 0 ? '<i class="ok" style="height:' + Math.max(3, Math.round((ok / max) * 100)) + '%"></i>' : '') +
+          (runs === 0 ? '<i class="zero"></i>' : '') +
+        '</span>' +
+        '<span class="ov-day-label">' + esc(fmtDayShort(d.date)) + '</span>' +
+      '</button>';
+    }
+    html += '</div></div>';
+    return html;
+  }
+
+  /** 主路径站位：10 段阶梯，走到哪一段一眼可见 */
+  function stageIndex(status) {
+    var i = MAIN_PATH.indexOf(status);
+    if (i >= 0) return i;
+    if (status === 'S-NEED_CLARIFICATION') return 1;
+    if (status === 'S-HUMAN_REVIEW') return 8;
+    if (status === 'S-DONE') return MAIN_PATH.length - 1;
+    return 0;
+  }
+
+  function ladderHtml(status) {
+    var idx = stageIndex(status);
+    var kind = statusKind(status);
+    var html = '<ol class="ladder ' + kind + '" title="主路径第 ' + (idx + 1) + ' / ' + MAIN_PATH.length + ' 段">';
+    for (var i = 0; i < MAIN_PATH.length; i++) {
+      var cls = '';
+      if (kind === 'done') cls = 'done';
+      else if (i < idx) cls = 'done';
+      else if (i === idx) cls = 'cur';
+      html += '<li class="' + cls + '"></li>';
+    }
+    return html + '</ol>';
+  }
+
+  function renderInFlight() {
+    var rows = [];
+    for (var i = 0; i < state.tasks.length; i++) {
+      var k = statusKind(state.tasks[i].status);
+      if (k === 'stage' || k === 'gate') rows.push(state.tasks[i]);
+    }
+    var html = '<div class="card">' +
+      '<div class="card-header"><h3>进行中</h3><span class="muted">' +
+        (rows.length > 0 ? rows.length + ' 个任务未到终态' : '全部任务都已到终态') + '</span></div>';
+    if (rows.length === 0) {
+      html += '<p class="muted" style="margin:4px 0 8px">当前没有进行中的任务。</p>';
+    } else {
+      html += '<ul class="ov-tasks">';
+      for (var j = 0; j < rows.length; j++) {
+        var t = rows[j];
+        var cat = statusKind(t.status);
+        html += '<li class="ov-task" data-task-id="' + esc(t.id) + '">' +
+          '<div class="ov-task-main">' +
+            '<span class="ov-task-title" title="' + esc(t.title) + '">' + esc(t.title) + '</span>' +
+            '<span class="ov-task-meta">' +
+              '<span class="task-status ' + cat + '">' + esc(statusLabel(t.status) || t.status) + '</span>' +
+              '<span class="task-repo" title="' + esc(t.repo) + '">' + esc(shortRepo(t.repo)) + '</span>' +
+              '<span class="ov-when">' +
+                (t.control_mode === 'paused' ? '已暂停，' : '') +
+                '更新 ' + esc(fmtShortTime(t.updated_at)) +
+              '</span>' +
+            '</span>' +
+          '</div>' +
+          ladderHtml(t.status) +
+        '</li>';
+      }
+      html += '</ul>';
+    }
+    return html + '</div>';
+  }
+
+  function renderOverviewProjects() {
+    var projects = groupByRepo(state.tasks);
+    var html = '<div class="card">' +
+      '<div class="card-header"><h3>项目</h3><span class="muted">' +
+        (projects.length > 0 ? projects.length + ' 个项目，点击进入项目视图' : '还没有项目') + '</span></div>';
+    if (projects.length === 0) return html + '</div>';
+    html += '<ul class="ov-projects">';
+    for (var i = 0; i < projects.length; i++) {
+      var p = projects[i];
+      html += '<li class="ov-proj" data-repo-id="' + esc(p.id) + '">' +
+        '<span class="ov-proj-name" title="' + esc(p.repo) + '">' + esc(shortRepo(p.repo)) + '</span>' +
+        '<span class="ov-proj-counts">' +
+          (p.counts.stage > 0 ? '<span class="proj-count stage">运行 ' + p.counts.stage + '</span>' : '') +
+          (p.counts.gate > 0 ? '<span class="proj-count gate">待介入 ' + p.counts.gate + '</span>' : '') +
+          '<span class="proj-count done">完成 ' + p.counts.done + '</span>' +
+          (p.counts.bad > 0 ? '<span class="proj-count bad">异常 ' + p.counts.bad + '</span>' : '') +
+        '</span>' +
+        '<span class="ov-proj-foot">' + p.counts.all + ' 个任务，' + p.runs + ' 轮，' +
+          (p.cost > 0 ? fmtCost(p.cost) + '，' : '') + '最近更新 ' + esc(fmtShortTime(p.lastUpdated)) + '</span>' +
+      '</li>';
+    }
+    html += '</ul></div>';
+    return html;
+  }
+
+  function renderOverview() {
+    var detailEl = document.getElementById('detail');
+    if (!state.stats) {
+      var pending = state.statsError
+        ? '<div class="empty">统计不可用：数据库连接失败，任务列表与详情不受影响。</div>'
+        : '<div class="ov-skeleton"></div><div class="ov-skeleton"></div>';
+      detailEl.innerHTML = '<div class="view"><div class="view-head"><h2 class="cockpit-title" style="margin:0">概览</h2></div>' +
+        '<div class="view-body">' + pending + '</div></div>';
+      return;
+    }
+    var s = sumDays(overviewPeriodDays());
+    var periods = [['today', '今天'], ['yesterday', '昨天'], ['7d', '近 7 天'], ['14d', '近 14 天']];
+    var periodHtml = '<div class="ov-periods" id="ov-periods">';
+    for (var i = 0; i < periods.length; i++) {
+      periodHtml += '<button type="button" class="ov-period' +
+        (state.overviewPeriod === periods[i][0] ? ' active' : '') +
+        '" data-period="' + periods[i][0] + '">' + periods[i][1] + '</button>';
+    }
+    periodHtml += '</div>';
+
+    var html = '<div class="view">' +
+      '<div class="view-head">' +
+        '<div class="ov-head-row">' +
+          '<h2 class="cockpit-title" style="margin:0">概览</h2>' +
+          periodHtml +
+        '</div>' +
+      '</div>' +
+      '<div class="view-body">' +
+        '<p class="ov-digest">' + renderDigest(s) + '</p>' +
+        renderOverviewMetrics(s) +
+        renderOverviewStrip() +
+        renderInFlight() +
+        renderOverviewProjects() +
+      '</div></div>';
+    detailEl.innerHTML = html;
+    syncHash();
+  }
+
+  /** 底部状态栏：运行中 / 待介入 / 已完成，来自任务列表，和侧栏同一口径 */
+  function updateStatusbar() {
+    var c = statusCounts(state.tasks);
+    var runEl = document.getElementById('sb-running');
+    if (runEl) runEl.textContent = String(c.stage);
+    var waitEl = document.getElementById('sb-waiting');
+    if (waitEl) waitEl.textContent = String(c.gate);
+    var doneEl = document.getElementById('sb-done');
+    if (doneEl) doneEl.textContent = c.done + ' 已完成';
+    var ovEl = document.getElementById('mode-count-overview');
+    if (ovEl) ovEl.textContent = String(c.stage + c.gate);
+    var health = document.getElementById('sb-health');
+    var dot = document.getElementById('health-dot');
+    if (health && dot && !dot.classList.contains('err')) health.textContent = '已连接';
+    if (health && dot && dot.classList.contains('err')) health.textContent = '连接异常';
+  }
+
+  function loadStats(silent) {
+    return fetchJSON('/api/stats').then(function (data) {
+      var days = data.days || [];
+      var parts = [];
+      for (var i = 0; i < days.length; i++) {
+        var d = days[i];
+        parts.push([d.date, d.runs, d.runs_ok, d.runs_failed, d.tasks_done, d.tasks_failed, d.issues_solved, d.cost_usd].join(':'));
+      }
+      var t = data.totals || {};
+      var sig = parts.join('|') + '#' + t.tasks + ':' + t.tasks_done + ':' + t.runs + ':' + t.cost_usd;
+      var changed = sig !== state.statsSig;
+      state.stats = data;
+      state.statsSig = sig;
+      state.statsError = false;
+      return changed;
+    }).catch(function () {
+      // 统计失败不拖垮控制台：任务与详情仍可用，概览给一句可诊断的说明
+      state.statsError = true;
+      return false;
+    });
   }
 
   function setMode(mode) {
@@ -2280,6 +2995,13 @@ export const CONSOLE_HTML = `<!doctype html>
         if (projects.length > 0) state.selectedRepo = projects[0].id;
       }
       renderProjects();
+    } else if (mode === 'overview') {
+      // 侧栏仍列全部任务：概览负责「现在怎么样」，点任务直接进任务模式看细节
+      renderTasks();
+      renderOverview();
+      loadStats(false).then(function () {
+        if (state.mode === 'overview') renderOverview();
+      });
     } else {
       renderTasks();
       if (state.selectedId) {
@@ -2695,11 +3417,15 @@ export const CONSOLE_HTML = `<!doctype html>
       ? '<a href="' + esc(t.repo) + '" target="_blank" rel="noopener noreferrer"><code>' + esc(t.repo) + '</code> ↗</a>'
       : '<code>' + esc(t.repo || '—') + '</code>';
 
-    var html = '<div class="cockpit-header">' +
+    var controlMode = t.control_mode || 'auto';
+    var controlLabel = controlMode === 'paused' ? '已暂停' : (controlMode === 'human' ? '人工驾驶' : '自动执行');
+
+    var html = '<div class="view">' +
+      '<div class="view-head">' +
       '<div class="cockpit-top-row">' +
         '<div class="cockpit-badges">' +
           badge(t.status) +
-          '<span class="mode-pill ' + esc(t.control_mode || 'auto') + '">control_mode: <b>' + esc(t.control_mode || 'auto') + '</b></span>' +
+          '<span class="mode-pill drive ' + esc(controlMode) + '" title="control_mode: ' + esc(controlMode) + '">' + controlLabel + '</span>' +
           (t.risk ? '<span class="badge ' + (t.risk === 'high' ? 'bad' : (t.risk === 'medium' ? 'gate' : 'done')) + '">risk: ' + esc(t.risk) + '</span>' : '') +
           (t.complexity ? '<span class="badge neutral">complexity: ' + esc(t.complexity) + '</span>' : '') +
           (pr ? '<a class="pr-link-pill" href="' + esc(pr.url) + '" target="_blank" rel="noopener noreferrer">PR #' + esc(pr.number || '') + ' ↗</a>' : '') +
@@ -2713,12 +3439,14 @@ export const CONSOLE_HTML = `<!doctype html>
       '</div>' +
       '<h2 class="cockpit-title">' + esc(t.title) + '</h2>' +
       '<div class="cockpit-meta">' +
-        '<span class="cockpit-meta-item">仓库: ' + repoHtml + '</span>' +
+        '<span class="cockpit-meta-item">' + repoHtml + '</span>' +
         '<span class="cockpit-meta-item">分支: <code>' + esc(t.work_branch || '—') + '</code> → <code>' + esc(t.base_branch || 'main') + '</code></span>' +
         '<span class="cockpit-meta-item">创建: ' + esc(fmtTime(t.created_at)) + '</span>' +
         '<span class="cockpit-meta-item">更新: ' + esc(fmtTime(t.updated_at)) + '</span>' +
         (t.terminal_at ? '<span class="cockpit-meta-item">终态: ' + esc(fmtTime(t.terminal_at)) + '</span>' : '') +
       '</div>' +
+      '</div>' +
+      '<div class="view-body">' +
       renderStatusSummary(d) +
       '<div class="summary-grid">' +
         '<div class="stat-box">' +
@@ -2749,8 +3477,7 @@ export const CONSOLE_HTML = `<!doctype html>
       '</div>' +
       '<div class="glossary-panel" id="glossary-panel"' + (state.glossaryOpen ? '' : ' hidden') + '>' +
         renderGlossary() +
-      '</div>' +
-    '</div>';
+      '</div>';
     return html;
   }
 
@@ -2765,7 +3492,7 @@ export const CONSOLE_HTML = `<!doctype html>
 
     var html = '<div class="card">' +
       '<div class="card-header">' +
-        '<h3>📄 RFC 工程规格书 · ' + esc(b.title || art.key || 'RFC') + ' <span class="badge purple">v' + esc(art.version) + (historyCount > 1 ? ' / 共' + historyCount + '版' : '') + '</span></h3>' +
+        '<h3>RFC 工程规格书 · ' + esc(b.title || art.key || 'RFC') + ' <span class="badge purple">v' + esc(art.version) + (historyCount > 1 ? ' / 共' + historyCount + '版' : '') + '</span></h3>' +
         '<span class="muted mono">' + esc(fmtTime(art.committed_at)) + '</span>' +
       '</div>';
 
@@ -2849,7 +3576,7 @@ export const CONSOLE_HTML = `<!doctype html>
 
     var html = '<div class="card">' +
       '<div class="card-header">' +
-        '<h3>⚖️ 策略引擎裁决 (Policy Decision · ' + esc(b.decision_point || art.key || 'policy') + ')</h3>' +
+        '<h3>策略引擎裁决 · ' + esc(b.decision_point || art.key || 'policy') + '</h3>' +
         '<span class="badge ' + (isAuto ? 'done' : 'gate') + '">' + esc(b.decision || '—') + '</span>' +
       '</div>' +
       '<div style="margin-bottom:8px;font-size:13px"><b>裁决理由：</b>' + esc(b.reason || '—') +
@@ -2891,7 +3618,7 @@ export const CONSOLE_HTML = `<!doctype html>
     // 1. Feedback Origin
     html += '<div class="card">' +
       '<div class="card-header">' +
-        '<h3>📥 需求起源 (Feedback Ingress · ' + feedbacks.length + ')</h3>' +
+        '<h3>需求起源 · ' + feedbacks.length + '</h3>' +
         (feedbacks.length > 0 ? '<span class="badge stage">source: ' + esc(feedbacks[0].source) + '</span>' : '') +
       '</div>';
     if (feedbacks.length === 0) {
@@ -2936,7 +3663,7 @@ export const CONSOLE_HTML = `<!doctype html>
     // 2. Stage Outcomes
     html += '<div class="card">' +
       '<div class="card-header">' +
-        '<h3>🎯 阶段评审结论 (Stage Outcomes · ' + outcomes.length + ')</h3>' +
+        '<h3>阶段评审结论 · ' + outcomes.length + '</h3>' +
         '<span class="muted" style="font-size:12px">状态机转移守卫 (Guard) 的结构化输入源</span>' +
       '</div>';
     if (outcomes.length === 0) {
@@ -2975,7 +3702,7 @@ export const CONSOLE_HTML = `<!doctype html>
 
     // 5. Other Artifacts (state, checkpoint, critic_review, capability_request)
     if (others.length > 0) {
-      html += '<div class="card"><div class="card-header"><h3>📦 其他结构化产物 (' + others.length + ')</h3></div>';
+      html += '<div class="card"><div class="card-header"><h3>其他结构化产物 · ' + others.length + '</h3></div>';
       for (var x = 0; x < others.length; x++) {
         var xa = others[x].latest;
         html += '<details data-expand-id="art-other-' + esc(xa.kind) + '-' + esc(xa.key) + '" style="margin-bottom:8px">' +
@@ -3005,7 +3732,7 @@ export const CONSOLE_HTML = `<!doctype html>
 
     var html = '<div class="card">' +
       '<div class="card-header">' +
-        '<h3>⚡ 执行轮次与上下文组装 (Runs & Context Builder · ' + runs.length + ')</h3>' +
+        '<h3>执行轮次与上下文组装 · ' + runs.length + '</h3>' +
         '<span class="muted" style="font-size:12px">Session 销毁后 Run 记录与 Context 快照永久留存于 Fact Plane</span>' +
       '</div>';
 
@@ -3030,7 +3757,7 @@ export const CONSOLE_HTML = `<!doctype html>
             '<span class="badge purple">Harness: ' + esc(run.harness_id || '—') + (run.harness_tier ? ' · ' + esc(run.harness_tier) : '') + '</span>' +
           '</div>' +
           '<div style="display:flex;align-items:center;gap:8px">' +
-            (run.id ? '<button type="button" class="copy-btn filter-run-btn" data-run-id="' + esc(run.id) + '">🔍 查看此 Run 事件</button>' : '') +
+            (run.id ? '<button type="button" class="copy-btn filter-run-btn" data-run-id="' + esc(run.id) + '">查看此 Run 事件</button>' : '') +
           '</div>' +
         '</div>' +
         '<div class="run-metrics-row">' +
@@ -3044,7 +3771,7 @@ export const CONSOLE_HTML = `<!doctype html>
 
       if (run.error_kind || run.error_detail) {
         html += '<div class="branch-callout bad" style="margin-top:8px">' +
-          '<div class="branch-callout-head">❌ 错误类型: <code>' + esc(run.error_kind || 'ERROR') + '</code></div>' +
+          '<div class="branch-callout-head">错误类型: <code>' + esc(run.error_kind || 'ERROR') + '</code></div>' +
           (run.error_detail ? '<div class="branch-callout-reason mono">' + esc(run.error_detail) + '</div>' : '') +
         '</div>';
       }
@@ -3074,7 +3801,7 @@ export const CONSOLE_HTML = `<!doctype html>
 
       if (diff && diff.files_changed && diff.files_changed.length > 0) {
         html += '<div style="margin-top:8px;font-size:12px" class="mono muted">' +
-          '📝 产生工作区代码变更: <b>' + diff.files_changed.length + ' 个文件</b> (' + fmtNum(diff.patch_chars) + ' chars) — 可在「代码变更」Tab 查看完整 Diff' +
+          '产生工作区代码变更: <b>' + diff.files_changed.length + ' 个文件</b> (' + fmtNum(diff.patch_chars) + ' chars) — 可在「代码变更」Tab 查看完整 Diff' +
         '</div>';
       }
 
@@ -3083,7 +3810,7 @@ export const CONSOLE_HTML = `<!doctype html>
     html += '</div>';
 
     if (timers.length > 0) {
-      html += '<div class="card"><div class="card-header"><h3>⏱️ 持久化定时器 (Durable Timers · ' + timers.length + ')</h3></div>' +
+      html += '<div class="card"><div class="card-header"><h3>持久化定时器 · ' + timers.length + '</h3></div>' +
         '<table><thead><tr><th>类型 (Kind)</th><th>状态 (State)</th><th>关联 Run</th><th>到期时间 (Due)</th><th>触发时间 (Fired)</th></tr></thead><tbody>';
       for (var t = 0; t < timers.length; t++) {
         var tm = timers[t];
@@ -3150,7 +3877,7 @@ export const CONSOLE_HTML = `<!doctype html>
     var diffEvents = extractDiffEvents(d.events || []);
     var html = '<div class="card">' +
       '<div class="card-header">' +
-        '<h3>🧬 工作区代码变更 (Workspace Diff Collected · ' + diffEvents.length + ')</h3>' +
+        '<h3>工作区代码变更 · ' + diffEvents.length + '</h3>' +
         '<span class="muted" style="font-size:12px">由 collectChanges 采集并持久化于事件流</span>' +
       '</div>';
 
@@ -3208,7 +3935,7 @@ export const CONSOLE_HTML = `<!doctype html>
       var fileObj = parsedFiles[b];
       html += '<div class="diff-block" id="diff-file-' + b + '">' +
         '<div class="diff-block-header">' +
-          '<span>📄 ' + esc(fileObj.file) + '</span>' +
+          '<span>' + esc(fileObj.file) + '</span>' +
           '<span><span class="diff-add-stat">+' + fileObj.added + '</span> / <span class="diff-del-stat">-' + fileObj.removed + '</span></span>' +
         '</div>' +
         '<div style="overflow-x:auto"><table class="diff-table"><tbody>';
@@ -3299,7 +4026,7 @@ export const CONSOLE_HTML = `<!doctype html>
 
     var html = '<div class="card">' +
       '<div class="card-header">' +
-        '<h3>📜 事实事件时间线 (Append-Only Event Stream · ' + filtered.length + ' / ' + events.length + ')</h3>' +
+        '<h3>事实事件时间线 · ' + filtered.length + ' / ' + events.length + '</h3>' +
         '<div style="display:flex;gap:6px">' +
           '<button type="button" class="copy-btn" id="expand-all-events">全部展开 JSON</button>' +
           '<button type="button" class="copy-btn" id="collapse-all-events">全部收起</button>' +
@@ -3375,7 +4102,7 @@ export const CONSOLE_HTML = `<!doctype html>
 
     html += '<div class="card">' +
       '<div class="card-header">' +
-        '<h3>🧭 状态机轨迹 (State Machine Trajectory)</h3>' +
+        '<h3>状态机轨迹</h3>' +
         '<div class="legend-bar">' +
           '<span class="legend-item"><span class="legend-swatch" style="background:var(--done)"></span>已实际通过</span>' +
           '<span class="legend-item"><span class="legend-swatch" style="background:var(--accent)"></span>当前所处状态</span>' +
@@ -3388,10 +4115,10 @@ export const CONSOLE_HTML = `<!doctype html>
 
     var tab = state.activeTab;
     html += '<div class="tabs-bar" role="tablist">' +
-      '<button type="button" class="tab-btn' + (tab === 'overview' ? ' active' : '') + '" data-tab="overview">📋 概览与方案 <span class="tab-count">' + (d.artifacts || []).length + '</span></button>' +
-      '<button type="button" class="tab-btn' + (tab === 'runs' ? ' active' : '') + '" data-tab="runs">⚡ 执行与上下文 <span class="tab-count">' + (d.runs || []).length + '</span></button>' +
-      '<button type="button" class="tab-btn' + (tab === 'diff' ? ' active' : '') + '" data-tab="diff">🧬 代码变更 <span class="tab-count">' + diffFileCount + '</span></button>' +
-      '<button type="button" class="tab-btn' + (tab === 'timeline' ? ' active' : '') + '" data-tab="timeline">📜 事件时间线 <span class="tab-count">' + (d.events || []).length + '</span></button>' +
+      '<button type="button" class="tab-btn' + (tab === 'overview' ? ' active' : '') + '" data-tab="overview">概览与方案 <span class="tab-count">' + (d.artifacts || []).length + '</span></button>' +
+      '<button type="button" class="tab-btn' + (tab === 'runs' ? ' active' : '') + '" data-tab="runs">执行与上下文 <span class="tab-count">' + (d.runs || []).length + '</span></button>' +
+      '<button type="button" class="tab-btn' + (tab === 'diff' ? ' active' : '') + '" data-tab="diff">代码变更 <span class="tab-count">' + diffFileCount + '</span></button>' +
+      '<button type="button" class="tab-btn' + (tab === 'timeline' ? ' active' : '') + '" data-tab="timeline">事件时间线 <span class="tab-count">' + (d.events || []).length + '</span></button>' +
     '</div>';
 
     html += '<div id="tab-content">';
@@ -3400,6 +4127,7 @@ export const CONSOLE_HTML = `<!doctype html>
     else if (tab === 'diff') html += renderDiffTab(d);
     else html += renderTimelineTab(d);
     html += '</div>';
+    html += '</div></div>'; // .view-body + .view
 
     detailEl.innerHTML = html;
     restoreExpandedState(prevScroll);
@@ -3440,6 +4168,7 @@ export const CONSOLE_HTML = `<!doctype html>
       }
       var dot = document.getElementById('health-dot');
       if (dot) dot.classList.remove('err');
+      updateStatusbar();
       return data;
     });
   }
@@ -3479,7 +4208,13 @@ export const CONSOLE_HTML = `<!doctype html>
   function refreshAll(silent) {
     var pulse = document.getElementById('pulse');
     if (!silent) pulse.textContent = '同步中…';
+    var prevTasksSig = state.tasksSig;
     return loadTasks(!!silent).then(function () {
+      if (state.mode === 'overview') {
+        return loadStats(!!silent).then(function (statsChanged) {
+          if (!silent || statsChanged || state.tasksSig !== prevTasksSig) renderOverview();
+        });
+      }
       if (state.mode === 'projects') {
         var projects = groupByRepo(state.tasks);
         var stillThere = false;
@@ -3555,8 +4290,28 @@ export const CONSOLE_HTML = `<!doctype html>
   });
 
   document.getElementById('detail').addEventListener('click', function (ev) {
-    var row = ev.target.closest('tr[data-task-id]');
-    if (row) select(row.getAttribute('data-task-id'));
+    // 概览的三种交互：切口径、点某一天、点项目
+    var periodBtn = ev.target.closest('.ov-period[data-period]');
+    if (periodBtn) {
+      state.overviewPeriod = periodBtn.getAttribute('data-period') || 'yesterday';
+      renderOverview();
+      return;
+    }
+    var dayBtn = ev.target.closest('.ov-day[data-date]');
+    if (dayBtn) {
+      state.overviewPeriod = 'date:' + dayBtn.getAttribute('data-date');
+      renderOverview();
+      return;
+    }
+    var projRow = ev.target.closest('.ov-proj[data-repo-id]');
+    if (projRow) {
+      state.selectedRepo = projRow.getAttribute('data-repo-id');
+      state.statusCat = 'all';
+      setMode('projects');
+      return;
+    }
+    var taskRow = ev.target.closest('[data-task-id]');
+    if (taskRow) select(taskRow.getAttribute('data-task-id'));
   });
 
   document.getElementById('task-list').addEventListener('click', function (ev) {
