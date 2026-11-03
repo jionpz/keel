@@ -397,3 +397,28 @@ develop 的 diff 事件与 commitAll 的 commit 对得上。随后修掉 `firstR
 ### Status
 
 [OK] **Completed**
+
+
+## Session 6: Console 双模式筛选
+
+**Date**: 2026-11-03
+**Task**: Console 双模式筛选
+**Branch**: `main`
+
+### Summary
+
+console 完成可读性/项目性改造：中文状态徽章、一句话现状、轨迹停留时长条、术语表、任务/项目双视图、布局收敛，以及本轮筛选（任务模式项目下拉+状态 chip，项目模式按状态筛当前项目任务表，chip 计数跟随筛选口径）。全部经无头 Chrome 验证，lint/typecheck/542 测试通过。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7efdba8` | (see git log) |
+| `56953e5` | (see git log) |
+| `55d06bc` | (see git log) |
+| `38d836d` | (see git log) |
+| `bab2646` | (see git log) |
+
+### Status
+
+[OK] **Completed**
