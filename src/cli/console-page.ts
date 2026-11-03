@@ -419,7 +419,7 @@ export const CONSOLE_HTML = `<!doctype html>
     align-items: center;
     justify-content: space-between;
     gap: 6px;
-    font-size: 11px;
+    font-size: 11.5px;
     color: var(--muted);
     font-family: var(--mono);
   }
@@ -466,6 +466,18 @@ export const CONSOLE_HTML = `<!doctype html>
   .badge.bad { color: var(--bad); background: var(--bad-soft); border-color: rgba(244, 63, 94, 0.3); }
   .badge.neutral { color: var(--muted); background: var(--panel-alt); border-color: var(--line); }
   .badge.purple { color: var(--purple); background: var(--purple-soft); border-color: rgba(167, 139, 250, 0.3); }
+  /* 人话在前、机器码在后：中文短名常驻，编号降为次要视觉层级 */
+  .badge-zh {
+    font-family: var(--sans);
+    font-size: 12px;
+    letter-spacing: 0.2px;
+  }
+  .badge-code {
+    font-size: 10.5px;
+    font-weight: 500;
+    opacity: 0.72;
+    letter-spacing: -0.2px;
+  }
 
   .dot {
     width: 7px;
@@ -484,7 +496,7 @@ export const CONSOLE_HTML = `<!doctype html>
   }
 
   .mode-pill {
-    font-size: 10.5px;
+    font-size: 11px;
     font-family: var(--mono);
     padding: 1px 6px;
     border-radius: 4px;
@@ -684,18 +696,34 @@ export const CONSOLE_HTML = `<!doctype html>
   }
   .pipeline .step {
     flex: 1 1 0;
-    min-width: 76px;
+    min-width: 84px;
     display: flex;
     flex-direction: column;
     justify-content: space-between;
-    gap: 3px;
-    padding: 6px 7px;
+    gap: 4px;
+    padding: 8px 9px 10px;
     border-radius: 7px;
     border: 1px solid var(--line);
     background: var(--panel-alt);
     color: var(--muted);
     position: relative;
+    overflow: hidden;
     transition: all 0.15s;
+  }
+  /* 停留时长条：节点内按最长阶段归一，让耗时成为可见的比例 */
+  .pipeline .step-bar {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 3px;
+    background: rgba(128, 128, 128, 0.12);
+  }
+  .pipeline .step-bar i {
+    display: block;
+    height: 100%;
+    background: currentColor;
+    opacity: 0.55;
   }
   .pipeline .step-foot {
     display: flex;
@@ -704,30 +732,23 @@ export const CONSOLE_HTML = `<!doctype html>
     gap: 3px;
   }
   .pipeline .step-name {
-    font-family: var(--mono);
-    font-size: 9.5px;
+    font-family: var(--sans);
+    font-size: 11.5px;
     font-weight: 700;
-    letter-spacing: -0.4px;
+    letter-spacing: 0;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .pipeline .step-tr {
-    font-family: var(--mono);
-    font-size: 8.5px;
-    padding: 0 3px;
-    border-radius: 3px;
-    background: rgba(128, 128, 128, 0.14);
-    color: currentColor;
-    opacity: 0.9;
-    white-space: nowrap;
-    flex-shrink: 0;
-  }
   .pipeline .step-meta {
-    font-size: 9.5px;
+    font-size: 11.5px;
+    font-weight: 600;
     font-family: var(--mono);
-    opacity: 0.92;
+    opacity: 0.95;
     white-space: nowrap;
+  }
+  .pipeline .step.current .step-meta {
+    font-weight: 700;
   }
   .pipeline .step.done {
     border-color: rgba(16, 185, 129, 0.45);
@@ -752,6 +773,20 @@ export const CONSOLE_HTML = `<!doctype html>
     background: transparent;
     color: var(--muted);
     opacity: 0.65;
+  }
+  /* 偏离主路径时，标出「从哪个阶段分出」，让轨道与下方分支说明连起来 */
+  .pipeline .step.departed {
+    border-color: rgba(245, 158, 11, 0.55);
+    border-style: dashed;
+    background: var(--gate-soft);
+    color: var(--text-sec);
+  }
+  .branch-dwell {
+    margin-left: auto;
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 600;
   }
   .pipeline .arrow {
     display: inline-flex;
@@ -824,6 +859,73 @@ export const CONSOLE_HTML = `<!doctype html>
     padding-left: 5px;
   }
 
+  /* ─── 一句话现状 ─── */
+  .status-summary {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin-top: 12px;
+    padding: 11px 14px;
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    border-radius: 8px;
+    background: var(--panel-alt);
+  }
+  .status-summary.term {
+    border-left-color: var(--done);
+  }
+  .status-summary.bad {
+    border-left-color: var(--bad);
+  }
+  .status-summary .ss-tag {
+    flex: 0 0 auto;
+    margin-top: 1px;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--accent);
+    border: 1px solid currentColor;
+    border-radius: 999px;
+    padding: 1px 8px;
+    opacity: 0.85;
+  }
+  .status-summary.term .ss-tag { color: var(--done); }
+  .status-summary.bad .ss-tag { color: var(--bad); }
+  .status-summary p {
+    margin: 0;
+    font-size: 13.5px;
+    line-height: 1.65;
+    color: var(--text);
+  }
+  .status-summary .ss-next {
+    color: var(--text-sec);
+  }
+
+  /* ─── 术语表 ─── */
+  .glossary-panel {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px dashed var(--line);
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 8px 20px;
+  }
+  .glossary-panel[hidden] { display: none; }
+  .gloss-item {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 12.5px;
+    line-height: 1.55;
+    color: var(--text-sec);
+  }
+  .gloss-term {
+    flex: 0 0 auto;
+    font-family: var(--mono);
+    font-weight: 700;
+    font-size: 11.5px;
+    color: var(--accent);
+  }
+
   /* ─── Workspace Tabs ─── */
   .tabs-bar {
     display: flex;
@@ -878,7 +980,9 @@ export const CONSOLE_HTML = `<!doctype html>
     padding: 12px 14px;
     white-space: pre-wrap;
     word-break: break-word;
-    font-size: 13px;
+    font-size: 14px;
+    line-height: 1.7;
+    max-width: 78ch;
     color: var(--text);
   }
   .outcomes-grid {
@@ -909,9 +1013,9 @@ export const CONSOLE_HTML = `<!doctype html>
     color: var(--text);
   }
   .outcome-reason {
-    font-size: 12.5px;
+    font-size: 13px;
     color: var(--text-sec);
-    line-height: 1.5;
+    line-height: 1.6;
   }
 
   .rfc-section {
@@ -941,7 +1045,8 @@ export const CONSOLE_HTML = `<!doctype html>
     margin: 0;
     padding-left: 18px;
     color: var(--text-sec);
-    font-size: 13px;
+    font-size: 13.5px;
+    line-height: 1.65;
   }
   .rfc-list li { margin-bottom: 4px; }
   .file-tags {
@@ -1195,7 +1300,7 @@ export const CONSOLE_HTML = `<!doctype html>
   details summary {
     cursor: pointer;
     color: var(--muted);
-    font-size: 11.5px;
+    font-size: 12px;
     user-select: none;
   }
   details summary:hover { color: var(--accent); }
@@ -1278,6 +1383,27 @@ export const CONSOLE_HTML = `<!doctype html>
 
   var STAGE_ORDER = ['pm', 'brainstorm', 'critic', 'rfc_draft', 'develop', 'qa', 'review'];
 
+  // 关口态没有 Run 在跑，补一句「在等什么」，让人不用反查状态机文档。
+  var STATUS_HINTS = {
+    'S-NEW': '已创建，等待调度派发',
+    'S-NEED_CLARIFICATION': '等待补充需求澄清',
+    'S-RFC_READY': 'RFC 已就绪，等待策略裁决或派发',
+    'S-HUMAN_REVIEW': '等待人工复核',
+    'S-PR_OPEN': 'PR 已创建，等待合并或关闭'
+  };
+
+  var GLOSSARY = [
+    ['S-*', '任务级状态。阶段态有 Run 在跑；关口态无 Run，等人或等条件；终态无出边。'],
+    ['T-*', '状态机转移规则编号，定义在 src/control/transition/table.ts，与 docs/04-state-machine.md 一致。'],
+    ['Guard', '转移守卫条件，来自结构化的阶段评审结论；满足才会发生该转移。'],
+    ['I8', '不变量 I8：终态一经写入，不可再变更。'],
+    ['Run', '一次阶段执行，相当于一次 Agent 会话；会话销毁后，Run 记录仍留在 Fact Plane。'],
+    ['Recipe / 预算水位', '每次 Run 的上下文配方，以及已用 / 上限的 token 预算。'],
+    ['Harness · L2', '执行该 Run 的 harness 与其能力等级（L0–L2），能力不足时显式降级。'],
+    ['产物 / 事件', 'Fact Plane 的 artifact 与 append-only event；页面上的数字都可由 readEvents 重建。'],
+    ['control_mode', '谁在驾驶：auto / paused / human，与任务状态正交。']
+  ];
+
   var state = {
     tasks: [],
     meta: null,
@@ -1291,6 +1417,7 @@ export const CONSOLE_HTML = `<!doctype html>
     eventSearch: '',
     selectedDiffIdx: 0,
     expandedIds: {},
+    glossaryOpen: false,
     tasksSig: '',
     detailSig: '',
     timer: null,
@@ -1378,6 +1505,9 @@ export const CONSOLE_HTML = `<!doctype html>
     if (m < 60) return m + 'm ' + s + 's';
     var h = Math.floor(m / 60);
     var remM = m % 60;
+    // 停留时间会横跨数天，继续用小时会让「205h 12m」这种数字失去直觉
+    var d = Math.floor(h / 24);
+    if (d >= 2) return d + '天 ' + (h % 24) + 'h';
     return h + 'h ' + remM + 'm';
   }
 
@@ -1428,8 +1558,23 @@ export const CONSOLE_HTML = `<!doctype html>
     return 'stage';
   }
 
-  function badge(status) {
-    return '<span class="badge ' + statusKind(status) + '"><span class="dot"></span>' + esc(status) + '</span>';
+  function statusLabel(status) {
+    var m = state.meta && state.meta.statusLabels;
+    return (m && m[status]) || '';
+  }
+
+  function eventLabel(ev) {
+    var m = state.meta && state.meta.eventLabels;
+    return (m && m[ev]) || ev;
+  }
+
+  function badge(status, compact) {
+    var zh = statusLabel(status);
+    var body = zh
+      ? '<span class="badge-zh">' + esc(zh) + '</span>' + (compact ? '' : '<span class="badge-code">' + esc(status) + '</span>')
+      : '<span class="badge-code">' + esc(status) + '</span>';
+    return '<span class="badge ' + statusKind(status) + '" title="' + esc(status) + '">' +
+      '<span class="dot"></span>' + body + '</span>';
   }
 
   function runStatusBadge(st) {
@@ -1534,7 +1679,7 @@ export const CONSOLE_HTML = `<!doctype html>
       var costNum = t.total_cost_usd != null ? Number(t.total_cost_usd) : 0;
       html += '<li data-id="' + esc(t.id) + '" class="task-item' + (isAct ? ' active' : '') + '">' +
         '<div class="task-item-top">' +
-          '<div class="task-item-badges">' + badge(t.status) +
+          '<div class="task-item-badges">' + badge(t.status, true) +
             '<span class="mode-pill ' + esc(t.control_mode || 'auto') + '">' + esc(t.control_mode || 'auto') + '</span>' +
           '</div>' +
           '<span class="mono muted">#' + esc(shortId(t.id)) + '</span>' +
@@ -1543,7 +1688,7 @@ export const CONSOLE_HTML = `<!doctype html>
         '<div class="task-item-foot">' +
           '<span class="task-item-repo" title="' + esc(t.repo) + '">' + esc(shortRepo(t.repo)) + '</span>' +
           '<span>' +
-            (runCount != null ? runCount + 'r · ' : '') +
+            (runCount != null ? runCount + ' 轮 · ' : '') +
             (costNum > 0 ? fmtCost(costNum) + ' · ' : '') +
             esc(fmtShortTime(t.updated_at)) +
           '</span>' +
@@ -1587,8 +1732,17 @@ export const CONSOLE_HTML = `<!doctype html>
       lastStatusEvent = sev;
     }
 
+    var currentSince = null;
     if (task && task.status) {
       visited[task.status] = true;
+      // 当前状态的进入时刻：用于在轨道上显示「已停留多久」。
+      for (var q = statusEvents.length - 1; q >= 0; q--) {
+        var pq = statusEvents[q].payload || {};
+        if (pq.to === task.status) {
+          currentSince = statusEvents[q].occurred_at;
+          break;
+        }
+      }
     }
 
     // Fallback when no TaskStatusChanged events exist (e.g. unit test mocks)
@@ -1610,7 +1764,8 @@ export const CONSOLE_HTML = `<!doctype html>
       transitionsByTo: transitionsByTo,
       durationByState: durationByState,
       maxVisitedMainIdx: maxVisitedMainIdx,
-      lastStatusEvent: lastStatusEvent
+      lastStatusEvent: lastStatusEvent,
+      currentSince: currentSince
     };
   }
 
@@ -1652,36 +1807,80 @@ export const CONSOLE_HTML = `<!doctype html>
     return '';
   }
 
+  /**
+   * 停留时长条的比例：按当前任务里最长阶段归一。
+   * 用对数刻度 —— 阶段耗时横跨毫秒到数天（例如人工等待），线性刻度会把短阶段全压成 0。
+   * 有耗时的最小值 3%，让「很短但不是零」的阶段仍然可见。
+   */
+  function durationPct(ms, maxMs) {
+    if (ms == null || ms <= 0 || maxMs <= 0) return 0;
+    var pct = Math.round((Math.log10(ms / 1000 + 1) / Math.log10(maxMs / 1000 + 1)) * 100);
+    return Math.max(3, Math.min(100, pct));
+  }
+
   function renderPipeline(d) {
     var status = d.task.status;
     var traj = analyzeTrajectory(d.task, d.events);
     var onMain = MAIN_PATH.indexOf(status) >= 0;
+    var kind = statusKind(status);
+
+    // 终态不再累计「已停留」，否则会显示成完成后的天数。
+    var localNow = Date.now();
+    var currentDur = null;
+    if (traj.currentSince && kind !== 'done' && kind !== 'bad') {
+      var sinceMs = new Date(traj.currentSince).getTime();
+      if (!isNaN(sinceMs) && localNow >= sinceMs) currentDur = localNow - sinceMs;
+    }
+
+    var maxDur = currentDur || 0;
+    var keys = Object.keys(traj.durationByState);
+    for (var m = 0; m < keys.length; m++) {
+      if (traj.durationByState[keys[m]] > maxDur) maxDur = traj.durationByState[keys[m]];
+    }
+
+    // 偏离主路径时，出发节点要标出来 —— 否则轨道上看起来像是正常停在该阶段
+    var departFrom = '';
+    if (!onMain && traj.lastStatusEvent) departFrom = (traj.lastStatusEvent.payload || {}).from || '';
 
     var html = '<div class="pipeline-scroll"><div class="pipeline">';
     for (var i = 0; i < MAIN_PATH.length; i++) {
       var s = MAIN_PATH[i];
       var shortName = s.replace(/^S-/, '');
+      var label = statusLabel(s) || shortName;
       var trId = traj.transitionsByTo[s] || '';
       var cls = 'step';
       var metaText = '待到达';
+      var dur = null;
       if (s === status) {
         cls += ' current' + (s === 'S-DONE' ? ' done-term' : '');
-        metaText = s === 'S-DONE' ? '✓ 已完成' : '● 进行中';
+        dur = currentDur;
+        metaText = s === 'S-DONE' ? '✓ 已完成' : (currentDur != null ? '● ' + fmtDurationMs(currentDur) : '● 进行中');
       } else if (traj.visited[s]) {
         cls += ' done';
-        var dur = traj.durationByState[s];
-        metaText = '✓ ' + (dur != null ? fmtDurationMs(dur) : '通过');
+        dur = traj.durationByState[s] != null ? traj.durationByState[s] : null;
+        metaText = '✓ ' + (dur != null ? fmtDurationMs(dur) : '已通过');
       } else if (i < traj.maxVisitedMainIdx) {
         cls += ' skipped';
         metaText = '↷ 已跳过';
       }
+      if (s === departFrom) {
+        cls += ' departed';
+        metaText = dur != null ? '↗ ' + fmtDurationMs(dur) : '↗ 分出';
+      }
 
-      html += '<div class="' + cls + '" title="' + esc(s + (trId ? ' (由 ' + trId + ' 转入)' : '')) + '">' +
-        '<span class="step-name">' + esc(shortName) + '</span>' +
+      var pct = durationPct(dur, maxDur);
+      var title = s + (label !== shortName ? ' · ' + label : '') + (trId ? '（由 ' + trId + ' 转入）' : '');
+      if (s === departFrom) title += '（由此分出至 ' + (statusLabel(status) || status) + '）';
+      var sinceAttr = (s === status && currentDur != null && traj.currentSince)
+        ? ' data-since="' + esc(traj.currentSince) + '"'
+        : '';
+      var prefixAttr = (s === status && dur != null) ? ' data-prefix="● "' : '';
+      html += '<div class="' + cls + '"' + sinceAttr + ' title="' + esc(title) + '">' +
+        '<span class="step-name">' + esc(label) + '</span>' +
         '<div class="step-foot">' +
-          '<span class="step-meta">' + esc(metaText) + '</span>' +
-          (trId ? '<span class="step-tr">' + esc(trId) + '</span>' : '') +
+          '<span class="step-meta"' + prefixAttr + '>' + esc(metaText) + '</span>' +
         '</div>' +
+        (pct > 0 ? '<span class="step-bar"><i style="width:' + pct + '%"></i></span>' : '') +
       '</div>';
 
       if (i < MAIN_PATH.length - 1) {
@@ -1696,11 +1895,18 @@ export const CONSOLE_HTML = `<!doctype html>
       var fromNode = lastSev.from || '主路径';
       var viaTr = lastSev.transition ? ' (' + lastSev.transition + ' · ' + (lastSev.event || '') + ')' : '';
       var reason = findGateOrFailureReason(d, lastSev);
-      html += '<div class="branch-callout' + (isBad ? ' bad' : '') + '">' +
+      var dwellHtml = currentDur != null
+        ? '<span class="branch-dwell" data-prefix="已停留 ">已停留 ' + esc(fmtDurationMs(currentDur)) + '</span>'
+        : '';
+      var sinceAttr = (currentDur != null && traj.currentSince)
+        ? ' data-since="' + esc(traj.currentSince) + '"'
+        : '';
+      html += '<div class="branch-callout' + (isBad ? ' bad' : '') + '"' + sinceAttr + '>' +
         '<div class="branch-callout-head">' +
           '<span>当前偏离主路径，停驻于分支状态：</span>' +
           '<span class="mono">' + esc(fromNode) + esc(viaTr) + ' → </span>' +
           badge(status) +
+          dwellHtml +
         '</div>' +
         (reason ? '<div class="branch-callout-reason">' + esc(reason) + '</div>' : '') +
       '</div>';
@@ -1728,6 +1934,23 @@ export const CONSOLE_HTML = `<!doctype html>
       html += '</div>';
     }
     return html;
+  }
+
+  /**
+   * 当前阶段的「已停留」只跟时间走，不跟数据走：
+   * 无感刷新在 detailSig 不变时不会重绘，这里按轮询节拍单独更新文本，避免时长冻结。
+   */
+  function tickElapsed() {
+    var els = document.querySelectorAll('[data-since]');
+    var now = Date.now();
+    for (var i = 0; i < els.length; i++) {
+      var since = new Date(els[i].getAttribute('data-since')).getTime();
+      if (isNaN(since)) continue;
+      var target = els[i].querySelector('.step-meta') || els[i].querySelector('.branch-dwell');
+      if (!target) continue;
+      var prefix = target.getAttribute('data-prefix') || '';
+      target.textContent = prefix + fmtDurationMs(now - since);
+    }
   }
 
   function extractPrInfo(events) {
@@ -1790,6 +2013,72 @@ export const CONSOLE_HTML = `<!doctype html>
     return latest;
   }
 
+  /** 人工介入的简短停驻原因 —— 详情由下方「偏离主路径」调用带完整给出。 */
+  function shortStatusReason(traj, status) {
+    if (status !== 'S-HUMAN_REVIEW') return '';
+    var last = traj && traj.lastStatusEvent ? (traj.lastStatusEvent.payload || {}) : {};
+    if (last.event === 'RunTimeout') return 'Run 超时后升级人工';
+    if (last.event === 'RunFailed') return 'Run 失败后升级人工';
+    if (last.transition === 'T-031') return '执行异常升级人工';
+    return '等待人工复核';
+  }
+
+  /**
+   * 一句话现状：现在在哪、在等什么、下一步能做什么。
+   * 全部由确定性数据推导，不调用模型、不写死单条任务的文案。
+   */
+  function renderStatusSummary(d) {
+    var t = d.task;
+    var status = t.status;
+    var traj = analyzeTrajectory(t, d.events || []);
+    var kind = statusKind(status);
+    var label = statusLabel(status) || status;
+    var isTerm = kind === 'done' || kind === 'bad';
+    var text;
+
+    if (isTerm) {
+      text = '<b>' + esc(label) + '</b> · 终态不可再变更（I8）。全程 ' +
+        (d.runs || []).length + ' 个 Run · ' + (d.artifacts || []).length + ' 个产物 · ' + (d.events || []).length + ' 个事件。';
+    } else {
+      var hint = shortStatusReason(traj, status) || STATUS_HINTS[status] || '';
+      text = '<b>' + esc(label) + '</b>' + (hint ? '：' + esc(hint) : '');
+
+      var nexts = [];
+      var allTr = (state.meta && state.meta.transitions) || [];
+      for (var i = 0; i < allTr.length; i++) {
+        if (allTr[i].from === status) nexts.push(allTr[i]);
+      }
+      if (nexts.length > 0) {
+        var opts = [];
+        for (var j = 0; j < nexts.length && j < 3; j++) {
+          var n = nexts[j];
+          // 自环转移（T-009 / T-030 等）用当前状态名 + 标注，避免直接显示裸 SELF。
+          var toLabel = n.to === 'SELF'
+            ? (statusLabel(status) || status) + '（自环）'
+            : (statusLabel(n.to) || n.to);
+          opts.push(n.id + ' ' + (n.on || []).map(eventLabel).join(' / ') + ' → ' + toLabel);
+        }
+        text += '<span class="ss-next"> · 下一步：' + esc(opts.join('；') + (nexts.length > 3 ? ' 等' : '')) + '</span>';
+      } else {
+        text += '<span class="ss-next"> · 当前状态没有可用的下一次转移。</span>';
+      }
+    }
+
+    return '<div class="status-summary' + (isTerm ? ' term' : '') + (kind === 'bad' ? ' bad' : '') + '">' +
+      '<span class="ss-tag">现状</span><p>' + text + '</p></div>';
+  }
+
+  function renderGlossary() {
+    var html = '';
+    for (var i = 0; i < GLOSSARY.length; i++) {
+      html += '<div class="gloss-item">' +
+        '<span class="gloss-term">' + esc(GLOSSARY[i][0]) + '</span>' +
+        '<span>' + esc(GLOSSARY[i][1]) + '</span>' +
+      '</div>';
+    }
+    return html;
+  }
+
   function renderCockpitHeader(d) {
     var t = d.task;
     var runs = d.runs || [];
@@ -1827,6 +2116,7 @@ export const CONSOLE_HTML = `<!doctype html>
           '<button type="button" class="copy-btn" data-copy="' + esc(t.id) + '" title="复制 Task UUID">复制 ID: ' + esc(shortId(t.id)) + '</button>' +
           '<button type="button" class="copy-btn" data-copy="keel status ' + esc(t.id) + '" title="复制 CLI 状态查询命令">复制 keel status</button>' +
           '<button type="button" class="copy-btn" data-copy="pnpm run timeline -- ' + esc(t.id) + '" title="复制完整时间线导出命令">复制 timeline 命令</button>' +
+          '<button type="button" class="copy-btn" id="glossary-btn" aria-expanded="' + (state.glossaryOpen ? 'true' : 'false') + '" title="查看状态码、转移编号与核心术语的说明">术语表</button>' +
         '</div>' +
       '</div>' +
       '<h2 class="cockpit-title">' + esc(t.title) + '</h2>' +
@@ -1837,6 +2127,7 @@ export const CONSOLE_HTML = `<!doctype html>
         '<span class="cockpit-meta-item">更新: ' + esc(fmtTime(t.updated_at)) + '</span>' +
         (t.terminal_at ? '<span class="cockpit-meta-item">终态: ' + esc(fmtTime(t.terminal_at)) + '</span>' : '') +
       '</div>' +
+      renderStatusSummary(d) +
       '<div class="summary-grid">' +
         '<div class="stat-box">' +
           '<div class="stat-label">总历时 (Duration)</div>' +
@@ -1864,6 +2155,9 @@ export const CONSOLE_HTML = `<!doctype html>
           '<div class="stat-sub">可由 readEvents 完整重建</div>' +
         '</div>' +
       '</div>' +
+      '<div class="glossary-panel" id="glossary-panel"' + (state.glossaryOpen ? '' : ' hidden') + '>' +
+        renderGlossary() +
+      '</div>' +
     '</div>';
     return html;
   }
@@ -1886,7 +2180,7 @@ export const CONSOLE_HTML = `<!doctype html>
     if (b.problem) {
       html += '<div class="rfc-section">' +
         '<h4 class="rfc-sec-title">问题描述 (Problem Statement)</h4>' +
-        '<div style="color:var(--text-sec);line-height:1.6">' + esc(b.problem) + '</div>' +
+        '<div style="color:var(--text-sec);font-size:13.5px;line-height:1.7">' + esc(b.problem) + '</div>' +
       '</div>';
     }
 
@@ -1909,7 +2203,7 @@ export const CONSOLE_HTML = `<!doctype html>
       html += '<div class="rfc-section">' +
         '<h4 class="rfc-sec-title">拟议方案 (Proposed Change)</h4>' +
         (pc.summary ? '<div style="font-weight:600;margin-bottom:6px">' + esc(pc.summary) + '</div>' : '') +
-        (pc.approach ? '<div style="white-space:pre-wrap;color:var(--text-sec);font-size:12.5px;line-height:1.6">' + esc(pc.approach) + '</div>' : '');
+        (pc.approach ? '<div style="white-space:pre-wrap;color:var(--text-sec);font-size:13.5px;line-height:1.7">' + esc(pc.approach) + '</div>' : '');
       if (areas.length > 0) {
         html += '<div class="file-tags">';
         for (var fa = 0; fa < areas.length; fa++) {
@@ -2614,6 +2908,7 @@ export const CONSOLE_HTML = `<!doctype html>
     if (on) state.timer = setInterval(function () {
       if (document.hidden) return;
       refreshAll(true);
+      tickElapsed();
     }, 5000);
   }
 
@@ -2686,6 +2981,15 @@ export const CONSOLE_HTML = `<!doctype html>
     if (tabBtn && state.detail) {
       state.activeTab = tabBtn.getAttribute('data-tab') || 'overview';
       renderDetail(state.detail, false);
+      return;
+    }
+
+    var glossaryBtn = ev.target.closest('#glossary-btn');
+    if (glossaryBtn) {
+      state.glossaryOpen = !state.glossaryOpen;
+      var gPanel = document.getElementById('glossary-panel');
+      if (gPanel) gPanel.hidden = !state.glossaryOpen;
+      glossaryBtn.setAttribute('aria-expanded', state.glossaryOpen ? 'true' : 'false');
       return;
     }
 

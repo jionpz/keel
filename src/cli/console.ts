@@ -40,6 +40,52 @@ const MAIN_PATH = [
   'S-DONE',
 ] as const
 
+/**
+ * 术语的人话层：状态与转移事件的短中文名。
+ *
+ * 只用于 console 呈现 —— 状态集合本身仍由 `src/shared/ids.ts` 与转移表定义，
+ * 这里不新增语义，只给每个机器码配一个可读标签。UI 通过 `/api/meta` 消费，
+ * 不在页面里硬编码第二份状态列表。
+ */
+const STATUS_LABELS: Record<string, string> = {
+  'S-NEW': '新建',
+  'S-NEED_CLARIFICATION': '待澄清',
+  'S-PM_ANALYZING': 'PM 分析',
+  'S-BRAINSTORM': '方案讨论',
+  'S-RFC_DRAFT': 'RFC 起草',
+  'S-RFC_READY': 'RFC 就绪',
+  'S-DEVELOPING': '开发中',
+  'S-QA': '质量验证',
+  'S-REVIEW': '评审',
+  'S-PR_OPEN': 'PR 待合并',
+  'S-HUMAN_REVIEW': '人工介入',
+  'S-DONE': '已完成',
+  'S-REJECTED': '已驳回',
+  'S-ABANDONED': '已放弃',
+  'S-FAILED': '已失败',
+}
+
+const EVENT_LABELS: Record<string, string> = {
+  FeedbackTriaged: '需求立案',
+  Dispatch: '派发执行',
+  RunSucceeded: 'Run 成功',
+  RunFailed: 'Run 失败',
+  RunTimeout: 'Run 超时',
+  ArtifactCommitted: '产物提交',
+  HumanApproved: '人工批准',
+  HumanRejected: '人工驳回',
+  HumanRequestedRework: '要求返工',
+  PolicyEvaluated: '策略裁决',
+  CIFailed: 'CI 失败',
+  CIPassed: 'CI 通过',
+  PRClosed: 'PR 关闭',
+  ClarificationReceived: '补充澄清',
+  Cancelled: '取消',
+  CapabilityRequested: '能力请求',
+  TimerFired: '定时触发',
+  UnrecoverableError: '不可恢复错误',
+}
+
 export type Row = Record<string, unknown>
 export type QueryFn = (sql: string, params: readonly unknown[]) => Promise<readonly Row[]>
 
@@ -58,6 +104,8 @@ function metaPayload() {
       gate: GATE_STATUSES,
       terminal: TERMINAL_STATUSES,
     },
+    statusLabels: STATUS_LABELS,
+    eventLabels: EVENT_LABELS,
     mainPath: MAIN_PATH,
     transitions: TASK_TRANSITIONS.map((t) => ({
       id: t.id,
