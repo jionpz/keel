@@ -122,6 +122,8 @@ export const CONSOLE_HTML = `<!doctype html>
   }
 
   * { box-sizing: border-box; }
+  /* 下面大量布局用 display:flex/grid，会盖掉 [hidden] 的 UA 样式，必须显式压一层 */
+  [hidden] { display: none !important; }
   html, body { height: 100%; margin: 0; }
   body {
     background: var(--bg);
@@ -233,40 +235,50 @@ export const CONSOLE_HTML = `<!doctype html>
     background: var(--accent-soft);
   }
 
-  /* ─── KPI Strip ─── */
-  .kpi-strip {
+  /* ─── 视图模式切换 ─── */
+  .mode-switch {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 6px;
-    padding: 10px 12px;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+    padding: 8px 12px;
     border-bottom: 1px solid var(--line);
     background: var(--panel-alt);
   }
-  .kpi-tile {
-    background: var(--panel);
-    border: 1px solid var(--line);
+  .mode-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 6px 10px;
     border-radius: 7px;
-    padding: 6px 8px;
-    text-align: center;
-    cursor: pointer;
-    transition: border-color 0.15s ease, transform 0.1s ease;
-  }
-  .kpi-tile:hover { border-color: var(--line-strong); }
-  .kpi-tile.active { border-color: var(--accent); background: var(--accent-soft); }
-  .kpi-val {
-    font-size: 16px;
-    font-weight: 700;
-    font-family: var(--mono);
-    line-height: 1.2;
-  }
-  .kpi-lbl {
-    font-size: 11px;
+    border: 1px solid transparent;
+    background: transparent;
     color: var(--muted);
-    margin-top: 2px;
+    font: inherit;
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
   }
-  .kpi-tile.stage .kpi-val { color: var(--stage); }
-  .kpi-tile.gate .kpi-val { color: var(--gate); }
-  .kpi-tile.done .kpi-val { color: var(--done); }
+  .mode-btn:hover { color: var(--text); }
+  .mode-btn.active {
+    background: var(--panel);
+    border-color: var(--line);
+    color: var(--text);
+    box-shadow: var(--shadow-sm);
+  }
+  .mode-count {
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: rgba(128, 128, 128, 0.16);
+    color: var(--muted);
+  }
+  .mode-btn.active .mode-count {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
 
   /* ─── Sidebar Search & Filter Bar ─── */
   .explorer-controls {
@@ -330,6 +342,14 @@ export const CONSOLE_HTML = `<!doctype html>
     color: #fff;
     font-weight: 600;
   }
+  /* 计数并入筛选 chip（原来那排 KPI 方块和它们是同一件事，占了两行高度） */
+  .filter-pill .pill-n {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    opacity: 0.85;
+    margin-left: 2px;
+  }
+  .filter-pill.active .pill-n { opacity: 1; }
 
   .toolbar {
     display: flex;
@@ -428,6 +448,226 @@ export const CONSOLE_HTML = `<!doctype html>
     text-overflow: ellipsis;
     white-space: nowrap;
     max-width: 170px;
+  }
+
+  /* ─── Project List（项目模式侧栏） ─── */
+  #project-list {
+    list-style: none;
+    margin: 0;
+    padding: 8px;
+    overflow-y: auto;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  #project-list li.proj-item {
+    padding: 10px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    transition: all 0.15s ease;
+  }
+  #project-list li.proj-item:hover {
+    border-color: var(--line-strong);
+    background: var(--panel-alt);
+  }
+  #project-list li.proj-item.active {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    box-shadow: inset 3px 0 0 var(--accent);
+  }
+  .proj-item-name {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    font-weight: 700;
+    font-size: 13px;
+    margin-bottom: 2px;
+  }
+  .proj-item-url {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    direction: rtl;
+    text-align: left;
+    margin-bottom: 6px;
+  }
+  .proj-item-counts {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+    margin-bottom: 6px;
+  }
+  .proj-count {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 0 7px;
+    border-radius: 999px;
+    font-family: var(--mono);
+    border: 1px solid var(--line);
+    color: var(--muted);
+  }
+  .proj-count.stage { color: var(--stage); border-color: rgba(56, 189, 248, 0.35); }
+  .proj-count.gate { color: var(--gate); border-color: rgba(245, 158, 11, 0.4); }
+  .proj-count.done { color: var(--done); border-color: rgba(16, 185, 129, 0.35); }
+  .proj-count.bad { color: var(--bad); border-color: rgba(244, 63, 94, 0.4); }
+  .proj-item-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    font-size: 11.5px;
+    color: var(--muted);
+    font-family: var(--mono);
+  }
+
+  /* ─── Project Overview（项目模式主区） ─── */
+  .proj-header h2 {
+    margin: 6px 0 4px;
+    font-size: 22px;
+    letter-spacing: -0.2px;
+  }
+  .proj-header .proj-url {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+    word-break: break-all;
+  }
+  .proj-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 10px;
+    margin: 16px 0;
+  }
+  .proj-stat {
+    border: 1px solid var(--line);
+    background: var(--panel);
+    border-radius: 9px;
+    padding: 9px 12px;
+  }
+  .proj-stat-lbl {
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+  }
+  .proj-stat-val {
+    font-family: var(--mono);
+    font-size: 18px;
+    font-weight: 700;
+    margin-top: 3px;
+  }
+  .proj-stat-sub {
+    font-size: 11.5px;
+    color: var(--muted);
+    margin-top: 2px;
+  }
+  .proj-stat.stage .proj-stat-val { color: var(--stage); }
+  .proj-stat.gate .proj-stat-val { color: var(--gate); }
+  .proj-stat.done .proj-stat-val { color: var(--done); }
+  .proj-stat.bad .proj-stat-val { color: var(--bad); }
+  /* 状态分布：一条堆叠条 + 图例，比四个方块更能看出项目的形状 */
+  .proj-dist {
+    display: flex;
+    height: 10px;
+    border-radius: 6px;
+    overflow: hidden;
+    background: rgba(128, 128, 128, 0.14);
+    margin: 10px 0 8px;
+  }
+  .proj-dist i {
+    display: block;
+    height: 100%;
+  }
+  .proj-dist i.stage { background: var(--stage); }
+  .proj-dist i.gate { background: var(--gate); }
+  .proj-dist i.done { background: var(--done); }
+  .proj-dist i.bad { background: var(--bad); }
+  .proj-dist-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    font-size: 12px;
+    color: var(--text-sec);
+  }
+  .proj-dist-legend .lg {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .proj-dist-legend .sw {
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+    display: inline-block;
+  }
+  .proj-table-wrap {
+    overflow-x: auto;
+  }
+  .proj-table {
+    width: 100%;
+    min-width: 560px;
+    border-collapse: collapse;
+    font-size: 12.5px;
+  }
+  .proj-table th {
+    text-align: left;
+    font-weight: 600;
+    font-size: 11.5px;
+    color: var(--muted);
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--line);
+    white-space: nowrap;
+  }
+  .proj-table td {
+    padding: 9px 10px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: middle;
+  }
+  .proj-table tbody tr {
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .proj-table tbody tr:hover { background: var(--panel-alt); }
+  .proj-table .ct-title {
+    font-weight: 600;
+    color: var(--text);
+    max-width: 420px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .proj-table .ct-num {
+    font-family: var(--mono);
+    color: var(--text-sec);
+    white-space: nowrap;
+  }
+  .proj-budget-bar {
+    height: 6px;
+    border-radius: 4px;
+    background: rgba(128, 128, 128, 0.16);
+    overflow: hidden;
+    margin-top: 6px;
+  }
+  .proj-budget-bar i {
+    display: block;
+    height: 100%;
+    background: var(--accent);
+  }
+  .proj-budget-bar.over i { background: var(--bad); }
+
+  @media (max-width: 1280px) {
+    #app { grid-template-columns: 320px minmax(0, 1fr); }
+    .proj-table { min-width: 0; }
+    .proj-table .ct-title { max-width: 240px; }
+    /* 窄屏优先保住状态/标题/成本/时间，分支在任务模式里仍能看 */
+    .proj-table th:nth-child(3), .proj-table td:nth-child(3) { display: none; }
   }
 
   /* ─── Main Detail Area ─── */
@@ -1343,7 +1583,10 @@ export const CONSOLE_HTML = `<!doctype html>
       </div>
     </div>
 
-    <div class="kpi-strip" id="kpi-strip"></div>
+    <div class="mode-switch" id="mode-switch" role="tablist" aria-label="视图模式">
+      <button type="button" class="mode-btn active" data-mode="tasks" role="tab" aria-selected="true">任务 <span class="mode-count" id="mode-count-tasks">0</span></button>
+      <button type="button" class="mode-btn" data-mode="projects" role="tab" aria-selected="false">项目 <span class="mode-count" id="mode-count-projects">0</span></button>
+    </div>
 
     <div class="explorer-controls">
       <div class="search-box">
@@ -1351,11 +1594,11 @@ export const CONSOLE_HTML = `<!doctype html>
         <button id="search-clear" class="search-clear" type="button" title="清空搜索">✕</button>
       </div>
       <div class="filter-pills" id="status-filters">
-        <button type="button" class="filter-pill active" data-cat="all">全部</button>
-        <button type="button" class="filter-pill" data-cat="stage">运行中</button>
-        <button type="button" class="filter-pill" data-cat="gate">待介入 Gate</button>
-        <button type="button" class="filter-pill" data-cat="done">已完成</button>
-        <button type="button" class="filter-pill" data-cat="bad">异常终态</button>
+        <button type="button" class="filter-pill active" data-cat="all" data-label="全部">全部</button>
+        <button type="button" class="filter-pill" data-cat="stage" data-label="运行中">运行中</button>
+        <button type="button" class="filter-pill" data-cat="gate" data-label="待介入">待介入</button>
+        <button type="button" class="filter-pill" data-cat="done" data-label="已完成">已完成</button>
+        <button type="button" class="filter-pill" data-cat="bad" data-label="异常">异常</button>
       </div>
     </div>
 
@@ -1368,6 +1611,7 @@ export const CONSOLE_HTML = `<!doctype html>
     </div>
 
     <ul id="task-list"></ul>
+    <ul id="project-list" hidden></ul>
   </aside>
 
   <main id="detail">
@@ -1407,6 +1651,8 @@ export const CONSOLE_HTML = `<!doctype html>
   var state = {
     tasks: [],
     meta: null,
+    mode: 'tasks',
+    selectedRepo: null,
     selectedId: null,
     detail: null,
     activeTab: 'overview',
@@ -1449,20 +1695,33 @@ export const CONSOLE_HTML = `<!doctype html>
     var h = (window.location.hash || '').replace(/^#/, '');
     if (!h) return;
     var parts = h.split('&');
+    var explicitMode = '';
+    var hasTask = false;
     for (var i = 0; i < parts.length; i++) {
       var kv = parts[i].split('=');
       var k = decodeURIComponent(kv[0] || '');
       var v = decodeURIComponent(kv[1] || '');
-      if (k === 'task' && v) state.selectedId = v;
+      if (k === 'task' && v) { state.selectedId = v; hasTask = true; }
+      if (k === 'mode' && (v === 'tasks' || v === 'projects')) explicitMode = v;
+      if (k === 'repo' && v) state.selectedRepo = v;
       if (k === 'tab' && (v === 'overview' || v === 'runs' || v === 'diff' || v === 'timeline')) {
         state.activeTab = v;
       }
     }
+    // 只有 task 键的链接回落到任务模式，否则从项目模式点任务会两边都不对
+    if (explicitMode) state.mode = explicitMode;
+    else if (hasTask) state.mode = 'tasks';
   }
 
   function syncHash() {
-    if (!state.selectedId) return;
-    var nextHash = '#task=' + encodeURIComponent(state.selectedId) + '&tab=' + encodeURIComponent(state.activeTab);
+    var nextHash;
+    if (state.mode === 'projects') {
+      nextHash = '#mode=projects' + (state.selectedRepo ? '&repo=' + encodeURIComponent(state.selectedRepo) : '');
+    } else if (state.selectedId) {
+      nextHash = '#task=' + encodeURIComponent(state.selectedId) + '&tab=' + encodeURIComponent(state.activeTab);
+    } else {
+      return;
+    }
     if (window.location.hash !== nextHash) {
       try {
         window.history.replaceState(null, '', nextHash);
@@ -1621,27 +1880,29 @@ export const CONSOLE_HTML = `<!doctype html>
     }
   }
 
-  function renderKpiStrip() {
-    var total = state.tasks.length;
-    var stageCnt = 0, gateCnt = 0, doneCnt = 0, badCnt = 0;
-    for (var i = 0; i < state.tasks.length; i++) {
-      var k = statusKind(state.tasks[i].status);
-      if (k === 'stage') stageCnt++;
-      else if (k === 'gate') gateCnt++;
-      else if (k === 'done') doneCnt++;
-      else if (k === 'bad') badCnt++;
+  function statusCounts(tasks) {
+    var c = { all: tasks.length, stage: 0, gate: 0, done: 0, bad: 0 };
+    for (var i = 0; i < tasks.length; i++) {
+      var k = statusKind(tasks[i].status);
+      if (c[k] != null) c[k]++;
     }
-    var strip = document.getElementById('kpi-strip');
-    if (!strip) return;
-    strip.innerHTML =
-      '<div class="kpi-tile ' + (state.statusCat === 'all' ? 'active' : '') + '" data-cat="all">' +
-        '<div class="kpi-val">' + total + '</div><div class="kpi-lbl">全部任务</div></div>' +
-      '<div class="kpi-tile stage ' + (state.statusCat === 'stage' ? 'active' : '') + '" data-cat="stage">' +
-        '<div class="kpi-val">' + stageCnt + '</div><div class="kpi-lbl">运行中</div></div>' +
-      '<div class="kpi-tile gate ' + (state.statusCat === 'gate' ? 'active' : '') + '" data-cat="gate">' +
-        '<div class="kpi-val">' + gateCnt + '</div><div class="kpi-lbl">待介入</div></div>' +
-      '<div class="kpi-tile done ' + (state.statusCat === 'done' ? 'active' : '') + '" data-cat="done">' +
-        '<div class="kpi-val">' + doneCnt + (badCnt > 0 ? '<span class="muted" style="font-size:11px">/' + badCnt + '</span>' : '') + '</div><div class="kpi-lbl">已完成</div></div>';
+    return c;
+  }
+
+  /** 计数直接长在筛选 chip 上 —— 与原来那排 KPI 方块是同一件事，没必要占两行。 */
+  function renderFilterCounts() {
+    var counts = statusCounts(state.tasks);
+    var pills = document.querySelectorAll('#status-filters .filter-pill');
+    for (var p = 0; p < pills.length; p++) {
+      var cat = pills[p].getAttribute('data-cat') || 'all';
+      var label = pills[p].getAttribute('data-label') || '';
+      pills[p].classList.toggle('active', cat === state.statusCat);
+      pills[p].innerHTML = esc(label) + '<span class="pill-n">' + (counts[cat] || 0) + '</span>';
+    }
+    var mt = document.getElementById('mode-count-tasks');
+    if (mt) mt.textContent = String(counts.all);
+    var mp = document.getElementById('mode-count-projects');
+    if (mp) mp.textContent = String(groupByRepo(state.tasks).length);
   }
 
   function getFilteredTasks() {
@@ -1660,12 +1921,7 @@ export const CONSOLE_HTML = `<!doctype html>
   }
 
   function renderTasks() {
-    renderKpiStrip();
-    var pills = document.querySelectorAll('#status-filters .filter-pill');
-    for (var p = 0; p < pills.length; p++) {
-      var cat = pills[p].getAttribute('data-cat');
-      pills[p].classList.toggle('active', cat === state.statusCat);
-    }
+    renderFilterCounts();
     var clearBtn = document.getElementById('search-clear');
     if (clearBtn) clearBtn.style.display = state.searchQuery ? 'block' : 'none';
 
@@ -1698,6 +1954,229 @@ export const CONSOLE_HTML = `<!doctype html>
     list.innerHTML = html || '<li class="empty" style="padding:24px 12px">没有匹配的任务</li>';
     document.getElementById('count').textContent =
       (filtered.length === state.tasks.length ? state.tasks.length + ' 个任务' : filtered.length + ' / ' + state.tasks.length + ' 个任务');
+  }
+
+  /**
+   * 项目 = 仓库地址。repo 行本身没有唯一约束（同一 remote_url 可能有多行），
+   * 所以按可读的仓库地址归组，而不是按 repo_id —— 否则侧栏会出现两个同名项目。
+   */
+  function groupByRepo(tasks) {
+    var order = [];
+    var map = {};
+    for (var i = 0; i < tasks.length; i++) {
+      var t = tasks[i];
+      var key = String(t.repo || t.repo_id || 'unknown');
+      var g = map[key];
+      if (!g) {
+        g = map[key] = {
+          id: key,
+          repo: t.repo || '',
+          provider: t.repo_provider || '',
+          tasks: [],
+          counts: { all: 0, stage: 0, gate: 0, done: 0, bad: 0 },
+          runs: 0,
+          cost: 0,
+          budget: 0,
+          lastUpdated: ''
+        };
+        order.push(g);
+      }
+      g.tasks.push(t);
+      g.counts.all++;
+      var k = statusKind(t.status);
+      if (g.counts[k] != null) g.counts[k]++;
+      g.runs += Number(t.run_count || 0);
+      g.cost += Number(t.total_cost_usd || 0);
+      g.budget += Number(t.budget_usd || 0);
+      if (!g.lastUpdated || String(t.updated_at || '') > g.lastUpdated) g.lastUpdated = t.updated_at || '';
+      if (!g.repo && t.repo) g.repo = t.repo;
+    }
+    order.sort(function (a, b) {
+      return String(b.lastUpdated).localeCompare(String(a.lastUpdated));
+    });
+    for (var j = 0; j < order.length; j++) {
+      order[j].tasks.sort(function (a, b) {
+        return String(b.updated_at || '').localeCompare(String(a.updated_at || ''));
+      });
+    }
+    return order;
+  }
+
+  function getFilteredProjects(projects) {
+    var q = state.searchQuery.trim().toLowerCase();
+    if (!q) return projects;
+    var out = [];
+    for (var i = 0; i < projects.length; i++) {
+      var p = projects[i];
+      var hay = (p.repo + ' ' + shortRepo(p.repo) + ' ' + p.provider).toLowerCase();
+      if (hay.indexOf(q) >= 0) out.push(p);
+    }
+    return out;
+  }
+
+  function findProject(id) {
+    var projects = groupByRepo(state.tasks);
+    for (var i = 0; i < projects.length; i++) {
+      if (projects[i].id === id) return projects[i];
+    }
+    return projects.length > 0 ? projects[0] : null;
+  }
+
+  function renderProjects() {
+    renderFilterCounts();
+    var all = groupByRepo(state.tasks);
+    var projects = getFilteredProjects(all);
+    var selectedVisible = false;
+    for (var v = 0; v < projects.length; v++) {
+      if (projects[v].id === state.selectedRepo) { selectedVisible = true; break; }
+    }
+    if (!selectedVisible) state.selectedRepo = projects.length > 0 ? projects[0].id : null;
+    var list = document.getElementById('project-list');
+    var html = '';
+    for (var i = 0; i < projects.length; i++) {
+      var p = projects[i];
+      var chips = '';
+      if (p.counts.stage > 0) chips += '<span class="proj-count stage">运行 ' + p.counts.stage + '</span>';
+      if (p.counts.gate > 0) chips += '<span class="proj-count gate">待介入 ' + p.counts.gate + '</span>';
+      if (p.counts.done > 0) chips += '<span class="proj-count done">完成 ' + p.counts.done + '</span>';
+      if (p.counts.bad > 0) chips += '<span class="proj-count bad">异常 ' + p.counts.bad + '</span>';
+      html += '<li class="proj-item' + (p.id === state.selectedRepo ? ' active' : '') + '" data-repo-id="' + esc(p.id) + '">' +
+        '<div class="proj-item-name">' +
+          '<span>' + esc(shortRepo(p.repo)) + '</span>' +
+          (p.provider ? '<span class="mode-pill">' + esc(p.provider) + '</span>' : '') +
+        '</div>' +
+        '<div class="proj-item-url" title="' + esc(p.repo) + '">' + esc(p.repo) + '</div>' +
+        '<div class="proj-item-counts">' + chips + '</div>' +
+        '<div class="proj-item-foot">' +
+          '<span>' + p.counts.all + ' 个任务 · ' + p.runs + ' 轮</span>' +
+          '<span>' + (p.cost > 0 ? fmtCost(p.cost) + ' · ' : '') + esc(fmtShortTime(p.lastUpdated)) + '</span>' +
+        '</div>' +
+      '</li>';
+    }
+    list.innerHTML = html || '<li class="empty" style="padding:24px 12px">没有匹配的项目</li>';
+    var clearBtn = document.getElementById('search-clear');
+    if (clearBtn) clearBtn.style.display = state.searchQuery ? 'block' : 'none';
+    document.getElementById('count').textContent =
+      (projects.length === all.length ? all.length + ' 个项目' : projects.length + ' / ' + all.length + ' 个项目');
+    if (state.mode === 'projects') renderProjectView();
+  }
+
+  function renderProjectView() {
+    var detailEl = document.getElementById('detail');
+    var p = findProject(state.selectedRepo);
+    if (!p) {
+      detailEl.innerHTML = '<div class="empty">还没有任何项目 —— 任务创建后会按仓库归组。</div>';
+      return;
+    }
+    state.selectedRepo = p.id;
+    var c = p.counts;
+    var pct = function (n) { return c.all > 0 ? Math.round((n / c.all) * 100) : 0; };
+    var dist = '';
+    var legend = '';
+    var kinds = [['stage', '运行中'], ['gate', '待介入'], ['done', '已完成'], ['bad', '异常终态']];
+    for (var i = 0; i < kinds.length; i++) {
+      var kk = kinds[i][0];
+      if (c[kk] > 0) {
+        dist += '<i class="' + kk + '" style="width:' + pct(c[kk]) + '%"></i>';
+        legend += '<span class="lg"><span class="sw" style="background:var(--' + kk + ')"></span>' +
+          kinds[i][1] + ' <b class="mono">' + c[kk] + '</b></span>';
+      }
+    }
+
+    var html = '<div class="proj-header">' +
+      '<div class="cockpit-badges">' +
+        '<span class="badge stage"><span class="dot"></span>项目</span>' +
+        (p.provider ? '<span class="mode-pill">' + esc(p.provider) + '</span>' : '') +
+        '<span class="mode-pill">' + c.all + ' 个任务</span>' +
+      '</div>' +
+      '<h2>' + esc(shortRepo(p.repo)) + '</h2>' +
+      '<div class="proj-url">' + esc(p.repo || '—') + '</div>' +
+    '</div>' +
+    '<div class="proj-stats">' +
+      '<div class="proj-stat"><div class="proj-stat-lbl">任务</div><div class="proj-stat-val">' + c.all + '</div>' +
+        '<div class="proj-stat-sub">' + (c.stage + c.gate) + ' 个未完成</div></div>' +
+      '<div class="proj-stat stage"><div class="proj-stat-lbl">运行中</div><div class="proj-stat-val">' + c.stage + '</div>' +
+        '<div class="proj-stat-sub">阶段态有 Run 在跑</div></div>' +
+      '<div class="proj-stat gate"><div class="proj-stat-lbl">待介入</div><div class="proj-stat-val">' + c.gate + '</div>' +
+        '<div class="proj-stat-sub">等人或等条件</div></div>' +
+      '<div class="proj-stat done"><div class="proj-stat-lbl">已完成</div><div class="proj-stat-val">' + c.done + '</div>' +
+        '<div class="proj-stat-sub">终态不可再变更（I8）</div></div>' +
+      (c.bad > 0 ? '<div class="proj-stat bad"><div class="proj-stat-lbl">异常终态</div><div class="proj-stat-val">' + c.bad + '</div>' +
+        '<div class="proj-stat-sub">失败 / 驳回 / 放弃</div></div>' : '') +
+      '<div class="proj-stat"><div class="proj-stat-lbl">Run 轮次</div><div class="proj-stat-val">' + p.runs + '</div>' +
+        '<div class="proj-stat-sub">跨 ' + c.all + ' 个任务</div></div>' +
+      '<div class="proj-stat"><div class="proj-stat-lbl">累计成本</div><div class="proj-stat-val">' + fmtCost(p.cost) + '</div>' +
+        '<div class="proj-stat-sub">' + (p.budget > 0 ? '预算 ' + fmtCost(p.budget) : '未设预算') + '</div>' +
+        (p.budget > 0 ? '<div class="proj-budget-bar' + (p.cost > p.budget ? ' over' : '') + '">' +
+          '<i style="width:' + Math.min(100, Math.round((p.cost / p.budget) * 100)) + '%"></i></div>' : '') +
+      '</div>' +
+    '</div>' +
+    '<div class="card">' +
+      '<div class="card-header"><h3>状态分布</h3><span class="muted">按任务当前状态</span></div>' +
+      '<div class="proj-dist">' + dist + '</div>' +
+      '<div class="proj-dist-legend">' + legend + '</div>' +
+    '</div>' +
+    '<div class="card">' +
+      '<div class="card-header"><h3>项目任务</h3><span class="muted">点击行进入任务模式</span></div>' +
+      '<div class="proj-table-wrap"><table class="proj-table"><thead><tr>' +
+        '<th>状态</th><th>标题</th><th>分支</th><th>轮次</th><th>成本</th><th>更新</th>' +
+      '</tr></thead><tbody>';
+    for (var j = 0; j < p.tasks.length; j++) {
+      var t = p.tasks[j];
+      html += '<tr data-task-id="' + esc(t.id) + '">' +
+        '<td>' + badge(t.status, true) + '</td>' +
+        '<td><div class="ct-title" title="' + esc(t.title) + '">' + esc(t.title) + '</div></td>' +
+        '<td class="ct-num">' + esc(t.work_branch || '—') + '</td>' +
+        '<td class="ct-num">' + Number(t.run_count || 0) + '</td>' +
+        '<td class="ct-num">' + (Number(t.total_cost_usd || 0) > 0 ? fmtCost(Number(t.total_cost_usd)) : '—') + '</td>' +
+        '<td class="ct-num">' + esc(fmtShortTime(t.updated_at)) + '</td>' +
+      '</tr>';
+    }
+    html += '</tbody></table></div></div>';
+    detailEl.innerHTML = html;
+    syncHash();
+  }
+
+  /** 两种模式共用同一个侧栏骨架：只切换可见容器与按钮态。 */
+  function applyModeChrome() {
+    var mode = state.mode;
+    var buttons = document.querySelectorAll('#mode-switch .mode-btn');
+    for (var i = 0; i < buttons.length; i++) {
+      var on = buttons[i].getAttribute('data-mode') === mode;
+      buttons[i].classList.toggle('active', on);
+      buttons[i].setAttribute('aria-selected', on ? 'true' : 'false');
+    }
+    var isProjects = mode === 'projects';
+    document.getElementById('task-list').hidden = isProjects;
+    document.getElementById('project-list').hidden = !isProjects;
+    var filters = document.getElementById('status-filters');
+    if (filters) filters.hidden = isProjects;
+    var search = document.getElementById('task-search');
+    if (search) {
+      search.placeholder = isProjects ? '搜索项目名或仓库地址…' : '搜索任务标题、ID、仓库、分支…';
+      search.value = state.searchQuery;
+    }
+  }
+
+  function setMode(mode) {
+    state.mode = mode;
+    applyModeChrome();
+    if (mode === 'projects') {
+      if (state.selectedRepo == null) {
+        var projects = groupByRepo(state.tasks);
+        if (projects.length > 0) state.selectedRepo = projects[0].id;
+      }
+      renderProjects();
+    } else {
+      renderTasks();
+      if (state.selectedId) {
+        document.getElementById('detail').innerHTML = '<div class="empty">正在加载任务事实数据…</div>';
+        loadDetail(state.selectedId, false);
+      } else if (state.tasks.length > 0) {
+        select(state.tasks[0].id);
+      }
+    }
+    syncHash();
   }
 
   function analyzeTrajectory(task, events) {
@@ -2840,7 +3319,11 @@ export const CONSOLE_HTML = `<!doctype html>
       state.tasks = nextTasks;
       if (!silent || sig !== state.tasksSig) {
         state.tasksSig = sig;
-        renderTasks();
+        if (state.mode === 'projects') {
+          renderProjects();
+        } else {
+          renderTasks();
+        }
       }
       var dot = document.getElementById('health-dot');
       if (dot) dot.classList.remove('err');
@@ -2870,6 +3353,10 @@ export const CONSOLE_HTML = `<!doctype html>
       state.eventRunFilter = 'all';
       state.selectedDiffIdx = 0;
     }
+    if (state.mode !== 'tasks') {
+      setMode('tasks');
+      return;
+    }
     renderTasks();
     syncHash();
     document.getElementById('detail').innerHTML = '<div class="empty">正在加载任务事实数据…</div>';
@@ -2880,13 +3367,23 @@ export const CONSOLE_HTML = `<!doctype html>
     var pulse = document.getElementById('pulse');
     if (!silent) pulse.textContent = '同步中…';
     return loadTasks(!!silent).then(function () {
+      if (state.mode === 'projects') {
+        var projects = groupByRepo(state.tasks);
+        var stillThere = false;
+        for (var i = 0; i < projects.length; i++) {
+          if (projects[i].id === state.selectedRepo) { stillThere = true; break; }
+        }
+        if (!stillThere) state.selectedRepo = projects.length > 0 ? projects[0].id : null;
+        renderProjects();
+        return;
+      }
       if (!state.selectedId && state.tasks.length > 0) {
         state.selectedId = state.tasks[0].id;
         renderTasks();
       } else if (state.selectedId) {
         var exists = false;
-        for (var i = 0; i < state.tasks.length; i++) {
-          if (state.tasks[i].id === state.selectedId) { exists = true; break; }
+        for (var j = 0; j < state.tasks.length; j++) {
+          if (state.tasks[j].id === state.selectedId) { exists = true; break; }
         }
         if (!exists && state.tasks.length > 0) {
           state.selectedId = state.tasks[0].id;
@@ -2927,17 +3424,31 @@ export const CONSOLE_HTML = `<!doctype html>
   }
 
   // ─── Event Listeners ───
+  document.getElementById('mode-switch').addEventListener('click', function (ev) {
+    var btn = ev.target.closest('.mode-btn[data-mode]');
+    if (btn) {
+      var next = btn.getAttribute('data-mode');
+      if (next !== state.mode) setMode(next);
+    }
+  });
+
+  document.getElementById('project-list').addEventListener('click', function (ev) {
+    var li = ev.target.closest('li[data-repo-id]');
+    if (li) {
+      state.selectedRepo = li.getAttribute('data-repo-id');
+      renderProjects();
+      syncHash();
+    }
+  });
+
+  document.getElementById('detail').addEventListener('click', function (ev) {
+    var row = ev.target.closest('tr[data-task-id]');
+    if (row) select(row.getAttribute('data-task-id'));
+  });
+
   document.getElementById('task-list').addEventListener('click', function (ev) {
     var li = ev.target.closest('li[data-id]');
     if (li) select(li.getAttribute('data-id'));
-  });
-
-  document.getElementById('kpi-strip').addEventListener('click', function (ev) {
-    var tile = ev.target.closest('.kpi-tile[data-cat]');
-    if (tile) {
-      state.statusCat = tile.getAttribute('data-cat') || 'all';
-      renderTasks();
-    }
   });
 
   document.getElementById('status-filters').addEventListener('click', function (ev) {
@@ -2950,14 +3461,16 @@ export const CONSOLE_HTML = `<!doctype html>
 
   document.getElementById('task-search').addEventListener('input', function (ev) {
     state.searchQuery = ev.target.value || '';
-    renderTasks();
+    if (state.mode === 'projects') renderProjects();
+    else renderTasks();
   });
 
   document.getElementById('search-clear').addEventListener('click', function () {
     state.searchQuery = '';
     var inp = document.getElementById('task-search');
     if (inp) inp.value = '';
-    renderTasks();
+    if (state.mode === 'projects') renderProjects();
+    else renderTasks();
   });
 
   document.getElementById('theme-btn').addEventListener('click', cycleTheme);
@@ -3071,8 +3584,15 @@ export const CONSOLE_HTML = `<!doctype html>
   window.addEventListener('hashchange', function () {
     var prevId = state.selectedId;
     var prevTab = state.activeTab;
+    var prevMode = state.mode;
+    var prevRepo = state.selectedRepo;
     parseHash();
-    if (state.selectedId && state.selectedId !== prevId) {
+    if (state.mode !== prevMode) {
+      setMode(state.mode);
+    } else if (state.mode === 'projects' && state.selectedRepo !== prevRepo) {
+      renderProjects();
+      renderProjectView();
+    } else if (state.selectedId && state.selectedId !== prevId) {
       select(state.selectedId);
     } else if (state.activeTab !== prevTab && state.detail) {
       renderDetail(state.detail, false);
@@ -3081,6 +3601,7 @@ export const CONSOLE_HTML = `<!doctype html>
 
   applyTheme(state.theme);
   parseHash();
+  applyModeChrome();
 
   fetchJSON('/api/meta').then(function (meta) {
     state.meta = meta;

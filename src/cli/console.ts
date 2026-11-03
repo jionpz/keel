@@ -177,7 +177,7 @@ export function createConsoleHandler(
           `SELECT t.id, t.title, t.status, t.control_mode, t.risk, t.complexity,
                   t.work_branch, t.base_branch, t.budget_usd,
                   t.created_at, t.updated_at, t.terminal_at,
-                  r.remote_url AS repo, r.provider AS repo_provider,
+                  r.id AS repo_id, r.remote_url AS repo, r.provider AS repo_provider,
                   COALESCE(rs.run_count, 0)::int AS run_count,
                   COALESCE(rs.total_cost_usd, 0)::text AS total_cost_usd,
                   COALESCE(rs.total_tokens, 0)::text AS total_tokens,

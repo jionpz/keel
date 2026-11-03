@@ -59,7 +59,7 @@ describe('keel console', () => {
       const html = await res.text()
       expect(html).toContain('Keel')
       expect(html).toContain('OBSERVATORY')
-      expect(html).toContain('kpi-strip')
+      expect(html).toContain('mode-switch')
       expect(html).toContain('task-search')
       expect(html).toContain('status-filters')
     })
