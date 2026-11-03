@@ -325,6 +325,32 @@ export const CONSOLE_HTML = `<!doctype html>
     gap: 4px;
     flex-wrap: wrap;
   }
+  /* 项目筛选：仓库可能很多，用下拉而不是 chip，避免侧栏被撑散 */
+  .repo-filter {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .repo-filter label {
+    font-size: 11.5px;
+    color: var(--muted);
+    flex: 0 0 auto;
+  }
+  .repo-select {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 4px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--line);
+    background: var(--panel-alt);
+    color: var(--text);
+    font: inherit;
+    font-size: 12.5px;
+    outline: none;
+    cursor: pointer;
+  }
+  .repo-select:focus { border-color: var(--accent); }
+  .repo-select.active { border-color: var(--accent); color: var(--accent); font-weight: 600; }
   .filter-pill {
     border: 1px solid var(--line);
     background: transparent;
@@ -635,6 +661,17 @@ export const CONSOLE_HTML = `<!doctype html>
     transition: background 0.12s;
   }
   .proj-table tbody tr:hover { background: var(--panel-alt); }
+  .proj-table tbody tr.proj-empty,
+  .proj-table tbody tr.proj-empty:hover {
+    cursor: default;
+    background: none;
+  }
+  .proj-table .proj-empty {
+    padding: 22px 10px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 12.5px;
+  }
   .proj-table .ct-title {
     font-weight: 600;
     color: var(--text);
@@ -1593,6 +1630,10 @@ export const CONSOLE_HTML = `<!doctype html>
         <input id="task-search" type="text" placeholder="搜索任务标题、ID、仓库、分支…" autocomplete="off" />
         <button id="search-clear" class="search-clear" type="button" title="清空搜索">✕</button>
       </div>
+      <div class="repo-filter" id="repo-filter-row">
+        <label for="repo-filter">项目</label>
+        <select id="repo-filter" class="repo-select"></select>
+      </div>
       <div class="filter-pills" id="status-filters">
         <button type="button" class="filter-pill active" data-cat="all" data-label="全部">全部</button>
         <button type="button" class="filter-pill" data-cat="stage" data-label="运行中">运行中</button>
@@ -1653,6 +1694,7 @@ export const CONSOLE_HTML = `<!doctype html>
     meta: null,
     mode: 'tasks',
     selectedRepo: null,
+    repoFilter: 'all',
     selectedId: null,
     detail: null,
     activeTab: 'overview',
@@ -1889,9 +1931,29 @@ export const CONSOLE_HTML = `<!doctype html>
     return c;
   }
 
+  /**
+   * 筛选的计数口径：
+   *   - 任务模式：跟随「项目」下拉；选中某个项目时只数该项目的任务；
+   *   - 项目模式：只数当前项目的任务（状态 chip 筛的是项目内的任务表）。
+   * 两种模式共用同一排 chip，计数必须和「点下去还能剩几条」一致，否则 chip 会撒谎。
+   */
+  function filterScopeTasks() {
+    if (state.mode === 'projects') {
+      var p = findProject(state.selectedRepo);
+      return p ? p.tasks : [];
+    }
+    if (state.repoFilter === 'all') return state.tasks;
+    var out = [];
+    for (var i = 0; i < state.tasks.length; i++) {
+      var t = state.tasks[i];
+      if (String(t.repo || t.repo_id || 'unknown') === state.repoFilter) out.push(t);
+    }
+    return out;
+  }
+
   /** 计数直接长在筛选 chip 上 —— 与原来那排 KPI 方块是同一件事，没必要占两行。 */
   function renderFilterCounts() {
-    var counts = statusCounts(state.tasks);
+    var counts = statusCounts(filterScopeTasks());
     var pills = document.querySelectorAll('#status-filters .filter-pill');
     for (var p = 0; p < pills.length; p++) {
       var cat = pills[p].getAttribute('data-cat') || 'all';
@@ -1900,9 +1962,40 @@ export const CONSOLE_HTML = `<!doctype html>
       pills[p].innerHTML = esc(label) + '<span class="pill-n">' + (counts[cat] || 0) + '</span>';
     }
     var mt = document.getElementById('mode-count-tasks');
-    if (mt) mt.textContent = String(counts.all);
+    if (mt) mt.textContent = String(state.tasks.length);
     var mp = document.getElementById('mode-count-projects');
     if (mp) mp.textContent = String(groupByRepo(state.tasks).length);
+  }
+
+  /**
+   * 项目下拉：仓库可能很多，用 select 而不是再排一排 chip。
+   * 选项只在项目集合或计数变化时重建 —— 5s 轮询不应该把用户正在操作的下拉框重置掉。
+   */
+  function renderRepoFilter() {
+    var sel = document.getElementById('repo-filter');
+    if (!sel) return;
+    var projects = groupByRepo(state.tasks);
+    var sig = 'all:' + state.tasks.length;
+    for (var i = 0; i < projects.length; i++) sig += '|' + projects[i].id + ':' + projects[i].counts.all;
+    if (state.repoFilter !== 'all') {
+      var known = false;
+      for (var j = 0; j < projects.length; j++) {
+        if (projects[j].id === state.repoFilter) { known = true; break; }
+      }
+      if (!known) state.repoFilter = 'all';
+    }
+    if (sel.getAttribute('data-sig') !== sig) {
+      var html = '<option value="all">全部项目（' + state.tasks.length + '）</option>';
+      for (var k = 0; k < projects.length; k++) {
+        html += '<option value="' + esc(projects[k].id) + '">' +
+          esc(shortRepo(projects[k].repo)) + '（' + projects[k].counts.all + '）</option>';
+      }
+      sel.innerHTML = html;
+      sel.setAttribute('data-sig', sig);
+    }
+    sel.value = state.repoFilter;
+    sel.classList.toggle('active', state.repoFilter !== 'all');
+    sel.title = state.repoFilter === 'all' ? '' : state.repoFilter;
   }
 
   function getFilteredTasks() {
@@ -1910,6 +2003,8 @@ export const CONSOLE_HTML = `<!doctype html>
     var out = [];
     for (var i = 0; i < state.tasks.length; i++) {
       var t = state.tasks[i];
+      if (state.repoFilter !== 'all' &&
+          String(t.repo || t.repo_id || 'unknown') !== state.repoFilter) continue;
       if (state.statusCat !== 'all' && statusKind(t.status) !== state.statusCat) continue;
       if (q) {
         var hay = ((t.title || '') + ' ' + (t.id || '') + ' ' + (t.status || '') + ' ' + (t.repo || '') + ' ' + (t.work_branch || '')).toLowerCase();
@@ -1921,6 +2016,7 @@ export const CONSOLE_HTML = `<!doctype html>
   }
 
   function renderTasks() {
+    renderRepoFilter();
     renderFilterCounts();
     var clearBtn = document.getElementById('search-clear');
     if (clearBtn) clearBtn.style.display = state.searchQuery ? 'block' : 'none';
@@ -1952,8 +2048,9 @@ export const CONSOLE_HTML = `<!doctype html>
       '</li>';
     }
     list.innerHTML = html || '<li class="empty" style="padding:24px 12px">没有匹配的任务</li>';
+    var scopeTotal = filterScopeTasks().length;
     document.getElementById('count').textContent =
-      (filtered.length === state.tasks.length ? state.tasks.length + ' 个任务' : filtered.length + ' / ' + state.tasks.length + ' 个任务');
+      (filtered.length === scopeTotal ? scopeTotal + ' 个任务' : filtered.length + ' / ' + scopeTotal + ' 个任务');
   }
 
   /**
@@ -2023,7 +2120,6 @@ export const CONSOLE_HTML = `<!doctype html>
   }
 
   function renderProjects() {
-    renderFilterCounts();
     var all = groupByRepo(state.tasks);
     var projects = getFilteredProjects(all);
     var selectedVisible = false;
@@ -2031,6 +2127,8 @@ export const CONSOLE_HTML = `<!doctype html>
       if (projects[v].id === state.selectedRepo) { selectedVisible = true; break; }
     }
     if (!selectedVisible) state.selectedRepo = projects.length > 0 ? projects[0].id : null;
+    // 计数要在选中项落定之后再算：项目模式下的状态 chip 数的是当前项目的任务
+    renderFilterCounts();
     var list = document.getElementById('project-list');
     var html = '';
     for (var i = 0; i < projects.length; i++) {
@@ -2083,6 +2181,14 @@ export const CONSOLE_HTML = `<!doctype html>
       }
     }
 
+    var visible = [];
+    for (var vi = 0; vi < p.tasks.length; vi++) {
+      if (state.statusCat !== 'all' && statusKind(p.tasks[vi].status) !== state.statusCat) continue;
+      visible.push(p.tasks[vi]);
+    }
+    var tableHint = state.statusCat === 'all'
+      ? '点击行进入任务模式'
+      : '显示 ' + visible.length + ' / ' + p.tasks.length + ' 个任务 · 状态筛选生效中';
     var html = '<div class="proj-header">' +
       '<div class="cockpit-badges">' +
         '<span class="badge stage"><span class="dot"></span>项目</span>' +
@@ -2117,12 +2223,12 @@ export const CONSOLE_HTML = `<!doctype html>
       '<div class="proj-dist-legend">' + legend + '</div>' +
     '</div>' +
     '<div class="card">' +
-      '<div class="card-header"><h3>项目任务</h3><span class="muted">点击行进入任务模式</span></div>' +
+      '<div class="card-header"><h3>项目任务</h3><span class="muted">' + esc(tableHint) + '</span></div>' +
       '<div class="proj-table-wrap"><table class="proj-table"><thead><tr>' +
         '<th>状态</th><th>标题</th><th>分支</th><th>轮次</th><th>成本</th><th>更新</th>' +
       '</tr></thead><tbody>';
-    for (var j = 0; j < p.tasks.length; j++) {
-      var t = p.tasks[j];
+    for (var j = 0; j < visible.length; j++) {
+      var t = visible[j];
       html += '<tr data-task-id="' + esc(t.id) + '">' +
         '<td>' + badge(t.status, true) + '</td>' +
         '<td><div class="ct-title" title="' + esc(t.title) + '">' + esc(t.title) + '</div></td>' +
@@ -2131,6 +2237,10 @@ export const CONSOLE_HTML = `<!doctype html>
         '<td class="ct-num">' + (Number(t.total_cost_usd || 0) > 0 ? fmtCost(Number(t.total_cost_usd)) : '—') + '</td>' +
         '<td class="ct-num">' + esc(fmtShortTime(t.updated_at)) + '</td>' +
       '</tr>';
+    }
+    if (visible.length === 0) {
+      html += '<tr class="proj-empty"><td colspan="6">' +
+        (p.tasks.length === 0 ? '这个项目还没有任务' : '当前状态筛选下没有任务') + '</td></tr>';
     }
     html += '</tbody></table></div></div>';
     detailEl.innerHTML = html;
@@ -2149,8 +2259,11 @@ export const CONSOLE_HTML = `<!doctype html>
     var isProjects = mode === 'projects';
     document.getElementById('task-list').hidden = isProjects;
     document.getElementById('project-list').hidden = !isProjects;
+    // 项目下拉只属于任务模式；状态 chip 两种模式都留着 —— 项目模式下它筛的是项目内的任务表
+    var row = document.getElementById('repo-filter-row');
+    if (row) row.hidden = isProjects;
     var filters = document.getElementById('status-filters');
-    if (filters) filters.hidden = isProjects;
+    if (filters) filters.hidden = false;
     var search = document.getElementById('task-search');
     if (search) {
       search.placeholder = isProjects ? '搜索项目名或仓库地址…' : '搜索任务标题、ID、仓库、分支…';
@@ -3455,8 +3568,15 @@ export const CONSOLE_HTML = `<!doctype html>
     var btn = ev.target.closest('.filter-pill[data-cat]');
     if (btn) {
       state.statusCat = btn.getAttribute('data-cat') || 'all';
-      renderTasks();
+      // 项目模式下 chip 筛的是项目任务表，不能去重绘任务侧栏
+      if (state.mode === 'projects') renderProjects();
+      else renderTasks();
     }
+  });
+
+  document.getElementById('repo-filter').addEventListener('change', function (ev) {
+    state.repoFilter = ev.target.value || 'all';
+    if (state.mode === 'tasks') renderTasks();
   });
 
   document.getElementById('task-search').addEventListener('input', function (ev) {
