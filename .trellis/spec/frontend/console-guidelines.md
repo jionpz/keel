@@ -26,7 +26,7 @@
 
 - `GET /api/tasks`（列表）：`id, title, status, control_mode, risk, complexity,
   work_branch, base_branch, budget_usd, created_at, updated_at, terminal_at,
-  repo, repo_provider`，外加 `LEFT JOIN LATERAL` 聚合出来的
+  repo_id, repo, repo_provider`，外加 `LEFT JOIN LATERAL` 聚合出来的
   `run_count, total_cost_usd, total_tokens, event_count`（只读统计，不写回）。
 - `GET /api/tasks/:id`（详情）：
   - `task`：列表字段 + `repo_id, current_run_id`；
@@ -61,6 +61,18 @@
   不要在各处自己拼单位。
 - 「已停留」类实时文案在节点上带 `data-since` + `data-prefix`，由 `tickElapsed()` 在轮询节拍里
   单独刷新文本 —— 指纹未变时不会重绘 DOM，不这样写时长会冻住。
+
+## 任务模式 / 项目模式
+
+- 页面有两种视图，共用同一个侧栏骨架：**任务模式**以 task 为主体，**项目模式**以仓库为主体。
+  切换只改可见容器与按钮态（`applyModeChrome`），不要复制两套侧栏。
+- 项目由客户端按 `repo`（仓库地址）归组，**不是** `repo_id`：`repo` 表没有 remote_url 唯一约束，
+  按 id 分会把同一项目拆成两行。聚合值（任务数、状态分布、轮次、成本）都从 `/api/tasks` 的
+  现成字段算，不新增写路径、不新增聚合接口。
+- 项目视图只做聚合与跳转：任务明细仍然回任务模式看，避免一个事实出现两种口径。
+- 模式与选中项进 URL Hash：`#mode=projects&repo=<url>` 与 `#task=<id>&tab=<tab>`；
+  只有 `task` 键的链接回落到任务模式。5s 轮询必须保持当前模式与选中项目。
+- 侧栏的计数只写一处：状态计数长在筛选 chip 上（`.pill-n`），不要再造一排 KPI 方块重复表达。
 
 ## 无感刷新与状态保持
 
