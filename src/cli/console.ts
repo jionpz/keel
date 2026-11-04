@@ -3,20 +3,27 @@
  *
  * 定位（docs/09-roadmap.md）：UI 是 Fact Plane 的**消费者**，不是被验证的东西。
  * 因此本文件：
- *   - 只有 SELECT，没有任何写入路径；
- *   - 以 `keel_control` 角色访问（该角色对事实表只有 SELECT / INSERT，控制台只用 SELECT）；
- *   - 只绑定 127.0.0.1，不提供鉴权 —— 它是本地观测面，不是服务端产品。
+ *   - 读路径只有 SELECT，以 `keel_control` 角色访问；
+ *   - 写路径只有一条：人工闸门的 `POST /api/tasks/:id/decide|answer`。它不是
+ *     「控制台自己改状态」—— 它转调 `decide.ts` 的 `decideTask` / `answerTask`，
+ *     和 CLI 走同一个 driver、同一套预检，控制台只多做了一层「本机可信」的校验；
+ *   - 只绑定 127.0.0.1，且写端点必须同时满足：Host 回环、Origin 回环（浏览器带时）、
+ *     `Content-Type: application/json`、`X-Keel-Console` 等于本次进程随机令牌。
+ *     这是为了挡住别的网页对 127.0.0.1 发起的跨站请求（含 DNS rebinding），
+ *     不是鉴权 —— 它仍然是本地观测面，不是服务端产品。
  *
  * 用法：
  *   pnpm run console            # 默认 http://127.0.0.1:4321
  *   KEEL_CONSOLE_PORT=4322 pnpm run console
  */
 
+import { randomBytes } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { TASK_TRANSITIONS } from '../control/transition/table.js'
 import { asRole, closePool, connectionString } from '../fact/db.js'
 import { GATE_STATUSES, STAGE_STATUSES, TERMINAL_STATUSES } from '../shared/ids.js'
-import { CONSOLE_HTML } from './console-page.js'
+import { CONSOLE_HTML, CONSOLE_TOKEN_PLACEHOLDER } from './console-page.js'
+import { answerTask, DECISIONS, type Decision, decideTask } from './decide.js'
 
 const DEFAULT_PORT = 4321
 const HOST = '127.0.0.1'
@@ -140,13 +147,64 @@ const STATS_TOTALS_SQL = `
 export type Row = Record<string, unknown>
 export type QueryFn = (sql: string, params: readonly unknown[]) => Promise<readonly Row[]>
 
+/** 写端点的回复。控制台不解释业务语义，只把 decide.ts 的结果翻译成 HTTP。 */
+export interface ActionReply {
+  readonly status: number
+  readonly body: unknown
+}
+
+/**
+ * 人工闸门的写入口。
+ *
+ * 抽成接口只为测试注入 —— 生产实现就是 `decideTask` / `answerTask` 的薄包装，
+ * 不在这里复制任何状态机逻辑。
+ */
+export interface ConsoleActions {
+  decide(taskId: string, decision: Decision, note: string | undefined): Promise<ActionReply>
+  answer(taskId: string, text: string): Promise<ActionReply>
+}
+
 export interface ConsoleDeps {
   readonly query: QueryFn
+  /** 省略时用真实 decide / answer（会连库、会建分支） */
+  readonly act?: ConsoleActions
+  /** 页面令牌。省略时每次进程启动随机生成；测试注入固定值。 */
+  readonly token?: string
 }
 
 /** 以 keel_control 角色执行只读查询 —— 与 CLI 共用同一套连接与角色解析。 */
 const controlQuery: QueryFn = async (sql, params) =>
   asRole('keel_control', async (c) => (await c.query(sql, params as unknown[])).rows)
+
+/** 错误码 → HTTP 状态。没列出的按 400 处理，绝不把业务失败伪装成 200。 */
+const ACTION_STATUS: Record<string, number> = {
+  NOT_FOUND: 404,
+  CONFLICT: 409,
+  CAPABILITY_UNSUPPORTED: 400,
+}
+
+const defaultActions: ConsoleActions = {
+  async decide(taskId, decision, note) {
+    const r = await decideTask(taskId, decision, note === undefined ? {} : { note })
+    if (!r.ok) {
+      return {
+        status: ACTION_STATUS[r.error.kind] ?? 400,
+        body: { ok: false, kind: r.error.kind, error: r.error.detail },
+      }
+    }
+    return { status: 200, body: { ok: true, ...r.value } }
+  },
+  async answer(taskId, text) {
+    const r = await answerTask(taskId, text)
+    if (!r.ok) {
+      return {
+        status: ACTION_STATUS[r.error.kind] ?? 400,
+        body: { ok: false, kind: r.error.kind, error: r.error.detail },
+      }
+    }
+    return { status: 200, body: { ok: true, ...r.value } }
+  },
+}
 
 function metaPayload() {
   return {
@@ -182,24 +240,122 @@ function sendText(res: ServerResponse, status: number, text: string, type: strin
   res.end(text)
 }
 
+const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1', '[::1]'])
+const MAX_BODY = 64 * 1024
+
+function isLoopback(value: string | undefined, withScheme: boolean): boolean {
+  if (value === undefined || value === '') return false
+  try {
+    return LOOPBACK.has(new URL(withScheme ? value : `http://${value}`).hostname)
+  } catch {
+    return false
+  }
+}
+
+function headerValue(req: IncomingMessage, name: string): string | undefined {
+  const raw = req.headers[name]
+  return Array.isArray(raw) ? raw[0] : raw
+}
+
+/**
+ * 写端点的本机校验。四道全过才放行：
+ *
+ *  1. `Host` 是回环地址 —— 挡 DNS rebinding（攻击者域名解析到 127.0.0.1 时，
+ *     浏览器发出的 Host 仍是攻击者域名）；
+ *  2. `Origin`（浏览器一定带）是回环地址 —— 挡别的站点直接 fetch 本机；
+ *  3. `Content-Type: application/json` —— 跨源简单请求发不出这个值，
+ *     必须走 preflight，而我们对 OPTIONS 一律不回 CORS 头；
+ *  4. `X-Keel-Console` 等于本次进程随机令牌 —— 自定义头同样要求 preflight，
+ *     并且让「同机另一个进程」也得先读到页面才能写。
+ *
+ * 这不是鉴权：本机能读到页面的人本来就能跑 CLI。它只把「网页顺手点一下」
+ * 和「DBA 手工改库」之间那类路径关掉。
+ */
+function writeRejection(
+  req: IncomingMessage,
+  token: string,
+): { status: number; error: string } | undefined {
+  if (!isLoopback(headerValue(req, 'host'), false)) {
+    return { status: 403, error: 'Host 不是本机回环地址' }
+  }
+  const origin = headerValue(req, 'origin')
+  if (origin !== undefined && !isLoopback(origin, true)) {
+    return { status: 403, error: 'Origin 不是本机控制台' }
+  }
+  const ctype = headerValue(req, 'content-type') ?? ''
+  if (!ctype.toLowerCase().startsWith('application/json')) {
+    return { status: 415, error: '写请求必须是 application/json' }
+  }
+  if (headerValue(req, 'x-keel-console') !== token) {
+    return { status: 403, error: '缺少或错误的本机令牌' }
+  }
+  return undefined
+}
+
+function readBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = []
+    let size = 0
+    req.on('data', (c: Buffer) => {
+      size += c.length
+      if (size > MAX_BODY) {
+        reject(new Error(`请求体超过 ${MAX_BODY} 字节`))
+        req.destroy()
+        return
+      }
+      chunks.push(c)
+    })
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
+    req.on('error', reject)
+  })
+}
+
+function parseBody(raw: string): Record<string, unknown> | undefined {
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** 只接受字符串；缺失返回 undefined，给错类型直接判非法，不做隐式转换 */
+function optionalText(value: unknown, max: number): string | undefined {
+  if (value === undefined || value === null) return undefined
+  if (typeof value !== 'string') return undefined
+  return value.trim().slice(0, max)
+}
+
 /**
  * 路由 + 处理。抽成纯函数便于测试：注入假的 query，不依赖真实数据库。
  */
 export function createConsoleHandler(
   deps: ConsoleDeps,
 ): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
+  const token = deps.token ?? randomBytes(16).toString('hex')
+  const page = CONSOLE_HTML.replace(CONSOLE_TOKEN_PLACEHOLDER, token)
+  const act = deps.act ?? defaultActions
+
   return async (req, res) => {
     const method = req.method ?? 'GET'
-    if (method !== 'GET' && method !== 'HEAD') {
-      sendJson(res, 405, { error: '只读控制台：只接受 GET' })
-      return
-    }
-
     const url = new URL(req.url ?? '/', `http://${HOST}`)
     const path = url.pathname
 
+    const action = /^\/api\/tasks\/([^/]+)\/(decide|answer)$/.exec(path)
+    if (action !== null) {
+      await handleAction(act, token, req, res, method, action[1] ?? '', action[2] ?? '')
+      return
+    }
+
+    if (method !== 'GET' && method !== 'HEAD') {
+      sendJson(res, 405, { error: '只接受 GET；写操作仅有 /api/tasks/:id/decide|answer' })
+      return
+    }
+
     if (path === '/' || path === '/index.html') {
-      sendText(res, 200, CONSOLE_HTML, 'text/html; charset=utf-8')
+      sendText(res, 200, page, 'text/html; charset=utf-8')
       return
     }
 
@@ -307,6 +463,72 @@ export function createConsoleHandler(
   }
 }
 
+async function handleAction(
+  act: ConsoleActions,
+  token: string,
+  req: IncomingMessage,
+  res: ServerResponse,
+  method: string,
+  rawId: string,
+  verb: string,
+): Promise<void> {
+  if (method !== 'POST') {
+    sendJson(res, 405, { ok: false, error: '该端点只接受 POST' })
+    return
+  }
+
+  const id = decodeURIComponent(rawId)
+  if (!UUID_RE.test(id)) {
+    sendJson(res, 404, { ok: false, error: 'task not found', detail: `不是合法的 task id：${id}` })
+    return
+  }
+
+  const rejected = writeRejection(req, token)
+  if (rejected !== undefined) {
+    sendJson(res, rejected.status, { ok: false, error: rejected.error })
+    return
+  }
+
+  let payload: Record<string, unknown> | undefined
+  try {
+    payload = parseBody(await readBody(req))
+  } catch (e) {
+    if (!res.headersSent) sendJson(res, 413, { ok: false, error: message(e) })
+    return
+  }
+  if (payload === undefined) {
+    sendJson(res, 400, { ok: false, error: '请求体必须是 JSON 对象' })
+    return
+  }
+
+  try {
+    if (verb === 'decide') {
+      const decision = payload.decision
+      if (typeof decision !== 'string' || !(DECISIONS as readonly string[]).includes(decision)) {
+        sendJson(res, 400, { ok: false, error: `decision 必须是 ${DECISIONS.join(' / ')}` })
+        return
+      }
+      if (payload.note !== undefined && typeof payload.note !== 'string') {
+        sendJson(res, 400, { ok: false, error: 'note 必须是字符串' })
+        return
+      }
+      const note = optionalText(payload.note, 2000)
+      const reply = await act.decide(id, decision as Decision, note === '' ? undefined : note)
+      sendJson(res, reply.status, reply.body)
+      return
+    }
+
+    if (typeof payload.text !== 'string' || payload.text.trim() === '') {
+      sendJson(res, 400, { ok: false, error: 'text 不能为空' })
+      return
+    }
+    const reply = await act.answer(id, payload.text.trim().slice(0, 8000))
+    sendJson(res, reply.status, reply.body)
+  } catch (e) {
+    sendJson(res, 500, { ok: false, error: message(e) })
+  }
+}
+
 async function loadTaskDetail(query: QueryFn, id: string): Promise<unknown | undefined> {
   const tasks = await query(
     `SELECT t.id, t.title, t.status, t.control_mode, t.repo_id, t.base_branch, t.work_branch,
@@ -401,9 +623,13 @@ export async function consoleMain(argv: readonly string[]): Promise<void> {
   if (argv.includes('--help') || argv.includes('-h')) {
     console.log(`用法: keel console
 
-只读 Web 控制台，默认 http://${HOST}:${DEFAULT_PORT}
+本地 Web 控制台，默认 http://${HOST}:${DEFAULT_PORT}
   KEEL_CONSOLE_PORT  端口（默认 ${DEFAULT_PORT}）
-  KEEL_DATABASE_URL  数据库连接串（与 CLI 共用）`)
+  KEEL_DATABASE_URL  数据库连接串（与 CLI 共用）
+
+读：全部事实只走 SELECT。
+写：只有人工闸门的 POST /api/tasks/:id/decide|answer，
+    与 keel decide / keel answer 走同一个 driver 和同一套预检。`)
     return
   }
 
@@ -412,7 +638,8 @@ export async function consoleMain(argv: readonly string[]): Promise<void> {
   const port = typeof address === 'object' && address !== null ? address.port : DEFAULT_PORT
   console.log(`keel console: http://${HOST}:${port}`)
   console.log(`数据库: ${connectionString()}`)
-  console.log('只读。Ctrl-C 退出。')
+  console.log('读取全量事实；人工闸门的批准 / 驳回 / 返工 / 澄清可在页面上直接提交。')
+  console.log('Ctrl-C 退出。')
 
   const shutdown = (signal: string) => {
     console.log(`\n收到 ${signal}，正在关闭…`)

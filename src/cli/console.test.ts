@@ -8,12 +8,23 @@
 
 import { createServer } from 'node:http'
 import { describe, expect, it } from 'vitest'
-import { createConsoleHandler, type QueryFn, type Row } from './console.js'
+import {
+  type ConsoleActions,
+  type ConsoleDeps,
+  createConsoleHandler,
+  type QueryFn,
+  type Row,
+} from './console.js'
+import { CONSOLE_TOKEN_PLACEHOLDER } from './console-page.js'
 
 const TASK_ID = '1d891a16-be91-4763-8333-38edd182a824'
+const TOKEN = 'test-token-0123456789abcdef'
 
-async function withServer(query: QueryFn, fn: (base: string) => Promise<void>): Promise<void> {
-  const handler = createConsoleHandler({ query })
+async function withServer(
+  deps: QueryFn | ConsoleDeps,
+  fn: (base: string) => Promise<void>,
+): Promise<void> {
+  const handler = createConsoleHandler(typeof deps === 'function' ? { query: deps } : deps)
   const server = createServer((req, res) => {
     handler(req, res).catch(() => res.end())
   })
@@ -25,6 +36,35 @@ async function withServer(query: QueryFn, fn: (base: string) => Promise<void>): 
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()))
   }
+}
+
+/** 记录调用的假写入口 —— 写端点只负责校验 + 转调，不复制状态机。 */
+function fakeActions() {
+  const calls: string[] = []
+  const act: ConsoleActions = {
+    async decide(taskId, decision, note) {
+      calls.push(`decide ${taskId} ${decision} ${note ?? ''}`)
+      return { status: 200, body: { ok: true, from: 'S-HUMAN_REVIEW', to: 'S-DEVELOPING' } }
+    },
+    async answer(taskId, text) {
+      calls.push(`answer ${taskId} ${text}`)
+      return { status: 200, body: { ok: true, from: 'S-NEED_CLARIFICATION', to: 'S-PM_ANALYZING' } }
+    },
+  }
+  return { act, calls }
+}
+
+function action(
+  base: string,
+  verb: 'decide' | 'answer',
+  body: unknown,
+  headers: Record<string, string> = {},
+): Promise<Response> {
+  return fetch(`${base}/api/tasks/${TASK_ID}/${verb}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-keel-console': TOKEN, ...headers },
+    body: typeof body === 'string' ? body : JSON.stringify(body),
+  })
 }
 
 function fakeQuery(rows: {
@@ -71,7 +111,7 @@ describe('keel console', () => {
       expect(html).toContain('data-mode="projects"')
       expect(html).toContain('id="statusbar"')
       expect(html).toContain("fetchJSON('/api/stats')")
-      // 人工闸门的提示条：控制台只给命令，不发写请求
+      // 人工闸门提示条：可点的按钮 + 一行等价的 CLI 命令
       expect(html).toContain('human-callout')
       // 命令必须带上 `pnpm ` 前缀 —— 仓库里没有全局 `keel` 可执行文件，
       // 只写 `keel decide` 会让人复制到终端后得到 command not found
@@ -140,9 +180,95 @@ describe('keel console', () => {
     })
   })
 
-  it('写方法被拒绝（只读）', async () => {
+  it('非写端点的写方法仍被拒绝（405）', async () => {
     await withServer(fakeQuery({}), async (base) => {
       const res = await fetch(`${base}/api/tasks`, { method: 'POST' })
+      expect(res.status).toBe(405)
+    })
+  })
+
+  it('页面注入了本机令牌，模板占位符不残留', async () => {
+    await withServer({ query: fakeQuery({}), token: TOKEN }, async (base) => {
+      const html = await (await fetch(`${base}/`)).text()
+      expect(html).toContain(`name="keel-console-token" content="${TOKEN}"`)
+      expect(html).not.toContain(CONSOLE_TOKEN_PLACEHOLDER)
+      // 按钮是派发入口，光有命令不算数（按钮由 JS 拼出，只断言构建逻辑与令牌注入）
+      expect(html).toContain("'approve'")
+      expect(html).toContain("'reject'")
+      expect(html).toContain("'rework'")
+      expect(html).toContain("'answer'")
+      expect(html).toContain('data-act=')
+      expect(html).toContain("'x-keel-console'")
+    })
+  })
+
+  it('写端点：缺令牌 403', async () => {
+    const { act, calls } = fakeActions()
+    await withServer({ query: fakeQuery({}), token: TOKEN, act }, async (base) => {
+      const res = await action(base, 'decide', { decision: 'approve' }, { 'x-keel-console': '' })
+      expect(res.status).toBe(403)
+    })
+    expect(calls).toEqual([])
+  })
+
+  it('写端点：非 application/json 415（挡跨站简单请求）', async () => {
+    const { act, calls } = fakeActions()
+    await withServer({ query: fakeQuery({}), token: TOKEN, act }, async (base) => {
+      const res = await action(base, 'decide', JSON.stringify({ decision: 'approve' }), {
+        'content-type': 'text/plain',
+      })
+      expect(res.status).toBe(415)
+    })
+    expect(calls).toEqual([])
+  })
+
+  it('写端点：外站 Origin 403（DNS rebinding / 跨站）', async () => {
+    const { act, calls } = fakeActions()
+    await withServer({ query: fakeQuery({}), token: TOKEN, act }, async (base) => {
+      const res = await action(
+        base,
+        'decide',
+        { decision: 'approve' },
+        { origin: 'https://evil.example' },
+      )
+      expect(res.status).toBe(403)
+    })
+    expect(calls).toEqual([])
+  })
+
+  it('写端点：带令牌的裁决转调 decide，note 去空白', async () => {
+    const { act, calls } = fakeActions()
+    await withServer({ query: fakeQuery({}), token: TOKEN, act }, async (base) => {
+      const res = await action(base, 'decide', { decision: 'approve', note: '  理由  ' })
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as { ok: boolean; to: string }
+      expect(body.ok).toBe(true)
+      expect(body.to).toBe('S-DEVELOPING')
+    })
+    expect(calls).toEqual([`decide ${TASK_ID} approve 理由`])
+  })
+
+  it('写端点：非法 decision 400，不调用动作', async () => {
+    const { act, calls } = fakeActions()
+    await withServer({ query: fakeQuery({}), token: TOKEN, act }, async (base) => {
+      const res = await action(base, 'decide', { decision: 'maybe' })
+      expect(res.status).toBe(400)
+    })
+    expect(calls).toEqual([])
+  })
+
+  it('写端点：澄清空文本 400，非空转调 answer', async () => {
+    const { act, calls } = fakeActions()
+    await withServer({ query: fakeQuery({}), token: TOKEN, act }, async (base) => {
+      expect((await action(base, 'answer', { text: '   ' })).status).toBe(400)
+      expect((await action(base, 'answer', { text: '补充说明' })).status).toBe(200)
+    })
+    expect(calls).toEqual([`answer ${TASK_ID} 补充说明`])
+  })
+
+  it('写端点：GET 405（只接受 POST）', async () => {
+    await withServer({ query: fakeQuery({}), token: TOKEN }, async (base) => {
+      const res = await fetch(`${base}/api/tasks/${TASK_ID}/decide`)
       expect(res.status).toBe(405)
     })
   })

@@ -17,6 +17,9 @@
 | `pnpm keel decide … rework` | `HumanRequestedRework` | `nextRun('brainstorm')` |
 | `pnpm keel answer … --text` | `ClarificationReceived` + `feedbackId` | 真写 `task_feedback`；取消澄清 timer；`nextRun('pm')` |
 
+控制台的按钮（`POST /api/tasks/:id/decide|answer`）**只转调这四个函数**，
+不实现第二套派发逻辑 —— 页面上点一次和在终端敲一条命令必须产生完全相同的副作用。
+
 三条纪律：
 
 1. **预检在写入之前**。`advance` 对不匹配的事件会如实写 `NoTransition` —— 那是编排该有的记账，

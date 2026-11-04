@@ -1,7 +1,8 @@
 # 控制台（只读 Web 面板）
 
 > 来源：`10-27-console-and-demo-app` 的第一份真实前端代码（`src/cli/console*.ts`）。
-> 在出现第二个 UI 之前，这些约定只覆盖「本地只读观测面」这一类，不要外推成通用前端规范。
+> 在出现第二个 UI 之前，这些约定只覆盖「本地观测面（读全量 + 单一人工闸门写入口）」这一类，
+> 不要外推成通用前端规范。
 
 ## 形态：单文件、零构建、零依赖
 
@@ -9,19 +10,37 @@
 - 客户端 JS 用字符串拼接，**不要用模板字符串** —— 会和外层模板字符串冲突。
 - 新增页面能力时先问：能不能用原生 DOM + `fetch` 完成？能就不要引依赖。
 
-## 只读边界
+## 读路径 / 写路径
 
-- 只发 `GET`；写方法一律 `405`。
+读路径：
+
+- 只发 `GET`。
 - 数据库访问只走 `asRole('keel_control')`，并且只发 `SELECT`。
 - 只绑定 `127.0.0.1`，不做鉴权 —— 因此**不要**把它暴露到公网。
-- 需要人工介入时也不开写路径：详情页的 `.human-callout` 只**把命令拼好给复制**
-  （`pnpm keel decide … approve|reject|rework`、`pnpm keel answer … --text`），
-  由人在本机终端执行。无鉴权本地页面 + 写端点 = 谁来点一下都能改状态，
-  这不是「顺手补个按钮」能承担的信任模型。
-- 页面里给出的命令一律带 `pnpm ` 前缀（`pnpm keel …` / `pnpm run timeline -- …`）：
-  `keel` 只是 `package.json` 的 `bin` 声明，仓库里没有 `node_modules/.bin/keel`，
-  全局也没装。只写 `keel decide` 会让人复制到终端后撞 `command not found` ——
-  **页面上写什么，就得能原样跑起来**。
+
+写路径只有一条，2026-11-04 加入：
+
+- `POST /api/tasks/:id/decide`（`{decision: approve|reject|rework, note?}`）与
+  `POST /api/tasks/:id/answer`（`{text}`）。它们**转调** `src/cli/decide.ts` 的
+  `decideTask` / `answerTask` —— 和 `pnpm keel decide|answer` 同一个 driver、同一套预检，
+  页面里不复制任何状态机逻辑。其余任何非 `GET` 方法仍然 `405`。
+- 四道本机校验全过才放行（`writeRejection`）：`Host` 回环、`Origin`（浏览器带时）
+  回环、`Content-Type: application/json`、`X-Keel-Console` 等于进程启动时随机生成、
+  注入到页面 `<meta name="keel-console-token">` 的令牌。前两条挡 DNS rebinding，
+  后两条靠 preflight 挡别的站点直接 fetch（我们对 `OPTIONS` 一律不回 CORS 头）。
+  这是**挡住「某个网页顺手点一下」**，不是鉴权：本机能读到页面的人本来就能跑 CLI。
+- 加写端点时**不要**放宽这四条，也不要把令牌写进常量：它必须是每次进程启动新生成的。
+- `control_mode ≠ auto` 时不派发 —— 页面要把服务端返回的 `error` 原样显示出来，
+  不要吞掉改写成「失败」。
+
+人工闸门的 UI 形态：详情页的 `.human-callout` 给**可点的按钮**（批准 / 驳回 / 返工 /
+提交澄清），按钮直接把请求打到上面的写端点；同一块里保留一行等价的 CLI 命令供复制
+（`.human-callout-cmd`），那是备用路径，不是唯一路径。
+
+页面里给出的命令一律带 `pnpm ` 前缀（`pnpm keel …` / `pnpm run timeline -- …`）：
+`keel` 只是 `package.json` 的 `bin` 声明，仓库里没有 `node_modules/.bin/keel`，
+全局也没装。只写 `keel decide` 会让人复制到终端后撞 `command not found` ——
+**页面上写什么，就得能原样跑起来**。
 
 ## 数据口径必须与 CLI 一致
 

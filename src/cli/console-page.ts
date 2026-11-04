@@ -8,11 +8,18 @@
  *  - 客户端 JS 用字符串拼接而非模板字符串 —— 避免与外层模板字符串冲突。
  */
 
+/**
+ * 页面模板里的令牌占位符。服务端每次进程启动随机生成一个令牌，在 `GET /` 时替换进来；
+ * 写端点要求请求头 `X-Keel-Console` 与它一致（见 `console.ts` 的 `writeRejection`）。
+ */
+export const CONSOLE_TOKEN_PLACEHOLDER = '__KEEL_CONSOLE_TOKEN__'
+
 export const CONSOLE_HTML = `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="keel-console-token" content="__KEEL_CONSOLE_TOKEN__" />
 <title>Keel Console · AI Engineering Runtime Observatory</title>
 <style>
   :root {
@@ -1149,15 +1156,15 @@ export const CONSOLE_HTML = `<!doctype html>
   }
   .copy-btn.copied { color: var(--done); }
 
-  /* 人工闸门：只读提示条 —— 命令可复制，页面不发写请求 */
+  /* 人工闸门：可点的裁决按钮 + 一行等价 CLI 命令（备用路径） */
   .human-callout {
     border: 1px solid var(--line-strong);
     border-left: 2px solid var(--gate);
     background: var(--gate-soft);
-    padding: 10px 12px;
+    padding: 12px 14px;
     margin: 2px 0 14px;
     display: grid;
-    gap: 6px;
+    gap: 10px;
   }
   .human-callout-head {
     display: flex;
@@ -1173,16 +1180,47 @@ export const CONSOLE_HTML = `<!doctype html>
     font-weight: 400;
     color: var(--muted);
   }
-  .human-callout-row {
+  .human-callout-actions {
     display: flex;
     align-items: center;
     gap: 8px;
-    min-width: 0;
+    flex-wrap: wrap;
   }
-  .human-callout-what {
-    flex: 0 0 56px;
-    font-size: 11.5px;
-    color: var(--text-sec);
+  .act-btn {
+    appearance: none;
+    border: 1px solid var(--line-strong);
+    background: var(--panel);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 5px 14px;
+    font-size: 12px;
+    font-family: var(--sans);
+    font-weight: 500;
+    line-height: 1.4;
+    cursor: pointer;
+    transition: background 0.12s, border-color 0.12s, opacity 0.12s;
+  }
+  .act-btn:hover { border-color: var(--muted); background: var(--panel-alt); }
+  .act-btn:disabled { opacity: 0.45; cursor: default; }
+  .act-btn[data-act="approve"] {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+  .act-btn[data-act="approve"]:hover { background: #0a6ee6; border-color: #0a6ee6; }
+  .act-btn[data-act="reject"] {
+    color: var(--bad);
+    border-color: rgba(215, 0, 21, 0.35);
+  }
+  .act-btn[data-act="reject"]:hover { background: var(--bad-soft); border-color: var(--bad); }
+  .human-callout-foot {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-size: 11px;
+    color: var(--muted);
+    min-width: 0;
   }
   .human-callout-cmd {
     font-family: var(--mono);
@@ -1195,6 +1233,10 @@ export const CONSOLE_HTML = `<!doctype html>
     overflow-x: auto;
     min-width: 0;
   }
+  .human-callout-msg { font-size: 11.5px; color: var(--text-sec); }
+  .human-callout-msg:empty { display: none; }
+  .human-callout-msg.bad { color: var(--bad); }
+  .human-callout-msg.done { color: var(--done); }
 
   .cockpit-title {
     font-size: 17px;
@@ -3432,39 +3474,51 @@ export const CONSOLE_HTML = `<!doctype html>
   /**
    * 人工闸门提示条。
    *
-   * 只回答两件事：现在为什么停住了、在本机终端敲什么。命令由页面拼好给复制，
-   * 控制台**不发任何写请求** —— 写操作只有 CLI 一条路径（见 spec/frontend/console-guidelines）。
+   * 三件事：现在为什么停住了、能点哪几个按钮、等价的 CLI 命令是什么。
+   * 按钮直接提交到本机写端点（/api/tasks/:id/decide|answer），
+   * 和 keel decide / keel answer 走同一个 driver 与同一套预检；
+   * CLI 那行是备用路径，不是唯一路径。
    */
   function renderHumanCallout(t) {
     var status = t.status;
     if (status !== 'S-HUMAN_REVIEW' && status !== 'S-NEED_CLARIFICATION') return '';
 
-    var rows = [];
+    var actions = [];
+    var cliCmd = '';
+    var head = '';
+    var hint = '';
+
     if (status === 'S-HUMAN_REVIEW') {
-      rows.push(['批准', 'pnpm keel decide ' + t.id + ' approve']);
-      rows.push(['驳回', 'pnpm keel decide ' + t.id + ' reject --note "…"']);
-      rows.push(['返工', 'pnpm keel decide ' + t.id + ' rework']);
+      actions.push(['approve', '批准']);
+      actions.push(['reject', '驳回']);
+      actions.push(['rework', '返工']);
+      cliCmd = 'pnpm keel decide ' + t.id + ' approve|reject|rework';
+      head = '需要人工：任务停在人工评审，等一次裁决';
+      hint = '批准会创建开发分支并派发下一轮；驳回是终态';
     } else {
-      rows.push(['补充澄清', 'pnpm keel answer ' + t.id + ' --text "…"']);
+      actions.push(['answer', '提交澄清']);
+      cliCmd = 'pnpm keel answer ' + t.id + ' --text "…"';
+      head = '需要人工：任务在等澄清答复，超时会自动放弃';
+      hint = '提交后写一条 feedback 并回到 PM 分析';
     }
 
-    var body = '';
-    for (var i = 0; i < rows.length; i++) {
-      body += '<div class="human-callout-row">' +
-        '<span class="human-callout-what">' + esc(rows[i][0]) + '</span>' +
-        '<code class="human-callout-cmd">' + esc(rows[i][1]) + '</code>' +
-        '<button type="button" class="copy-btn" data-copy="' + esc(rows[i][1]) + '" title="复制命令">复制</button>' +
-        '</div>';
+    var buttons = '';
+    for (var i = 0; i < actions.length; i++) {
+      buttons += '<button type="button" class="act-btn" data-act="' + actions[i][0] +
+        '" data-task="' + esc(t.id) + '">' + esc(actions[i][1]) + '</button>';
     }
-
-    var head = status === 'S-HUMAN_REVIEW'
-      ? '需要人工：任务停在人工评审，等一次裁决'
-      : '需要人工：任务在等澄清答复，超时会自动放弃';
 
     return '<div class="human-callout">' +
       '<div class="human-callout-head">' + esc(head) +
-        '<span class="human-callout-hint">控制台只读，命令在本机终端执行</span>' +
-      '</div>' + body + '</div>';
+        '<span class="human-callout-hint">' + esc(hint) + '</span>' +
+      '</div>' +
+      '<div class="human-callout-actions">' + buttons + '</div>' +
+      '<div class="human-callout-msg" id="human-callout-msg"></div>' +
+      '<div class="human-callout-foot">等价命令：' +
+        '<code class="human-callout-cmd">' + esc(cliCmd) + '</code>' +
+        '<button type="button" class="copy-btn" data-copy="' + esc(cliCmd) + '" title="复制命令">复制</button>' +
+      '</div>' +
+    '</div>';
   }
 
   function renderGlossary() {
@@ -4357,6 +4411,82 @@ export const CONSOLE_HTML = `<!doctype html>
     }).catch(function () {});
   }
 
+  /**
+   * 人工闸门的提交。按钮直接打本机写端点，不是复制命令。
+   * 令牌来自页面 meta 标签；服务端逐项校验 Host / Origin / Content-Type / 令牌。
+   */
+  function consoleToken() {
+    var meta = document.querySelector('meta[name="keel-console-token"]');
+    return meta ? meta.getAttribute('content') || '' : '';
+  }
+
+  function setCalloutMsg(kind, text) {
+    var el = document.getElementById('human-callout-msg');
+    if (!el) return;
+    el.className = 'human-callout-msg' + (kind ? ' ' + kind : '');
+    el.textContent = text;
+  }
+
+  function lockActButtons(locked) {
+    var buttons = document.querySelectorAll('.act-btn');
+    for (var i = 0; i < buttons.length; i++) buttons[i].disabled = locked;
+  }
+
+  function submitAction(taskId, path, payload) {
+    setCalloutMsg('', '提交中…');
+    lockActButtons(true);
+    fetch('/api/tasks/' + encodeURIComponent(taskId) + '/' + path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-keel-console': consoleToken() },
+      body: JSON.stringify(payload)
+    }).then(function (res) {
+      return res.json().then(function (data) {
+        return { ok: res.ok && data && data.ok, data: data };
+      });
+    }).then(function (r) {
+      if (r.ok) {
+        setCalloutMsg('done', '已提交：' + r.data.from + ' → ' + r.data.to + '，正在刷新…');
+        state.detailSig = '';
+        setTimeout(function () { refreshAll(true); }, 600);
+        return;
+      }
+      lockActButtons(false);
+      setCalloutMsg('bad', (r.data && r.data.error) || ('提交失败（HTTP ' + r.data + '）'));
+    }).catch(function (err) {
+      lockActButtons(false);
+      setCalloutMsg('bad', '提交失败：' + err.message);
+    });
+  }
+
+  function handleAct(btn) {
+    var act = btn.getAttribute('data-act');
+    var taskId = btn.getAttribute('data-task') || state.selectedId;
+    if (!taskId) return;
+    var note;
+    if (act === 'approve') {
+      if (!window.confirm('批准 ' + shortId(taskId) + '？会创建开发分支并派发下一轮。')) return;
+      submitAction(taskId, 'decide', { decision: 'approve' });
+      return;
+    }
+    if (act === 'reject') {
+      note = window.prompt('驳回理由（写入决策记录，可留空）：', '');
+      if (note === null) return;
+      submitAction(taskId, 'decide', { decision: 'reject', note: note });
+      return;
+    }
+    if (act === 'rework') {
+      note = window.prompt('返工理由（写入决策记录，可留空）：', '');
+      if (note === null) return;
+      submitAction(taskId, 'decide', { decision: 'rework', note: note });
+      return;
+    }
+    if (act === 'answer') {
+      var text = window.prompt('补充的澄清内容：', '');
+      if (text === null || text.trim() === '') return;
+      submitAction(taskId, 'answer', { text: text });
+    }
+  }
+
   // ─── Event Listeners ───
   document.getElementById('mode-switch').addEventListener('click', function (ev) {
     var btn = ev.target.closest('.mode-btn[data-mode]');
@@ -4464,6 +4594,12 @@ export const CONSOLE_HTML = `<!doctype html>
       var gPanel = document.getElementById('glossary-panel');
       if (gPanel) gPanel.hidden = !state.glossaryOpen;
       glossaryBtn.setAttribute('aria-expanded', state.glossaryOpen ? 'true' : 'false');
+      return;
+    }
+
+    var actBtn = ev.target.closest('.act-btn[data-act]');
+    if (actBtn) {
+      handleAct(actBtn);
       return;
     }
 

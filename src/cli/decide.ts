@@ -10,7 +10,8 @@
  *   2. 需要工作区的决定（approve）先准备项目，让 T-014 的 CreateBranch 真的建分支；
  *   3. 把结果翻译成「发生了什么 + 下一步」，而不是把裸事件名丢给用户。
  *
- * 不在这里做的事：控制台的写路径（它仍然只读）、control_mode 的恢复入口（见 design §10）。
+ * 不在这里做的事：控制台的写路径（控制台只转调本模块，不复制状态机逻辑）、
+ * control_mode 的恢复入口（见 design §10）。
  */
 
 import { randomUUID } from 'node:crypto'
