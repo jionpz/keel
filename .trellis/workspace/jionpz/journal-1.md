@@ -509,3 +509,25 @@ console 完成可读性/项目性改造：中文状态徽章、一句话现状�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 11: 人工闸门决策页
+
+**Date**: 2026-11-04
+**Task**: 人工闸门决策页
+**Branch**: `main`
+
+### Summary
+
+控制台从「一排批准按钮」改成决策页：闸门状态默认落 decision Tab，四块为为什么停在这里（PM 理由 / T-031 升级原因）/ 证据（触发 Run + 同阶段 attempt 轨迹）/ 这次决定依赖的事实（分支、RFC、diff、预算）/ 选项（写清副作用，理由内联 textarea，必填为空禁用，去掉 window.prompt）。澄清闸门对称：在问什么、TTL 剩余 → S-ABANDONED。写入口仍是转调 decide.ts 的两个端点；选项 key 与 DECISIONS 由 console.test.ts 锁死。pnpm run check 48 文件 664 通过。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a2e4a6d` | (see git log) |
+| `c1837b8` | (see git log) |
+
+### Status
+
+[OK] **Completed**
