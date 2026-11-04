@@ -1,20 +1,22 @@
 /**
- * keel console —— 只读 Web 控制台。
+ * keel console —— 受口令保护的 Web 控制台。
  *
  * 定位（docs/09-roadmap.md）：UI 是 Fact Plane 的**消费者**，不是被验证的东西。
  * 因此本文件：
  *   - 读路径只有 SELECT，以 `keel_control` 角色访问；
  *   - 写路径只有一条：人工闸门的 `POST /api/tasks/:id/decide|answer`。它不是
  *     「控制台自己改状态」—— 它转调 `decide.ts` 的 `decideTask` / `answerTask`，
- *     和 CLI 走同一个 driver、同一套预检，控制台只多做了一层「本机可信」的校验；
- *   - 只绑定 127.0.0.1，且写端点必须同时满足：Host 回环、Origin 回环（浏览器带时）、
- *     `Content-Type: application/json`、`X-Keel-Console` 等于本次进程随机令牌。
- *     这是为了挡住别的网页对 127.0.0.1 发起的跨站请求（含 DNS rebinding），
- *     不是鉴权 —— 它仍然是本地观测面，不是服务端产品。
+ *     和 CLI 走同一个 driver、同一套预检；
+ *   - **鉴权**：除 `/login`、`POST /api/login`、`/healthz` 外，所有路由先过会话闸门。
+ *     会话是进程内存态（HttpOnly + SameSite=Strict Cookie），重启即失效；
+ *   - **写端点**在会话之外仍要求：Host 合法（绑回环时必须回环）、Origin 与 Host
+ *     同源（浏览器带时）、`Content-Type: application/json`、`X-Keel-Console`
+ *     等于本次进程随机令牌。这条防线不因登录而取消。
  *
  * 用法：
- *   pnpm run console            # 默认 http://127.0.0.1:4321
- *   KEEL_CONSOLE_PORT=4322 pnpm run console
+ *   pnpm run console                                     # 默认 http://127.0.0.1:4321
+ *   KEEL_CONSOLE_PASSWORD=… pnpm run console             # 固定口令
+ *   KEEL_CONSOLE_HOST=0.0.0.0 KEEL_CONSOLE_PASSWORD=… pnpm run console   # 对外监听
  */
 
 import { randomBytes } from 'node:crypto'
@@ -22,11 +24,15 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { TASK_TRANSITIONS } from '../control/transition/table.js'
 import { asRole, closePool, connectionString } from '../fact/db.js'
 import { GATE_STATUSES, STAGE_STATUSES, TERMINAL_STATUSES } from '../shared/ids.js'
+import { type AuthOptions, ConsoleAuth, resolveConsoleAuth } from './console-auth.js'
+import { CONSOLE_LOGIN_HTML } from './console-login-page.js'
 import { CONSOLE_HTML, CONSOLE_TOKEN_PLACEHOLDER } from './console-page.js'
 import { answerTask, DECISIONS, type Decision, decideTask } from './decide.js'
 
 const DEFAULT_PORT = 4321
-const HOST = '127.0.0.1'
+const DEFAULT_HOST = '127.0.0.1'
+/** 只用来解析相对 URL；与监听地址无关。 */
+const URL_BASE = 'http://127.0.0.1'
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /**
@@ -170,6 +176,15 @@ export interface ConsoleDeps {
   readonly act?: ConsoleActions
   /** 页面令牌。省略时每次进程启动随机生成；测试注入固定值。 */
   readonly token?: string
+  /**
+   * 登录口令。**必填**：不存在「无鉴权」的默认路径，测试也必须显式给口令。
+   * 其余选项（会话时长、限流窗口、时钟）见 `console-auth.ts`。
+   */
+  readonly auth: AuthOptions
+  /** 实际监听地址。决定写端点是否强制 Host 回环；默认 127.0.0.1。 */
+  readonly boundHost?: string
+  /** 经 HTTPS 反代时给会话 Cookie 加 Secure。 */
+  readonly secureCookie?: boolean
 }
 
 /** 以 keel_control 角色执行只读查询 —— 与 CLI 共用同一套连接与角色解析。 */
@@ -226,9 +241,24 @@ function metaPayload() {
   }
 }
 
+/**
+ * 页面与 API 统一的安全响应头。
+ *
+ * CSP 只放行本页真正需要的东西：内联样式 / 脚本（单文件页面的前提）、
+ * 同源 fetch、内联 SVG；其余一律拒绝。页面里没有任何外部资源。
+ */
+const SECURITY_HEADERS: Readonly<Record<string, string>> = {
+  'x-content-type-options': 'nosniff',
+  'x-frame-options': 'DENY',
+  'referrer-policy': 'no-referrer',
+  'content-security-policy':
+    "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+}
+
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   const text = JSON.stringify(body)
   res.writeHead(status, {
+    ...SECURITY_HEADERS,
     'content-type': 'application/json; charset=utf-8',
     'cache-control': 'no-store',
   })
@@ -236,8 +266,22 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
 }
 
 function sendText(res: ServerResponse, status: number, text: string, type: string): void {
-  res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store' })
+  res.writeHead(status, {
+    ...SECURITY_HEADERS,
+    'content-type': type,
+    'cache-control': 'no-store',
+  })
   res.end(text)
+}
+
+/** 未登录访问页面时统一回登录页；不做 401 空白页。 */
+function redirect(res: ServerResponse, location: string): void {
+  res.writeHead(302, {
+    ...SECURITY_HEADERS,
+    location,
+    'cache-control': 'no-store',
+  })
+  res.end()
 }
 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1', '[::1]'])
@@ -257,30 +301,44 @@ function headerValue(req: IncomingMessage, name: string): string | undefined {
   return Array.isArray(raw) ? raw[0] : raw
 }
 
+function isLoopbackHost(host: string): boolean {
+  return LOOPBACK.has(host)
+}
+
+function sameOrigin(origin: string, host: string | undefined): boolean {
+  if (host === undefined || host === '') return false
+  try {
+    return new URL(origin).host === host
+  } catch {
+    return false
+  }
+}
+
 /**
- * 写端点的本机校验。四道全过才放行：
+ * 写端点的 CSRF 校验。会话之外仍要全部通过：
  *
- *  1. `Host` 是回环地址 —— 挡 DNS rebinding（攻击者域名解析到 127.0.0.1 时，
- *     浏览器发出的 Host 仍是攻击者域名）；
- *  2. `Origin`（浏览器一定带）是回环地址 —— 挡别的站点直接 fetch 本机；
+ *  1. 绑定回环时，`Host` 必须是回环地址 —— 挡 DNS rebinding（攻击者域名解析到
+ *     127.0.0.1 时，浏览器发出的 Host 仍是攻击者域名）；
+ *  2. `Origin`（浏览器一定带）必须与 `Host` 同源 —— 绑非回环时同样成立；
  *  3. `Content-Type: application/json` —— 跨源简单请求发不出这个值，
  *     必须走 preflight，而我们对 OPTIONS 一律不回 CORS 头；
- *  4. `X-Keel-Console` 等于本次进程随机令牌 —— 自定义头同样要求 preflight，
- *     并且让「同机另一个进程」也得先读到页面才能写。
+ *  4. `X-Keel-Console` 等于本次进程随机令牌 —— 自定义头同样要求 preflight。
  *
- * 这不是鉴权：本机能读到页面的人本来就能跑 CLI。它只把「网页顺手点一下」
- * 和「DBA 手工改库」之间那类路径关掉。
+ * 登录后会话 Cookie 已是 SameSite=Strict；这四道是纵深防御，不是替代品。
+ * 新增写端点时不要放宽其中任何一条。
  */
 function writeRejection(
   req: IncomingMessage,
   token: string,
+  boundHost: string,
 ): { status: number; error: string } | undefined {
-  if (!isLoopback(headerValue(req, 'host'), false)) {
+  const host = headerValue(req, 'host')
+  if (isLoopbackHost(boundHost) && !isLoopback(host, false)) {
     return { status: 403, error: 'Host 不是本机回环地址' }
   }
   const origin = headerValue(req, 'origin')
-  if (origin !== undefined && !isLoopback(origin, true)) {
-    return { status: 403, error: 'Origin 不是本机控制台' }
+  if (origin !== undefined && origin !== '' && !sameOrigin(origin, host)) {
+    return { status: 403, error: 'Origin 与 Host 不同源' }
   }
   const ctype = headerValue(req, 'content-type') ?? ''
   if (!ctype.toLowerCase().startsWith('application/json')) {
@@ -336,16 +394,75 @@ export function createConsoleHandler(
 ): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const token = deps.token ?? randomBytes(16).toString('hex')
   const page = CONSOLE_HTML.replace(CONSOLE_TOKEN_PLACEHOLDER, token)
+  const loginPage = CONSOLE_LOGIN_HTML.replace(CONSOLE_TOKEN_PLACEHOLDER, token)
   const act = deps.act ?? defaultActions
+  const auth = new ConsoleAuth(deps.auth)
+  const boundHost = deps.boundHost ?? DEFAULT_HOST
+  const secureCookie = deps.secureCookie ?? false
 
   return async (req, res) => {
     const method = req.method ?? 'GET'
-    const url = new URL(req.url ?? '/', `http://${HOST}`)
+    const url = new URL(req.url ?? '/', URL_BASE)
     const path = url.pathname
+    const cookie = headerValue(req, 'cookie')
+    const authenticated = auth.isValid(cookie)
+
+    // ── 公开路径 ────────────────────────────────────────────────────────
+    // 登录页、登录提交、退出、探活。其余一切先过会话闸门。
+    if (path === '/login') {
+      if (method !== 'GET' && method !== 'HEAD') {
+        sendJson(res, 405, { ok: false, error: '该端点只接受 GET' })
+        return
+      }
+      if (authenticated) {
+        redirect(res, '/')
+        return
+      }
+      sendText(res, 200, loginPage, 'text/html; charset=utf-8')
+      return
+    }
+
+    if (path === '/api/login') {
+      await handleLogin(auth, token, boundHost, secureCookie, req, res, method)
+      return
+    }
+
+    // 退出是幂等的：即使会话已过期，也要把浏览器里的旧 Cookie 清掉。
+    if (path === '/api/logout') {
+      await handleLogout(auth, token, boundHost, secureCookie, req, res, method)
+      return
+    }
+
+    if (path === '/healthz') {
+      try {
+        await deps.query('SELECT 1', [])
+        sendJson(res, 200, { ok: true })
+      } catch (e) {
+        // 匿名探活只回答「活着吗」；错误详情与连接串仅登录后可见。
+        sendJson(
+          res,
+          503,
+          authenticated
+            ? { ok: false, error: message(e), connection: connectionString() }
+            : { ok: false },
+        )
+      }
+      return
+    }
+
+    // ── 会话闸门 ────────────────────────────────────────────────────────
+    if (!authenticated) {
+      if (path.startsWith('/api/')) {
+        sendJson(res, 401, { ok: false, error: '未登录', detail: '请先登录控制台' })
+      } else {
+        redirect(res, '/login')
+      }
+      return
+    }
 
     const action = /^\/api\/tasks\/([^/]+)\/(decide|answer)$/.exec(path)
     if (action !== null) {
-      await handleAction(act, token, req, res, method, action[1] ?? '', action[2] ?? '')
+      await handleAction(act, token, boundHost, req, res, method, action[1] ?? '', action[2] ?? '')
       return
     }
 
@@ -361,20 +478,6 @@ export function createConsoleHandler(
 
     if (path === '/api/meta') {
       sendJson(res, 200, metaPayload())
-      return
-    }
-
-    if (path === '/healthz') {
-      try {
-        await deps.query('SELECT 1', [])
-        sendJson(res, 200, { ok: true })
-      } catch (e) {
-        sendJson(res, 503, {
-          ok: false,
-          error: e instanceof Error ? e.message : String(e),
-          connection: connectionString(),
-        })
-      }
       return
     }
 
@@ -463,9 +566,96 @@ export function createConsoleHandler(
   }
 }
 
+/**
+ * 登录提交。错误文案刻意统一：不区分「口令错误」和「用户不存在」这类不存在的差异，
+ * 也不回显任何口令内容。
+ */
+async function handleLogin(
+  auth: ConsoleAuth,
+  token: string,
+  boundHost: string,
+  secureCookie: boolean,
+  req: IncomingMessage,
+  res: ServerResponse,
+  method: string,
+): Promise<void> {
+  if (method !== 'POST') {
+    sendJson(res, 405, { ok: false, error: '该端点只接受 POST' })
+    return
+  }
+
+  const rejected = writeRejection(req, token, boundHost)
+  if (rejected !== undefined) {
+    sendJson(res, rejected.status, { ok: false, error: rejected.error })
+    return
+  }
+
+  let payload: Record<string, unknown> | undefined
+  try {
+    payload = parseBody(await readBody(req))
+  } catch (e) {
+    if (!res.headersSent) sendJson(res, 413, { ok: false, error: message(e) })
+    return
+  }
+  if (payload === undefined) {
+    sendJson(res, 400, { ok: false, error: '请求体必须是 JSON 对象' })
+    return
+  }
+  if (typeof payload.password !== 'string' || payload.password === '') {
+    sendJson(res, 400, { ok: false, error: 'password 不能为空' })
+    return
+  }
+  if (payload.remember !== undefined && typeof payload.remember !== 'boolean') {
+    sendJson(res, 400, { ok: false, error: 'remember 必须是布尔值' })
+    return
+  }
+
+  const ip = req.socket.remoteAddress ?? 'unknown'
+  const outcome = auth.login(payload.password, ip, payload.remember === true)
+  if (!outcome.ok) {
+    if (outcome.reason === 'rate-limited') {
+      res.setHeader('retry-after', String(outcome.retryAfterSec))
+      sendJson(res, 429, { ok: false, error: '尝试过于频繁，请稍后再试' })
+      return
+    }
+    sendJson(res, 401, { ok: false, error: '口令不正确' })
+    return
+  }
+
+  res.setHeader('set-cookie', auth.sessionCookie(outcome.token, outcome.maxAgeSec, secureCookie))
+  sendJson(res, 200, { ok: true })
+}
+
+/** 退出：删服务端会话 + 清 Cookie。重复调用、会话已过期都返回 200。 */
+async function handleLogout(
+  auth: ConsoleAuth,
+  token: string,
+  boundHost: string,
+  secureCookie: boolean,
+  req: IncomingMessage,
+  res: ServerResponse,
+  method: string,
+): Promise<void> {
+  if (method !== 'POST') {
+    sendJson(res, 405, { ok: false, error: '该端点只接受 POST' })
+    return
+  }
+
+  const rejected = writeRejection(req, token, boundHost)
+  if (rejected !== undefined) {
+    sendJson(res, rejected.status, { ok: false, error: rejected.error })
+    return
+  }
+
+  auth.logout(headerValue(req, 'cookie'))
+  res.setHeader('set-cookie', auth.clearCookie(secureCookie))
+  sendJson(res, 200, { ok: true })
+}
+
 async function handleAction(
   act: ConsoleActions,
   token: string,
+  boundHost: string,
   req: IncomingMessage,
   res: ServerResponse,
   method: string,
@@ -483,7 +673,7 @@ async function handleAction(
     return
   }
 
-  const rejected = writeRejection(req, token)
+  const rejected = writeRejection(req, token, boundHost)
   if (rejected !== undefined) {
     sendJson(res, rejected.status, { ok: false, error: rejected.error })
     return
@@ -596,11 +786,38 @@ function parsePort(raw: string | undefined): number {
   return n
 }
 
+function parseHost(raw: string | undefined): string {
+  if (raw === undefined || raw === '') return DEFAULT_HOST
+  const host = raw.trim()
+  if (host === '' || host.includes('/') || host.includes('://') || /\s/.test(host)) {
+    throw new Error(`KEEL_CONSOLE_HOST 不是合法主机：${raw}`)
+  }
+  return host
+}
+
+function secureCookieFromEnv(env: NodeJS.ProcessEnv): boolean {
+  const raw = env.KEEL_CONSOLE_SECURE_COOKIE
+  return raw === '1' || raw === 'true'
+}
+
+export interface StartConsoleOptions {
+  readonly port?: number
+  readonly host?: string
+  readonly query?: QueryFn
+  readonly auth?: AuthOptions
+  readonly secureCookie?: boolean
+}
+
 /** 启动控制台。返回 listen 完成后的 Server，便于测试与优雅关闭。 */
-export function startConsole(
-  opts: { readonly port?: number; readonly query?: QueryFn } = {},
-): Promise<Server> {
-  const deps: ConsoleDeps = { query: opts.query ?? controlQuery }
+export function startConsole(opts: StartConsoleOptions = {}): Promise<Server> {
+  const host = opts.host ?? parseHost(process.env.KEEL_CONSOLE_HOST)
+  const resolved = resolveConsoleAuth(process.env)
+  const deps: ConsoleDeps = {
+    query: opts.query ?? controlQuery,
+    auth: opts.auth ?? { password: resolved.password },
+    boundHost: host,
+    secureCookie: opts.secureCookie ?? secureCookieFromEnv(process.env),
+  }
   const handler = createConsoleHandler(deps)
   const server = createServer((req, res) => {
     handler(req, res).catch((e) => {
@@ -612,7 +829,7 @@ export function startConsole(
   const port = opts.port ?? parsePort(process.env.KEEL_CONSOLE_PORT)
   return new Promise((resolve, reject) => {
     server.once('error', reject)
-    server.listen(port, HOST, () => {
+    server.listen(port, host, () => {
       server.off('error', reject)
       resolve(server)
     })
@@ -623,20 +840,41 @@ export async function consoleMain(argv: readonly string[]): Promise<void> {
   if (argv.includes('--help') || argv.includes('-h')) {
     console.log(`用法: keel console
 
-本地 Web 控制台，默认 http://${HOST}:${DEFAULT_PORT}
-  KEEL_CONSOLE_PORT  端口（默认 ${DEFAULT_PORT}）
-  KEEL_DATABASE_URL  数据库连接串（与 CLI 共用）
+Web 控制台，默认 http://${DEFAULT_HOST}:${DEFAULT_PORT}
+  KEEL_CONSOLE_PORT           端口（默认 ${DEFAULT_PORT}）
+  KEEL_CONSOLE_HOST           监听地址（默认 ${DEFAULT_HOST}；0.0.0.0 对外）
+  KEEL_CONSOLE_PASSWORD       访问口令；未设置时每次启动随机生成并打印
+  KEEL_CONSOLE_SECURE_COOKIE  设为 1 时会话 Cookie 加 Secure（反代 HTTPS）
+  KEEL_DATABASE_URL           数据库连接串（与 CLI 共用）
 
 读：全部事实只走 SELECT。
 写：只有人工闸门的 POST /api/tasks/:id/decide|answer，
-    与 keel decide / keel answer 走同一个 driver 和同一套预检。`)
+    与 keel decide / keel answer 走同一个 driver 和同一套预检。
+鉴权：除 /login、POST /api/login、POST /api/logout、/healthz 外都需要登录。`)
     return
   }
 
-  const server = await startConsole()
+  const host = parseHost(process.env.KEEL_CONSOLE_HOST)
+  const resolved = resolveConsoleAuth(process.env)
+  const server = await startConsole({ host, auth: { password: resolved.password } })
   const address = server.address()
   const port = typeof address === 'object' && address !== null ? address.port : DEFAULT_PORT
-  console.log(`keel console: http://${HOST}:${port}`)
+
+  if (host === '0.0.0.0' || host === '::') {
+    console.log(`keel console: http://${DEFAULT_HOST}:${port}（监听 ${host}:${port}）`)
+  } else {
+    console.log(`keel console: http://${host}:${port}`)
+  }
+  if (resolved.source === 'generated') {
+    console.log(
+      `访问口令: ${resolved.password}  （本次进程随机生成；设置 KEEL_CONSOLE_PASSWORD 可固定）`,
+    )
+  } else {
+    console.log('访问口令: 由 KEEL_CONSOLE_PASSWORD 提供')
+  }
+  if (!isLoopbackHost(host)) {
+    console.log(`⚠ 正在监听非回环地址 ${host}；请确认网络边界，建议由反向代理终止 TLS。`)
+  }
   console.log(`数据库: ${connectionString()}`)
   console.log('读取全量事实；人工闸门的批准 / 驳回 / 返工 / 澄清可在页面上直接提交。')
   console.log('Ctrl-C 退出。')

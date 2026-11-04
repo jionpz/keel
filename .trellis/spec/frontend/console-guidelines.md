@@ -16,7 +16,9 @@
 
 - 只发 `GET`。
 - 数据库访问只走 `asRole('keel_control')`，并且只发 `SELECT`。
-- 只绑定 `127.0.0.1`，不做鉴权 —— 因此**不要**把它暴露到公网。
+- 默认只绑定 `127.0.0.1`；`KEEL_CONSOLE_HOST=0.0.0.0` 可对外监听。
+  **鉴权始终生效**（2026-11-04 起）：除 `/login`、`POST /api/login`、
+  `POST /api/logout`、`/healthz` 外，所有路由先过会话闸门。没有「关掉鉴权」的开关。
 
 写路径只有一条，2026-11-04 加入：
 
@@ -57,6 +59,29 @@
 `keel` 只是 `package.json` 的 `bin` 声明，仓库里没有 `node_modules/.bin/keel`，
 全局也没装。只写 `keel decide` 会让人复制到终端后撞 `command not found` ——
 **页面上写什么，就得能原样跑起来**。
+
+## 鉴权与会话（2026-11-04 起）
+
+- **没有无鉴权模式**。`createConsoleHandler` 的 `auth` 必填；测试也必须显式给口令
+  （`withServer` 默认注入固定口令并先登录）。
+- 口令来源：`KEEL_CONSOLE_PASSWORD`；未设置时每次启动随机生成并**打印到启动终端**。
+  口令不下发页面、不写日志、不进事件。进程内只保存 scrypt 哈希，比较用 `timingSafeEqual`。
+- 会话：进程内存表，Cookie `keel_console_session` 带 `HttpOnly`、`SameSite=Strict`、
+  `Path=/`；默认 12h，勾选「保持登录」7d。退出即删，重启即失效。
+  反代 HTTPS 时设 `KEEL_CONSOLE_SECURE_COOKIE=1` 给 Cookie 加 `Secure`。
+- 登录限流：每 IP 5 次 / 5 分钟，全局 20 次 / 5 分钟；超限 `429` + `Retry-After`。
+  失败文案统一为「口令不正确」，不泄露口令是否存在。
+- 公开路径清单只有一个来源（`console.ts` 的 handler 顶部）：`/login`、
+  `POST /api/login`、`POST /api/logout`、`/healthz`。**新增路由默认受保护**；
+  要加公开路径，先证明它不返回任何事实，并在测试里断言匿名可达。
+- `/healthz` 匿名只回 `{ok}`；错误详情与 `connectionString()` 仅登录后返回。
+  不要把连接串回给未鉴权请求。
+- 写入口的四道校验不因登录而取消：绑回环时 `Host` 必须回环；`Origin` 存在时必须与
+  `Host` 同源；`Content-Type: application/json`；`X-Keel-Console` 等于进程随机令牌。
+  会话 Cookie 是另一层，不是替代品。
+- 页面侧：统一 `fetchJSON` 遇 `401` 跳 `/login`；顶栏「退出」调用 `POST /api/logout`。
+  登录页是独立单文件（`console-login-page.ts`），不加载任何事实，配色与主页面
+  `:root` 保持一致 —— 改主色时两处一起改。
 
 ## 数据口径必须与 CLI 一致
 

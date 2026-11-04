@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/frontend/console-guidelines.md", "reason": "控制台的形态约束：单文件零构建、读写路径、本机令牌、页面文案纪律"}
+{"file": ".trellis/spec/backend/cli-lifecycle.md", "reason": "console 是常驻进程：信号、关池、退出语义必须保持"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "HTTP 错误不能把业务失败伪装成 200；错误矩阵沿用既有纪律"}
+{"file": "docs/09-roadmap.md", "reason": "UI 的定位是 Fact Plane 消费者，不是被验证的东西"}

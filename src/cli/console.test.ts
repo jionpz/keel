@@ -4,6 +4,9 @@
  * 用注入的假 query 起一个真实 http server —— 验证路由 / 状态码 / JSON 形状，
  * 不依赖 Postgres。真实数据库的那一段由 `pnpm run console` 手工验证
  * （与 CLI 的 status / timeline 对账），不在默认单测里连库。
+ *
+ * 鉴权：`withServer` 默认先登录并把会话 Cookie 注入 `api`，业务用例不重复关心登录；
+ * `{ anonymous: true }` 时不登录，用来断言「未登录进不去」。
  */
 
 import { createServer } from 'node:http'
@@ -15,25 +18,74 @@ import {
   type QueryFn,
   type Row,
 } from './console.js'
+import { type AuthOptions, SESSION_COOKIE } from './console-auth.js'
 import { CONSOLE_TOKEN_PLACEHOLDER } from './console-page.js'
 import { DECISIONS } from './decide.js'
 
 const TASK_ID = '1d891a16-be91-4763-8333-38edd182a824'
 const TOKEN = 'test-token-0123456789abcdef'
+const PASSWORD = 'test-password-0123456789'
+
+type ServerDeps = Omit<ConsoleDeps, 'auth'> & { readonly auth?: AuthOptions }
+type ApiFetch = (path: string, init?: RequestInit) => Promise<Response>
+
+/** 登录一次，取出 `cookie` 请求头需要的 `name=value`。 */
+async function loginCookie(base: string): Promise<string> {
+  const res = await loginRequest(base, PASSWORD)
+  if (res.status !== 200) throw new Error(`测试登录失败：HTTP ${res.status}`)
+  const setCookie = res.headers.get('set-cookie') ?? ''
+  const pair = setCookie.split(';')[0] ?? ''
+  if (!pair.startsWith(`${SESSION_COOKIE}=`)) {
+    throw new Error(`登录没有返回会话 Cookie：${setCookie}`)
+  }
+  return pair
+}
+
+function loginRequest(
+  base: string,
+  password: string,
+  extra: Record<string, string> = {},
+): Promise<Response> {
+  return fetch(`${base}/api/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-keel-console': TOKEN, ...extra },
+    body: JSON.stringify({ password }),
+  })
+}
 
 async function withServer(
-  deps: QueryFn | ConsoleDeps,
-  fn: (base: string) => Promise<void>,
+  deps: QueryFn | ServerDeps,
+  fn: (base: string, api: ApiFetch) => Promise<void>,
+  opts: { readonly anonymous?: boolean } = {},
 ): Promise<void> {
-  const handler = createConsoleHandler(typeof deps === 'function' ? { query: deps } : deps)
+  const input: ServerDeps = typeof deps === 'function' ? { query: deps } : deps
+  const resolved: ConsoleDeps = {
+    query: input.query,
+    token: input.token ?? TOKEN,
+    auth: input.auth ?? { password: PASSWORD },
+    ...(input.act !== undefined ? { act: input.act } : {}),
+    ...(input.boundHost !== undefined ? { boundHost: input.boundHost } : {}),
+    ...(input.secureCookie !== undefined ? { secureCookie: input.secureCookie } : {}),
+  }
+  const handler = createConsoleHandler(resolved)
   const server = createServer((req, res) => {
     handler(req, res).catch(() => res.end())
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
   const address = server.address()
   const port = typeof address === 'object' && address !== null ? address.port : 0
+  const base = `http://127.0.0.1:${port}`
+  const cookie = opts.anonymous === true ? undefined : await loginCookie(base)
+  const api: ApiFetch = (path, init = {}) =>
+    fetch(`${base}${path}`, {
+      ...init,
+      headers: {
+        ...(cookie === undefined ? {} : { cookie }),
+        ...(init.headers as Record<string, string> | undefined),
+      },
+    })
   try {
-    await fn(`http://127.0.0.1:${port}`)
+    await fn(base, api)
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()))
   }
@@ -56,12 +108,12 @@ function fakeActions() {
 }
 
 function action(
-  base: string,
+  api: ApiFetch,
   verb: 'decide' | 'answer',
   body: unknown,
   headers: Record<string, string> = {},
 ): Promise<Response> {
-  return fetch(`${base}/api/tasks/${TASK_ID}/${verb}`, {
+  return api(`/api/tasks/${TASK_ID}/${verb}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-keel-console': TOKEN, ...headers },
     body: typeof body === 'string' ? body : JSON.stringify(body),
@@ -95,10 +147,173 @@ function fakeQuery(rows: {
   }
 }
 
+describe('keel console 鉴权', () => {
+  it('未登录访问页面 302 到 /login', async () => {
+    await withServer(
+      fakeQuery({}),
+      async (base) => {
+        const res = await fetch(`${base}/`, { redirect: 'manual' })
+        expect(res.status).toBe(302)
+        expect(res.headers.get('location')).toBe('/login')
+      },
+      { anonymous: true },
+    )
+  })
+
+  it('未登录访问 API 401，不泄漏事实', async () => {
+    await withServer(
+      fakeQuery({ tasks: [{ id: TASK_ID, title: 'secret' }] }),
+      async (base) => {
+        for (const path of ['/api/tasks', '/api/stats', '/api/meta', `/api/tasks/${TASK_ID}`]) {
+          const res = await fetch(`${base}${path}`)
+          expect(res.status).toBe(401)
+          const body = (await res.json()) as { ok: boolean; error: string }
+          expect(body.ok).toBe(false)
+          expect(body.error).toBe('未登录')
+        }
+      },
+      { anonymous: true },
+    )
+  })
+
+  it('登录页可访问，且注入了本机令牌', async () => {
+    await withServer(
+      fakeQuery({}),
+      async (base) => {
+        const res = await fetch(`${base}/login`)
+        expect(res.status).toBe(200)
+        expect(res.headers.get('content-type')).toContain('text/html')
+        const html = await res.text()
+        expect(html).toContain('login-form')
+        expect(html).toContain('访问口令')
+        expect(html).toContain(`name="keel-console-token" content="${TOKEN}"`)
+        expect(html).not.toContain(CONSOLE_TOKEN_PLACEHOLDER)
+      },
+      { anonymous: true },
+    )
+  })
+
+  it('已登录访问 /login 直接回控制台', async () => {
+    await withServer(fakeQuery({}), async (_base, api) => {
+      const res = await api('/login', { redirect: 'manual' })
+      expect(res.status).toBe(302)
+      expect(res.headers.get('location')).toBe('/')
+    })
+  })
+
+  it('错误口令 401，且不签发 Cookie', async () => {
+    await withServer(
+      fakeQuery({}),
+      async (base) => {
+        const res = await loginRequest(base, 'wrong-password')
+        expect(res.status).toBe(401)
+        expect(res.headers.get('set-cookie')).toBeNull()
+        const body = (await res.json()) as { ok: boolean; error: string }
+        expect(body.error).toBe('口令不正确')
+      },
+      { anonymous: true },
+    )
+  })
+
+  it('正确口令签发 HttpOnly / SameSite=Strict Cookie', async () => {
+    await withServer(
+      fakeQuery({}),
+      async (base) => {
+        const res = await loginRequest(base, PASSWORD)
+        expect(res.status).toBe(200)
+        const setCookie = res.headers.get('set-cookie') ?? ''
+        expect(setCookie).toContain(`${SESSION_COOKIE}=`)
+        expect(setCookie).toContain('HttpOnly')
+        expect(setCookie).toContain('SameSite=Strict')
+        expect(setCookie).toContain('Max-Age=43200')
+        expect(setCookie).not.toContain('Secure')
+      },
+      { anonymous: true },
+    )
+  })
+
+  it('保持登录使用 7 天会话', async () => {
+    await withServer(
+      fakeQuery({}),
+      async (base) => {
+        const res = await fetch(`${base}/api/login`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-keel-console': TOKEN },
+          body: JSON.stringify({ password: PASSWORD, remember: true }),
+        })
+        expect(res.status).toBe(200)
+        expect(res.headers.get('set-cookie')).toContain('Max-Age=604800')
+      },
+      { anonymous: true },
+    )
+  })
+
+  it('连续失败 5 次后 429，正确口令也被限流', async () => {
+    await withServer(
+      fakeQuery({}),
+      async (base) => {
+        for (let i = 0; i < 5; i += 1) {
+          expect((await loginRequest(base, 'wrong')).status).toBe(401)
+        }
+        const limited = await loginRequest(base, 'wrong')
+        expect(limited.status).toBe(429)
+        expect(limited.headers.get('retry-after')).toBeTruthy()
+        expect((await loginRequest(base, PASSWORD)).status).toBe(429)
+      },
+      { anonymous: true },
+    )
+  })
+
+  it('退出后旧 Cookie 立即失效', async () => {
+    await withServer(fakeQuery({}), async (_base, api) => {
+      expect((await api('/api/tasks')).status).toBe(200)
+      const out = await api('/api/logout', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-keel-console': TOKEN },
+        body: '{}',
+      })
+      expect(out.status).toBe(200)
+      expect(out.headers.get('set-cookie')).toContain('Max-Age=0')
+      expect((await api('/api/tasks')).status).toBe(401)
+    })
+  })
+
+  it('页面与 API 带安全响应头', async () => {
+    await withServer(fakeQuery({}), async (_base, api) => {
+      const page = await api('/')
+      expect(page.headers.get('x-frame-options')).toBe('DENY')
+      expect(page.headers.get('x-content-type-options')).toBe('nosniff')
+      expect(page.headers.get('content-security-policy')).toContain("default-src 'none'")
+
+      const meta = await api('/api/meta')
+      expect(meta.headers.get('x-frame-options')).toBe('DENY')
+    })
+  })
+
+  it('非回环绑定仍要求 Origin 与 Host 同源', async () => {
+    const { act, calls } = fakeActions()
+    await withServer(
+      { query: fakeQuery({}), token: TOKEN, act, boundHost: '0.0.0.0' },
+      async (_base, api) => {
+        const res = await action(
+          api,
+          'decide',
+          { decision: 'approve' },
+          {
+            origin: 'https://evil.example',
+          },
+        )
+        expect(res.status).toBe(403)
+      },
+    )
+    expect(calls).toEqual([])
+  })
+})
+
 describe('keel console', () => {
   it('GET / 返回页面', async () => {
-    await withServer(fakeQuery({}), async (base) => {
-      const res = await fetch(`${base}/`)
+    await withServer(fakeQuery({}), async (_base, api) => {
+      const res = await api('/')
       expect(res.status).toBe(200)
       expect(res.headers.get('content-type')).toContain('text/html')
       const html = await res.text()
@@ -123,12 +338,15 @@ describe('keel console', () => {
       // 只写 `keel decide` 会让人复制到终端后得到 command not found
       expect(html).toContain('pnpm keel decide ')
       expect(html).toContain('pnpm keel answer ')
+      // 退出入口：令牌来自 meta，POST /api/logout 后回登录页
+      expect(html).toContain('id="logout"')
+      expect(html).toContain("fetch('/api/logout'")
     })
   })
 
   it('视觉系统：墨色定位、颜色只用来说「要不要你动手」', async () => {
-    await withServer(fakeQuery({}), async (base) => {
-      const html = await (await fetch(`${base}/`)).text()
+    await withServer(fakeQuery({}), async (_base, api) => {
+      const html = await (await api('/')).text()
       // 冷纸 + 墨色 + 四个语义色，缺一个整套配色就塌
       for (const token of [
         '--paper',
@@ -167,8 +385,8 @@ describe('keel console', () => {
     const tasks: Row[] = [
       { id: TASK_ID, title: 'demo', status: 'S-DONE', control_mode: 'auto', repo: 'file:///tmp/x' },
     ]
-    await withServer(fakeQuery({ tasks }), async (base) => {
-      const res = await fetch(`${base}/api/tasks`)
+    await withServer(fakeQuery({ tasks }), async (_base, api) => {
+      const res = await api('/api/tasks')
       expect(res.status).toBe(200)
       const body = (await res.json()) as { tasks: Row[] }
       expect(body.tasks).toHaveLength(1)
@@ -185,8 +403,8 @@ describe('keel console', () => {
       feedbacks: [{ id: 'f1', source: 'github_issue', external_ref: 'o/r#1', body: '需求正文' }],
       timers: [{ id: 't1', kind: 'gate_timeout', state: 'PENDING' }],
     })
-    await withServer(query, async (base) => {
-      const res = await fetch(`${base}/api/tasks/${TASK_ID}`)
+    await withServer(query, async (_base, api) => {
+      const res = await api(`/api/tasks/${TASK_ID}`)
       expect(res.status).toBe(200)
       const body = (await res.json()) as {
         task: Row
@@ -208,8 +426,8 @@ describe('keel console', () => {
   })
 
   it('不存在的 task 返回 404，而不是空数据', async () => {
-    await withServer(fakeQuery({ task: [] }), async (base) => {
-      const res = await fetch(`${base}/api/tasks/${TASK_ID}`)
+    await withServer(fakeQuery({ task: [] }), async (_base, api) => {
+      const res = await api(`/api/tasks/${TASK_ID}`)
       expect(res.status).toBe(404)
       const body = (await res.json()) as { error: string }
       expect(body.error).toBe('task not found')
@@ -217,22 +435,22 @@ describe('keel console', () => {
   })
 
   it('非法 task id 返回 404', async () => {
-    await withServer(fakeQuery({}), async (base) => {
-      const res = await fetch(`${base}/api/tasks/not-a-uuid`)
+    await withServer(fakeQuery({}), async (_base, api) => {
+      const res = await api('/api/tasks/not-a-uuid')
       expect(res.status).toBe(404)
     })
   })
 
   it('非写端点的写方法仍被拒绝（405）', async () => {
-    await withServer(fakeQuery({}), async (base) => {
-      const res = await fetch(`${base}/api/tasks`, { method: 'POST' })
+    await withServer(fakeQuery({}), async (_base, api) => {
+      const res = await api('/api/tasks', { method: 'POST' })
       expect(res.status).toBe(405)
     })
   })
 
   it('页面注入了本机令牌，模板占位符不残留', async () => {
-    await withServer({ query: fakeQuery({}), token: TOKEN }, async (base) => {
-      const html = await (await fetch(`${base}/`)).text()
+    await withServer({ query: fakeQuery({}), token: TOKEN }, async (_base, api) => {
+      const html = await (await api('/')).text()
       expect(html).toContain(`name="keel-console-token" content="${TOKEN}"`)
       expect(html).not.toContain(CONSOLE_TOKEN_PLACEHOLDER)
       // 按钮是派发入口，光有命令不算数（按钮由 JS 拼出，只断言构建逻辑与令牌注入）
@@ -246,8 +464,8 @@ describe('keel console', () => {
   })
 
   it('决策页：给出「为什么停 / 在批什么 / 每个选项的后果」，不是一排按钮', async () => {
-    await withServer({ query: fakeQuery({}), token: TOKEN }, async (base) => {
-      const html = await (await fetch(`${base}/`)).text()
+    await withServer({ query: fakeQuery({}), token: TOKEN }, async (_base, api) => {
+      const html = await (await api('/')).text()
       // 四块骨架
       expect(html).toContain('decision-page')
       expect(html).toContain('为什么停在这里')
@@ -266,8 +484,8 @@ describe('keel console', () => {
   })
 
   it('决策页不用 window.prompt / window.confirm 拿输入', async () => {
-    await withServer({ query: fakeQuery({}), token: TOKEN }, async (base) => {
-      const html = await (await fetch(`${base}/`)).text()
+    await withServer({ query: fakeQuery({}), token: TOKEN }, async (_base, api) => {
+      const html = await (await api('/')).text()
       expect(html).not.toContain('window.prompt(')
       expect(html).not.toContain('window.confirm(')
       // 理由内联在卡片里，按 data-note-for 取值
@@ -276,16 +494,16 @@ describe('keel console', () => {
   })
 
   it('选项 key 与 decide.ts 的 DECISIONS 完全一致，改一处不会漏掉另一处', async () => {
-    await withServer({ query: fakeQuery({}), token: TOKEN }, async (base) => {
-      const html = await (await fetch(`${base}/`)).text()
+    await withServer({ query: fakeQuery({}), token: TOKEN }, async (_base, api) => {
+      const html = await (await api('/')).text()
       const keys = [...html.matchAll(/key: '([a-z]+)',\s*\n\s*title:/g)].map((m) => m[1])
       expect(new Set(keys)).toEqual(new Set(DECISIONS))
     })
   })
 
   it('决策 Tab 只在闸门状态注入，且闸门状态默认落在它上面', async () => {
-    await withServer({ query: fakeQuery({}), token: TOKEN }, async (base) => {
-      const html = await (await fetch(`${base}/`)).text()
+    await withServer({ query: fakeQuery({}), token: TOKEN }, async (_base, api) => {
+      const html = await (await api('/')).text()
       expect(html).toContain('isGateStatus')
       expect(html).toContain("'S-HUMAN_REVIEW'")
       expect(html).toContain("'S-NEED_CLARIFICATION'")
@@ -296,8 +514,8 @@ describe('keel console', () => {
 
   it('写端点：缺令牌 403', async () => {
     const { act, calls } = fakeActions()
-    await withServer({ query: fakeQuery({}), token: TOKEN, act }, async (base) => {
-      const res = await action(base, 'decide', { decision: 'approve' }, { 'x-keel-console': '' })
+    await withServer({ query: fakeQuery({}), token: TOKEN, act }, async (_base, api) => {
+      const res = await action(api, 'decide', { decision: 'approve' }, { 'x-keel-console': '' })
       expect(res.status).toBe(403)
     })
     expect(calls).toEqual([])
@@ -305,8 +523,8 @@ describe('keel console', () => {
 
   it('写端点：非 application/json 415（挡跨站简单请求）', async () => {
     const { act, calls } = fakeActions()
-    await withServer({ query: fakeQuery({}), token: TOKEN, act }, async (base) => {
-      const res = await action(base, 'decide', JSON.stringify({ decision: 'approve' }), {
+    await withServer({ query: fakeQuery({}), token: TOKEN, act }, async (_base, api) => {
+      const res = await action(api, 'decide', JSON.stringify({ decision: 'approve' }), {
         'content-type': 'text/plain',
       })
       expect(res.status).toBe(415)
@@ -316,12 +534,14 @@ describe('keel console', () => {
 
   it('写端点：外站 Origin 403（DNS rebinding / 跨站）', async () => {
     const { act, calls } = fakeActions()
-    await withServer({ query: fakeQuery({}), token: TOKEN, act }, async (base) => {
+    await withServer({ query: fakeQuery({}), token: TOKEN, act }, async (_base, api) => {
       const res = await action(
-        base,
+        api,
         'decide',
         { decision: 'approve' },
-        { origin: 'https://evil.example' },
+        {
+          origin: 'https://evil.example',
+        },
       )
       expect(res.status).toBe(403)
     })
@@ -330,8 +550,8 @@ describe('keel console', () => {
 
   it('写端点：带令牌的裁决转调 decide，note 去空白', async () => {
     const { act, calls } = fakeActions()
-    await withServer({ query: fakeQuery({}), token: TOKEN, act }, async (base) => {
-      const res = await action(base, 'decide', { decision: 'approve', note: '  理由  ' })
+    await withServer({ query: fakeQuery({}), token: TOKEN, act }, async (_base, api) => {
+      const res = await action(api, 'decide', { decision: 'approve', note: '  理由  ' })
       expect(res.status).toBe(200)
       const body = (await res.json()) as { ok: boolean; to: string }
       expect(body.ok).toBe(true)
@@ -342,8 +562,8 @@ describe('keel console', () => {
 
   it('写端点：非法 decision 400，不调用动作', async () => {
     const { act, calls } = fakeActions()
-    await withServer({ query: fakeQuery({}), token: TOKEN, act }, async (base) => {
-      const res = await action(base, 'decide', { decision: 'maybe' })
+    await withServer({ query: fakeQuery({}), token: TOKEN, act }, async (_base, api) => {
+      const res = await action(api, 'decide', { decision: 'maybe' })
       expect(res.status).toBe(400)
     })
     expect(calls).toEqual([])
@@ -351,16 +571,16 @@ describe('keel console', () => {
 
   it('写端点：澄清空文本 400，非空转调 answer', async () => {
     const { act, calls } = fakeActions()
-    await withServer({ query: fakeQuery({}), token: TOKEN, act }, async (base) => {
-      expect((await action(base, 'answer', { text: '   ' })).status).toBe(400)
-      expect((await action(base, 'answer', { text: '补充说明' })).status).toBe(200)
+    await withServer({ query: fakeQuery({}), token: TOKEN, act }, async (_base, api) => {
+      expect((await action(api, 'answer', { text: '   ' })).status).toBe(400)
+      expect((await action(api, 'answer', { text: '补充说明' })).status).toBe(200)
     })
     expect(calls).toEqual([`answer ${TASK_ID} 补充说明`])
   })
 
   it('写端点：GET 405（只接受 POST）', async () => {
-    await withServer({ query: fakeQuery({}), token: TOKEN }, async (base) => {
-      const res = await fetch(`${base}/api/tasks/${TASK_ID}/decide`)
+    await withServer({ query: fakeQuery({}), token: TOKEN }, async (_base, api) => {
+      const res = await api(`/api/tasks/${TASK_ID}/decide`)
       expect(res.status).toBe(405)
     })
   })
@@ -379,8 +599,8 @@ describe('keel console', () => {
       },
     ]
     const statsTotals: Row[] = [{ tasks: 8, tasks_done: 3, runs: 28, cost_usd: '3.21' }]
-    await withServer(fakeQuery({ statsDays, statsTotals }), async (base) => {
-      const res = await fetch(`${base}/api/stats`)
+    await withServer(fakeQuery({ statsDays, statsTotals }), async (_base, api) => {
+      const res = await api('/api/stats')
       expect(res.status).toBe(200)
       const body = (await res.json()) as { days: Row[]; totals: Row }
       expect(body.days).toHaveLength(1)
@@ -389,16 +609,32 @@ describe('keel console', () => {
     })
   })
 
-  it('数据库不可用时 /healthz 返回 503', async () => {
+  it('数据库不可用时：匿名 /healthz 只回 ok，不带错误与连接串', async () => {
     const broken: QueryFn = async () => {
       throw new Error('connection refused')
     }
-    await withServer(broken, async (base) => {
-      const res = await fetch(`${base}/healthz`)
+    await withServer(
+      broken,
+      async (base) => {
+        const res = await fetch(`${base}/healthz`)
+        expect(res.status).toBe(503)
+        expect(await res.json()).toEqual({ ok: false })
+      },
+      { anonymous: true },
+    )
+  })
+
+  it('数据库不可用时：已登录 /healthz 保留排障详情', async () => {
+    const broken: QueryFn = async () => {
+      throw new Error('connection refused')
+    }
+    await withServer(broken, async (_base, api) => {
+      const res = await api('/healthz')
       expect(res.status).toBe(503)
-      const body = (await res.json()) as { ok: boolean; error: string }
+      const body = (await res.json()) as { ok: boolean; error: string; connection: string }
       expect(body.ok).toBe(false)
       expect(body.error).toContain('connection refused')
+      expect(body.connection).toContain('postgres')
     })
   })
 })

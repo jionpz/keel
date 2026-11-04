@@ -86,8 +86,8 @@ DATABASE_URL=postgres://localhost/keel_dev pnpm run db:migrate
 # 3. 构建（可选；CLI 也可以直接用 tsx 跑源码）
 pnpm run build
 
-# 4. 启动只读控制台
-pnpm run console     # http://127.0.0.1:4321
+# 4. 启动控制台
+pnpm run console     # http://127.0.0.1:4321（口令见启动终端）
 ```
 
 ⚠️ 迁移脚本读 `DATABASE_URL`，而 CLI / 控制台读 `KEEL_DATABASE_URL` 或 `DATABASE_URL`
@@ -170,15 +170,26 @@ pnpm run check     # CI 跑的就是这一条 —— 与本地完全一致
 
 `check` 聚合了 lint / typecheck / 架构边界 / 类型同步 / 转移表比对 / 纯度 / 测试。
 
-### 控制台（只读）
+### 控制台（口令登录）
 
 ```bash
 pnpm run console     # http://127.0.0.1:4321
 ```
 
 一屏看 task 列表、状态机位置、run、产物与完整事件时间线。
-控制台是 Fact Plane 的**消费者**：只发 `SELECT`、只绑定 `127.0.0.1`、无鉴权，
-因此不要把它暴露到公网。端口可用 `KEEL_CONSOLE_PORT` 覆盖，
+控制台是 Fact Plane 的**消费者**：读路径只发 `SELECT`，写路径只有人工闸门的
+`POST /api/tasks/:id/decide|answer`（转调与 CLI 相同的 driver）。
+
+**登录**：除登录页与 `/healthz` 外，所有页面和 API 都要求会话。
+
+| 环境变量 | 默认 | 说明 |
+|---|---|---|
+| `KEEL_CONSOLE_PORT` | `4321` | 端口 |
+| `KEEL_CONSOLE_HOST` | `127.0.0.1` | 监听地址；`0.0.0.0` 对外提供服务 |
+| `KEEL_CONSOLE_PASSWORD` | 未设置 | 访问口令；未设置时每次启动随机生成并打印到终端 |
+| `KEEL_CONSOLE_SECURE_COOKIE` | 未设置 | 设为 `1` 时会话 Cookie 加 `Secure`（建议由反向代理终止 TLS） |
+
+会话保存在进程内存里（默认 12 小时，勾选「保持登录」7 天），控制台重启后需要重新登录。
 数据库沿用 `KEEL_DATABASE_URL` / `DATABASE_URL`（默认 `postgres://localhost/keel_dev`）。
 
 

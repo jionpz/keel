@@ -2174,6 +2174,7 @@ export const CONSOLE_HTML = `<!doctype html>
       <div class="brand-actions">
         <button id="theme-btn" class="icon-btn" type="button" title="切换明/暗主题">主题</button>
         <button id="refresh" class="icon-btn" type="button" title="立即刷新数据">刷新</button>
+        <button id="logout" class="icon-btn" type="button" title="退出登录">退出</button>
       </div>
     </div>
 
@@ -2513,6 +2514,10 @@ export const CONSOLE_HTML = `<!doctype html>
 
   function fetchJSON(url) {
     return fetch(url, { headers: { accept: 'application/json' } }).then(function (r) {
+      if (r.status === 401) {
+        window.location.replace('/login');
+        throw new Error(url + ' → 未登录');
+      }
       if (!r.ok) throw new Error(url + ' → HTTP ' + r.status);
       return r.json();
     });
@@ -5182,6 +5187,17 @@ export const CONSOLE_HTML = `<!doctype html>
 
   document.getElementById('theme-btn').addEventListener('click', cycleTheme);
   document.getElementById('refresh').addEventListener('click', function () { refreshAll(false); });
+  document.getElementById('logout').addEventListener('click', function () {
+    fetch('/api/logout', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-keel-console': consoleToken() },
+      body: '{}'
+    }).then(function () {
+      window.location.replace('/login');
+    }, function () {
+      window.location.replace('/login');
+    });
+  });
   document.getElementById('auto').addEventListener('change', function (ev) { setAuto(ev.target.checked); });
 
   var detailRoot = document.getElementById('detail');
