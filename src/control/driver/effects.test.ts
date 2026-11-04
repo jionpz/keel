@@ -293,6 +293,40 @@ describe('timer 副作用 · StartTimer/CancelTimer/ConsumeTimer', () => {
     return r.rows[0] ?? null
   }
 
+  /** 以 keel_ingress 写一条 feedback —— 与生产里 `keel answer` 的写路径一致 */
+  async function seedFeedback(body: string): Promise<string> {
+    const id = randomUUID()
+    await asRole('keel_ingress', (c) =>
+      c.query(
+        `INSERT INTO feedback (id, source, external_ref, body)
+         VALUES ($1,'manual',$2,$3)`,
+        [id, `ref-${id}`, body],
+      ),
+    )
+    return id
+  }
+
+  async function eventsOf(
+    taskId: string,
+  ): Promise<{ type: string; payload: Record<string, unknown> }[]> {
+    const r = await asOwner((c) =>
+      c.query<{ type: string; payload: Record<string, unknown> }>(
+        'SELECT type, payload FROM event WHERE task_id=$1 ORDER BY seq',
+        [taskId],
+      ),
+    )
+    return r.rows
+  }
+
+  async function linkedFeedback(taskId: string): Promise<string[]> {
+    const r = await asOwner((c) =>
+      c.query<{ feedback_id: string }>('SELECT feedback_id FROM task_feedback WHERE task_id=$1', [
+        taskId,
+      ]),
+    )
+    return r.rows.map((x) => x.feedback_id)
+  }
+
   it('T-008:TimerFired → S-ABANDONED,timer 置 fired(I9:带 fired_at)', async () => {
     const { taskId } = await seedClarification()
     const driver = new WorkflowDriver(new RuleBasedPolicyEngine(DEFAULT_RULESET))
@@ -319,6 +353,47 @@ describe('timer 副作用 · StartTimer/CancelTimer/ConsumeTimer', () => {
 
     const t = await timerState(taskId)
     expect(t?.state).toBe('cancelled')
+  })
+
+  it('T-007 不带 feedbackId:LinkFeedback 记意图,不凭空写 task_feedback', async () => {
+    const { taskId } = await seedClarification()
+    const driver = new WorkflowDriver(new RuleBasedPolicyEngine(DEFAULT_RULESET))
+
+    const r = await driver.advance(taskId, { type: 'ClarificationReceived' }, NOW)
+    expect(r.ok && r.value.advanced).toBe(true)
+
+    // 调用方手上没有 feedback 行 —— 事件流必须如实说「只是意图」
+    expect(await linkedFeedback(taskId)).toEqual([])
+    const evs = await eventsOf(taskId)
+    const intents = evs.filter(
+      (e) => e.type === 'SideEffectIntent' && e.payload.kind === 'LinkFeedback',
+    )
+    expect(intents).toHaveLength(1)
+    const applied = evs.filter(
+      (e) => e.type === 'SideEffectApplied' && e.payload.kind === 'LinkFeedback',
+    )
+    expect(applied).toEqual([])
+  })
+
+  it('T-007 带 feedbackId:LinkFeedback 真落地(task_feedback 有行 + SideEffectApplied)', async () => {
+    const { taskId } = await seedClarification()
+    const feedbackId = await seedFeedback('补充：目标用户是内部运维')
+    const driver = new WorkflowDriver(new RuleBasedPolicyEngine(DEFAULT_RULESET))
+
+    const r = await driver.advance(taskId, { type: 'ClarificationReceived', feedbackId }, NOW)
+    expect(r.ok && r.value.advanced).toBe(true)
+    if (!r.ok || !r.value.advanced) return
+    expect(r.value.transition_id).toBe('T-007')
+    expect(r.value.effects.map((e) => `${e.kind}:${e.outcome}`)).toContain('LinkFeedback:applied')
+
+    expect(await linkedFeedback(taskId)).toEqual([feedbackId])
+    const evs = await eventsOf(taskId)
+    expect(
+      evs.filter((e) => e.type === 'SideEffectIntent' && e.payload.kind === 'LinkFeedback'),
+    ).toEqual([])
+    expect(
+      evs.filter((e) => e.type === 'SideEffectApplied' && e.payload.kind === 'LinkFeedback'),
+    ).toHaveLength(1)
   })
 
   it('idempotency:已 fired 的 timer 再 advance(TimerFired)→ ConsumeTimer skipped,T-008 不再推进', async () => {

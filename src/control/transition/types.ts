@@ -18,7 +18,14 @@ export type TransitionEvent =
   | { readonly type: 'RunSucceeded'; readonly stage: Stage }
   | { readonly type: 'RunFailed'; readonly stage: Stage }
   | { readonly type: 'RunTimeout'; readonly stage: Stage }
-  | { readonly type: 'ClarificationReceived' }
+  /**
+   * 澄清答复（T-007）。
+   *
+   * `feedbackId` 可选：带上时 `LinkFeedback` 真的把该 feedback 关联到 task
+   * （人工经 `keel answer` 回答的路径）；不带时维持「记录意图」的历史行为 ——
+   * 事件仍可重放，不因为多了一个字段就改变旧语义。
+   */
+  | { readonly type: 'ClarificationReceived'; readonly feedbackId?: string }
   | { readonly type: 'TimerFired'; readonly timer: 'clarification_ttl' }
   | { readonly type: 'CapabilityRequested'; readonly capability: string }
   | { readonly type: 'ArtifactCommitted'; readonly kind: string }

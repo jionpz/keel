@@ -3,7 +3,7 @@
   "name": "human-gate-cli",
   "title": "人工介入入口：keel decide / keel answer + 控制台可复制命令",
   "description": "S-HUMAN_REVIEW 的批准/驳回/返工与 S-NEED_CLARIFICATION 的补充澄清目前没有任何入口（CLI 无命令、控制台只读）。补 CLI 命令，并让控制台详情页显示可直接复制的命令。",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

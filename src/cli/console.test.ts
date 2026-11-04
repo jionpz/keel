@@ -71,6 +71,10 @@ describe('keel console', () => {
       expect(html).toContain('data-mode="projects"')
       expect(html).toContain('id="statusbar"')
       expect(html).toContain("fetchJSON('/api/stats')")
+      // 人工闸门的提示条：控制台只给命令，不发写请求
+      expect(html).toContain('human-callout')
+      expect(html).toContain('keel decide ')
+      expect(html).toContain('keel answer ')
     })
   })
 

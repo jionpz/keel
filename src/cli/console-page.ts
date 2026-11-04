@@ -1149,6 +1149,53 @@ export const CONSOLE_HTML = `<!doctype html>
   }
   .copy-btn.copied { color: var(--done); }
 
+  /* 人工闸门：只读提示条 —— 命令可复制，页面不发写请求 */
+  .human-callout {
+    border: 1px solid var(--line-strong);
+    border-left: 2px solid var(--gate);
+    background: var(--gate-soft);
+    padding: 10px 12px;
+    margin: 2px 0 14px;
+    display: grid;
+    gap: 6px;
+  }
+  .human-callout-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .human-callout-hint {
+    font-size: 11px;
+    font-weight: 400;
+    color: var(--muted);
+  }
+  .human-callout-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+  .human-callout-what {
+    flex: 0 0 56px;
+    font-size: 11.5px;
+    color: var(--text-sec);
+  }
+  .human-callout-cmd {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text);
+    background: var(--code-bg);
+    padding: 3px 6px;
+    border-radius: 4px;
+    white-space: nowrap;
+    overflow-x: auto;
+    min-width: 0;
+  }
+
   .cockpit-title {
     font-size: 17px;
     font-weight: 600;
@@ -3382,6 +3429,44 @@ export const CONSOLE_HTML = `<!doctype html>
       '<span class="ss-tag">现状</span><p>' + text + '</p></div>';
   }
 
+  /**
+   * 人工闸门提示条。
+   *
+   * 只回答两件事：现在为什么停住了、在本机终端敲什么。命令由页面拼好给复制，
+   * 控制台**不发任何写请求** —— 写操作只有 CLI 一条路径（见 spec/frontend/console-guidelines）。
+   */
+  function renderHumanCallout(t) {
+    var status = t.status;
+    if (status !== 'S-HUMAN_REVIEW' && status !== 'S-NEED_CLARIFICATION') return '';
+
+    var rows = [];
+    if (status === 'S-HUMAN_REVIEW') {
+      rows.push(['批准', 'keel decide ' + t.id + ' approve']);
+      rows.push(['驳回', 'keel decide ' + t.id + ' reject --note "…"']);
+      rows.push(['返工', 'keel decide ' + t.id + ' rework']);
+    } else {
+      rows.push(['补充澄清', 'keel answer ' + t.id + ' --text "…"']);
+    }
+
+    var body = '';
+    for (var i = 0; i < rows.length; i++) {
+      body += '<div class="human-callout-row">' +
+        '<span class="human-callout-what">' + esc(rows[i][0]) + '</span>' +
+        '<code class="human-callout-cmd">' + esc(rows[i][1]) + '</code>' +
+        '<button type="button" class="copy-btn" data-copy="' + esc(rows[i][1]) + '" title="复制命令">复制</button>' +
+        '</div>';
+    }
+
+    var head = status === 'S-HUMAN_REVIEW'
+      ? '需要人工：任务停在人工评审，等一次裁决'
+      : '需要人工：任务在等澄清答复，超时会自动放弃';
+
+    return '<div class="human-callout">' +
+      '<div class="human-callout-head">' + esc(head) +
+        '<span class="human-callout-hint">控制台只读，命令在本机终端执行</span>' +
+      '</div>' + body + '</div>';
+  }
+
   function renderGlossary() {
     var html = '';
     for (var i = 0; i < GLOSSARY.length; i++) {
@@ -3448,6 +3533,7 @@ export const CONSOLE_HTML = `<!doctype html>
       '</div>' +
       '<div class="view-body">' +
       renderStatusSummary(d) +
+      renderHumanCallout(t) +
       '<div class="summary-grid">' +
         '<div class="stat-box">' +
           '<div class="stat-label">总历时 (Duration)</div>' +

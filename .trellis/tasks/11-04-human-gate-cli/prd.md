@@ -32,10 +32,11 @@
 
 ### R2 `keel answer <task-id> --text <text>`
 
-- 在 `S-NEED_CLARIFICATION` 上：新建 `feedback(source='manual')` 并链接到该 task，
+- 在 `S-NEED_CLARIFICATION` 上：新建 `feedback(source='manual')` 并**真的**链接到该 task，
   取消澄清 timer，状态 → `S-PM_ANALYZING`，创建 `run(pm, n+1)`（`T-007`）。
-- 三步必须在**同一个事务**内完成：要么澄清答复与状态变更一起落地，
-  要么都不落地（不变量 I4）。
+- 状态变更、事件、run、链接四者在 `keel_control` 的**同一个事务**内完成（不变量 I4）。
+  `feedback` 行只能由 `keel_ingress` 写（写权限矩阵），因此它先于该事务落库：
+  中途失败会留下一条未关联的 feedback，命令必须把它的 id 打出来，不静默。
 - 任务不在 `S-NEED_CLARIFICATION` 时同上：不写、报错、退出码非 0。
 
 ### R3 控制台显示可复制的命令
@@ -61,10 +62,13 @@
       **数据库零写入**（事件数、run 数、状态均不变）。
 - [ ] AC5 `keel answer <id> --text "..."` 在 `S-NEED_CLARIFICATION` 上：
       新增 `feedback(source='manual')` 与 `task_feedback` 关联、澄清 timer 被取消、
-      状态 → `S-PM_ANALYZING`、新建 `pm` run；三步同事务（中途失败全部回滚）。
+      状态 → `S-PM_ANALYZING`、新建 `pm` run；状态/事件/link/run 同事务，
+      advance 失败时回滚这四项并打印未关联 feedback 的 id。
 - [ ] AC6 控制台详情页在这两个状态下显示「需要人工」提示条与可复制命令；
       `POST /api/tasks` 仍返回 405。
-- [ ] AC7 `pnpm run lint` / `pnpm run typecheck` / `pnpm test` 全绿。
+- [ ] AC7 `control_mode != auto`（`paused` / `human`）时执行上述任一命令：
+      退出码非 0，说明原因，零写入（不产生 `NoTransition` 事件）。
+- [ ] AC8 `pnpm run lint` / `pnpm run typecheck` / `pnpm test` 全绿。
 
 ## 备注
 

@@ -74,6 +74,17 @@ export interface AdvanceOutcome {
   readonly reason: string | null
 }
 
+/**
+ * 人工裁决的附带记录。
+ *
+ * `note` 只是给人看的理由：不进 prompt、不参与 guard、不影响转移结论。
+ * 只有人工命令（`keel decide` / `keel answer`）会传；其它调用不传，
+ * 事件流里也就不会凭空多出 `HumanDecision`。
+ */
+export interface AdvanceOptions {
+  readonly note?: string
+}
+
 export class WorkflowDriver {
   /**
    * @param workspace 可选。不传时 CreateBranch / CleanWorkspace 退回记录意图 ——
@@ -210,11 +221,13 @@ export class WorkflowDriver {
    * 并发写者先行提交时返回 `CONFLICT`（可重试），副作用一个都不会落地。
    *
    * @param now 时间由外部注入。控制平面不读时钟，否则重放会得到不同结果。
+   * @param opts 人工裁决的附带记录（见 `AdvanceOptions`），其它调用省略即可。
    */
   async advance(
     taskId: string,
     event: TransitionEvent,
     now: string,
+    opts: AdvanceOptions = {},
   ): Promise<Result<AdvanceOutcome>> {
     return asRole('keel_control', async (c) => {
       const row = await c.query<{ status: TaskStatus; control_mode: ControlMode }>(
@@ -337,6 +350,18 @@ export class WorkflowDriver {
           now,
         ],
       )
+
+      // 人工理由：与转移同事务落库，避免「状态变了、理由丢了」的中间态。
+      // 单独一条事件而不是塞进 TaskStatusChanged —— 时间线要能单独渲染它，
+      // 状态变更事件的 payload 只该描述状态变更本身。
+      const note = opts.note?.trim()
+      if (note !== undefined && note !== '') {
+        await c.query(
+          `INSERT INTO event (task_id, type, payload, trace_id, occurred_at)
+           VALUES ($1,'HumanDecision',$2::jsonb,$3,$4)`,
+          [taskId, JSON.stringify({ decision: event.type, note }), traceId, now],
+        )
+      }
 
       return ok<AdvanceOutcome>({
         advanced: true,

@@ -448,6 +448,56 @@ describe('失败路径：QA 失败 → 返工 → 重试耗尽 → 人工', () =
   })
 })
 
+// ────────────────────── 人工裁决的附带记录 ──────────────────────
+
+describe('HumanDecision 事件', () => {
+  /** 直接铺到 S-HUMAN_REVIEW：本组只关心裁决事件的写法，不重走一遍失败链 */
+  async function seedHumanReview(): Promise<string> {
+    const taskId = await seedTask()
+    await asOwner((c) =>
+      c.query("UPDATE task SET status = 'S-HUMAN_REVIEW' WHERE id = $1", [taskId]),
+    )
+    return taskId
+  }
+
+  async function eventsOf(
+    taskId: string,
+  ): Promise<{ type: string; payload: Record<string, unknown> }[]> {
+    const r = await asOwner((c) =>
+      c.query<{ type: string; payload: Record<string, unknown> }>(
+        'SELECT type, payload FROM event WHERE task_id = $1 ORDER BY seq',
+        [taskId],
+      ),
+    )
+    return r.rows
+  }
+
+  it('带 note：同事务写一条 HumanDecision，且在 TaskStatusChanged 之后', async () => {
+    const taskId = await seedHumanReview()
+
+    const r = await driver.advance(taskId, { type: 'HumanApproved' }, NOW, {
+      note: '  RFC 方案通过  ',
+    })
+    expect(r.ok && r.value.transition_id).toBe('T-014')
+
+    const evs = await eventsOf(taskId)
+    const decisions = evs.filter((e) => e.type === 'HumanDecision')
+    expect(decisions).toHaveLength(1)
+    expect(decisions[0]?.payload).toEqual({ decision: 'HumanApproved', note: 'RFC 方案通过' })
+    expect(evs[evs.length - 1]?.type).toBe('HumanDecision')
+  })
+
+  it('不传 note：不写 HumanDecision（其它调用与旧行为一致）', async () => {
+    const taskId = await seedHumanReview()
+
+    const r = await driver.advance(taskId, { type: 'HumanRejected' }, NOW)
+    expect(r.ok && r.value.transition_id).toBe('T-015')
+
+    const evs = await eventsOf(taskId)
+    expect(evs.some((e) => e.type === 'HumanDecision')).toBe(false)
+  })
+})
+
 // ────────────────────────── control_mode ──────────────────────────
 
 describe('control_mode 与状态正交', () => {

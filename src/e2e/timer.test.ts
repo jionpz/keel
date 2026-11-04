@@ -14,6 +14,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+import { answerTask } from '../cli/decide.js'
 import type {
   DisposeReport,
   HarnessAdapter,
@@ -211,9 +212,21 @@ describe('durable timer · clarification TTL(issue #24,方案 A)', () => {
     await runTaskToCompletion(taskId, depsFor(), { maxSteps: 4 })
     expect(await statusOf(taskId)).toBe('S-NEED_CLARIFICATION')
 
-    // 直接 driver.advance(ClarificationReceived) —— 模拟人工回答(T-007 取消 timer)
-    const adv = await depsFor().driver.advance(taskId, { type: 'ClarificationReceived' }, now())
-    expect(adv.ok && adv.value.advanced).toBe(true)
+    // 走与 `keel answer` 相同的路径(人工回答 → feedback 关联 + T-007 取消 timer)
+    const ans = await answerTask(taskId, '  目标用户是内部运维  ', {
+      now: now(),
+      driver: depsFor().driver,
+    })
+    expect(ans.ok, ans.ok ? '' : ans.error.detail).toBe(true)
+    if (ans.ok) {
+      const linked = await asOwner((c) =>
+        c.query<{ n: string }>('SELECT count(*) AS n FROM task_feedback WHERE task_id = $1', [
+          taskId,
+        ]),
+      )
+      expect(Number(linked.rows[0]?.n ?? 0)).toBe(1)
+      expect(ans.value.feedbackId).toMatch(/[0-9a-f-]{36}/)
+    }
 
     const t = await timerRow(taskId)
     expect(t?.state).toBe('cancelled')

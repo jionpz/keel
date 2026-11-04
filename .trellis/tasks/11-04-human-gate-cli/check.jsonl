@@ -1,1 +1,4 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "验证清单：lint / typecheck / check:transitions / 测试纪律"}
+{"file": ".trellis/spec/backend/transition-effects.md", "reason": "核对 T-007 / T-014 / T-015 / T-016 的副作用是否按契约落地"}
+{"file": ".trellis/spec/frontend/console-guidelines.md", "reason": "核对提示条仍只读、POST 仍 405、文案与视觉纪律"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "核对同一事实在 CLI 输出、事件流、控制台三处一致"}

@@ -1,1 +1,6 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/transition-effects.md", "reason": "副作用执行契约：CreateRun attempt、撞键归因、LinkFeedback 由意图转落地的边界"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "写权限矩阵与 asRole / asRole 事务纪律：feedback 只能由 keel_ingress 写"}
+{"file": ".trellis/spec/backend/git-workspace.md", "reason": "prepareProject / WorkspaceBinding：approve 需要真实建分支"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "src/cli 模块归属，新增 decide.ts 与 task-workspace.ts 的位置"}
+{"file": ".trellis/spec/frontend/console-guidelines.md", "reason": "控制台只读边界、字符串拼接、无 emoji、窄屏覆盖顺序"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "CLI → driver → 事件流 → 控制台 的跨层数据流检查"}

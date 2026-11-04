@@ -75,6 +75,7 @@ const EVENT_LABELS: Record<string, string> = {
   HumanApproved: '人工批准',
   HumanRejected: '人工驳回',
   HumanRequestedRework: '要求返工',
+  HumanDecision: '人工裁决',
   PolicyEvaluated: '策略裁决',
   CIFailed: 'CI 失败',
   CIPassed: 'CI 通过',

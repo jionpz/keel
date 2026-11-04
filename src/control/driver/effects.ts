@@ -130,6 +130,38 @@ async function consumeTimer(
   return { kind: 'ConsumeTimer', outcome: 'applied', detail: '澄清 timer 已 fire' }
 }
 
+/**
+ * 把 feedback 关联到 task（T-007 澄清答复、T-001 创建）。
+ *
+ * **只有事件携带 `feedbackId` 时才落地**：那说明调用方手上真有一条 feedback 行
+ * （`keel answer` 先以 `keel_ingress` 写入，再进本事务）。历史调用
+ * （例如 e2e 里直接 `advance(ClarificationReceived)` 模拟人工回答）没有反馈行，
+ * 假装链接成功会让事件流声称做了没做的事 —— 这种情形维持记录意图。
+ *
+ * T-001 不经这里（`driver.intake` 自己写 `SideEffectApplied`）。
+ *
+ * 幂等：`task_feedback` 主键 `(task_id, feedback_id)`，重放走 `ON CONFLICT DO NOTHING`。
+ */
+async function linkFeedback(c: PoolClient, ctx: EffectContext): Promise<AppliedEffect> {
+  const feedbackId = ctx.event.type === 'ClarificationReceived' ? ctx.event.feedbackId : undefined
+  if (feedbackId === undefined) return recordIntent(c, ctx, { kind: 'LinkFeedback' })
+
+  const ins = await c.query(
+    `INSERT INTO task_feedback (task_id, feedback_id) VALUES ($1,$2)
+     ON CONFLICT DO NOTHING`,
+    [ctx.taskId, feedbackId],
+  )
+  const outcome = ins.rowCount === 0 ? 'skipped' : 'applied'
+  await emit(
+    c,
+    ctx,
+    outcome === 'applied' ? 'SideEffectApplied' : 'SideEffectSkipped',
+    { kind: 'LinkFeedback', feedback_id: feedbackId, dedupe_key: feedbackId },
+    ctx.now,
+  )
+  return { kind: 'LinkFeedback', outcome, detail: feedbackId }
+}
+
 /** 写一条事件。所有副作用记录都走事件流 —— 不另建表 */
 async function emit(
   c: PoolClient,
@@ -588,10 +620,10 @@ export async function applyEffects(
       // 走到这里说明有人把它加进了别的转移 —— 编程错误，不是可预期失败。
       case 'CreateTask':
         throw new Error('CreateTask 只能经 driver.intake 执行')
-      // 以下 v0.1 只记录意图：真实 git / 会话取消属后续子任务。
-      // LinkFeedback 留在这里是因为 T-007（澄清回灌）也发它，那条路径本轮不改；
-      // T-001 的 LinkFeedback 由 intake 直接落 SideEffectApplied。
       case 'LinkFeedback':
+        applied.push(await linkFeedback(c, ctx))
+        break
+      // 以下 v0.1 只记录意图：真实 git / 会话取消属后续子任务。
       case 'CancelRun':
       case 'RecordReason':
       case 'MaybeAutoMerge':

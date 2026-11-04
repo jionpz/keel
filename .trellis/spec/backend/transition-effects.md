@@ -5,6 +5,45 @@
 
 ---
 
+## 人工闸门的两个入口
+
+`T-014 / T-015 / T-016`（人工裁决）与 `T-007`（补充澄清）在 2026-11-04 之前**没有任何
+生产代码发出对应事件** —— 转移表里有，CLI 里没有。入口补齐在 `src/cli/decide.ts`：
+
+| 命令 | 事件 | 副作用要点 |
+|---|---|---|
+| `keel decide … approve` | `HumanApproved` | `CreateBranch` **必须注入 workspace**，否则只记意图、分支并不存在 |
+| `keel decide … reject` | `HumanRejected` | 无副作用 |
+| `keel decide … rework` | `HumanRequestedRework` | `nextRun('brainstorm')` |
+| `keel answer … --text` | `ClarificationReceived` + `feedbackId` | 真写 `task_feedback`；取消澄清 timer；`nextRun('pm')` |
+
+三条纪律：
+
+1. **预检在写入之前**。`advance` 对不匹配的事件会如实写 `NoTransition` —— 那是编排该有的记账，
+   但对误触的命令来说就是「什么都没做，库里却多了一条」。入口先读 `(status, control_mode)`
+   并零写入退出；预检到 advance 之间的竞争仍由 `advance` 的 `advanced:false` 表达。
+2. **`control_mode ≠ auto` 时不派发**（`ignoresControlMode: false`）。`paused` 是预算熔断、
+   `human` 是人工接管，两者都要求先恢复 —— 而恢复入口（C-003 / C-005 / C-006）尚未提供。
+   入口要如实说出这一点，不要让用户以为命令坏了。
+3. **`LinkFeedback` 踩在两条路径上**：事件带 `feedbackId` 时真写 `task_feedback` 并发
+   `SideEffectApplied`；不带时维持 `recordIntent`。区分它们的是**调用方手上到底有没有 feedback 行**，
+   不是「哪种事件」。`T-001` 不经 `applyEffects`（`driver.intake` 自己落事件）。
+
+`feedback` 只能由 `keel_ingress` 写，而 `SET LOCAL ROLE` 是事务级的 —— 所以 `answer` 必然是
+两段写：feedback 先落（append-only），control 事务随后完成状态 / 事件 / run / 链接。
+framing 成「一个事务」是错的；代价是中途失败会留一条未被引用的 feedback 行，
+入口必须在错误里把它的 id 报出来。
+
+## 裁决理由：`advance` 的第 4 参
+
+`advance(taskId, event, now, { note })` —— 只有人工命令传。成功转移后在同一事务内写一条
+`HumanDecision` 事件（`payload: { decision, note }`），位置在 `TaskStatusChanged` 之后。
+
+- 不塞进 `TaskStatusChanged` 的 payload：状态变更事件只该描述状态变更本身，
+  时间线要能把理由单独渲染成一行。
+- 不单独开事务写：那会造出「状态变了、理由丢了」的中间态。
+- `note` 不进 prompt、不参与 guard —— 它只是给人看的记录。
+
 ## `CreateRun` 的 attempt 由副作用决定，键由事件决定
 
 ```ts

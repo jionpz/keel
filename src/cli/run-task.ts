@@ -26,11 +26,11 @@ import {
 import { DEFAULT_OMP_MODEL, OmpAdapter } from '../execution/adapters/omp.js'
 import { HarnessSessionManager } from '../execution/session/manager.js'
 import { asRole } from '../fact/db.js'
-import { GitWorkspace, type ProjectBinding } from '../fact/git-workspace.js'
 import { GitHubProvider, readTokenFromEnv } from '../fact/github-provider.js'
 import type { TaskStatus } from '../shared/ids.js'
 import { parseArgs } from './argv.js'
 import { statusMain } from './status.js'
+import { loadTaskWorkspace } from './task-workspace.js'
 
 export const CI_MODES = ['passed', 'failed', 'real'] as const
 export type CiMode = (typeof CI_MODES)[number]
@@ -287,35 +287,10 @@ export async function runTask(
   const model = resolveModelForHarness(harness.value, opts.model, process.env.KEEL_MODEL)
   if (!model.ok) return model
 
-  // 读 task + repo(remote_url + local_path)。以 keel_control 身份读 —— asOwner 按 db.ts
-  // 的纪律只留给测试装置与迁移,生产命令不该用属主权限读生产数据。
-  const info = await asRole('keel_control', (c) =>
-    c.query<{
-      repo_id: string
-      base_branch: string
-      remote_url: string
-      local_path: string | null
-    }>(
-      `SELECT t.repo_id, t.base_branch, r.remote_url, r.local_path
-       FROM task t JOIN repo r ON r.id = t.repo_id WHERE t.id = $1`,
-      [taskId],
-    ),
-  )
-  const row = info.rows[0]
-  if (row === undefined) {
-    return err(makeError('NOT_FOUND', `找不到 task ${taskId}`))
-  }
-
   // 持久项目根 → 绑定项目 → 同步基线。失败即不创建 run。
-  const git = new GitWorkspace()
-  const projectBinding: ProjectBinding =
-    row.local_path === null
-      ? { mode: 'managed', repoId: row.repo_id }
-      : { mode: 'attached', repoId: row.repo_id, localPath: row.local_path }
-  const prepared = await git.prepareProject(projectBinding, row.remote_url, row.base_branch)
-  if (!prepared.ok) return prepared
-
-  const binding = { git, repoId: row.repo_id, project: prepared.value }
+  const loaded = await loadTaskWorkspace(taskId)
+  if (!loaded.ok) return loaded
+  const binding = loaded.value
   const now = () => new Date().toISOString()
 
   const result = await runTaskToCompletion(
