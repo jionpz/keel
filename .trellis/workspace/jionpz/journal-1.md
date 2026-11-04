@@ -466,3 +466,25 @@ console 完成可读性/项目性改造：中文状态徽章、一句话现状�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 9: 接入自动化 poller：多仓库 issue 常驻扫描
+
+**Date**: 2026-11-04
+**Task**: 接入自动化 poller：多仓库 issue 常驻扫描
+**Branch**: `main`
+
+### Summary
+
+实现 keel poller：迁移 repo.issue_label + register-repo --issue-label、provider listOpenIssues（分页/truncated/PR 过滤/空 label 拒绝）、src/ingress 轮询核心（轮内去重、单条失败隔离）、CLI 接线与 finally 关池；复核修掉 5 个真缺陷（StopToken 订阅制替代悬挂回调、重复 remote 轮内去重、argv 空白语义漂移、--label 静默忽略、日志里 remote userinfo 泄漏），pnpm run check 629 passed；spec 记录契约与已知边界，任务已归档。跨任务遗留：其它 CLI 子命令退出不关池、timer-worker SIGTERM 忙等。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3c9e604` | (see git log) |
+| `8472c5f` | (see git log) |
+
+### Status
+
+[OK] **Completed**

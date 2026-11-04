@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 8
+- **Total Sessions**: 9
 - **Last Active**: 2026-11-04
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~468 | Active |
+| `journal-1.md` | ~490 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 9 | 2026-11-04 | 接入自动化 poller：多仓库 issue 常驻扫描 | `3c9e604`, `8472c5f` | `main` |
 | 8 | 2026-11-04 | git 传输认证：私有 https remote 注入凭据 | `48b0dff`, `f2c634f` | `main` |
 | 7 | 2026-11-04 | GHES host 支持收尾：契约测试与 spec 落地 | `2d61e53`, `aea6768` | `main` |
 | 6 | 2026-11-03 | Console 双模式筛选 | `7efdba8`, `56953e5`, `55d06bc`, `38d836d`, `bab2646` | `main` |
