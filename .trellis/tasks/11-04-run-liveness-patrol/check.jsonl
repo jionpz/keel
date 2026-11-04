@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量门槛、测试分层与验收凭据"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "核对新表的角色授权、迁移与并发 claim 的隔离"}
+{"file": ".trellis/spec/backend/transition-effects.md", "reason": "核对 RunStalled 被转移表消费且没有绕过副作用白名单"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "核对 RUN_STALLED 的 retryable 与错误形状"}
+{"file": ".trellis/spec/backend/harness-adapter.md", "reason": "核对增量解析没有破坏子进程与会话契约"}
+{"file": ".trellis/spec/backend/orchestrator-loop.md", "reason": "核对停止原因、单进程前提与不静默修复"}

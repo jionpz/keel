@@ -1,0 +1,10 @@
+{"file": ".trellis/spec/backend/harness-adapter.md", "reason": "OMP 增量解析、子进程交互、会话状态与 argv 纪律"}
+{"file": ".trellis/spec/backend/orchestrator-loop.md", "reason": "编排循环的停止原因、单进程前提、只报告不修复"}
+{"file": ".trellis/spec/backend/transition-effects.md", "reason": "RunStalled 必须由转移表消费；副作用白名单与重入键"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "新增 run_liveness / worker_health 的迁移、角色授权与测试隔离"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "RUN_STALLED 的注册、retryable 语义与错误矩阵"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试分层、mock 纪律与验收凭据"}
+{"file": "docs/04-state-machine.md", "reason": "Run 状态机、T-030/T-031、timer 与超时语义的事实来源"}
+{"file": "docs/05-contracts/harness-adapter.md", "reason": "interrupt / close / 会话能力的契约边界"}
+{"file": "docs/adr/0008-wall-clock-semantics.md", "reason": "既有墙钟决策（方案 B）与「预算归属」的已知边界"}
+{"file": "docs/08-cross-cutting.md", "reason": "预算兜底、并发上限与跨切面约束"}
