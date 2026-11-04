@@ -15,6 +15,11 @@
 
 ### 2. Signatures
 
+> 模块归属：URL / host 解析在 `src/fact/github-remote.ts`，凭据读取在
+> `src/fact/github-auth.ts`；`github-provider.ts` **re-export** 它们，
+> 现有调用点仍从 provider import。拆分原因：`github-auth → provider → github-auth`
+> 会构成循环依赖（`no-circular` 必红），且 host 解析必须保持单份实现。
+
 ```ts
 export interface ParsedRemote {
   readonly host: string        // 小写，无端口

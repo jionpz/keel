@@ -12,7 +12,7 @@
 
 ```ts
 // src/fact/git-workspace.ts
-await exec('git', [
+await this.execGit([
   '-C', wt,
   '-c', 'user.email=keel@localhost',
   '-c', 'user.name=Keel',
@@ -57,7 +57,7 @@ execFileSync('git', ['config', 'commit.gpgsign', 'false'], { cwd: ws })
 
 ```ts
 // 只钉身份不钉签名 —— 提交行为仍受操作者全局配置摆布
-await exec('git', ['-C', wt, '-c', 'user.email=keel@localhost', '-c', 'user.name=Keel', 'commit', '-m', message])
+await this.execGit(['-C', wt, '-c', 'user.email=keel@localhost', '-c', 'user.name=Keel', 'commit', '-m', message])
 ```
 
 ### Correct
@@ -147,3 +147,120 @@ code 全集：`local_path_missing` / `not_a_git_worktree` / `origin_mismatch` /
 
 `base_missing` 是 `fetch_failed` 的一个特例：git 对不存在的 ref 报的是
 `couldn't find remote ref`，按 stderr 归类，不把「分支名写错」混进「网络故障」。
+
+---
+
+# git https 传输认证（11-03-git-transport-auth）
+
+> 代码：`src/fact/github-auth.ts`（凭据纯逻辑）、`src/fact/git-workspace.ts`（注入点）；
+> host 解析复用 `src/fact/github-remote.ts`，不写第二套正则。
+
+## Scenario: 私有 https remote 的认证注入
+
+### 1. Scope / Trigger
+
+- 触发：clone / fetch / push 访问私有 https remote 需要 `KEEL_GITHUB_TOKEN` / `GITHUB_TOKEN`。
+- 影响面：三条网络调用的子进程环境；`git-workspace.ts` 的全部错误出口。
+- 风险：token 进 argv（同机 `ps` 可见）或进错误 detail（落进事件表）。
+
+### 2. Signatures
+
+```ts
+export function readTokenFromEnv(): string | undefined   // KEEL_GITHUB_TOKEN 优先
+export function authEnvFor(
+  remoteUrl: string,
+  token: string | undefined,
+  baseEnv?: NodeJS.ProcessEnv,   // 只用于读既有 GIT_CONFIG_COUNT；测试注入
+): Record<string, string>
+export function gitAuthSecrets(token: string | undefined): readonly string[]
+export function redactSecrets(text: string, secrets: readonly string[]): string
+
+export type GitExec = (
+  file: string,
+  args: readonly string[],
+  opts?: { env?: NodeJS.ProcessEnv },
+) => Promise<{ stdout: string; stderr: string }>
+
+class GitWorkspace { constructor(opts?: { root?: string; exec?: GitExec }) }
+```
+
+### 3. Contracts
+
+`authEnvFor` 成功时返回三件套，**只对本次子进程生效，不写任何 config 文件**：
+
+```ts
+{
+  GIT_CONFIG_COUNT: '<n+1>',
+  [`GIT_CONFIG_KEY_<n>`]: 'http.<scheme>://<authority>/.extraheader',
+  [`GIT_CONFIG_VALUE_<n>`]: 'AUTHORIZATION: basic <base64("oauth2:"+token)>',
+}
+```
+
+- **authority 来自 `new URL(remoteUrl).host`**，不是 `parseRemoteUrl().host`：
+  后者不含端口。git 对 `http.<url>.*` 的匹配规则是「省略端口按 scheme 默认端口处理」
+  （`man git-config`），所以 `https://host:8443/...` 必须写成 `https://host:8443/`，
+  否则认证静默失效。`URL.host` 同时省掉 443/80，与 git 语义一致。
+- **合并**：已有 `GIT_CONFIG_COUNT` 时**追加**，不覆盖操作者配置；非数字值按 0。
+- **注入点**：只有 `ensureGitDir`（clone）、`syncBase`（fetch）、`push` 传 `{ auth }`。
+  worktree / commit / status / remove / rev-parse 是本地操作，**不传 env**（连空 env 都不传）。
+
+### 4. Validation & Error Matrix
+
+| 条件 | 结果 |
+|---|---|
+| 无 token / token 空白 | `{}`，调用形态与未接入认证前完全一致 |
+| `ssh://`、SCP-like(`git@host:o/r`) | `{}` —— 走部署方 ssh key，代码不碰凭据 |
+| `file://`、解析失败 | `{}` —— 让 git 自己报错，认证层不吞解析错误 |
+| host 不在 `github.com` / `github.*` | `{}` —— token 不发往非 GitHub 服务 |
+| http(s) + 有效 token | 返回三件套；key 带非默认端口，省默认端口 |
+| git 输出含明文 token 或其 base64 | `redactSecrets` 替换为 `***` 后才进 `detail` |
+
+### 5. Good / Base / Bad Cases
+
+- **Good**：`https://github.example.com:8443/acme/widget.git`
+  → `http.https://github.example.com:8443/.extraheader`
+- **Base**：`https://github.com/acme/widget.git`
+  → `http.https://github.com/.extraheader`（与是否设 token 无关，只有 set 时才注入）
+- **Bad**：`git -c http.https://github.com/.extraheader=... clone ...` —— 值进 argv
+
+### 6. Tests Required
+
+`src/fact/github-auth.test.ts`（15 用例）：
+
+- https / http / GHES host / 非默认端口 / 默认端口被规范化掉
+- 无 token、空白 token、ssh、SCP-like、file://、非 GitHub host → `{}`
+- 既有 `GIT_CONFIG_COUNT=2` → 追加为第 3 组；非数字按 0
+- `redactSecrets`：明文 token、base64、`Bearer <token>`、空 secret 不破坏文本
+
+`src/fact/git-workspace.test.ts`（33 用例）：
+
+- 注入路径用 `exec` 注入捕获真实 argv/env：header 在 env、token 不在 argv
+- 无 token 时 https remote 的 `opts` 为 `undefined`（不是空 env）
+- `commitAll` 的 env 不含 `GIT_CONFIG_*`，且 `-c user.email/user.name/commit.gpgsign=false` 原样保留
+- fetch 失败时 stderr 里的 token 也被脱敏（三个出口都要有反例验证）
+
+### 7. Wrong vs Correct
+
+**Wrong**：用 `-c` 传 header，或把 token 塞进 URL
+
+```ts
+await exec('git', ['clone', `https://oauth2:${token}@${host}/o/r.git`, dest])
+// argv / remote URL / 错误消息里都有凭据
+```
+
+**Correct**：环境变量只作用于本次子进程
+
+```ts
+const auth = authEnvFor(remoteUrl, readTokenFromEnv())
+await this.exec('git', args, { env: { ...process.env, ...auth } })
+```
+
+## 运行前提与已知边界
+
+- `GIT_CONFIG_COUNT` 机制需要 **git ≥ 2.31**（本机 2.39.5 已验证注入被 git 采纳）。
+- 认证失败仍映射 `WORKSPACE_ERROR`，不新增 ErrorKind。
+- 已知边界：`push` 失败 detail 会原样带 `remoteUrl`。若注册时 URL 自带 userinfo
+  （`https://u:p@host/...`），它会出现在 detail 里；环境 token 不受影响。
+  这是接入认证前就有的行为，改动前先确认是否需要脱敏 URL userinfo。
+- REST 侧的非默认端口不在本机制内：`apiRootForHost` 仍按 host 推导，
+  GHES 在非 443 端口时要用 `KEEL_GITHUB_API_ROOT` 显式覆盖（见 `github-provider.md`）。
