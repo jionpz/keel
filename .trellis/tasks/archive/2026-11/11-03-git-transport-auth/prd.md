@@ -26,12 +26,21 @@
 
 ## Acceptance Criteria
 
-- [ ] 私有 https remote 在 `KEEL_GITHUB_TOKEN` 下 clone / fetch / push 成功
+- [x] 私有 https remote 在 `KEEL_GITHUB_TOKEN` 下 clone / fetch / push 成功
       （用本地 https 认证 stub 或注入式单测证明注入生效）。
-- [ ] ssh remote 不产生任何 extraheader。
-- [ ] 事件表 / 日志 / 错误 detail 中 grep 不到 token 或它的 base64。
-- [ ] `GIT_CONFIG_COUNT` 已存在时，原有配置项保留。
-- [ ] `pnpm run check` 全绿。
+- [x] ssh remote 不产生任何 extraheader。
+- [x] 事件表 / 日志 / 错误 detail 中 grep 不到 token 或它的 base64。
+- [x] `GIT_CONFIG_COUNT` 已存在时，原有配置项保留。
+- [x] `pnpm run check` 全绿。
+
+## 验收记录
+
+- `pnpm run check` 全绿；注入生效、token 不进 argv、不进错误 detail 均有断言与反例验证。
+- **未覆盖（如实记录）**：
+  1. 无私有仓库凭据，未对真实私有 https 仓库跑 clone/fetch/push；AC 第 1 条由注入式单测证明。
+  2. `push` 失败 detail 仍会原样带 `remoteUrl`；若注册 URL 自带 userinfo 会出现在 detail 里
+     （环境 token 不受影响）。这是接入认证前就有的行为，未在本任务改动。
+  3. REST 侧非默认端口仍需 `KEEL_GITHUB_API_ROOT` 覆盖；本任务只让 git 传输认证支持端口。
 
 ## Constraints
 
