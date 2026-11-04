@@ -40,13 +40,28 @@
 
 ## Acceptance Criteria
 
-- [ ] `KEEL_GITHUB_API_ROOT=https://github.example.com/api/v3` 时，
+- [x] `KEEL_GITHUB_API_ROOT=https://github.example.com/api/v3` 时，
       `register-repo https://github.example.com/o/r` 成功。
-- [ ] `ingest-issue https://github.example.com/o/r/issues/1` 解析成功（host 保留）。
-- [ ] 不设环境变量时，github.com 的 `ownerRepo` / `parseIssueUrl` / API 请求 URL 与现状一致。
-- [ ] `ownerRepo` / `parseIssueUrl` 各有 GHES host 用例；GitHubProvider stub server
+- [x] `ingest-issue https://github.example.com/o/r/issues/1` 解析成功（host 保留）。
+- [x] 不设环境变量时，github.com 的 `ownerRepo` / `parseIssueUrl` / API 请求 URL 与现状一致。
+- [x] `ownerRepo` / `parseIssueUrl` 各有 GHES host 用例；GitHubProvider stub server
       用例覆盖「按 host 推导 apiRoot」与「环境变量覆盖」两条路径。
-- [ ] `pnpm run check` 全绿。
+- [x] `pnpm run check` 全绿。
+
+## 验收记录
+
+- 实现提交：`77f7008 feat(provider): 支持 GitHub Enterprise host 与 API root 环境变量（#69）`。
+- 单元/契约测试：`src/fact/github-provider.test.ts` 55 passed，覆盖 host 白名单、
+  四种 URL 语法、`.git` 只剥一次、路径穿越拒绝、API root 三级优先级、
+  空白/非 http(s) 配置 fail-closed 且不发请求。
+- `pnpm run check`：全绿。
+- **未覆盖（如实记录）**：
+  1. 没有可用的 GHES 实例，未做真实 `register-repo` / `ingest-issue` 端到端跑通；
+     第 1、2 条 AC 由解析层契约测试 + 调用方实现保证，非实测。
+  2. `src/acceptance/preflight.ts` 仍硬编码 `github.com` 与 `https://api.github.com`，
+     面向 GHES 跑真实验收时会打公网；不在本任务范围，需单独收敛。
+  3. remote 统一规范化为 `https://`：用 `http://` 注册后再用 `http://` issue URL
+     ingest 时，`resolveRepo` 的字符串比对会落空（design 既定契约的跨层限制）。
 
 ## Constraints
 
