@@ -531,3 +531,24 @@ console 完成可读性/项目性改造：中文状态徽章、一句话现状�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 12: 项目页按「少思考」重构
+
+**Date**: 2026-11-04
+**Task**: 控制台项目页按「少思考」重构信息架构
+**Branch**: `main`
+
+### Summary
+
+项目页原先是仪表盘：6 块指标带、状态分布条、6 列表格，侧栏一项 4 行还带完整 URL。重构成先回答「有没有事等我」：侧栏 2 行（短名 + 待处理徽章 / 任务数 · 非零状态 · 最近更新），按 needsYou 降序排；详情头部一句话现状 + 一行累计元信息，删掉指标带与分布图；任务按 需要你处理 → 进行中 → 等待中 → 已收尾 分组，首组行内给「去决策 / 去回答 →」，点击仍走 select()。needsYou 只数 isGateStatus，避免把系统等待误报成人的待办。状态 chip 移到列表上方（.proj-filters），侧栏只留项目搜索。改动的取舍、分组契约与验证清单落在 .trellis/tasks/11-04-console-project-page-simplify/。pnpm run check 48 文件 664 通过。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `bb6a496` | (see git log) |
+
+### Status
+
+[OK] **Completed**
