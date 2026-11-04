@@ -97,29 +97,76 @@ export async function drainAllDueTimers(deps: WorkerDeps): Promise<ReapStats> {
   return stats
 }
 
-/**
- * 常驻循环:周期 drain,直到 SIGTERM 优雅退出。
- * intervalMs 缺省 5s。不引入 daemon 监督框架 —— 接入层负责。
- */
-export async function runForever(
-  deps: WorkerDeps,
-  opts: { intervalMs?: number } = {},
-): Promise<void> {
-  const intervalMs = opts.intervalMs ?? 5_000
-  const stopped = new Promise<void>((resolve) => {
-    process.once('SIGTERM', () => resolve())
-  })
+/** 信号源抽象 —— 测试注入假实现,生产默认 process */
+export interface TimerSignalSource {
+  on(signal: 'SIGTERM' | 'SIGINT', handler: () => void): void
+  off(signal: 'SIGTERM' | 'SIGINT', handler: () => void): void
+}
 
-  for (;;) {
-    await drainAllDueTimers(deps)
-    // race:interval 到点继续,或 SIGTERM 退出
-    let timer: ReturnType<typeof setTimeout> | null = null
-    await Promise.race([
-      new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, intervalMs)
-      }),
-      stopped,
-    ])
-    if (timer !== null) clearTimeout(timer)
+const processSignals: TimerSignalSource = {
+  on: (signal, handler) => {
+    process.on(signal, handler)
+  },
+  off: (signal, handler) => {
+    process.off(signal, handler)
+  },
+}
+
+export interface RunForeverOptions {
+  readonly intervalMs?: number
+  readonly signals?: TimerSignalSource
+  /** 注入 drain(测试用);缺省 `drainAllDueTimers` */
+  readonly drain?: (deps: WorkerDeps) => Promise<ReapStats>
+}
+
+/**
+ * 常驻循环:周期 drain,直到 SIGTERM / SIGINT 优雅退出。
+ * intervalMs 缺省 5s。不引入 daemon 监督框架 —— 接入层负责。
+ *
+ * 退出必须是**跳出循环**,不能只是「让 race 的另一臂先完成」:
+ * 旧写法把 `new Promise(r => process.once('SIGTERM', r))` 放在循环外,
+ * 信号一到这个 promise 就永久 settle,之后每轮 `Promise.race` 立即返回 ——
+ * 进程不再等待 interval,而是**满速反复 drain**(实测每秒数千轮),直到被 SIGKILL。
+ * 所以这里用显式的 `stopRequested` 控制 while,信号同时叫醒当前这一轮等待。
+ */
+export async function runForever(deps: WorkerDeps, opts: RunForeverOptions = {}): Promise<void> {
+  const intervalMs = opts.intervalMs ?? 5_000
+  const signals = opts.signals ?? processSignals
+  const drain = opts.drain ?? drainAllDueTimers
+
+  let stopRequested = false
+  /** 当前这一轮等待的唤醒函数(只有 sleep 期间存在) */
+  let wake: (() => void) | undefined
+
+  const onSignal = (): void => {
+    stopRequested = true
+    wake?.()
+  }
+
+  signals.on('SIGTERM', onSignal)
+  signals.on('SIGINT', onSignal)
+  try {
+    while (!stopRequested) {
+      await drain(deps)
+      // drain 期间可能收到信号:此时不再等 interval,直接退出
+      if (stopRequested) break
+
+      await new Promise<void>((resolve) => {
+        let timer: ReturnType<typeof setTimeout> | undefined
+        let settled = false
+        const finish = (): void => {
+          if (settled) return
+          settled = true
+          if (timer !== undefined) clearTimeout(timer)
+          wake = undefined
+          resolve()
+        }
+        timer = setTimeout(finish, intervalMs)
+        wake = finish
+      })
+    }
+  } finally {
+    signals.off('SIGTERM', onSignal)
+    signals.off('SIGINT', onSignal)
   }
 }

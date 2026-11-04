@@ -161,5 +161,6 @@ token.request()                        // 只置位一次并清空订阅者
   这是 PRD 里明确记录的 AC 偏离，硬取消留给后续任务。
 - **与 timer-worker 分工**：poller 管扫描与驱动，timer 管到期收割；poller 不处理 wall-clock timer。
 - **单进程**：不引入队列 / 并发框架；多实例部署不在范围（未来用 advisory lock）。
-- 未修复的遗留：其它碰库的 CLI 子命令仍在退出时挂住（`pg` Pool 未关闭），
-  本任务只修了 poller 自己；`timer-worker` 的 SIGTERM 忙等也未修。
+- **连接池与信号**：poller 自己 `finally { closeDb() }` 只是兜底；CLI 统一在
+  `runCli` 的 `finally` 关池（所有碰库子命令共用）。`timer-worker` 的 SIGTERM
+  退出同样已收口 —— 两者规则见 `cli-lifecycle.md`。

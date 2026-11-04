@@ -53,13 +53,14 @@ describe('parseArgs(零依赖 argv 解析)', () => {
 })
 
 /**
- * index.ts 在模块顶层就 main()，import 会真的执行 CLI —— 所以读源码而非 import。
+ * 分发与 HELP 在 `run.ts`(index.ts 只剩进程入口) —— 仍然读源码而非 import:
+ * import 会在模块顶层真的跑 CLI 逻辑。
  *
  * 读源码是刻意的：断言一份手抄的 HELP 副本包含哪些命令，等于测试自己写的字面量,
- * 加了 case 忘了改帮助时照样是绿的。这里比对的是 index.ts 里**实际**的两份清单。
+ * 加了 case 忘了改帮助时照样是绿的。这里比对的是 run.ts 里**实际**的两份清单。
  */
 describe('命令分发 · switch 分支与 HELP 清单不得漂移', () => {
-  const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8')
+  const source = readFileSync(new URL('./run.ts', import.meta.url), 'utf8')
 
   /** switch 里的子命令(排除 --version / -h 这类标志与 undefined 兜底) */
   function dispatchedCommands(): string[] {
@@ -125,7 +126,7 @@ describe('命令分发 · switch 分支与 HELP 清单不得漂移', () => {
 describe('--ci 取值清单不得漂移', () => {
   /**
    * 检查**每一处**清单式的 `--ci a|b|c`,而不是「文件里出现过完整清单就算过」——
-   * 后者已被反例证伪:index.ts 里 run-task 那行漏掉 real 时,run-issue 那行
+   * 后者已被反例证伪:HELP 里 run-task 那行漏掉 real 时,run-issue 那行
    * 仍带着完整清单,断言照样绿。
    */
   function ciFlagLists(src: string): string[] {
@@ -135,7 +136,7 @@ describe('--ci 取值清单不得漂移', () => {
   it('每处帮助文本里的 --ci 清单都与 CI_MODES 一致', () => {
     const expected = CI_MODES.join('|')
     expect(CI_MODES.length).toBeGreaterThan(1)
-    for (const file of ['./index.ts', './run-task.ts', './run-issue.ts', './poller.ts']) {
+    for (const file of ['./run.ts', './run-task.ts', './run-issue.ts', './poller.ts']) {
       const lists = ciFlagLists(readFileSync(new URL(file, import.meta.url), 'utf8'))
       expect(lists.length, `${file} 未列出 --ci 取值`).toBeGreaterThan(0)
       for (const list of lists) {
@@ -180,7 +181,7 @@ describe('--harness 取值清单不得漂移', () => {
   it('每处帮助文本里的 --harness 清单都与 HARNESS_IDS 一致', () => {
     const expected = HARNESS_IDS.join('|')
     expect(HARNESS_IDS.length).toBeGreaterThan(1)
-    for (const file of ['./index.ts', './run-task.ts', './run-issue.ts', './poller.ts']) {
+    for (const file of ['./run.ts', './run-task.ts', './run-issue.ts', './poller.ts']) {
       const lists = harnessFlagLists(readFileSync(new URL(file, import.meta.url), 'utf8'))
       expect(lists.length, `${file} 未列出 --harness 取值`).toBeGreaterThan(0)
       for (const list of lists) {

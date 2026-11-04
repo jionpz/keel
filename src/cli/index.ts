@@ -3,97 +3,15 @@
 /**
  * keel CLI 入口(issue #27)。
  *
- * 子命令:
- *   console                        只读 Web 控制台(默认 127.0.0.1:4321)
- *   timer-worker [--interval <ms>]  到期收割(单次/常驻)
- *   run-task <taskId> [--max-steps N] [--ci passed|failed|real] [--model <id>] [--harness omp|claude] [--wall-clock <秒>]
- *   status <taskId> [--events N]
- *   register-repo <remoteUrl> [--default-branch <name>] [--local-path <dir>] [--issue-label <name>]
- *   ingest-issue <issueUrl> [--label <name>] [--repo <uuid>]
- *   run-issue <issueUrl> [--label <name>] [--max-steps N] [--ci passed|failed|real] [--model <id>] [--harness omp|claude] [--wall-clock <秒>]
- *   poller [--interval <ms>] [--ci passed|failed|real] [--model <id>] [--harness omp|claude] [--wall-clock <秒>]
+ * 这个文件**只有入口职责**:读 `process.argv`、跑 `runCli`、把未捕获异常
+ * 变成退出码。分发与连接池收口在 `run.ts` —— 那里可以脱离进程被 import 测试。
+ *
+ * 子命令清单见 `run.ts` 的 HELP。
  */
 
-import { consoleMain } from './console.js'
-import { ingestIssueMain } from './ingest-issue.js'
-import { pollerMain } from './poller.js'
-import { registerRepoMain } from './register-repo.js'
-import { runIssueMain } from './run-issue.js'
-import { runTaskMain } from './run-task.js'
-import { statusMain } from './status.js'
-import { timerWorkerMain } from './timer-worker.js'
+import { runCli } from './run.js'
 
-const VERSION = '0.1.0'
-
-const HELP = `keel — AI Engineering Runtime CLI
-
-用法:
-  keel <command> [args]
-
-命令:
-  console                          只读 Web 控制台(默认 http://127.0.0.1:4321)
-  timer-worker [--interval <ms>]   到期收割 timer(默认单次;--interval 常驻)
-  run-task <taskId> [--max-steps N] [--ci passed|failed|real] [--model <id>] [--harness omp|claude] [--wall-clock <秒>]   驱动单 task 到终态
-  status <taskId> [--events N]     查 task / run / 事件摘要
-  register-repo <remoteUrl> [--default-branch <name>] [--local-path <dir>] [--issue-label <name>]   注册 repo；可绑定本地项目目录、配置扫描 label
-  ingest-issue <issueUrl> [--label <name>] [--repo <uuid>]   GitHub Issue → task
-  run-issue <issueUrl> [--label <name>] [--max-steps N] [--ci passed|failed|real] [--model <id>] [--harness omp|claude] [--wall-clock <秒>]   Issue → task → 驱动到终态
-  poller [--interval <ms>] [--ci passed|failed|real] [--model <id>] [--harness omp|claude] [--wall-clock <秒>]   常驻扫描各仓库 label 下的 open issue 并驱动
-
-选项:
-  --help, -h   显示帮助
-  --version    显示版本
-`
-
-function usage(): void {
-  console.log(HELP)
-}
-
-async function main(): Promise<void> {
-  const [command, ...rest] = process.argv.slice(2)
-
-  switch (command) {
-    case 'console':
-      await consoleMain(rest)
-      return
-    case 'timer-worker':
-      await timerWorkerMain(rest)
-      return
-    case 'run-task':
-      await runTaskMain(rest)
-      return
-    case 'status':
-      await statusMain(rest)
-      return
-    case 'register-repo':
-      await registerRepoMain(rest)
-      return
-    case 'ingest-issue':
-      await ingestIssueMain(rest)
-      return
-    case 'run-issue':
-      await runIssueMain(rest)
-      return
-    case 'poller':
-      await pollerMain(rest)
-      return
-    case '--version':
-    case '-v':
-      console.log(`keel ${VERSION}`)
-      return
-    case '--help':
-    case '-h':
-    case undefined:
-      usage()
-      return
-    default:
-      console.error(`未知命令: ${command}`)
-      usage()
-      process.exitCode = 2
-  }
-}
-
-main().catch((e) => {
+runCli(process.argv.slice(2)).catch((e) => {
   console.error(`keel: ${e instanceof Error ? e.message : String(e)}`)
   process.exitCode = 1
 })
