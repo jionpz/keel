@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/frontend/console-guidelines.md", "reason": "验收时对照：控制台仍只发 GET（除人工闸门写端点）、术语中文在前、时长走 fmtDurationMs、窄屏规则位置正确"}
+{"file": ".trellis/spec/backend/transition-effects.md", "reason": "逐个核对选项文案与实际副作用是否一致，避免页面承诺与转移表脱节"}

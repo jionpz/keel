@@ -33,9 +33,25 @@
 - `control_mode ≠ auto` 时不派发 —— 页面要把服务端返回的 `error` 原样显示出来，
   不要吞掉改写成「失败」。
 
-人工闸门的 UI 形态：详情页的 `.human-callout` 给**可点的按钮**（批准 / 驳回 / 返工 /
-提交澄清），按钮直接把请求打到上面的写端点；同一块里保留一行等价的 CLI 命令供复制
-（`.human-callout-cmd`），那是备用路径，不是唯一路径。
+人工闸门的 UI 形态：**决策页优先，按钮其次**。
+
+- `S-HUMAN_REVIEW` / `S-NEED_CLARIFICATION` 时详情页多一个 `decision` Tab，并且是默认落点
+  （`state.tabChosen` 为假时强制激活；用户亲手选过 Tab、或 hash 里带 `tab=` 就尊重用户）。
+  其它状态不注入这个 Tab。
+- 决策页的四块顺序固定：**为什么停在这里 → 证据 → 这次决定依赖的事实 → 选项**，澄清闸门把
+  中间两块换成「在问什么 / 不回答会怎样」。数据全部来自已在手的 `d`（runs / events /
+  artifacts / feedbacks / timers），**不新增接口、不新增表**；某块算不出来就整块不渲染，
+  不写占位文案。
+- 每个选项卡片写清**后果**（建分支并派发第几轮 / 回到方案讨论 / 进入终态），不可逆的那个
+  放最后并标「终态 · 不可恢复」。理由用卡片内联 `<textarea>`，必填项为空时按钮 `disabled`；
+  **不要用 `window.prompt` / `window.confirm`** —— 弹窗挡住了判断依据，也挡住了失败原因。
+- 提交成功 / 失败都写在**对应卡片内部**（`.option-msg`），不弹全局提示。
+- 选项文案是**承诺**：它与 `src/control/transition/table.ts` 的副作用一一对应
+  （T-014 / T-016 / T-015 / T-007）。改转移表就要改文案；`console.test.ts` 断言页面里的
+  选项 key 集合等于 `src/cli/decide.ts` 的 `DECISIONS`，别绕过它。
+- 概览 Tab 顶部保留一条窄入口 `.human-callout`：「停在人工评审 · 去决策页」+ 等价 CLI 命令；
+  **只在不在决策页时渲染**，决策页自己底部给等价命令（`.decision-cli`）。两侧都不放
+  与决策页重复的一排按钮。
 
 页面里给出的命令一律带 `pnpm ` 前缀（`pnpm keel …` / `pnpm run timeline -- …`）：
 `keel` 只是 `package.json` 的 `bin` 声明，仓库里没有 `node_modules/.bin/keel`，

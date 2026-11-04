@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/frontend/console-guidelines.md", "reason": "控制台形态纪律：单文件模板字符串、字符串拼接不用模板串、无 emoji、窄屏覆盖写在最后、写端点四道校验"}
+{"file": ".trellis/spec/backend/transition-effects.md", "reason": "人工闸门四个入口的副作用契约：approve 必注入 workspace 建分支、rework 回 brainstorm、answer 两段写 —— 决策页的选项文案必须与之一致"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "runs / events / artifacts / timers → 决策页 的跨层数据流检查，确认没有第三套事实口径"}

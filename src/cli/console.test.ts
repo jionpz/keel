@@ -16,6 +16,7 @@ import {
   type Row,
 } from './console.js'
 import { CONSOLE_TOKEN_PLACEHOLDER } from './console-page.js'
+import { DECISIONS } from './decide.js'
 
 const TASK_ID = '1d891a16-be91-4763-8333-38edd182a824'
 const TOKEN = 'test-token-0123456789abcdef'
@@ -199,6 +200,55 @@ describe('keel console', () => {
       expect(html).toContain("'answer'")
       expect(html).toContain('data-act=')
       expect(html).toContain("'x-keel-console'")
+    })
+  })
+
+  it('决策页：给出「为什么停 / 在批什么 / 每个选项的后果」，不是一排按钮', async () => {
+    await withServer({ query: fakeQuery({}), token: TOKEN }, async (base) => {
+      const html = await (await fetch(`${base}/`)).text()
+      // 四块骨架
+      expect(html).toContain('decision-page')
+      expect(html).toContain('为什么停在这里')
+      expect(html).toContain('这次决定依赖的事实')
+      expect(html).toContain('同阶段轨迹')
+      // 三种后果必须落到转移表的副作用上（T-014 / T-016 / T-015）
+      expect(html).toContain('并派发 develop 第 ')
+      expect(html).toContain('回到方案讨论')
+      expect(html).toContain('S-REJECTED')
+      expect(html).toContain('不可恢复')
+      // 澄清闸门：问什么 + 不回答会怎样
+      expect(html).toContain('在问什么')
+      expect(html).toContain('不回答会怎样')
+      expect(html).toContain('S-ABANDONED')
+    })
+  })
+
+  it('决策页不用 window.prompt / window.confirm 拿输入', async () => {
+    await withServer({ query: fakeQuery({}), token: TOKEN }, async (base) => {
+      const html = await (await fetch(`${base}/`)).text()
+      expect(html).not.toContain('window.prompt(')
+      expect(html).not.toContain('window.confirm(')
+      // 理由内联在卡片里，按 data-note-for 取值
+      expect(html).toContain('data-note-for=')
+    })
+  })
+
+  it('选项 key 与 decide.ts 的 DECISIONS 完全一致，改一处不会漏掉另一处', async () => {
+    await withServer({ query: fakeQuery({}), token: TOKEN }, async (base) => {
+      const html = await (await fetch(`${base}/`)).text()
+      const keys = [...html.matchAll(/key: '([a-z]+)',\s*\n\s*title:/g)].map((m) => m[1])
+      expect(new Set(keys)).toEqual(new Set(DECISIONS))
+    })
+  })
+
+  it('决策 Tab 只在闸门状态注入，且闸门状态默认落在它上面', async () => {
+    await withServer({ query: fakeQuery({}), token: TOKEN }, async (base) => {
+      const html = await (await fetch(`${base}/`)).text()
+      expect(html).toContain('isGateStatus')
+      expect(html).toContain("'S-HUMAN_REVIEW'")
+      expect(html).toContain("'S-NEED_CLARIFICATION'")
+      expect(html).toContain('data-tab="decision"')
+      expect(html).toContain("if (gate && !state.tabChosen) tab = 'decision'")
     })
   })
 

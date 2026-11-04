@@ -1180,12 +1180,6 @@ export const CONSOLE_HTML = `<!doctype html>
     font-weight: 400;
     color: var(--muted);
   }
-  .human-callout-actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
   .act-btn {
     appearance: none;
     border: 1px solid var(--line-strong);
@@ -1233,10 +1227,162 @@ export const CONSOLE_HTML = `<!doctype html>
     overflow-x: auto;
     min-width: 0;
   }
-  .human-callout-msg { font-size: 11.5px; color: var(--text-sec); }
-  .human-callout-msg:empty { display: none; }
-  .human-callout-msg.bad { color: var(--bad); }
-  .human-callout-msg.done { color: var(--done); }
+
+  /* ─── 人工闸门决策页 ───
+     只有「为什么停在这里」用闸门底色，其余靠发丝线分块，不堆卡片阴影。 */
+  .callout-link {
+    appearance: none;
+    border: 1px solid var(--line-strong);
+    background: var(--panel);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 3px 10px;
+    font-family: var(--sans);
+    font-size: 11.5px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .callout-link:hover { background: var(--panel-alt); border-color: var(--muted); }
+  .tab-btn.gate { color: var(--gate); }
+  .tab-btn.gate.active { color: var(--gate); border-color: var(--gate); }
+  .tab-link {
+    appearance: none;
+    border: 0;
+    background: none;
+    color: var(--accent);
+    font-family: var(--sans);
+    font-size: 11.5px;
+    cursor: pointer;
+    padding: 0 2px;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .decision-page { display: flex; flex-direction: column; }
+  .decision-why {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 14px 16px;
+    /* 页头已经有一条闸门色的告警条，这里改用左侧竖线，避免两条横幅叠在一起 */
+    border-left: 2px solid var(--gate);
+    border-bottom: 1px solid var(--line);
+  }
+  .decision-why-text { font-size: 14px; font-weight: 600; line-height: 1.5; color: var(--text); }
+  .decision-why-meta {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    flex-wrap: wrap;
+    font-size: 11.5px;
+    color: var(--text-sec);
+  }
+  .decision-block { padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  .decision-block:last-child { border-bottom: 0; }
+  .decision-block-title {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--muted);
+    margin-bottom: 10px;
+  }
+  .decision-evidence,
+  .decision-facts { display: flex; flex-direction: column; gap: 8px; }
+  .evidence-row { display: flex; align-items: baseline; gap: 12px; font-size: 12.5px; }
+  .evidence-key { flex: 0 0 80px; color: var(--muted); font-size: 11.5px; }
+  .evidence-val { min-width: 0; color: var(--text); }
+  .evidence-error {
+    font-size: 12px;
+    line-height: 1.55;
+    color: var(--text);
+    background: var(--bad-soft);
+    border-left: 2px solid var(--bad);
+    padding: 8px 10px;
+    border-radius: 0 4px 4px 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .evidence-note { font-size: 11.5px; line-height: 1.6; color: var(--text-sec); }
+  .attempt-strip { display: flex; gap: 6px; flex-wrap: wrap; }
+  .attempt-chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    border: 1px solid var(--line-strong);
+    border-radius: 6px;
+    padding: 2px 8px;
+    font-size: 11px;
+    color: var(--text-sec);
+  }
+  .attempt-chip b { color: var(--text); font-weight: 600; }
+  .attempt-chip.ok { border-color: rgba(48, 209, 88, 0.35); }
+  .attempt-chip.bad { border-color: rgba(215, 0, 21, 0.35); color: var(--bad); }
+  .attempt-chip.bad b { color: var(--bad); }
+
+  .decision-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  .decision-options.single { grid-template-columns: minmax(0, 1fr); max-width: 640px; }
+  .option-card {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    padding: 12px;
+    min-width: 0;
+  }
+  .option-card.busy { opacity: 0.7; }
+  .option-card.danger { border-color: rgba(215, 0, 21, 0.35); }
+  .option-title { font-size: 13px; font-weight: 600; color: var(--text); }
+  .option-terminal { font-size: 10.5px; font-weight: 600; color: var(--bad); }
+  .option-effect { font-size: 12px; line-height: 1.55; color: var(--text); }
+  .option-note { font-size: 11px; color: var(--muted); }
+  .option-card textarea {
+    width: 100%;
+    box-sizing: border-box;
+    resize: vertical;
+    border: 1px solid var(--line-strong);
+    border-radius: 6px;
+    background: var(--panel);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 12px;
+    line-height: 1.5;
+    padding: 6px 8px;
+    min-height: 52px;
+  }
+  .option-card textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .option-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: auto;
+  }
+  .option-msg { font-size: 11px; color: var(--text-sec); }
+  .option-msg:empty { display: none; }
+  .option-msg.bad { color: var(--bad); }
+  .option-msg.done { color: var(--done); }
+  .decision-history { display: flex; flex-direction: column; gap: 6px; }
+  .hd-row { display: flex; align-items: baseline; gap: 10px; font-size: 12px; }
+  .hd-note { color: var(--text-sec); }
+  .decision-subtitle { font-size: 11.5px; font-weight: 600; color: var(--muted); margin: 12px 0 6px; }
+  .question-list { margin: 0; padding-left: 18px; font-size: 12.5px; line-height: 1.6; }
+  .feedback-body {
+    font-size: 12.5px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    background: var(--code-bg);
+    border-radius: 6px;
+    padding: 10px 12px;
+    max-height: 220px;
+    overflow-y: auto;
+  }
+  .decision-note { font-size: 12px; color: var(--text-sec); }
+  .decision-cli {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
 
   .cockpit-title {
     font-size: 17px;
@@ -2018,6 +2164,9 @@ export const CONSOLE_HTML = `<!doctype html>
     .pipeline .arrow { display: none; }
     .pipeline .step { min-width: 64px; padding: 7px 6px 9px; }
     .pipeline .step-name { font-size: 11px; }
+    /* 决策卡在窄屏纵向排列：先读后果，再写理由 */
+    .decision-options { grid-template-columns: minmax(0, 1fr); }
+    .evidence-key { flex-basis: 64px; }
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -2147,6 +2296,8 @@ export const CONSOLE_HTML = `<!doctype html>
     selectedId: null,
     detail: null,
     activeTab: 'overview',
+    // 用户是否亲手选过 Tab：没选过时，闸门状态默认落在决策页；选过就尊重用户
+    tabChosen: false,
     searchQuery: '',
     statusCat: 'all',
     eventCat: 'all',
@@ -2200,8 +2351,9 @@ export const CONSOLE_HTML = `<!doctype html>
       if (k === 'task' && v) { state.selectedId = v; hasTask = true; }
       if (k === 'mode' && (v === 'tasks' || v === 'projects' || v === 'overview')) explicitMode = v;
       if (k === 'repo' && v) state.selectedRepo = v;
-      if (k === 'tab' && (v === 'overview' || v === 'runs' || v === 'diff' || v === 'timeline')) {
+      if (k === 'tab' && (v === 'overview' || v === 'runs' || v === 'diff' || v === 'timeline' || v === 'decision')) {
         state.activeTab = v;
+        state.tabChosen = true;
       }
     }
     // 只有 task 键的链接回落到任务模式，否则从项目模式点任务会两边都不对
@@ -3349,7 +3501,7 @@ export const CONSOLE_HTML = `<!doctype html>
     for (var i = 0; i < els.length; i++) {
       var since = new Date(els[i].getAttribute('data-since')).getTime();
       if (isNaN(since)) continue;
-      var target = els[i].querySelector('.step-meta') || els[i].querySelector('.branch-dwell');
+      var target = els[i].querySelector('.step-meta') || els[i].querySelector('.branch-dwell') || els[i].querySelector('.decision-dwell');
       if (!target) continue;
       var prefix = target.getAttribute('data-prefix') || '';
       target.textContent = prefix + fmtDurationMs(now - since);
@@ -3430,6 +3582,382 @@ export const CONSOLE_HTML = `<!doctype html>
    * 一句话现状：现在在哪、在等什么、下一步能做什么。
    * 全部由确定性数据推导，不调用模型、不写死单条任务的文案。
    */
+  // ─── 人工闸门：决策页 ───
+  //
+  // 决策页只重排已经在手的 runs / events / artifacts / timers，不发新请求。
+  // 每一块算不出数据就整块不渲染 —— 占位文案会让人以为系统知道得比实际多。
+  // 选项的「会发生什么」是文案，但必须与 src/control/transition/table.ts 的副作用一致；
+  // 改表时同步改 DECISION_OPTIONS（console.test.ts 断言它的 key 集合等于 decide.ts 的 DECISIONS）。
+
+  var DECISION_LABELS = {
+    HumanApproved: '批准',
+    HumanRejected: '驳回',
+    HumanRequestedRework: '要求返工'
+  };
+
+  function isGateStatus(status) {
+    return status === 'S-HUMAN_REVIEW' || status === 'S-NEED_CLARIFICATION';
+  }
+
+  function sumRunCost(runs) {
+    var total = 0;
+    for (var i = 0; i < (runs || []).length; i++) total += Number(runs[i].cost_usd) || 0;
+    return total;
+  }
+
+  function latestArtifactOfKind(d, kind, stage) {
+    var groups = getLatestArtifacts(d.artifacts || []);
+    for (var i = 0; i < groups.length; i++) {
+      var a = groups[i].latest;
+      if (a.kind !== kind) continue;
+      if (stage && a.key !== stage && (!a.body || a.body.stage !== stage)) continue;
+      return a;
+    }
+    return null;
+  }
+
+  /** 未决问题：progress 的 unresolved_questions 与 brainstorm 的 open_questions，有才返回 */
+  function collectOpenQuestions(d) {
+    var groups = getLatestArtifacts(d.artifacts || []);
+    var out = [];
+    for (var i = 0; i < groups.length; i++) {
+      var body = groups[i].latest.body || {};
+      var uq = body.unresolved_questions;
+      if (Array.isArray(uq)) {
+        for (var a = 0; a < uq.length; a++) if (uq[a]) out.push(String(uq[a]));
+      }
+      var oq = body.open_questions;
+      if (Array.isArray(oq)) {
+        for (var b = 0; b < oq.length; b++) if (oq[b] && oq[b].text) out.push(String(oq[b].text));
+      }
+    }
+    return out;
+  }
+
+  /** 触发升级的那次 Run：最后一条失败 / 超时 / 带 error_kind 的 */
+  function findTriggerRun(runs) {
+    for (var i = (runs || []).length - 1; i >= 0; i--) {
+      var r = runs[i];
+      if (r.status === 'FAILED' || r.status === 'TIMEOUT' || r.error_kind) return r;
+    }
+    return null;
+  }
+
+  /** 同一阶段的全部 attempt（升序）—— 「再试一次」是否已被试过，由它回答 */
+  function attemptTrail(runs, stage) {
+    var out = [];
+    for (var i = 0; i < (runs || []).length; i++) {
+      if (runs[i].stage === stage) out.push(runs[i]);
+    }
+    out.sort(function (a, b) { return (Number(a.attempt) || 0) - (Number(b.attempt) || 0); });
+    return out;
+  }
+
+  function renderDecisionWhy(d) {
+    var t = d.task || {};
+    var traj = analyzeTrajectory(t, d.events || []);
+    var lastSev = traj.lastStatusEvent ? (traj.lastStatusEvent.payload || {}) : {};
+    var cause = '';
+    if (t.status === 'S-NEED_CLARIFICATION') {
+      // 澄清闸门的原因只来自 PM 的结论：旧 Run 的失败细节在这里会把人带偏
+      var pm = latestArtifactOfKind(d, 'stage_outcome', 'pm');
+      var pmReason = pm && pm.body && pm.body.reason ? String(pm.body.reason) : '';
+      cause = pmReason
+        ? 'PM 判定需求不够明确：' + pmReason
+        : 'PM 判定需求不够明确（verdict=unclear），需要你补充信息后才能继续。';
+    } else {
+      cause = findGateOrFailureReason(d, lastSev) || '任务停在人工评审，等待一次裁决。';
+    }
+    var dwell = '';
+    if (traj.currentSince) {
+      dwell = '<span data-since="' + esc(traj.currentSince) + '">' +
+        '<span class="decision-dwell" data-prefix="已停留 ">已停留 ' +
+        esc(fmtDurationMs(Date.now() - new Date(traj.currentSince).getTime())) + '</span></span>';
+    }
+    var spent = sumRunCost(d.runs);
+    var budget = t.budget_usd == null ? null : Number(t.budget_usd);
+    var budgetText = budget ? '已花 ' + fmtCost(spent) + ' / 预算 ' + fmtCost(budget) : '已花 ' + fmtCost(spent);
+
+    return '<div class="decision-why">' +
+      '<div class="decision-block-title">为什么停在这里</div>' +
+      '<div class="decision-why-text">' + esc(cause) + '</div>' +
+      '<div class="decision-why-meta">' +
+        '<span>' + esc(statusLabel(t.status) || t.status) + '</span>' +
+        '<span class="mono">' + esc(t.status) + '</span>' +
+        dwell +
+        '<span>' + esc(budgetText) + '</span>' +
+      '</div>' +
+    '</div>';
+  }
+
+  function renderDecisionEvidence(d) {
+    var runs = d.runs || [];
+    var trigger = findTriggerRun(runs);
+    if (!trigger) return '';
+
+    var attempts = attemptTrail(runs, trigger.stage);
+    var trailHtml = '';
+    if (attempts.length > 1) {
+      var chips = '';
+      for (var i = 0; i < attempts.length; i++) {
+        var a = attempts[i];
+        var bad = a.status === 'FAILED' || a.status === 'TIMEOUT' || a.error_kind;
+        var ok = a.status === 'SUCCEEDED';
+        chips += '<span class="attempt-chip' + (bad ? ' bad' : ok ? ' ok' : '') + '">' +
+          '<b>#' + esc(a.attempt) + '</b>' +
+          '<span>' + esc(a.error_kind || a.status) + '</span>' +
+          '<span class="muted">' + esc(calcDuration(a.started_at, a.ended_at)) + '</span>' +
+        '</span>';
+      }
+      trailHtml = '<div class="evidence-row">' +
+          '<span class="evidence-key">同阶段轨迹</span>' +
+          '<span class="attempt-strip">' + chips + '</span>' +
+        '</div>' +
+        '<div class="evidence-note">该阶段已试 ' + attempts.length + ' 轮，最后一轮 ' +
+          esc(trigger.status) + (trigger.error_kind ? '（' + esc(trigger.error_kind) + '）' : '') +
+          ' —— 重试额度用尽才升级人工，所以「再跑一次」不在选项里。</div>';
+    }
+
+    return '<div class="decision-block">' +
+      '<div class="decision-block-title">证据</div>' +
+      '<div class="decision-evidence">' +
+        '<div class="evidence-row">' +
+          '<span class="evidence-key">触发</span>' +
+          '<span class="evidence-val">Run <b>' + esc(trigger.stage) + ' #' + esc(trigger.attempt) + '</b> · ' +
+            esc(trigger.status) + (trigger.error_kind ? ' · <code>' + esc(trigger.error_kind) + '</code>' : '') +
+            ' · ' + esc(calcDuration(trigger.started_at, trigger.ended_at)) +
+          '</span>' +
+        '</div>' +
+        (trigger.error_detail
+          ? '<div class="evidence-row"><span class="evidence-key">错误</span>' +
+            '<span class="evidence-error">' + esc(trigger.error_detail) + '</span></div>'
+          : '') +
+        trailHtml +
+      '</div>' +
+    '</div>';
+  }
+
+  function renderDecisionFacts(d) {
+    var t = d.task || {};
+    var rows = '';
+
+    if (t.work_branch) {
+      rows += '<div class="evidence-row">' +
+        '<span class="evidence-key">工作分支</span>' +
+        '<span class="evidence-val mono">' + esc(t.work_branch) +
+          (t.base_branch ? ' → ' + esc(t.base_branch) : '') + '</span>' +
+      '</div>';
+    }
+
+    var rfc = latestArtifactOfKind(d, 'rfc');
+    if (rfc && rfc.body) {
+      var title = rfc.body.title || rfc.body.summary || '';
+      rows += '<div class="evidence-row">' +
+        '<span class="evidence-key">方案</span>' +
+        '<span class="evidence-val">RFC v' + esc(rfc.version) +
+          (title ? '《' + esc(String(title).slice(0, 80)) + '》' : '') +
+          ' <button type="button" class="tab-link" data-goto="overview">查看全文</button></span>' +
+      '</div>';
+    }
+
+    var diffEvents = extractDiffEvents(d.events || []);
+    if (diffEvents.length > 0) {
+      var lastDiff = diffEvents[diffEvents.length - 1].payload || {};
+      var n = Array.isArray(lastDiff.files_changed) ? lastDiff.files_changed.length : parseUnifiedDiff(lastDiff.patch || '').length;
+      rows += '<div class="evidence-row">' +
+        '<span class="evidence-key">变更规模</span>' +
+        '<span class="evidence-val">' + esc(n) + ' 个文件 <button type="button" class="tab-link" data-goto="diff">看 diff</button></span>' +
+      '</div>';
+    }
+
+    if (t.risk || t.complexity) {
+      rows += '<div class="evidence-row">' +
+        '<span class="evidence-key">风险 / 复杂度</span>' +
+        '<span class="evidence-val">' + esc(t.risk || '—') + ' / ' + esc(t.complexity || '—') + '</span>' +
+      '</div>';
+    }
+
+    if (!rows) return '';
+    return '<div class="decision-block">' +
+      '<div class="decision-block-title">这次决定依赖的事实</div>' +
+      '<div class="decision-facts">' + rows + '</div>' +
+    '</div>';
+  }
+
+  function renderDecisionOptions(d) {
+    var t = d.task || {};
+    var runs = d.runs || [];
+    var nextAttempt = 1;
+    for (var i = 0; i < runs.length; i++) if (runs[i].stage === 'develop') nextAttempt++;
+    var branch = t.work_branch || '工作分支';
+
+    var options = [
+      {
+        key: 'approve',
+        title: '批准',
+        effect: '创建分支 ' + branch + ' 并派发 develop 第 ' + nextAttempt + ' 轮开发。',
+        note: '理由可选，写入决策记录。',
+        required: false,
+        terminal: false,
+        cta: '批准'
+      },
+      {
+        key: 'rework',
+        title: '返工',
+        effect: '回到方案讨论，RFC 将被重写，再从方案走一遍评审。',
+        note: '理由必填 —— 它会成为返工的唯一输入。',
+        required: true,
+        terminal: false,
+        cta: '要求返工'
+      },
+      {
+        key: 'reject',
+        title: '驳回',
+        effect: '任务进入终态 S-REJECTED，不再有后续执行。',
+        note: '理由必填。',
+        required: true,
+        terminal: true,
+        cta: '驳回'
+      }
+    ];
+
+    var html = '';
+    for (var j = 0; j < options.length; j++) {
+      var o = options[j];
+      html += '<div class="option-card' + (o.terminal ? ' danger' : '') + '" data-option="' + o.key + '">' +
+        '<div class="option-title">' + esc(o.title) + '</div>' +
+        (o.terminal ? '<div class="option-terminal">终态 · 不可恢复</div>' : '') +
+        '<div class="option-effect">' + esc(o.effect) + '</div>' +
+        '<div class="option-note">' + esc(o.note) + '</div>' +
+        '<textarea data-note-for="' + o.key + '" rows="2" placeholder="' +
+          (o.required ? '填写理由（必填）' : '填写理由（可选）') + '"></textarea>' +
+        '<div class="option-actions">' +
+          '<button type="button" class="act-btn" data-act="' + o.key + '" data-task="' + esc(t.id) + '"' +
+            (o.required ? ' disabled' : '') + '>' + esc(o.cta) + '</button>' +
+          '<span class="option-msg" data-msg-for="' + o.key + '"></span>' +
+        '</div>' +
+      '</div>';
+    }
+
+    return '<div class="decision-block">' +
+      '<div class="decision-block-title">选项</div>' +
+      '<div class="decision-options">' + html + '</div>' +
+    '</div>';
+  }
+
+  function renderDecisionHistory(d) {
+    var events = d.events || [];
+    var rows = '';
+    for (var i = events.length - 1; i >= 0; i--) {
+      var ev = events[i];
+      if (ev.type !== 'HumanDecision') continue;
+      var p = ev.payload || {};
+      rows += '<div class="hd-row">' +
+        '<span class="muted">' + esc(fmtShortTime(ev.occurred_at)) + '</span>' +
+        '<span><b>' + esc(DECISION_LABELS[p.decision] || p.decision || '裁决') + '</b></span>' +
+        (p.note ? '<span class="hd-note">' + esc(p.note) + '</span>' : '<span class="muted">未填理由</span>') +
+      '</div>';
+    }
+    if (!rows) return '';
+    return '<div class="decision-block">' +
+      '<div class="decision-block-title">已发生的裁决</div>' +
+      '<div class="decision-history">' + rows + '</div>' +
+    '</div>';
+  }
+
+  function renderClarificationBlock(d) {
+    var t = d.task || {};
+    var questions = collectOpenQuestions(d);
+    var feedbacks = d.feedbacks || [];
+    var origin = feedbacks.length > 0 && feedbacks[0].body ? String(feedbacks[0].body) : '';
+
+    // 停下理由已经在第一块写过，这里只回答「在问什么、原始需求是什么」
+    var body = '';
+    if (questions.length > 0) {
+      body += '<div class="decision-subtitle">AI 提出的未决问题</div><ul class="question-list">';
+      for (var i = 0; i < questions.length; i++) {
+        body += '<li>' + esc(questions[i]) + '</li>';
+      }
+      body += '</ul>';
+    }
+    if (origin) {
+      body += '<div class="decision-subtitle">原始需求</div>' +
+        '<div class="feedback-body">' + esc(origin) + '</div>';
+    }
+
+    var html = '';
+    if (body) {
+      html += '<div class="decision-block">' +
+        '<div class="decision-block-title">在问什么</div>' +
+        body +
+      '</div>';
+    }
+
+    // 超时：clarification_ttl 的 PENDING timer
+    var timer = null;
+    var timers = d.timers || [];
+    for (var j = 0; j < timers.length; j++) {
+      if (timers[j].kind === 'clarification_ttl' && String(timers[j].state).toLowerCase() === 'pending') { timer = timers[j]; break; }
+    }
+    if (timer && timer.due_at) {
+      var left = new Date(timer.due_at).getTime() - Date.now();
+      var leftText = left > 0 ? fmtDurationMs(left) : '已到期，等待收割';
+      html += '<div class="decision-block">' +
+        '<div class="decision-block-title">不回答会怎样</div>' +
+        '<div class="evidence-row"><span class="evidence-key">剩余</span>' +
+          '<span class="evidence-val">' + esc(leftText) + ' 后超时，任务自动进入 S-ABANDONED（终态）</span></div>' +
+      '</div>';
+    }
+
+    html += '<div class="decision-block">' +
+      '<div class="decision-block-title">选项</div>' +
+      '<div class="decision-options single">' +
+        '<div class="option-card" data-option="answer">' +
+          '<div class="option-title">补充澄清</div>' +
+          '<div class="option-effect">写一条 feedback 关联到任务，取消澄清计时，重新回到 PM 分析。</div>' +
+          '<textarea data-note-for="answer" rows="4" placeholder="补充的信息（必填）"></textarea>' +
+          '<div class="option-actions">' +
+            '<button type="button" class="act-btn" data-act="answer" data-task="' + esc(t.id) + '" disabled>提交澄清</button>' +
+            '<span class="option-msg" data-msg-for="answer"></span>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+
+    return html;
+  }
+
+  /** 页面上的按钮是主路径，CLI 是同一套预检的备用路径；两条都要能原样跑起来 */
+  function renderDecisionCli(d) {
+    var t = d.task || {};
+    var cmd = t.status === 'S-NEED_CLARIFICATION'
+      ? 'pnpm keel answer ' + t.id + ' --text "…"'
+      : 'pnpm keel decide ' + t.id + ' approve|reject|rework';
+    return '<div class="decision-block decision-cli">' +
+      '<span class="evidence-key">等价命令</span>' +
+      '<code class="human-callout-cmd">' + esc(cmd) + '</code>' +
+      '<button type="button" class="copy-btn" data-copy="' + esc(cmd) + '" title="复制命令">复制</button>' +
+    '</div>';
+  }
+
+  function renderDecisionTab(d) {
+    var t = d.task || {};
+    var html = '<div class="decision-page">';
+    html += renderDecisionWhy(d);
+    if (t.status === 'S-NEED_CLARIFICATION') {
+      html += renderClarificationBlock(d);
+    } else {
+      html += renderDecisionEvidence(d);
+      html += renderDecisionFacts(d);
+      html += renderDecisionOptions(d);
+    }
+    html += renderDecisionHistory(d);
+    html += renderDecisionCli(d);
+    html += '</div>';
+    return html;
+  }
+
+
   function renderStatusSummary(d) {
     var t = d.task;
     var status = t.status;
@@ -3481,39 +4009,23 @@ export const CONSOLE_HTML = `<!doctype html>
    */
   function renderHumanCallout(t) {
     var status = t.status;
-    if (status !== 'S-HUMAN_REVIEW' && status !== 'S-NEED_CLARIFICATION') return '';
+    if (!isGateStatus(status)) return '';
+    // 决策页自己会放等价命令，页头不再重复一条只剩命令的孤条
+    if (state.activeTab === 'decision') return '';
 
-    var actions = [];
-    var cliCmd = '';
-    var head = '';
-    var hint = '';
+    var head = status === 'S-HUMAN_REVIEW'
+      ? '停在人工评审，等一次裁决'
+      : '在等澄清答复，超时会自动放弃';
+    var cliCmd = status === 'S-HUMAN_REVIEW'
+      ? 'pnpm keel decide ' + t.id + ' approve|reject|rework'
+      : 'pnpm keel answer ' + t.id + ' --text "…"';
 
-    if (status === 'S-HUMAN_REVIEW') {
-      actions.push(['approve', '批准']);
-      actions.push(['reject', '驳回']);
-      actions.push(['rework', '返工']);
-      cliCmd = 'pnpm keel decide ' + t.id + ' approve|reject|rework';
-      head = '需要人工：任务停在人工评审，等一次裁决';
-      hint = '批准会创建开发分支并派发下一轮；驳回是终态';
-    } else {
-      actions.push(['answer', '提交澄清']);
-      cliCmd = 'pnpm keel answer ' + t.id + ' --text "…"';
-      head = '需要人工：任务在等澄清答复，超时会自动放弃';
-      hint = '提交后写一条 feedback 并回到 PM 分析';
-    }
-
-    var buttons = '';
-    for (var i = 0; i < actions.length; i++) {
-      buttons += '<button type="button" class="act-btn" data-act="' + actions[i][0] +
-        '" data-task="' + esc(t.id) + '">' + esc(actions[i][1]) + '</button>';
-    }
-
+    // 这里只做入口，不重复放按钮 —— 点什么之前要先能读到为什么。
     return '<div class="human-callout">' +
       '<div class="human-callout-head">' + esc(head) +
-        '<span class="human-callout-hint">' + esc(hint) + '</span>' +
+        '<button type="button" class="callout-link" data-goto="decision">去决策页</button>' +
+        '<span class="human-callout-hint">为什么停在这里、证据、每个选项的后果都在那一页</span>' +
       '</div>' +
-      '<div class="human-callout-actions">' + buttons + '</div>' +
-      '<div class="human-callout-msg" id="human-callout-msg"></div>' +
       '<div class="human-callout-foot">等价命令：' +
         '<code class="human-callout-cmd">' + esc(cliCmd) + '</code>' +
         '<button type="button" class="copy-btn" data-copy="' + esc(cliCmd) + '" title="复制命令">复制</button>' +
@@ -4238,6 +4750,13 @@ export const CONSOLE_HTML = `<!doctype html>
       diffFileCount = Array.isArray(lastDiff.files_changed) ? lastDiff.files_changed.length : parseUnifiedDiff(lastDiff.patch || '').length;
     }
 
+    var gate = isGateStatus((d.task || {}).status);
+    var tab = state.activeTab;
+    // 闸门状态默认落在决策页，直到用户亲手选过 Tab；旧链接 tab=overview 等仍然优先
+    if (gate && !state.tabChosen) tab = 'decision';
+    if (!gate && tab === 'decision') tab = 'overview';
+    state.activeTab = tab;
+
     var html = renderCockpitHeader(d);
 
     html += '<div class="card">' +
@@ -4254,7 +4773,11 @@ export const CONSOLE_HTML = `<!doctype html>
     '</div>';
 
     var tab = state.activeTab;
+
     html += '<div class="tabs-bar" role="tablist">' +
+      (gate
+        ? '<button type="button" class="tab-btn gate' + (tab === 'decision' ? ' active' : '') + '" data-tab="decision">决策 <span class="tab-count">待你决定</span></button>'
+        : '') +
       '<button type="button" class="tab-btn' + (tab === 'overview' ? ' active' : '') + '" data-tab="overview">概览与方案 <span class="tab-count">' + (d.artifacts || []).length + '</span></button>' +
       '<button type="button" class="tab-btn' + (tab === 'runs' ? ' active' : '') + '" data-tab="runs">执行与上下文 <span class="tab-count">' + (d.runs || []).length + '</span></button>' +
       '<button type="button" class="tab-btn' + (tab === 'diff' ? ' active' : '') + '" data-tab="diff">代码变更 <span class="tab-count">' + diffFileCount + '</span></button>' +
@@ -4262,7 +4785,8 @@ export const CONSOLE_HTML = `<!doctype html>
     '</div>';
 
     html += '<div id="tab-content">';
-    if (tab === 'overview') html += renderOverviewTab(d);
+    if (tab === 'decision') html += renderDecisionTab(d);
+    else if (tab === 'overview') html += renderOverviewTab(d);
     else if (tab === 'runs') html += renderRunsTab(d);
     else if (tab === 'diff') html += renderDiffTab(d);
     else html += renderTimelineTab(d);
@@ -4334,6 +4858,8 @@ export const CONSOLE_HTML = `<!doctype html>
       state.detailSig = '';
       state.eventRunFilter = 'all';
       state.selectedDiffIdx = 0;
+      // 换了任务就该重新判断落点：闸门任务直接进决策页
+      state.tabChosen = false;
     }
     if (state.mode !== 'tasks') {
       setMode('tasks');
@@ -4420,20 +4946,49 @@ export const CONSOLE_HTML = `<!doctype html>
     return meta ? meta.getAttribute('content') || '' : '';
   }
 
-  function setCalloutMsg(kind, text) {
-    var el = document.getElementById('human-callout-msg');
+  function optionCard(act) {
+    var cards = document.querySelectorAll('.option-card');
+    for (var i = 0; i < cards.length; i++) {
+      if (cards[i].getAttribute('data-option') === act) return cards[i];
+    }
+    return null;
+  }
+
+  function setOptionMsg(act, kind, text) {
+    var el = document.querySelector('[data-msg-for="' + act + '"]');
     if (!el) return;
-    el.className = 'human-callout-msg' + (kind ? ' ' + kind : '');
+    el.className = 'option-msg' + (kind ? ' ' + kind : '');
     el.textContent = text;
+  }
+
+  /** 必填项为空时按钮禁用 —— 「点了才报错」不该是主路径 */
+  function syncOptionButtons() {
+    var cards = document.querySelectorAll('.option-card[data-option]');
+    for (var i = 0; i < cards.length; i++) {
+      var card = cards[i];
+      if (card.classList.contains('busy')) continue;
+      var key = card.getAttribute('data-option');
+      var box = card.querySelector('[data-note-for="' + key + '"]');
+      var btn = card.querySelector('.act-btn');
+      if (!box || !btn) continue;
+      btn.disabled = key !== 'approve' && String(box.value || '').trim() === '';
+    }
   }
 
   function lockActButtons(locked) {
     var buttons = document.querySelectorAll('.act-btn');
     for (var i = 0; i < buttons.length; i++) buttons[i].disabled = locked;
+    if (!locked) syncOptionButtons();
   }
 
-  function submitAction(taskId, path, payload) {
-    setCalloutMsg('', '提交中…');
+  /** 提交并把成功 / 失败写在**对应的那张卡里**，不弹窗、不写页面顶部 */
+  function submitAction(taskId, path, payload, act) {
+    var card = optionCard(act);
+    if (card) {
+      card.classList.add('busy');
+      card.setAttribute('aria-busy', 'true');
+    }
+    setOptionMsg(act, '', '提交中…');
     lockActButtons(true);
     fetch('/api/tasks/' + encodeURIComponent(taskId) + '/' + path, {
       method: 'POST',
@@ -4445,16 +5000,24 @@ export const CONSOLE_HTML = `<!doctype html>
       });
     }).then(function (r) {
       if (r.ok) {
-        setCalloutMsg('done', '已提交：' + r.data.from + ' → ' + r.data.to + '，正在刷新…');
+        setOptionMsg(act, 'done', '已提交：' + r.data.from + ' → ' + r.data.to + '，正在刷新…');
         state.detailSig = '';
         setTimeout(function () { refreshAll(true); }, 600);
         return;
       }
+      if (card) {
+        card.classList.remove('busy');
+        card.removeAttribute('aria-busy');
+      }
       lockActButtons(false);
-      setCalloutMsg('bad', (r.data && r.data.error) || ('提交失败（HTTP ' + r.data + '）'));
+      setOptionMsg(act, 'bad', (r.data && r.data.error) || '提交失败');
     }).catch(function (err) {
+      if (card) {
+        card.classList.remove('busy');
+        card.removeAttribute('aria-busy');
+      }
       lockActButtons(false);
-      setCalloutMsg('bad', '提交失败：' + err.message);
+      setOptionMsg(act, 'bad', '提交失败：' + err.message);
     });
   }
 
@@ -4462,29 +5025,19 @@ export const CONSOLE_HTML = `<!doctype html>
     var act = btn.getAttribute('data-act');
     var taskId = btn.getAttribute('data-task') || state.selectedId;
     if (!taskId) return;
-    var note;
-    if (act === 'approve') {
-      if (!window.confirm('批准 ' + shortId(taskId) + '？会创建开发分支并派发下一轮。')) return;
-      submitAction(taskId, 'decide', { decision: 'approve' });
-      return;
-    }
-    if (act === 'reject') {
-      note = window.prompt('驳回理由（写入决策记录，可留空）：', '');
-      if (note === null) return;
-      submitAction(taskId, 'decide', { decision: 'reject', note: note });
-      return;
-    }
-    if (act === 'rework') {
-      note = window.prompt('返工理由（写入决策记录，可留空）：', '');
-      if (note === null) return;
-      submitAction(taskId, 'decide', { decision: 'rework', note: note });
-      return;
-    }
+    var box = document.querySelector('[data-note-for="' + act + '"]');
+    var note = box ? String(box.value || '').trim() : '';
+
     if (act === 'answer') {
-      var text = window.prompt('补充的澄清内容：', '');
-      if (text === null || text.trim() === '') return;
-      submitAction(taskId, 'answer', { text: text });
+      if (!note) return;
+      submitAction(taskId, 'answer', { text: note }, act);
+      return;
     }
+    if (act !== 'approve' && act !== 'reject' && act !== 'rework') return;
+    if (act !== 'approve' && !note) return;
+    var payload = { decision: act };
+    if (note) payload.note = note;
+    submitAction(taskId, 'decide', payload, act);
   }
 
   // ─── Event Listeners ───
@@ -4580,11 +5133,28 @@ export const CONSOLE_HTML = `<!doctype html>
     }
   }, true);
 
+  detailRoot.addEventListener('input', function (ev) {
+    if (ev.target.closest && ev.target.closest('textarea[data-note-for]')) syncOptionButtons();
+  });
+
   detailRoot.addEventListener('click', function (ev) {
     var tabBtn = ev.target.closest('.tab-btn[data-tab]');
     if (tabBtn && state.detail) {
       state.activeTab = tabBtn.getAttribute('data-tab') || 'overview';
+      state.tabChosen = true;
       renderDetail(state.detail, false);
+      return;
+    }
+
+    // 概览顶部的窄入口 / 决策页里的事实跳转
+    var gotoBtn = ev.target.closest('[data-goto]');
+    if (gotoBtn && state.detail) {
+      var target = gotoBtn.getAttribute('data-goto');
+      if (target === 'decision' || target === 'overview' || target === 'runs' || target === 'diff' || target === 'timeline') {
+        state.activeTab = target;
+        state.tabChosen = true;
+        renderDetail(state.detail, false);
+      }
       return;
     }
 
