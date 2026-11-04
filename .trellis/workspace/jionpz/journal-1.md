@@ -444,3 +444,25 @@ console 完成可读性/项目性改造：中文状态徽章、一句话现状�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 8: git 传输认证：私有 https remote 注入凭据
+
+**Date**: 2026-11-04
+**Task**: git 传输认证：私有 https remote 注入凭据
+**Branch**: `main`
+
+### Summary
+
+新增 github-auth.ts（token 读取/authEnvFor/gitAuthSecrets/redactSecrets）与 github-remote.ts（host 解析下沉，避免循环依赖），clone/fetch/push 改用 GIT_CONFIG_* 单次子进程注入，token 不进 argv/错误 detail；复核发现非默认端口下 extraheader 不匹配的真实缺口并修复（authority 取 URL.host），补齐脱敏与合并断言（github-auth 15、git-workspace 33），pnpm run check 全绿；spec 记录契约与已知边界，任务已归档。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `48b0dff` | (see git log) |
+| `f2c634f` | (see git log) |
+
+### Status
+
+[OK] **Completed**
