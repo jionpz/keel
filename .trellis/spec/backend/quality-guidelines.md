@@ -101,6 +101,7 @@ lint → typecheck → boundaries → check:generated → check:transitions → 
 | `KEEL_HARNESS` | 选择 Adapter(`omp` / `claude`;CLI `--harness` 优先) | 可选；缺省 `omp`；非法/空白拒绝、不静默回退 |
 | `ANTHROPIC_API_KEY` | Claude Code `--bare` 认证(不读 OAuth / 钥匙串) | `--harness claude` 与 `claude-code-e2e` 必须 |
 | `KEEL_GITHUB_TOKEN`(优先)/ `GITHUB_TOKEN` | GitHub REST:PR 创建 + CI 回读(`GitHubProvider`) | 见下「token 能力边界」 |
+| `KEEL_GITHUB_API_ROOT` | 覆盖 GitHub API 根(GHES 部署常用 `https://<host>/api/v3`) | 可选；空白或非 http(s) 直接报错,不静默回退公网。见 `github-provider.md` |
 | `KEEL_TEST_REMOTE_REPO` | 验收用真实远程仓库(如 `https://github.com/jionpz/keel`) | 对上述 token 可写 |
 | (git push 鉴权) | 不走上面的 token,走 git credential helper | `gh auth setup-git` |
 
