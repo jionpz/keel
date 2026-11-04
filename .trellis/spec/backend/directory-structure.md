@@ -17,6 +17,7 @@ src/
 │   └── policy/
 ├── fact/           # 唯一事实来源。只由 Control Plane 写入
 ├── execution/      # 干活。⛔ 不得 import src/fact
+├── ingress/        # 接入层：poller 等外部触发。只做扫描 + 组合，不参与状态机决策
 ├── contracts/      # 接口定义。⛔ 只能依赖 src/generated 与 src/shared
 ├── generated/      # 由 docs/schemas/ 生成 —— ⛔ 禁止手改
 └── shared/         # 跨平面共享的 ID 与类型
