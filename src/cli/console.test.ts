@@ -73,8 +73,10 @@ describe('keel console', () => {
       expect(html).toContain("fetchJSON('/api/stats')")
       // 人工闸门的提示条：控制台只给命令，不发写请求
       expect(html).toContain('human-callout')
-      expect(html).toContain('keel decide ')
-      expect(html).toContain('keel answer ')
+      // 命令必须带上 `pnpm ` 前缀 —— 仓库里没有全局 `keel` 可执行文件，
+      // 只写 `keel decide` 会让人复制到终端后得到 command not found
+      expect(html).toContain('pnpm keel decide ')
+      expect(html).toContain('pnpm keel answer ')
     })
   })
 

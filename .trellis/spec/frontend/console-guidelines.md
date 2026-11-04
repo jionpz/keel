@@ -15,9 +15,13 @@
 - 数据库访问只走 `asRole('keel_control')`，并且只发 `SELECT`。
 - 只绑定 `127.0.0.1`，不做鉴权 —— 因此**不要**把它暴露到公网。
 - 需要人工介入时也不开写路径：详情页的 `.human-callout` 只**把命令拼好给复制**
-  （`keel decide … approve|reject|rework`、`keel answer … --text`），
+  （`pnpm keel decide … approve|reject|rework`、`pnpm keel answer … --text`），
   由人在本机终端执行。无鉴权本地页面 + 写端点 = 谁来点一下都能改状态，
   这不是「顺手补个按钮」能承担的信任模型。
+- 页面里给出的命令一律带 `pnpm ` 前缀（`pnpm keel …` / `pnpm run timeline -- …`）：
+  `keel` 只是 `package.json` 的 `bin` 声明，仓库里没有 `node_modules/.bin/keel`，
+  全局也没装。只写 `keel decide` 会让人复制到终端后撞 `command not found` ——
+  **页面上写什么，就得能原样跑起来**。
 
 ## 数据口径必须与 CLI 一致
 

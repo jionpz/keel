@@ -12,10 +12,10 @@
 
 | 命令 | 事件 | 副作用要点 |
 |---|---|---|
-| `keel decide … approve` | `HumanApproved` | `CreateBranch` **必须注入 workspace**，否则只记意图、分支并不存在 |
-| `keel decide … reject` | `HumanRejected` | 无副作用 |
-| `keel decide … rework` | `HumanRequestedRework` | `nextRun('brainstorm')` |
-| `keel answer … --text` | `ClarificationReceived` + `feedbackId` | 真写 `task_feedback`；取消澄清 timer；`nextRun('pm')` |
+| `pnpm keel decide … approve` | `HumanApproved` | `CreateBranch` **必须注入 workspace**，否则只记意图、分支并不存在 |
+| `pnpm keel decide … reject` | `HumanRejected` | 无副作用 |
+| `pnpm keel decide … rework` | `HumanRequestedRework` | `nextRun('brainstorm')` |
+| `pnpm keel answer … --text` | `ClarificationReceived` + `feedbackId` | 真写 `task_feedback`；取消澄清 timer；`nextRun('pm')` |
 
 三条纪律：
 

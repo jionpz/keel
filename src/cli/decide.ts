@@ -183,7 +183,7 @@ export async function decideTask(
     return err(
       makeError(
         'CONFLICT',
-        `转移未发生：${advanced.value.reason ?? '状态在预检之后被并发改变'}。请重新执行 keel status ${taskId}。`,
+        `转移未发生：${advanced.value.reason ?? '状态在预检之后被并发改变'}。请重新执行 pnpm keel status ${taskId}。`,
       ),
     )
   }
@@ -274,17 +274,17 @@ function describeStatus(taskId: string, snapshot: TaskSnapshot): string {
     `  control_mode：${snapshot.control_mode}`,
   ]
   if (snapshot.status === HUMAN_REVIEW) {
-    lines.push(`  可用：keel decide ${taskId} approve|reject|rework [--note <text>]`)
+    lines.push(`  可用：pnpm keel decide ${taskId} approve|reject|rework [--note <text>]`)
   } else if (snapshot.status === NEED_CLARIFICATION) {
-    lines.push(`  可用：keel answer ${taskId} --text "..."`)
+    lines.push(`  可用：pnpm keel answer ${taskId} --text "..."`)
   } else {
-    lines.push(`  查看：keel status ${taskId}`)
+    lines.push(`  查看：pnpm keel status ${taskId}`)
   }
   return lines.join('\n')
 }
 
 function usageDecide(): string {
-  return `用法: keel decide <taskId> <approve|reject|rework> [--note <text>]
+  return `用法: pnpm keel decide <taskId> <approve|reject|rework> [--note <text>]
 
 人工裁决 S-HUMAN_REVIEW 状态的任务：
   approve   T-014 建工作分支并派发 develop  → S-DEVELOPING
@@ -337,12 +337,12 @@ export async function decideMain(argv: readonly string[]): Promise<void> {
   if (v.to === 'S-REJECTED') {
     console.log('任务已驳回收尾，无需后续命令。')
   } else {
-    console.log(`下一步：keel run-task ${taskId}`)
+    console.log(`下一步：pnpm keel run-task ${taskId}`)
   }
 }
 
 function usageAnswer(): string {
-  return `用法: keel answer <taskId> --text <text>
+  return `用法: pnpm keel answer <taskId> --text <text>
 
 回答 S-NEED_CLARIFICATION 状态的澄清：
   - 写入 feedback(source=manual) 并关联到任务
@@ -385,5 +385,5 @@ export async function answerMain(argv: readonly string[]): Promise<void> {
   const v = result.value
   console.log(`澄清已回灌：${v.transitionId} ${v.from} → ${v.to}（feedback ${v.feedbackId}）`)
   for (const line of effectsLines(v.effects)) console.log(line)
-  console.log(`下一步：keel run-task ${taskId}`)
+  console.log(`下一步：pnpm keel run-task ${taskId}`)
 }

@@ -3441,11 +3441,11 @@ export const CONSOLE_HTML = `<!doctype html>
 
     var rows = [];
     if (status === 'S-HUMAN_REVIEW') {
-      rows.push(['批准', 'keel decide ' + t.id + ' approve']);
-      rows.push(['驳回', 'keel decide ' + t.id + ' reject --note "…"']);
-      rows.push(['返工', 'keel decide ' + t.id + ' rework']);
+      rows.push(['批准', 'pnpm keel decide ' + t.id + ' approve']);
+      rows.push(['驳回', 'pnpm keel decide ' + t.id + ' reject --note "…"']);
+      rows.push(['返工', 'pnpm keel decide ' + t.id + ' rework']);
     } else {
-      rows.push(['补充澄清', 'keel answer ' + t.id + ' --text "…"']);
+      rows.push(['补充澄清', 'pnpm keel answer ' + t.id + ' --text "…"']);
     }
 
     var body = '';
@@ -3517,7 +3517,7 @@ export const CONSOLE_HTML = `<!doctype html>
         '</div>' +
         '<div class="cockpit-actions">' +
           '<button type="button" class="copy-btn" data-copy="' + esc(t.id) + '" title="复制 Task UUID">复制 ID: ' + esc(shortId(t.id)) + '</button>' +
-          '<button type="button" class="copy-btn" data-copy="keel status ' + esc(t.id) + '" title="复制 CLI 状态查询命令">复制 keel status</button>' +
+          '<button type="button" class="copy-btn" data-copy="pnpm keel status ' + esc(t.id) + '" title="复制 CLI 状态查询命令">复制 pnpm keel status</button>' +
           '<button type="button" class="copy-btn" data-copy="pnpm run timeline -- ' + esc(t.id) + '" title="复制完整时间线导出命令">复制 timeline 命令</button>' +
           '<button type="button" class="copy-btn" id="glossary-btn" aria-expanded="' + (state.glossaryOpen ? 'true' : 'false') + '" title="查看状态码、转移编号与核心术语的说明">术语表</button>' +
         '</div>' +
