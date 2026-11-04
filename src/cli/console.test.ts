@@ -126,6 +126,43 @@ describe('keel console', () => {
     })
   })
 
+  it('视觉系统：墨色定位、颜色只用来说「要不要你动手」', async () => {
+    await withServer(fakeQuery({}), async (base) => {
+      const html = await (await fetch(`${base}/`)).text()
+      // 冷纸 + 墨色 + 四个语义色，缺一个整套配色就塌
+      for (const token of [
+        '--paper',
+        '--panel',
+        '--ink',
+        '--ink-2',
+        '--ink-3',
+        '--signal',
+        '--move',
+        '--good',
+        '--bad',
+      ]) {
+        expect(html).toContain(token + ':')
+      }
+      // 旧 macOS 系统色必须清干净：看到它们就是回退到「AI 默认皮肤」
+      for (const gone of ['#0a7aff', '#f5f5f7', '#ff9f0a', '#30d158', '#ff453a']) {
+        expect(html.toLowerCase()).not.toContain(gone)
+      }
+      // 品牌是字标 + 龙骨，不是圆角色块
+      expect(html).toContain('brand-glyph')
+      // 状态标记 = 方块 + 文字，不做胶囊、不做脉冲
+      expect(html).toContain('class="dot"')
+      expect(html).not.toContain('pulse-ring')
+      expect(html).not.toContain('@keyframes')
+      // 位置刻度：列表行上靠 10 段阶梯读「走到哪了」
+      expect(html).toContain('class="ladder')
+      // CTA 去掉箭头
+      expect(html).not.toContain('去决策 →')
+      expect(html).not.toContain('去回答 →')
+      // 元信息用中文逗号成句，不用 `·` 拼接
+      expect(html).not.toContain(' · ')
+    })
+  })
+
   it('GET /api/tasks 返回任务列表', async () => {
     const tasks: Row[] = [
       { id: TASK_ID, title: 'demo', status: 'S-DONE', control_mode: 'auto', repo: 'file:///tmp/x' },

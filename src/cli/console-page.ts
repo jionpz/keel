@@ -20,103 +20,101 @@ export const CONSOLE_HTML = `<!doctype html>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta name="keel-console-token" content="__KEEL_CONSOLE_TOKEN__" />
-<title>Keel Console · AI Engineering Runtime Observatory</title>
+<title>Keel 工程运行时控制台</title>
 <style>
   :root {
     color-scheme: light dark;
-    /* macOS 系统色板：窗口 / 侧栏 / 内容面用同一套中性灰，强调色只出现在选中与运行态 */
-    --bg: #f5f5f7;
-    --bg-elev: #f2f2f4;
-    --panel: #ffffff;
-    --panel-alt: #f7f7f9;
-    --code-bg: #f2f2f5;
-    --text: #1d1d1f;
-    --text-sec: #48484a;
-    --muted: #86868b;
-    --line: rgba(0, 0, 0, 0.085);
-    --line-strong: rgba(0, 0, 0, 0.16);
-    --accent: #0a7aff;
-    --accent-soft: rgba(10, 122, 255, 0.10);
-    --stage: #0a7aff;
-    --stage-soft: rgba(10, 122, 255, 0.10);
-    --gate: #c93400;
-    --gate-soft: rgba(255, 149, 0, 0.14);
-    --done: #1d7d36;
-    --done-soft: rgba(52, 199, 89, 0.14);
-    --bad: #d70015;
-    --bad-soft: rgba(255, 59, 48, 0.12);
-    --purple: #5e5ce6;
-    --purple-soft: rgba(94, 92, 230, 0.12);
-    --diff-add-bg: rgba(52, 199, 89, 0.14);
-    --diff-add-text: #196c30;
-    --diff-del-bg: rgba(255, 59, 48, 0.12);
-    --diff-del-text: #a80012;
-    --diff-hunk-bg: rgba(10, 122, 255, 0.08);
-    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-    --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    /* 海图仪表：冷纸 / 墨 / 单一信号色。
+       颜色只回答「要不要人动手」；位置与层级一律交给墨色深浅。 */
+    --paper: #edf0f2;
+    --panel: #f8f9fa;
+    --panel-2: #ffffff;
+    --code-bg: #e8ecef;
+    --ink: #12181d;
+    --ink-2: #3e4a52;
+    --ink-3: #64707a;
+    --rule: rgba(18, 24, 29, 0.14);
+    --rule-strong: rgba(18, 24, 29, 0.30);
+    --select: rgba(18, 24, 29, 0.055);
+    --hover: rgba(18, 24, 29, 0.04);
+    --signal: #a65a00;
+    --signal-wash: rgba(166, 90, 0, 0.08);
+    --move: #1f5e7a;
+    --move-wash: rgba(31, 94, 122, 0.08);
+    --good: #2c6b4f;
+    --good-wash: rgba(44, 107, 79, 0.08);
+    --bad: #8e2f2b;
+    --bad-wash: rgba(142, 47, 43, 0.08);
+    --special: #5b4b8a;
+    --special-wash: rgba(91, 75, 138, 0.08);
+    --diff-add-bg: rgba(44, 107, 79, 0.10);
+    --diff-add-text: #24583f;
+    --diff-del-bg: rgba(142, 47, 43, 0.10);
+    --diff-del-text: #7c2622;
+    --diff-hunk-bg: rgba(31, 94, 122, 0.07);
+    --mono: "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: "Avenir Next", "Avenir", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   }
 
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-      --bg: #161618;
-      --bg-elev: #1d1d1f;
-      --panel: #1c1c1e;
-      --panel-alt: #2c2c2e;
-      --code-bg: #111113;
-      --text: #f5f5f7;
-      --text-sec: #c7c7cc;
-      --muted: #8e8e93;
-      --line: rgba(255, 255, 255, 0.10);
-      --line-strong: rgba(255, 255, 255, 0.20);
-      --accent: #0a84ff;
-      --accent-soft: rgba(10, 132, 255, 0.18);
-      --stage: #0a84ff;
-      --stage-soft: rgba(10, 132, 255, 0.18);
-      --gate: #ff9f0a;
-      --gate-soft: rgba(255, 159, 10, 0.16);
-      --done: #30d158;
-      --done-soft: rgba(48, 209, 88, 0.16);
-      --bad: #ff453a;
-      --bad-soft: rgba(255, 69, 58, 0.16);
-      --purple: #bf5af2;
-      --purple-soft: rgba(191, 90, 242, 0.16);
-      --diff-add-bg: rgba(48, 209, 88, 0.16);
-      --diff-add-text: #7ee2a0;
-      --diff-del-bg: rgba(255, 69, 58, 0.16);
-      --diff-del-text: #ffa8a2;
-      --diff-hunk-bg: rgba(10, 132, 255, 0.12);
+      --paper: #10161b;
+      --panel: #151c21;
+      --panel-2: #1a2228;
+      --code-bg: #0c1216;
+      --ink: #e7edf1;
+      --ink-2: #b3bfc7;
+      --ink-3: #7f8c95;
+      --rule: rgba(231, 237, 241, 0.13);
+      --rule-strong: rgba(231, 237, 241, 0.26);
+      --select: rgba(231, 237, 241, 0.07);
+      --hover: rgba(231, 237, 241, 0.05);
+      --signal: #e0a05c;
+      --signal-wash: rgba(224, 160, 92, 0.12);
+      --move: #74a9c7;
+      --move-wash: rgba(116, 169, 199, 0.12);
+      --good: #6faf8c;
+      --good-wash: rgba(111, 175, 140, 0.12);
+      --bad: #d97a72;
+      --bad-wash: rgba(217, 122, 114, 0.12);
+      --special: #a99bd0;
+      --special-wash: rgba(169, 155, 208, 0.12);
+      --diff-add-bg: rgba(111, 175, 140, 0.14);
+      --diff-add-text: #9fd3b9;
+      --diff-del-bg: rgba(217, 122, 114, 0.14);
+      --diff-del-text: #f0b0aa;
+      --diff-hunk-bg: rgba(116, 169, 199, 0.10);
     }
   }
 
   :root[data-theme="dark"] {
     color-scheme: dark;
-    --bg: #161618;
-    --bg-elev: #1d1d1f;
-    --panel: #1c1c1e;
-    --panel-alt: #2c2c2e;
-    --code-bg: #111113;
-    --text: #f5f5f7;
-    --text-sec: #c7c7cc;
-    --muted: #8e8e93;
-    --line: rgba(255, 255, 255, 0.10);
-    --line-strong: rgba(255, 255, 255, 0.20);
-    --accent: #0a84ff;
-    --accent-soft: rgba(10, 132, 255, 0.18);
-    --stage: #0a84ff;
-    --stage-soft: rgba(10, 132, 255, 0.18);
-    --gate: #ff9f0a;
-    --gate-soft: rgba(255, 159, 10, 0.16);
-    --done: #30d158;
-    --done-soft: rgba(48, 209, 88, 0.16);
-    --bad: #ff453a;
-    --bad-soft: rgba(255, 69, 58, 0.16);
-    --purple: #bf5af2;
-    --purple-soft: rgba(191, 90, 242, 0.16);
-    --diff-add-bg: rgba(48, 209, 88, 0.16);
-    --diff-add-text: #7ee2a0;
-    --diff-del-bg: rgba(255, 69, 58, 0.16);
-    --diff-del-text: #ffa8a2;
-    --diff-hunk-bg: rgba(10, 132, 255, 0.12);
+    --paper: #10161b;
+    --panel: #151c21;
+    --panel-2: #1a2228;
+    --code-bg: #0c1216;
+    --ink: #e7edf1;
+    --ink-2: #b3bfc7;
+    --ink-3: #7f8c95;
+    --rule: rgba(231, 237, 241, 0.13);
+    --rule-strong: rgba(231, 237, 241, 0.26);
+    --select: rgba(231, 237, 241, 0.07);
+    --hover: rgba(231, 237, 241, 0.05);
+    --signal: #e0a05c;
+    --signal-wash: rgba(224, 160, 92, 0.12);
+    --move: #74a9c7;
+    --move-wash: rgba(116, 169, 199, 0.12);
+    --good: #6faf8c;
+    --good-wash: rgba(111, 175, 140, 0.12);
+    --bad: #d97a72;
+    --bad-wash: rgba(217, 122, 114, 0.12);
+    --special: #a99bd0;
+    --special-wash: rgba(169, 155, 208, 0.12);
+    --diff-add-bg: rgba(111, 175, 140, 0.14);
+    --diff-add-text: #9fd3b9;
+    --diff-del-bg: rgba(217, 122, 114, 0.14);
+    --diff-del-text: #f0b0aa;
+    --diff-hunk-bg: rgba(116, 169, 199, 0.10);
   }
 
   :root[data-theme="light"] {
@@ -128,22 +126,29 @@ export const CONSOLE_HTML = `<!doctype html>
   [hidden] { display: none !important; }
   html, body { height: 100%; margin: 0; }
   body {
-    background: var(--bg);
-    color: var(--text);
-    font: 13px/1.45 var(--sans);
+    background: var(--paper);
+    color: var(--ink);
+    font: 12.5px/1.5 var(--sans);
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
   }
 
-  a { color: var(--accent); text-decoration: none; }
-  a:hover { text-decoration: underline; }
+  a {
+    color: var(--ink);
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 3px;
+    text-decoration-color: var(--rule-strong);
+  }
+  a:hover { color: var(--signal); text-decoration-color: var(--signal); }
+  :focus-visible { outline: 1.5px solid var(--signal); outline-offset: 2px; }
   code, pre, .mono { font-family: var(--mono); font-size: 11.5px; }
   .num, .stat-value, .pill-n, .mode-count, .tab-count { font-variant-numeric: tabular-nums; }
 
   /* ─── Layout Shell ─── */
   #app {
     display: grid;
-    grid-template-columns: 288px minmax(0, 1fr);
+    grid-template-columns: 272px minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr) 26px;
     height: 100vh;
     overflow: hidden;
@@ -151,8 +156,8 @@ export const CONSOLE_HTML = `<!doctype html>
 
   /* ─── Sidebar (Task Explorer) ─── */
   aside {
-    border-right: 1px solid var(--line);
-    background: var(--bg-elev);
+    border-right: 1px solid var(--rule);
+    background: var(--paper);
     display: flex;
     flex-direction: column;
     height: 100%;
@@ -162,13 +167,14 @@ export const CONSOLE_HTML = `<!doctype html>
   }
 
   .brand-bar {
-    height: 44px;
-    padding: 0 12px 0 14px;
+    height: 48px;
+    padding: 0 10px 0 14px;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 8px;
     flex: 0 0 auto;
+    border-bottom: 1px solid var(--rule);
   }
   .brand-left {
     display: flex;
@@ -176,35 +182,25 @@ export const CONSOLE_HTML = `<!doctype html>
     gap: 9px;
     min-width: 0;
   }
-  /* 单色应用图标，避免渐变图标那种装饰感 */
-  .brand-logo {
-    width: 22px;
-    height: 22px;
-    border-radius: 6px;
-    background: var(--text);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--bg-elev);
-    font-weight: 700;
-    font-size: 12px;
-    letter-spacing: -0.2px;
-  }
+  /* 龙骨字标：一道竖脊 + 三根横肋，代替通用的圆角字母块 */
+  .brand-glyph { width: 13px; height: 18px; color: var(--ink); flex: 0 0 auto; }
   .brand-title {
     display: flex;
-    align-items: baseline;
-    gap: 7px;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px;
     min-width: 0;
   }
   .brand-title h1 {
-    font-size: 13px;
+    font-size: 11.5px;
     font-weight: 600;
     margin: 0;
-    letter-spacing: -0.1px;
+    letter-spacing: 0.16em;
+    line-height: 1.1;
   }
   .brand-sub {
-    font-size: 11px;
-    color: var(--muted);
+    font-size: 10.5px;
+    color: var(--ink-3);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -219,41 +215,42 @@ export const CONSOLE_HTML = `<!doctype html>
   .icon-btn {
     border: 0;
     background: transparent;
-    color: var(--text-sec);
-    border-radius: 5px;
-    padding: 3px 7px;
+    color: var(--ink-3);
+    border-radius: 2px;
+    padding: 4px 6px;
     cursor: pointer;
-    font-size: 11.5px;
+    font: inherit;
+    font-size: 10.5px;
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    transition: background 0.12s;
+    transition: color 0.12s, background 0.12s;
   }
-  .icon-btn:hover {
-    color: var(--text);
-    background: rgba(128, 128, 128, 0.14);
-  }
-  .icon-btn:active { background: rgba(128, 128, 128, 0.22); }
+  .icon-btn:hover { color: var(--ink); background: var(--hover); }
+  .icon-btn:active { background: var(--select); }
 
-  /* ─── 视图导航（macOS 侧栏式） ─── */
+  /* ─── 视图导航 ─── */
   .mode-switch {
     display: flex;
     flex-direction: column;
-    gap: 1px;
-    padding: 2px 8px 8px;
+    gap: 0;
+    margin: 8px 10px 6px;
+    padding: 0 0 8px;
+    border-bottom: 1px solid var(--rule);
     flex: 0 0 auto;
   }
   .mode-btn {
+    position: relative;
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 9px;
     width: 100%;
-    height: 28px;
-    padding: 0 8px;
-    border-radius: 6px;
+    height: 30px;
+    padding: 0 8px 0 12px;
+    border-radius: 0;
     border: 0;
     background: transparent;
-    color: var(--text-sec);
+    color: var(--ink-2);
     font: inherit;
     font-size: 12.5px;
     font-weight: 500;
@@ -261,25 +258,30 @@ export const CONSOLE_HTML = `<!doctype html>
     cursor: pointer;
     transition: background 0.12s, color 0.12s;
   }
-  .mode-btn svg { flex: 0 0 auto; opacity: 0.75; }
-  .mode-btn:hover { color: var(--text); background: rgba(128, 128, 128, 0.12); }
-  .mode-btn.active {
-    background: var(--accent-soft);
-    color: var(--accent);
-    font-weight: 600;
+  .mode-btn svg { flex: 0 0 auto; opacity: 0.55; }
+  .mode-btn:hover { color: var(--ink); background: var(--hover); }
+  .mode-btn.active { background: transparent; color: var(--ink); font-weight: 600; }
+  .mode-btn.active::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 5px;
+    bottom: 5px;
+    width: 2px;
+    background: var(--ink);
   }
   .mode-btn.active svg { opacity: 1; }
   .mode-label { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .mode-count {
-    font-size: 11.5px;
-    color: var(--muted);
+    font-size: 10.5px;
+    color: var(--ink-3);
     font-variant-numeric: tabular-nums;
   }
-  .mode-btn.active .mode-count { color: var(--accent); opacity: 0.8; }
+  .mode-btn.active .mode-count { color: var(--ink); }
 
   /* ─── Sidebar Search & Filter Bar ─── */
   .explorer-controls {
-    padding: 0 8px 8px;
+    padding: 0 10px 8px;
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -292,27 +294,23 @@ export const CONSOLE_HTML = `<!doctype html>
   }
   .search-box input {
     width: 100%;
-    height: 26px;
-    padding: 0 24px 0 24px;
-    border-radius: 6px;
-    border: 1px solid transparent;
-    background: rgba(128, 128, 128, 0.12);
-    color: var(--text);
+    height: 28px;
+    padding: 0 24px;
+    border-radius: 2px;
+    border: 1px solid var(--rule);
+    background: var(--panel-2);
+    color: var(--ink);
     font: inherit;
     font-size: 12px;
     outline: none;
-    transition: background 0.12s, border-color 0.12s, box-shadow 0.12s;
+    transition: border-color 0.12s;
   }
-  .search-box input::placeholder { color: var(--muted); }
-  .search-box input:focus {
-    background: var(--panel);
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-soft);
-  }
+  .search-box input::placeholder { color: var(--ink-3); }
+  .search-box input:focus { border-color: var(--ink); }
   .search-icon {
     position: absolute;
     left: 7px;
-    color: var(--muted);
+    color: var(--ink-3);
     pointer-events: none;
     display: inline-flex;
   }
@@ -321,17 +319,18 @@ export const CONSOLE_HTML = `<!doctype html>
     right: 5px;
     border: 0;
     background: transparent;
-    color: var(--muted);
+    color: var(--ink-3);
     cursor: pointer;
     font-size: 11px;
     padding: 2px 3px;
     display: none;
   }
-  .search-clear:hover { color: var(--text); }
+  .search-clear:hover { color: var(--ink); }
   .filter-pills {
     display: flex;
-    gap: 1px;
+    gap: 14px;
     flex-wrap: wrap;
+    padding: 2px 2px 0;
   }
   /* 项目筛选：仓库可能很多，用下拉而不是 chip，避免侧栏被撑散 */
   .repo-filter {
@@ -342,48 +341,50 @@ export const CONSOLE_HTML = `<!doctype html>
   }
   .repo-filter label {
     font-size: 11.5px;
-    color: var(--muted);
+    color: var(--ink-3);
     flex: 0 0 auto;
   }
   .repo-select {
     flex: 1 1 auto;
     min-width: 0;
-    height: 24px;
+    height: 26px;
     padding: 0 6px;
-    border-radius: 5px;
-    border: 1px solid transparent;
-    background: rgba(128, 128, 128, 0.10);
-    color: var(--text-sec);
+    border-radius: 2px;
+    border: 1px solid var(--rule);
+    background: var(--panel-2);
+    color: var(--ink-2);
     font: inherit;
     font-size: 11.5px;
     outline: none;
     cursor: pointer;
   }
-  .repo-select:focus { border-color: var(--accent); background: var(--panel); }
-  .repo-select.active { color: var(--accent); font-weight: 600; }
+  .repo-select:focus { border-color: var(--ink); }
+  .repo-select.active { color: var(--ink); font-weight: 600; }
   .filter-pill {
     border: 0;
     background: transparent;
-    color: var(--muted);
-    border-radius: 5px;
-    padding: 2px 7px;
+    color: var(--ink-3);
+    border-radius: 0;
+    padding: 3px 0 5px;
+    font: inherit;
     font-size: 11.5px;
     cursor: pointer;
-    transition: background 0.12s, color 0.12s;
+    border-bottom: 1.5px solid transparent;
+    transition: color 0.12s, border-color 0.12s;
   }
-  .filter-pill:hover { color: var(--text); background: rgba(128, 128, 128, 0.12); }
+  .filter-pill:hover { color: var(--ink); }
   .filter-pill.active {
-    background: var(--accent-soft);
-    color: var(--accent);
+    color: var(--ink);
     font-weight: 600;
+    border-bottom-color: var(--ink);
   }
   /* 计数并入筛选 chip（原来那排 KPI 方块和它们是同一件事，占了两行高度） */
   .filter-pill .pill-n {
-    font-size: 11px;
-    opacity: 0.7;
+    font-size: 10px;
+    color: var(--ink-3);
     margin-left: 3px;
   }
-  .filter-pill.active .pill-n { opacity: 1; }
+  .filter-pill.active .pill-n { color: var(--ink); }
 
   /* ─── 底部状态栏（VS Code 式，贯穿两栏） ─── */
   .statusbar {
@@ -394,10 +395,10 @@ export const CONSOLE_HTML = `<!doctype html>
     justify-content: space-between;
     gap: 12px;
     padding: 0 12px;
-    border-top: 1px solid var(--line);
-    background: var(--bg-elev);
-    font-size: 11px;
-    color: var(--muted);
+    border-top: 1px solid var(--rule);
+    background: var(--paper);
+    font-size: 10.5px;
+    color: var(--ink-3);
     user-select: none;
   }
   .statusbar-left,
@@ -416,7 +417,7 @@ export const CONSOLE_HTML = `<!doctype html>
   .statusbar .sb-sep {
     width: 1px;
     height: 12px;
-    background: var(--line-strong);
+    background: var(--rule-strong);
     opacity: 0.6;
   }
   .statusbar label {
@@ -431,15 +432,15 @@ export const CONSOLE_HTML = `<!doctype html>
     width: 11px;
     height: 11px;
     margin: 0;
-    border-radius: 3px;
-    border: 1px solid var(--line-strong);
+    border-radius: 0;
+    border: 1px solid var(--rule-strong);
     background: transparent;
     cursor: pointer;
     position: relative;
   }
   .statusbar input[type="checkbox"]:checked {
-    background: var(--accent);
-    border-color: var(--accent);
+    background: var(--ink);
+    border-color: var(--ink);
   }
   .statusbar input[type="checkbox"]:checked::after {
     content: "";
@@ -448,23 +449,23 @@ export const CONSOLE_HTML = `<!doctype html>
     top: 0.5px;
     width: 3px;
     height: 6px;
-    border: solid #fff;
+    border: solid var(--paper);
     border-width: 0 1.5px 1.5px 0;
     transform: rotate(45deg);
   }
   .health-dot {
     width: 6px;
     height: 6px;
-    border-radius: 50%;
-    background: var(--done);
+    border-radius: 0;
+    background: var(--good);
     display: inline-block;
     flex: 0 0 auto;
   }
   .health-dot.err { background: var(--bad); }
-  .sb-live { color: var(--text-sec); font-variant-numeric: tabular-nums; }
+  .sb-live { color: var(--ink-2); font-variant-numeric: tabular-nums; }
   .sb-live b { font-weight: 600; }
-  .sb-live.run b { color: var(--stage); }
-  .sb-live.wait b { color: var(--gate); }
+  .sb-live.run b { color: var(--move); }
+  .sb-live.wait b { color: var(--signal); }
 
   /* ─── Task List ─── */
   #task-list {
@@ -478,30 +479,40 @@ export const CONSOLE_HTML = `<!doctype html>
     gap: 1px;
   }
   #task-list li.task-item {
-    padding: 5px 8px;
-    border-radius: 6px;
+    position: relative;
+    padding: 6px 8px 6px 10px;
+    border-radius: 0;
     cursor: pointer;
     display: flex;
     align-items: flex-start;
     gap: 8px;
     transition: background 0.1s;
   }
-  #task-list li.task-item:hover { background: rgba(128, 128, 128, 0.10); }
-  #task-list li.task-item.active { background: var(--accent-soft); }
-  #task-list li.task-item.active .task-title { color: var(--accent); }
+  #task-list li.task-item:hover { background: var(--hover); }
+  #task-list li.task-item.active { background: var(--select); }
+  #task-list li.task-item.active::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 4px;
+    bottom: 4px;
+    width: 2px;
+    background: var(--ink);
+  }
+  #task-list li.task-item.active .task-title { color: var(--ink); font-weight: 600; }
 
-  /* 状态只用一个圆点表达；中文短名放在第二行，机器码留给详情页 */
+  /* 状态只用一个方块表达；中文短名放在第二行，机器码留给详情页 */
   .task-dot {
     width: 6px;
     height: 6px;
-    border-radius: 50%;
+    border-radius: 0;
     margin-top: 6px;
     flex: 0 0 auto;
-    background: var(--muted);
+    background: var(--ink-3);
   }
-  .task-dot.stage { background: var(--stage); }
-  .task-dot.gate { background: var(--gate); }
-  .task-dot.done { background: var(--done); }
+  .task-dot.stage { background: var(--move); }
+  .task-dot.gate { background: var(--signal); }
+  .task-dot.done { background: var(--good); }
   .task-dot.bad { background: var(--bad); }
   .task-body { min-width: 0; flex: 1 1 auto; }
   .task-title-row {
@@ -512,7 +523,7 @@ export const CONSOLE_HTML = `<!doctype html>
   .task-title {
     font-size: 12.5px;
     font-weight: 500;
-    color: var(--text);
+    color: var(--ink);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -520,7 +531,7 @@ export const CONSOLE_HTML = `<!doctype html>
   }
   .task-id {
     font-size: 10.5px;
-    color: var(--muted);
+    color: var(--ink-3);
     font-family: var(--mono);
     flex: 0 0 auto;
   }
@@ -528,18 +539,15 @@ export const CONSOLE_HTML = `<!doctype html>
     display: flex;
     align-items: center;
     gap: 6px;
-    margin-top: 1px;
-    font-size: 11px;
-    color: var(--muted);
+    margin-top: 2px;
+    font-size: 10.5px;
+    color: var(--ink-3);
     min-width: 0;
     font-variant-numeric: tabular-nums;
   }
+  /* 侧栏最密的地方只留一个颜色通道：状态方块。文字一律墨灰 */
   .task-sub .task-status { flex: 0 0 auto; }
-  .task-sub .task-status.stage { color: var(--stage); }
-  .task-sub .task-status.gate { color: var(--gate); }
-  .task-sub .task-status.done { color: var(--done); }
-  .task-sub .task-status.bad { color: var(--bad); }
-  .task-sub .task-mode { flex: 0 0 auto; color: var(--gate); }
+  .task-sub .task-mode { flex: 0 0 auto; }
   .task-sub .task-repo {
     overflow: hidden;
     text-overflow: ellipsis;
@@ -563,14 +571,24 @@ export const CONSOLE_HTML = `<!doctype html>
     gap: 1px;
   }
   #project-list li.proj-item {
-    padding: 7px 8px;
-    border-radius: 6px;
+    position: relative;
+    padding: 8px 8px 8px 10px;
+    border-radius: 0;
     cursor: pointer;
     transition: background 0.1s;
   }
-  #project-list li.proj-item:hover { background: rgba(128, 128, 128, 0.10); }
-  #project-list li.proj-item.active { background: var(--accent-soft); }
-  #project-list li.proj-item.active .proj-item-name { color: var(--accent); }
+  #project-list li.proj-item:hover { background: var(--hover); }
+  #project-list li.proj-item.active { background: var(--select); }
+  #project-list li.proj-item.active::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 5px;
+    bottom: 5px;
+    width: 2px;
+    background: var(--ink);
+  }
+  #project-list li.proj-item.active .proj-item-name { color: var(--ink); font-weight: 600; }
   .proj-item-top {
     display: flex;
     align-items: center;
@@ -581,48 +599,57 @@ export const CONSOLE_HTML = `<!doctype html>
   .proj-item-name {
     font-weight: 500;
     font-size: 12.5px;
-    color: var(--text);
+    color: var(--ink);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
   .proj-attention {
     flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
     font-size: 10.5px;
     font-weight: 600;
-    color: var(--gate);
-    background: var(--gate-soft);
-    border-radius: 999px;
-    padding: 1px 7px;
+    color: var(--signal);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
+  }
+  .proj-attention::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    background: var(--signal);
   }
   .proj-item-sub {
-    margin-top: 2px;
-    font-size: 11px;
-    color: var(--muted);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-top: 3px;
+    font-size: 10.5px;
+    color: var(--ink-3);
+    min-width: 0;
     font-variant-numeric: tabular-nums;
   }
+  .proj-item-sub .facts { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .proj-item-sub .time { margin-left: auto; flex: 0 0 auto; }
 
   /* ─── Project View（项目模式主区） ───
      一句话说清「有没有事等我」，任务按行动分组；不再摆指标带和状态分布图。 */
   .proj-summary {
-    margin: 2px 0 0;
-    font-size: 14px;
-    line-height: 1.55;
-    color: var(--text);
+    margin: 3px 0 0;
+    font-size: 13.5px;
+    line-height: 1.6;
+    color: var(--ink);
     max-width: 78ch;
   }
-  .proj-summary .gate-text { color: var(--gate); font-weight: 600; }
-  .proj-summary .stage-text { color: var(--stage); font-weight: 600; }
+  .proj-summary .gate-text { color: var(--signal); font-weight: 600; }
+  .proj-summary .stage-text { color: var(--move); font-weight: 600; }
   .proj-summary .bad-text { color: var(--bad); font-weight: 600; }
   .proj-meta {
-    margin: 4px 0 0;
-    font-size: 11.5px;
-    color: var(--muted);
+    margin: 5px 0 0;
+    font-size: 11px;
+    color: var(--ink-3);
     font-variant-numeric: tabular-nums;
   }
   .proj-toolbar {
@@ -632,18 +659,24 @@ export const CONSOLE_HTML = `<!doctype html>
     gap: 8px 12px;
     flex-wrap: wrap;
     padding-bottom: 10px;
-    border-bottom: 1px solid var(--line);
+    border-bottom: 1px solid var(--rule);
   }
   .proj-toolbar-hint {
-    font-size: 11.5px;
-    color: var(--muted);
+    font-size: 11px;
+    color: var(--ink-3);
     font-variant-numeric: tabular-nums;
   }
   .proj-group {
-    padding: 14px 0 2px;
-    border-bottom: 1px solid var(--line);
+    padding: 16px 0 4px;
+    border-bottom: 1px solid var(--rule);
   }
   .proj-group:last-child { border-bottom: 0; }
+  /* 页面唯一的整组着色：需要你处理的那一组，一条 2px 琥珀竖线 */
+  .proj-group.needs {
+    border-left: 2px solid var(--signal);
+    padding-left: 14px;
+    margin-left: -16px;
+  }
   .proj-group-head {
     display: flex;
     align-items: baseline;
@@ -653,21 +686,22 @@ export const CONSOLE_HTML = `<!doctype html>
   }
   .proj-group-title {
     margin: 0;
-    font-size: 12.5px;
+    font-size: 11.5px;
     font-weight: 600;
-    color: var(--text-sec);
+    letter-spacing: 0.04em;
+    color: var(--ink-2);
     display: inline-flex;
     align-items: baseline;
     gap: 7px;
   }
   .proj-group-title .n {
-    font-size: 11.5px;
-    color: var(--muted);
+    font-size: 10.5px;
+    color: var(--ink-3);
     font-variant-numeric: tabular-nums;
   }
-  .proj-group-title.needs { color: var(--gate); }
-  .proj-group-title.needs .n { color: var(--gate); }
-  .proj-group-hint { font-size: 11.5px; color: var(--muted); }
+  .proj-group-title.needs { color: var(--signal); }
+  .proj-group-title.needs .n { color: var(--signal); }
+  .proj-group-hint { font-size: 10.5px; color: var(--ink-3); }
   .proj-rows {
     list-style: none;
     margin: 0;
@@ -679,65 +713,68 @@ export const CONSOLE_HTML = `<!doctype html>
     gap: 10px;
     padding: 7px 8px;
     margin: 0 -8px;
-    border-radius: 6px;
+    border-radius: 0;
     cursor: pointer;
     transition: background 0.1s;
   }
-  .proj-row:hover { background: rgba(128, 128, 128, 0.08); }
+  .proj-row:hover { background: var(--hover); }
   .proj-row .badge { flex: 0 0 auto; }
+  .proj-row .ladder { flex: 0 0 auto; }
   .proj-row-title {
     flex: 1 1 auto;
     min-width: 0;
     font-size: 12.5px;
-    color: var(--text);
+    color: var(--ink);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
   .proj-row-time {
     flex: 0 0 auto;
-    font-size: 11px;
-    color: var(--muted);
+    font-size: 10.5px;
+    color: var(--ink-3);
     font-variant-numeric: tabular-nums;
   }
   .proj-row-cta {
     flex: 0 0 auto;
-    font-size: 11.5px;
+    font-size: 11px;
     font-weight: 600;
-    color: var(--gate);
+    color: var(--signal);
   }
   .proj-empty {
     margin: 14px 0;
     font-size: 12.5px;
-    color: var(--muted);
+    color: var(--ink-3);
   }
 
   /* ─── 概览（Overview） ─── */
   .ov-periods {
     display: inline-flex;
     align-items: center;
-    gap: 1px;
-    padding: 1px;
-    border-radius: 6px;
-    background: rgba(128, 128, 128, 0.10);
+    gap: 14px;
+    padding: 0;
+    border-radius: 0;
+    background: transparent;
   }
   .ov-period {
     border: 0;
     background: transparent;
-    color: var(--text-sec);
+    color: var(--ink-3);
     font: inherit;
     font-size: 11.5px;
-    padding: 2px 9px;
-    border-radius: 5px;
+    padding: 3px 0 5px;
+    border-radius: 0;
+    border-bottom: 1.5px solid transparent;
     cursor: pointer;
     white-space: nowrap;
   }
-  .ov-period:hover { color: var(--text); }
+  .ov-period:hover { color: var(--ink); }
   .ov-period.active {
-    background: var(--panel);
-    color: var(--text);
+    background: transparent;
+    color: var(--ink);
     font-weight: 600;
-    box-shadow: 0 0 0 1px var(--line), 0 1px 2px rgba(0, 0, 0, 0.06);
+    box-shadow: none;
+    border-bottom-color: var(--ink);
   }
   .ov-head-row {
     display: flex;
@@ -753,28 +790,28 @@ export const CONSOLE_HTML = `<!doctype html>
     min-width: 0;
   }
   .ov-head-title h2 {
-    font-size: 17px;
+    font-size: 19px;
     font-weight: 600;
     margin: 0;
-    letter-spacing: -0.2px;
+    letter-spacing: -0.01em;
   }
 
   /* 一句话摘要：概览的主角，一行说完这段时间发生了什么 */
   .ov-digest {
-    font-size: 15px;
-    line-height: 1.6;
-    color: var(--text);
+    font-size: 14px;
+    line-height: 1.65;
+    color: var(--ink);
     margin: 2px 0 14px;
     max-width: 72ch;
   }
-  .ov-digest .ov-when { color: var(--muted); }
+  .ov-digest .ov-when { color: var(--ink-3); }
   .ov-digest b { font-weight: 600; font-variant-numeric: tabular-nums; }
   .ov-digest .bad { color: var(--bad); }
-  .ov-digest .done { color: var(--done); }
+  .ov-digest .done { color: var(--good); }
 
   .ov-cum {
-    font-size: 11.5px;
-    color: var(--muted);
+    font-size: 11px;
+    color: var(--ink-3);
     margin: 8px 0 0;
     font-variant-numeric: tabular-nums;
   }
@@ -792,7 +829,7 @@ export const CONSOLE_HTML = `<!doctype html>
     border: 0;
     background: transparent;
     padding: 2px 0 0;
-    border-radius: 4px;
+    border-radius: 0;
     cursor: pointer;
     display: flex;
     flex-direction: column;
@@ -800,10 +837,15 @@ export const CONSOLE_HTML = `<!doctype html>
     gap: 3px;
     font: inherit;
   }
-  .ov-day:hover { background: rgba(128, 128, 128, 0.10); }
-  .ov-day.in-range { background: rgba(128, 128, 128, 0.08); }
-  .ov-day.active { background: var(--accent-soft); }
-  .ov-day.active .ov-day-label { color: var(--accent); font-weight: 600; }
+  .ov-day:hover { background: var(--hover); }
+  .ov-day.in-range { background: var(--hover); }
+  .ov-day.active { background: transparent; }
+  .ov-day.active .ov-day-label {
+    color: var(--ink);
+    font-weight: 600;
+    border-bottom: 1.5px solid var(--ink);
+    padding-bottom: 1px;
+  }
   .ov-col {
     display: flex;
     flex-direction: column;
@@ -816,15 +858,15 @@ export const CONSOLE_HTML = `<!doctype html>
   .ov-col i {
     display: block;
     width: 100%;
-    border-radius: 2px;
+    border-radius: 0;
     min-height: 0;
   }
-  .ov-col i.ok { background: var(--stage); opacity: 0.9; }
+  .ov-col i.ok { background: var(--good); opacity: 0.85; }
   .ov-col i.bad { background: var(--bad); opacity: 0.85; }
-  .ov-col i.zero { background: rgba(128, 128, 128, 0.18); height: 2px !important; }
+  .ov-col i.zero { background: var(--rule); height: 2px !important; }
   .ov-day-label {
     font-size: 9.5px;
-    color: var(--muted);
+    color: var(--ink-3);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
@@ -832,10 +874,10 @@ export const CONSOLE_HTML = `<!doctype html>
     display: flex;
     gap: 12px;
     font-size: 11px;
-    color: var(--muted);
+    color: var(--ink-3);
   }
   .ov-strip-legend span { display: inline-flex; align-items: center; gap: 4px; }
-  .ov-strip-legend i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+  .ov-strip-legend i { width: 8px; height: 8px; border-radius: 0; display: inline-block; }
 
   /* 进行中任务：一行一个任务，右侧 10 段阶梯表示走到哪一步 */
   .ov-tasks, .ov-projects {
@@ -847,21 +889,21 @@ export const CONSOLE_HTML = `<!doctype html>
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 7px 8px;
+    padding: 8px 8px;
     margin: 0 -8px;
-    border-radius: 6px;
-    border-bottom: 1px solid var(--line);
+    border-radius: 0;
+    border-bottom: 1px solid var(--rule);
     cursor: pointer;
     transition: background 0.1s;
   }
   .ov-task:last-child { border-bottom: 0; }
-  .ov-task:hover { background: rgba(128, 128, 128, 0.08); }
+  .ov-task:hover { background: var(--hover); }
   .ov-task-main { flex: 1 1 auto; min-width: 0; }
   .ov-task-title {
     display: block;
     font-size: 12.5px;
     font-weight: 500;
-    color: var(--text);
+    color: var(--ink);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -870,9 +912,9 @@ export const CONSOLE_HTML = `<!doctype html>
     display: flex;
     align-items: center;
     gap: 6px;
-    margin-top: 1px;
-    font-size: 11px;
-    color: var(--muted);
+    margin-top: 2px;
+    font-size: 10.5px;
+    color: var(--ink-3);
     min-width: 0;
     font-variant-numeric: tabular-nums;
   }
@@ -881,9 +923,9 @@ export const CONSOLE_HTML = `<!doctype html>
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .ov-task-meta .task-status.stage { color: var(--stage); }
-  .ov-task-meta .task-status.gate { color: var(--gate); }
-  .ov-task-meta .task-status.done { color: var(--done); }
+  .ov-task-meta .task-status.stage { color: var(--move); }
+  .ov-task-meta .task-status.gate { color: var(--signal); }
+  .ov-task-meta .task-status.done { color: var(--good); }
   .ov-task-meta .task-status.bad { color: var(--bad); }
   .ov-task-meta .ov-when { margin-left: auto; flex: 0 0 auto; }
   .ladder {
@@ -894,33 +936,34 @@ export const CONSOLE_HTML = `<!doctype html>
     padding: 0;
     flex: 0 0 auto;
   }
+  /* 位置刻度：墨色表示走到第几段，颜色只标出「当前段」的语义 */
   .ladder li {
-    width: 9px;
-    height: 5px;
-    border-radius: 1.5px;
-    background: rgba(128, 128, 128, 0.20);
+    width: 4px;
+    height: 8px;
+    border-radius: 0;
+    background: var(--rule);
   }
-  .ladder li.done { background: var(--stage); opacity: 0.5; }
-  .ladder li.cur { background: var(--stage); }
-  .ladder.gate li.cur { background: var(--gate); }
-  .ladder.bad li.done { background: var(--bad); opacity: 0.5; }
+  .ladder li.done { background: var(--ink-3); opacity: 0.4; }
+  .ladder li.cur { background: var(--ink); }
+  .ladder.gate li.cur { background: var(--signal); }
+  .ladder.bad li.done { background: var(--bad); opacity: 0.45; }
   .ladder.bad li.cur { background: var(--bad); }
-  .ladder.done li.done { background: var(--done); opacity: 0.75; }
+  .ladder.done li.done { background: var(--good); opacity: 0.75; }
 
   /* 项目行：名字 + 状态计数 + 体量，一行读一个项目 */
   .ov-proj {
     display: flex;
     flex-direction: column;
-    gap: 1px;
-    padding: 8px;
+    gap: 2px;
+    padding: 9px 8px;
     margin: 0 -8px;
-    border-radius: 6px;
-    border-bottom: 1px solid var(--line);
+    border-radius: 0;
+    border-bottom: 1px solid var(--rule);
     cursor: pointer;
     transition: background 0.1s;
   }
   .ov-proj:last-child { border-bottom: 0; }
-  .ov-proj:hover { background: rgba(128, 128, 128, 0.08); }
+  .ov-proj:hover { background: var(--hover); }
   .ov-proj-top {
     display: flex;
     align-items: center;
@@ -931,22 +974,22 @@ export const CONSOLE_HTML = `<!doctype html>
   .ov-proj-name {
     font-size: 12.5px;
     font-weight: 500;
-    color: var(--text);
+    color: var(--ink);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
   .ov-proj-foot {
-    font-size: 11px;
-    color: var(--muted);
+    font-size: 10.5px;
+    color: var(--ink-3);
     font-variant-numeric: tabular-nums;
   }
 
   /* 统计还没到位时的占位，不要让页面跳一下空白 */
   .ov-skeleton {
     height: 12px;
-    border-radius: 3px;
-    background: rgba(128, 128, 128, 0.12);
+    border-radius: 0;
+    background: var(--rule);
     margin: 10px 0;
     width: 40%;
   }
@@ -964,89 +1007,82 @@ export const CONSOLE_HTML = `<!doctype html>
     top: 0;
     z-index: 20;
     background: var(--panel);
-    border-bottom: 1px solid var(--line);
-    padding: 10px 22px 11px;
+    border-bottom: 1px solid var(--rule);
+    padding: 15px 28px 13px;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 7px;
     flex: 0 0 auto;
   }
-  .view-body { padding: 18px 22px 72px; }
+  .view-body { padding: 22px 28px 72px; }
 
   .empty {
-    color: var(--muted);
+    color: var(--ink-3);
     padding: 64px 20px;
     text-align: center;
-    font-size: 13px;
+    font-size: 12.5px;
   }
 
-  /* ─── Badges & Pills ─── */
+  /* ─── 状态标记：方块 + 文字，不用胶囊 ───
+     颜色只出现在 7px 方块与文字上；形状不再承载状态，也不再有脉冲动画。 */
   .badge {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: 6px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    font-family: var(--sans);
     font-size: 11.5px;
-    font-weight: 600;
-    font-family: var(--mono);
-    padding: 2px 8px;
-    border-radius: 999px;
-    border: 1px solid transparent;
+    font-weight: 500;
     white-space: nowrap;
   }
-  .badge.stage { color: var(--stage); background: var(--stage-soft); }
-  .badge.gate { color: var(--gate); background: var(--gate-soft); }
-  .badge.done { color: var(--done); background: var(--done-soft); }
-  .badge.bad { color: var(--bad); background: var(--bad-soft); }
-  .badge.neutral { color: var(--muted); background: var(--panel-alt); }
-  .badge.purple { color: var(--purple); background: var(--purple-soft); }
-  /* 人话在前、机器码在后：中文短名常驻，编号降为次要视觉层级 */
-  .badge-zh {
-    font-family: var(--sans);
-    font-size: 12px;
-    letter-spacing: 0.2px;
-  }
-  .badge-code {
-    font-size: 10.5px;
-    font-weight: 500;
-    opacity: 0.72;
-    letter-spacing: -0.2px;
-  }
-
-  .dot {
+  .badge::before {
+    content: "";
     width: 7px;
     height: 7px;
-    border-radius: 50%;
+    flex: 0 0 auto;
     background: currentColor;
-    display: inline-block;
   }
-  @keyframes pulse-ring {
-    0% { box-shadow: 0 0 0 0 currentColor; opacity: 1; }
-    70% { box-shadow: 0 0 0 5px transparent; opacity: 0.85; }
-    100% { box-shadow: 0 0 0 0 transparent; opacity: 1; }
+  .badge.stage { color: var(--move); }
+  .badge.gate { color: var(--signal); }
+  .badge.done { color: var(--good); }
+  .badge.bad { color: var(--bad); }
+  .badge.neutral { color: var(--ink-3); }
+  .badge.purple { color: var(--special); }
+  /* 人话在前、机器码在后：中文短名常驻，编号降为次要视觉层级 */
+  .badge-zh { font-size: 11.5px; }
+  .badge-code {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 400;
+    opacity: 0.6;
+    letter-spacing: 0;
   }
-  .badge.stage .dot, .badge.gate .dot {
-    animation: pulse-ring 2s infinite;
-  }
+  /* JS 仍会输出 .dot（历史结构）；标记形状统一交给 .badge::before */
+  .dot { display: none; }
 
   .mode-pill {
-    font-size: 11px;
-    font-family: var(--mono);
-    padding: 1px 6px;
-    border-radius: 4px;
-    border: 1px solid var(--line);
-    color: var(--text-sec);
-    background: var(--panel-alt);
-  }
-  .mode-pill.human, .mode-pill.paused {
-    border-color: var(--gate);
-    color: var(--gate);
-    background: var(--gate-soft);
-  }
-  /* 驾驶模式用中文标签，机器码留在 title 里 —— 头部不该出现 control_mode: auto 这种半成品 */
-  .mode-pill.drive {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0;
+    border: 0;
+    background: none;
     font-family: var(--sans);
     font-size: 11.5px;
+    color: var(--ink-2);
   }
+  .mode-pill::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    background: currentColor;
+  }
+  .mode-pill.human, .mode-pill.paused { color: var(--signal); }
+  /* 驾驶模式用中文标签，机器码留在 title 里 —— 头部不该出现 control_mode: auto 这种半成品 */
+  .mode-pill.drive { font-size: 11.5px; }
 
   /* ─── Cockpit Header（详情页常驻头） ─── */
   .cockpit-top-row {
@@ -1072,10 +1108,10 @@ export const CONSOLE_HTML = `<!doctype html>
   .copy-btn {
     border: 0;
     background: transparent;
-    color: var(--muted);
-    border-radius: 5px;
+    color: var(--ink-3);
+    border-radius: 2px;
     padding: 3px 7px;
-    font-size: 11px;
+    font-size: 10.5px;
     font-family: var(--sans);
     cursor: pointer;
     display: inline-flex;
@@ -1083,17 +1119,14 @@ export const CONSOLE_HTML = `<!doctype html>
     gap: 4px;
     transition: background 0.12s, color 0.12s;
   }
-  .copy-btn:hover {
-    color: var(--text);
-    background: rgba(128, 128, 128, 0.12);
-  }
-  .copy-btn.copied { color: var(--done); }
+  .copy-btn:hover { color: var(--ink); background: var(--hover); }
+  .copy-btn.copied { color: var(--good); }
 
   /* 人工闸门：可点的裁决按钮 + 一行等价 CLI 命令（备用路径） */
   .human-callout {
-    border: 1px solid var(--line-strong);
-    border-left: 2px solid var(--gate);
-    background: var(--gate-soft);
+    border: 1px solid var(--rule-strong);
+    border-left: 2px solid var(--signal);
+    background: var(--signal-wash);
     padding: 12px 14px;
     margin: 2px 0 14px;
     display: grid;
@@ -1106,19 +1139,19 @@ export const CONSOLE_HTML = `<!doctype html>
     flex-wrap: wrap;
     font-size: 12px;
     font-weight: 600;
-    color: var(--text);
+    color: var(--ink);
   }
   .human-callout-hint {
     font-size: 11px;
     font-weight: 400;
-    color: var(--muted);
+    color: var(--ink-3);
   }
   .act-btn {
     appearance: none;
-    border: 1px solid var(--line-strong);
+    border: 1px solid var(--rule-strong);
     background: var(--panel);
-    color: var(--text);
-    border-radius: 6px;
+    color: var(--ink);
+    border-radius: 2px;
     padding: 5px 14px;
     font-size: 12px;
     font-family: var(--sans);
@@ -1127,35 +1160,35 @@ export const CONSOLE_HTML = `<!doctype html>
     cursor: pointer;
     transition: background 0.12s, border-color 0.12s, opacity 0.12s;
   }
-  .act-btn:hover { border-color: var(--muted); background: var(--panel-alt); }
+  .act-btn:hover { border-color: var(--ink-3); background: var(--panel-2); }
   .act-btn:disabled { opacity: 0.45; cursor: default; }
   .act-btn[data-act="approve"] {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: #fff;
+    background: var(--ink);
+    border-color: var(--ink);
+    color: var(--panel);
   }
-  .act-btn[data-act="approve"]:hover { background: #0a6ee6; border-color: #0a6ee6; }
+  .act-btn[data-act="approve"]:hover { opacity: 0.86; }
   .act-btn[data-act="reject"] {
     color: var(--bad);
-    border-color: rgba(215, 0, 21, 0.35);
+    border-color: var(--bad);
   }
-  .act-btn[data-act="reject"]:hover { background: var(--bad-soft); border-color: var(--bad); }
+  .act-btn[data-act="reject"]:hover { background: var(--bad-wash); border-color: var(--bad); }
   .human-callout-foot {
     display: flex;
     align-items: baseline;
     gap: 8px;
     flex-wrap: wrap;
     font-size: 11px;
-    color: var(--muted);
+    color: var(--ink-3);
     min-width: 0;
   }
   .human-callout-cmd {
     font-family: var(--mono);
     font-size: 11px;
-    color: var(--text);
+    color: var(--ink);
     background: var(--code-bg);
     padding: 3px 6px;
-    border-radius: 4px;
+    border-radius: 2px;
     white-space: nowrap;
     overflow-x: auto;
     min-width: 0;
@@ -1165,24 +1198,24 @@ export const CONSOLE_HTML = `<!doctype html>
      只有「为什么停在这里」用闸门底色，其余靠发丝线分块，不堆卡片阴影。 */
   .callout-link {
     appearance: none;
-    border: 1px solid var(--line-strong);
+    border: 1px solid var(--rule-strong);
     background: var(--panel);
-    color: var(--text);
-    border-radius: 6px;
+    color: var(--ink);
+    border-radius: 2px;
     padding: 3px 10px;
     font-family: var(--sans);
     font-size: 11.5px;
     font-weight: 500;
     cursor: pointer;
   }
-  .callout-link:hover { background: var(--panel-alt); border-color: var(--muted); }
-  .tab-btn.gate { color: var(--gate); }
-  .tab-btn.gate.active { color: var(--gate); border-color: var(--gate); }
+  .callout-link:hover { background: var(--panel-2); border-color: var(--ink-3); }
+  .tab-btn.gate { color: var(--signal); }
+  .tab-btn.gate.active { color: var(--signal); border-color: var(--signal); }
   .tab-link {
     appearance: none;
     border: 0;
     background: none;
-    color: var(--accent);
+    color: var(--ink);
     font-family: var(--sans);
     font-size: 11.5px;
     cursor: pointer;
@@ -1198,91 +1231,98 @@ export const CONSOLE_HTML = `<!doctype html>
     gap: 6px;
     padding: 14px 16px;
     /* 页头已经有一条闸门色的告警条，这里改用左侧竖线，避免两条横幅叠在一起 */
-    border-left: 2px solid var(--gate);
-    border-bottom: 1px solid var(--line);
+    border-left: 2px solid var(--signal);
+    border-bottom: 1px solid var(--rule);
   }
-  .decision-why-text { font-size: 14px; font-weight: 600; line-height: 1.5; color: var(--text); }
+  .decision-why-text { font-size: 14px; font-weight: 600; line-height: 1.5; color: var(--ink); }
   .decision-why-meta {
     display: flex;
     align-items: baseline;
     gap: 14px;
     flex-wrap: wrap;
     font-size: 11.5px;
-    color: var(--text-sec);
+    color: var(--ink-2);
   }
-  .decision-block { padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  .decision-block { padding: 14px 16px; border-bottom: 1px solid var(--rule); }
   .decision-block:last-child { border-bottom: 0; }
   .decision-block-title {
     font-size: 11.5px;
     font-weight: 600;
-    color: var(--muted);
+    color: var(--ink-3);
     margin-bottom: 10px;
   }
   .decision-evidence,
   .decision-facts { display: flex; flex-direction: column; gap: 8px; }
   .evidence-row { display: flex; align-items: baseline; gap: 12px; font-size: 12.5px; }
-  .evidence-key { flex: 0 0 80px; color: var(--muted); font-size: 11.5px; }
-  .evidence-val { min-width: 0; color: var(--text); }
+  .evidence-key { flex: 0 0 80px; color: var(--ink-3); font-size: 11.5px; }
+  .evidence-val { min-width: 0; color: var(--ink); }
   .evidence-error {
     font-size: 12px;
     line-height: 1.55;
-    color: var(--text);
-    background: var(--bad-soft);
+    color: var(--ink);
+    background: var(--bad-wash);
     border-left: 2px solid var(--bad);
     padding: 8px 10px;
-    border-radius: 0 4px 4px 0;
+    border-radius: 0;
     white-space: pre-wrap;
     word-break: break-word;
   }
-  .evidence-note { font-size: 11.5px; line-height: 1.6; color: var(--text-sec); }
-  .attempt-strip { display: flex; gap: 6px; flex-wrap: wrap; }
+  .evidence-note { font-size: 11.5px; line-height: 1.6; color: var(--ink-2); }
+  .attempt-strip { display: flex; gap: 4px 16px; flex-wrap: wrap; }
   .attempt-chip {
     display: inline-flex;
     align-items: baseline;
     gap: 6px;
-    border: 1px solid var(--line-strong);
-    border-radius: 6px;
-    padding: 2px 8px;
+    border: 0;
+    border-left: 2px solid var(--rule-strong);
+    border-radius: 0;
+    padding: 1px 0 1px 8px;
     font-size: 11px;
-    color: var(--text-sec);
+    color: var(--ink-2);
+    font-variant-numeric: tabular-nums;
   }
-  .attempt-chip b { color: var(--text); font-weight: 600; }
-  .attempt-chip.ok { border-color: rgba(48, 209, 88, 0.35); }
-  .attempt-chip.bad { border-color: rgba(215, 0, 21, 0.35); color: var(--bad); }
+  .attempt-chip b { color: var(--ink); font-weight: 600; }
+  .attempt-chip.ok { border-left-color: var(--good); }
+  .attempt-chip.bad { border-left-color: var(--bad); color: var(--bad); }
   .attempt-chip.bad b { color: var(--bad); }
 
-  .decision-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  /* 三个选项 = 三条并排的竖直色带：顶线颜色说明这一步会把任务带去哪 */
+  .decision-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 28px; }
   .decision-options.single { grid-template-columns: minmax(0, 1fr); max-width: 640px; }
   .option-card {
     display: flex;
     flex-direction: column;
     gap: 8px;
-    border: 1px solid var(--line-strong);
-    border-radius: 8px;
-    padding: 12px;
+    border: 0;
+    border-top: 2px solid var(--rule-strong);
+    border-radius: 0;
+    padding: 12px 0 0;
     min-width: 0;
   }
   .option-card.busy { opacity: 0.7; }
-  .option-card.danger { border-color: rgba(215, 0, 21, 0.35); }
-  .option-title { font-size: 13px; font-weight: 600; color: var(--text); }
+  .option-card.approve { border-top-color: var(--ink); }
+  .option-card.reject { border-top-color: var(--bad); }
+  .option-card.danger { border-top-color: var(--bad); }
+  .option-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+  .option-title { font-size: 13px; font-weight: 600; color: var(--ink); }
   .option-terminal { font-size: 10.5px; font-weight: 600; color: var(--bad); }
-  .option-effect { font-size: 12px; line-height: 1.55; color: var(--text); }
-  .option-note { font-size: 11px; color: var(--muted); }
+  .option-effect { font-size: 12px; line-height: 1.55; color: var(--ink); }
+  .option-note { font-size: 11px; color: var(--ink-3); }
   .option-card textarea {
     width: 100%;
     box-sizing: border-box;
     resize: vertical;
-    border: 1px solid var(--line-strong);
-    border-radius: 6px;
-    background: var(--panel);
-    color: var(--text);
+    border: 1px solid var(--rule-strong);
+    border-radius: 2px;
+    background: var(--panel-2);
+    color: var(--ink);
     font-family: var(--sans);
     font-size: 12px;
     line-height: 1.5;
     padding: 6px 8px;
     min-height: 52px;
   }
-  .option-card textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .option-card textarea:focus { outline: 2px solid var(--ink); outline-offset: -1px; }
   .option-actions {
     display: flex;
     align-items: center;
@@ -1290,26 +1330,26 @@ export const CONSOLE_HTML = `<!doctype html>
     flex-wrap: wrap;
     margin-top: auto;
   }
-  .option-msg { font-size: 11px; color: var(--text-sec); }
+  .option-msg { font-size: 11px; color: var(--ink-2); }
   .option-msg:empty { display: none; }
   .option-msg.bad { color: var(--bad); }
-  .option-msg.done { color: var(--done); }
+  .option-msg.done { color: var(--good); }
   .decision-history { display: flex; flex-direction: column; gap: 6px; }
   .hd-row { display: flex; align-items: baseline; gap: 10px; font-size: 12px; }
-  .hd-note { color: var(--text-sec); }
-  .decision-subtitle { font-size: 11.5px; font-weight: 600; color: var(--muted); margin: 12px 0 6px; }
+  .hd-note { color: var(--ink-2); }
+  .decision-subtitle { font-size: 11.5px; font-weight: 600; color: var(--ink-3); margin: 12px 0 6px; }
   .question-list { margin: 0; padding-left: 18px; font-size: 12.5px; line-height: 1.6; }
   .feedback-body {
     font-size: 12.5px;
     line-height: 1.6;
     white-space: pre-wrap;
     background: var(--code-bg);
-    border-radius: 6px;
+    border-radius: 2px;
     padding: 10px 12px;
     max-height: 220px;
     overflow-y: auto;
   }
-  .decision-note { font-size: 12px; color: var(--text-sec); }
+  .decision-note { font-size: 12px; color: var(--ink-2); }
   .decision-cli {
     display: flex;
     align-items: baseline;
@@ -1318,12 +1358,12 @@ export const CONSOLE_HTML = `<!doctype html>
   }
 
   .cockpit-title {
-    font-size: 17px;
+    font-size: 19px;
     font-weight: 600;
     margin: 0;
     line-height: 1.3;
-    letter-spacing: -0.2px;
-    color: var(--text);
+    letter-spacing: -0.01em;
+    color: var(--ink);
     padding-right: 12px;
   }
   .cockpit-meta {
@@ -1331,8 +1371,8 @@ export const CONSOLE_HTML = `<!doctype html>
     flex-wrap: wrap;
     align-items: center;
     gap: 4px 14px;
-    font-size: 11.5px;
-    color: var(--muted);
+    font-size: 11px;
+    color: var(--ink-3);
     padding-bottom: 0;
     border-bottom: 0;
   }
@@ -1344,26 +1384,27 @@ export const CONSOLE_HTML = `<!doctype html>
     white-space: nowrap;
   }
   .pr-link-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    background: var(--done-soft);
-    color: var(--done);
+    display: inline;
+    background: none;
+    color: var(--good);
     border: 0;
-    padding: 1px 7px;
-    border-radius: 4px;
+    padding: 0;
+    border-radius: 0;
     font-weight: 600;
     font-size: 11.5px;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    text-decoration-thickness: 1px;
   }
-  .pr-link-pill:hover { text-decoration: none; filter: brightness(0.95); }
+  .pr-link-pill:hover { color: var(--signal); text-decoration-color: var(--signal); }
 
   .summary-grid {
     display: flex;
     flex-wrap: wrap;
     gap: 0;
     margin: 14px 0 2px;
-    border-top: 1px solid var(--line);
-    border-bottom: 1px solid var(--line);
+    border-top: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
   }
   .stat-box {
     flex: 1 1 132px;
@@ -1374,34 +1415,34 @@ export const CONSOLE_HTML = `<!doctype html>
     margin-right: 14px;
   }
   .stat-box + .stat-box {
-    border-left: 1px solid var(--line);
+    border-left: 1px solid var(--rule);
     padding-left: 14px;
     margin-right: 14px;
   }
   .stat-label {
-    font-size: 11px;
-    color: var(--muted);
+    font-size: 10.5px;
+    color: var(--ink-3);
     text-transform: none;
     letter-spacing: 0;
-    margin-bottom: 2px;
+    margin-bottom: 3px;
   }
   .stat-value {
-    font-size: 16px;
+    font-size: 20px;
     font-weight: 600;
     font-family: var(--sans);
-    letter-spacing: -0.2px;
-    color: var(--text);
+    letter-spacing: -0.02em;
+    color: var(--ink);
   }
   .stat-sub {
-    font-size: 11px;
-    color: var(--muted);
+    font-size: 10.5px;
+    color: var(--ink-3);
     margin-top: 1px;
     font-family: var(--sans);
   }
 
   /* ─── Cards → 分组区块（发丝分隔，不做卡片堆） ─── */
   .card {
-    border-top: 1px solid var(--line);
+    border-top: 1px solid var(--rule);
     padding: 14px 0 2px;
     margin: 0 0 4px;
     background: transparent;
@@ -1419,7 +1460,7 @@ export const CONSOLE_HTML = `<!doctype html>
   .card h3 {
     font-size: 12.5px;
     margin: 0;
-    color: var(--text);
+    color: var(--ink);
     font-weight: 600;
     letter-spacing: 0;
     display: flex;
@@ -1431,7 +1472,7 @@ export const CONSOLE_HTML = `<!doctype html>
     align-items: center;
     gap: 12px;
     font-size: 11.5px;
-    color: var(--muted);
+    color: var(--ink-3);
     flex-wrap: wrap;
   }
   .legend-item {
@@ -1442,138 +1483,131 @@ export const CONSOLE_HTML = `<!doctype html>
   .legend-swatch {
     width: 9px;
     height: 9px;
-    border-radius: 3px;
+    border-radius: 0;
     display: inline-block;
   }
 
-  /* ─── State Machine Trajectory ─── */
+  /* ─── State Machine Trajectory ───
+     10 段主路径读成一把刻度尺：每段一条 2px 基线，基线的填充比例是停留时长。
+     不做 10 个带框卡片 —— 那会变成一排等重的格子，反而看不出「现在在哪」。 */
   .pipeline-scroll {
     overflow-x: auto;
     padding-bottom: 2px;
   }
   .pipeline {
     display: flex;
-    align-items: stretch;
+    align-items: flex-end;
     gap: 4px;
     width: 100%;
   }
   .pipeline .step {
     flex: 1 1 0;
-    min-width: 84px;
+    min-width: 76px;
     display: flex;
     flex-direction: column;
-    justify-content: space-between;
-    gap: 4px;
-    padding: 8px 9px 10px;
-    border-radius: 7px;
-    border: 1px solid var(--line);
-    background: var(--panel-alt);
-    color: var(--muted);
+    justify-content: flex-end;
+    gap: 3px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: var(--ink-3);
     position: relative;
-    overflow: hidden;
-    transition: all 0.15s;
+    padding-top: 11px;
+    transition: color 0.12s;
   }
-  /* 停留时长条：节点内按最长阶段归一，让耗时成为可见的比例 */
-  .pipeline .step-bar {
+  /* 当前位置：在刻度上方压一条墨线，像量表上的游标 */
+  .pipeline .step.current::before {
+    content: "";
     position: absolute;
     left: 0;
     right: 0;
-    bottom: 0;
-    height: 3px;
-    background: rgba(128, 128, 128, 0.12);
+    top: 0;
+    height: 2px;
+    background: var(--ink);
   }
-  .pipeline .step-bar i {
-    display: block;
-    height: 100%;
-    background: currentColor;
-    opacity: 0.55;
+  /* 偏离主路径时没有 current 段：游标压在「从哪一段分出去」的那一站 */
+  .pipeline .step.departed::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    height: 2px;
+    background: var(--signal);
   }
-  .pipeline .step-foot {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 3px;
-  }
+  .pipeline .step.current.departed::before { background: var(--signal); }
+  .pipeline .step.current.done-term::before { background: var(--good); }
   .pipeline .step-name {
     font-family: var(--sans);
     font-size: 11.5px;
-    font-weight: 700;
+    font-weight: 500;
     letter-spacing: 0;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  /* 停留时长是数值，不是机器码：正文族 + 等宽数字，不用 mono */
   .pipeline .step-meta {
-    font-size: 11.5px;
-    font-weight: 600;
-    font-family: var(--mono);
-    opacity: 0.95;
+    display: block;
+    font-size: 10.5px;
+    font-weight: 400;
+    font-variant-numeric: tabular-nums;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
-  .pipeline .step.current .step-meta {
-    font-weight: 700;
+  /* 基线：底轨固定，填充 = 该段停留时长占最长的比例 */
+  .pipeline .step-bar {
+    display: block;
+    height: 2px;
+    background: var(--rule);
+    margin-top: 4px;
   }
-  .pipeline .step.done {
-    border-color: rgba(16, 185, 129, 0.45);
-    background: var(--done-soft);
-    color: var(--done);
+  .pipeline .step-bar i {
+    display: block;
+    height: 100%;
+    background: currentColor;
+    opacity: 0.5;
   }
-  .pipeline .step.current {
-    border-color: var(--accent);
-    background: var(--accent-soft);
-    color: var(--accent);
-    box-shadow: 0 0 0 2px var(--accent-soft);
-  }
-  .pipeline .step.current.done-term {
-    border-color: var(--done);
-    background: var(--done-soft);
-    color: var(--done);
-    box-shadow: 0 0 0 2px var(--done-soft);
-  }
-  .pipeline .step.skipped {
-    border-style: dashed;
-    border-color: var(--line-strong);
-    background: transparent;
-    color: var(--muted);
-    opacity: 0.65;
+  .pipeline .step.current .step-bar { background: var(--rule-strong); }
+  .pipeline .step.current .step-bar i { background: var(--ink); opacity: 1; }
+  .pipeline .step.done { color: var(--ink-2); }
+  .pipeline .step.done .step-bar i { background: var(--ink-3); opacity: 0.55; }
+  .pipeline .step.current { color: var(--ink); }
+  .pipeline .step.current .step-name { font-weight: 600; }
+  .pipeline .step.current.done-term { color: var(--good); }
+  .pipeline .step.current.done-term .step-bar i { background: var(--good); }
+  .pipeline .step.skipped { color: var(--ink-3); opacity: 0.7; }
+  .pipeline .step.skipped .step-bar {
+    background: repeating-linear-gradient(90deg, var(--rule) 0 2px, transparent 2px 4px);
   }
   /* 偏离主路径时，标出「从哪个阶段分出」，让轨道与下方分支说明连起来 */
-  .pipeline .step.departed {
-    border-color: rgba(245, 158, 11, 0.55);
-    border-style: dashed;
-    background: var(--gate-soft);
-    color: var(--text-sec);
-  }
+  .pipeline .step.departed { color: var(--ink-2); }
+  .pipeline .step.departed .step-bar i { background: var(--signal); opacity: 0.8; }
   .branch-dwell {
     margin-left: auto;
-    color: var(--muted);
-    font-family: var(--mono);
-    font-size: 12px;
+    color: var(--ink-3);
+    font-size: 11.5px;
     font-weight: 600;
+    font-variant-numeric: tabular-nums;
   }
-  .pipeline .arrow {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--muted);
-    font-size: 10px;
-    opacity: 0.55;
-    flex: 0 0 auto;
-  }
+  .pipeline .arrow { display: none; }
+
 
   .branch-callout {
     margin-top: 12px;
     padding: 11px 14px;
-    border-radius: 8px;
-    border: 1px solid rgba(245, 158, 11, 0.45);
-    background: var(--gate-soft);
+    border-radius: 2px;
+    border: 1px solid var(--signal);
+    background: var(--signal-wash);
     display: flex;
     flex-direction: column;
     gap: 5px;
   }
   .branch-callout.bad {
-    border-color: rgba(244, 63, 94, 0.45);
-    background: var(--bad-soft);
+    border-color: var(--bad);
+    background: var(--bad-wash);
   }
   .branch-callout-head {
     display: flex;
@@ -1585,41 +1619,42 @@ export const CONSOLE_HTML = `<!doctype html>
   }
   .branch-callout-reason {
     font-size: 12px;
-    color: var(--text-sec);
+    color: var(--ink-2);
   }
 
   .next-transitions {
     margin-top: 12px;
     padding-top: 10px;
-    border-top: 1px solid var(--line);
+    border-top: 1px solid var(--rule);
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 6px;
+    gap: 4px 22px;
   }
   .next-label {
     font-size: 11.5px;
-    color: var(--muted);
+    color: var(--ink-3);
     font-weight: 600;
   }
   .tr-chip {
     display: inline-flex;
-    align-items: center;
+    align-items: baseline;
     gap: 5px;
-    padding: 3px 8px;
-    border-radius: 6px;
-    border: 1px solid var(--line);
-    background: var(--panel-alt);
+    padding: 1px 0;
+    border-radius: 0;
+    border: 0;
+    background: transparent;
     font-family: var(--mono);
-    font-size: 11.5px;
-    color: var(--text-sec);
+    font-size: 11px;
+    color: var(--ink-2);
   }
-  .tr-chip .tr-code { color: var(--accent); font-weight: 600; }
+  .tr-chip .tr-code { color: var(--ink); font-weight: 600; }
   .tr-chip .tr-guard {
-    color: var(--muted);
+    color: var(--ink-3);
     font-size: 10.5px;
-    border-left: 1px solid var(--line);
-    padding-left: 5px;
+    border-left: 1px solid var(--rule);
+    padding-left: 6px;
+    font-family: var(--sans);
   }
 
   /* ─── 一句话现状 ─── */
@@ -1630,12 +1665,12 @@ export const CONSOLE_HTML = `<!doctype html>
     margin: 2px 0 4px;
     padding: 9px 12px;
     border: 0;
-    border-left: 2px solid var(--accent);
+    border-left: 2px solid var(--ink);
     border-radius: 0;
-    background: var(--accent-soft);
+    background: var(--select);
   }
   .status-summary.term {
-    border-left-color: var(--done);
+    border-left-color: var(--good);
   }
   .status-summary.bad {
     border-left-color: var(--bad);
@@ -1645,30 +1680,30 @@ export const CONSOLE_HTML = `<!doctype html>
     margin-top: 2px;
     font-size: 10.5px;
     font-weight: 600;
-    color: var(--accent);
+    color: var(--ink);
     border: 0;
     border-radius: 0;
     padding: 0;
     opacity: 0.9;
     letter-spacing: 0.2px;
   }
-  .status-summary.term .ss-tag { color: var(--done); }
+  .status-summary.term .ss-tag { color: var(--good); }
   .status-summary.bad .ss-tag { color: var(--bad); }
   .status-summary p {
     margin: 0;
     font-size: 13.5px;
     line-height: 1.65;
-    color: var(--text);
+    color: var(--ink);
   }
   .status-summary .ss-next {
-    color: var(--text-sec);
+    color: var(--ink-2);
   }
 
   /* ─── 术语表 ─── */
   .glossary-panel {
     margin-top: 12px;
     padding-top: 12px;
-    border-top: 1px dashed var(--line);
+    border-top: 1px dashed var(--rule);
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
     gap: 8px 20px;
@@ -1680,14 +1715,14 @@ export const CONSOLE_HTML = `<!doctype html>
     gap: 8px;
     font-size: 12.5px;
     line-height: 1.55;
-    color: var(--text-sec);
+    color: var(--ink-2);
   }
   .gloss-term {
     flex: 0 0 auto;
     font-family: var(--mono);
     font-weight: 700;
     font-size: 11.5px;
-    color: var(--accent);
+    color: var(--ink);
   }
 
   /* ─── Workspace Tabs ─── */
@@ -1695,18 +1730,18 @@ export const CONSOLE_HTML = `<!doctype html>
     display: flex;
     align-items: center;
     gap: 6px;
-    border-bottom: 1px solid var(--line);
+    border-bottom: 1px solid var(--rule);
     margin-bottom: 16px;
     overflow-x: auto;
   }
   .tab-btn {
     border: 0;
-    border-bottom: 1px solid transparent;
+    border-bottom: 2px solid transparent;
     background: transparent;
-    color: var(--muted);
-    padding: 9px 10px;
+    color: var(--ink-3);
+    padding: 9px 10px 8px;
     font: inherit;
-    font-size: 12.5px;
+    font-size: 12px;
     font-weight: 500;
     cursor: pointer;
     display: inline-flex;
@@ -1715,31 +1750,31 @@ export const CONSOLE_HTML = `<!doctype html>
     white-space: nowrap;
     transition: all 0.15s;
   }
-  .tab-btn:hover { color: var(--text); }
+  .tab-btn:hover { color: var(--ink); }
   .tab-btn.active {
-    color: var(--accent);
-    border-bottom-color: var(--accent);
+    color: var(--ink);
+    border-bottom-color: var(--ink);
   }
   .tab-count {
-    font-size: 11px;
+    font-size: 10px;
     padding: 0;
     border-radius: 0;
     background: transparent;
     border: 0;
-    color: var(--muted);
+    color: var(--ink-3);
   }
   .tab-btn.active .tab-count {
-    background: var(--accent-soft);
+    background: transparent;
     border-color: transparent;
-    color: var(--accent);
+    color: var(--ink);
   }
 
   /* ─── Overview & Structured Artifacts ─── */
   .feedback-body {
-    background: var(--panel-alt);
-    border: 1px solid var(--line);
-    border-left: 3px solid var(--accent);
-    border-radius: 6px;
+    background: var(--panel-2);
+    border: 1px solid var(--rule);
+    border-left: 2px solid var(--ink);
+    border-radius: 0;
     padding: 12px 14px;
     white-space: pre-wrap;
     word-break: break-word;
@@ -1749,7 +1784,7 @@ export const CONSOLE_HTML = `<!doctype html>
     /* 需求正文可能很长，超过一屏就自己滚，别把后面的评审结论挤到看不见 */
     max-height: 520px;
     overflow: auto;
-    color: var(--text);
+    color: var(--ink);
   }
   .outcomes-grid {
     display: grid;
@@ -1759,8 +1794,9 @@ export const CONSOLE_HTML = `<!doctype html>
   }
   .outcome-card {
     background: transparent;
-    border: 1px solid var(--line);
-    border-radius: 8px;
+    border: 1px solid var(--rule);
+    border-left: 2px solid var(--rule-strong);
+    border-radius: 0;
     padding: 12px 14px;
     display: flex;
     flex-direction: column;
@@ -1776,18 +1812,18 @@ export const CONSOLE_HTML = `<!doctype html>
     font-family: var(--mono);
     font-weight: 600;
     font-size: 12.5px;
-    color: var(--text);
+    color: var(--ink);
   }
   .outcome-reason {
-    font-size: 13px;
-    color: var(--text-sec);
+    font-size: 12.5px;
+    color: var(--ink-2);
     line-height: 1.6;
   }
 
   .rfc-section {
     margin-top: 14px;
     padding-top: 14px;
-    border-top: 1px solid var(--line);
+    border-top: 1px solid var(--rule);
   }
   .rfc-section:first-child {
     margin-top: 0;
@@ -1797,7 +1833,7 @@ export const CONSOLE_HTML = `<!doctype html>
   .rfc-sec-title {
     font-size: 12px;
     font-weight: 600;
-    color: var(--muted);
+    color: var(--ink-3);
     margin: 0 0 8px;
   }
   .rfc-two-col {
@@ -1808,7 +1844,7 @@ export const CONSOLE_HTML = `<!doctype html>
   .rfc-list {
     margin: 0;
     padding-left: 18px;
-    color: var(--text-sec);
+    color: var(--ink-2);
     font-size: 13.5px;
     line-height: 1.65;
   }
@@ -1821,12 +1857,12 @@ export const CONSOLE_HTML = `<!doctype html>
   }
   .file-tag {
     font-family: var(--mono);
-    font-size: 11.5px;
-    padding: 2px 8px;
-    border-radius: 5px;
+    font-size: 11px;
+    padding: 2px 7px;
+    border-radius: 0;
     background: var(--code-bg);
-    border: 1px solid var(--line);
-    color: var(--accent);
+    border: 1px solid var(--rule);
+    color: var(--ink);
   }
   .ac-table th, .ac-table td {
     padding: 8px 10px;
@@ -1834,7 +1870,7 @@ export const CONSOLE_HTML = `<!doctype html>
   .ac-id {
     font-family: var(--mono);
     font-weight: 700;
-    color: var(--accent);
+    color: var(--ink);
     white-space: nowrap;
   }
 
@@ -1846,19 +1882,19 @@ export const CONSOLE_HTML = `<!doctype html>
   }
   .fact-chip {
     font-family: var(--mono);
-    font-size: 11.5px;
+    font-size: 11px;
     padding: 3px 8px;
-    border-radius: 6px;
-    background: var(--panel-alt);
-    border: 1px solid var(--line);
-    color: var(--text-sec);
+    border-radius: 0;
+    background: var(--panel-2);
+    border: 1px solid var(--rule);
+    color: var(--ink-2);
   }
 
   /* ─── Runs & Context Builder ─── */
   .run-card {
     background: transparent;
     border: 0;
-    border-top: 1px solid var(--line);
+    border-top: 1px solid var(--rule);
     border-radius: 0;
     padding: 12px 0;
     margin-bottom: 0;
@@ -1883,26 +1919,26 @@ export const CONSOLE_HTML = `<!doctype html>
     font-family: var(--mono);
     font-weight: 700;
     font-size: 13px;
-    color: var(--text);
+    color: var(--ink);
   }
   .run-metrics-row {
     display: flex;
     flex-wrap: wrap;
     gap: 8px 18px;
-    font-size: 12px;
-    color: var(--muted);
-    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
     padding: 8px 10px;
     background: var(--panel);
-    border: 1px solid var(--line);
-    border-radius: 7px;
+    border: 1px solid var(--rule);
+    border-radius: 2px;
   }
   .ctx-box {
     margin-top: 10px;
     padding: 10px 12px;
-    border-radius: 7px;
+    border-radius: 2px;
     background: var(--panel);
-    border: 1px solid var(--line);
+    border: 1px solid var(--rule);
   }
   .ctx-head {
     display: flex;
@@ -1910,35 +1946,42 @@ export const CONSOLE_HTML = `<!doctype html>
     justify-content: space-between;
     font-size: 11.5px;
     margin-bottom: 6px;
-    color: var(--text-sec);
+    color: var(--ink-2);
   }
   .progress-track {
-    height: 7px;
-    border-radius: 999px;
-    background: var(--panel-alt);
-    border: 1px solid var(--line);
+    height: 4px;
+    border-radius: 0;
+    background: var(--rule);
     overflow: hidden;
     margin-bottom: 8px;
   }
   .progress-fill {
     height: 100%;
-    background: var(--accent);
-    border-radius: 999px;
+    background: var(--ink);
+    border-radius: 0;
   }
   .ctx-sections {
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
   }
+  /* 上下文分段 = 左侧 2px 短线 + 三段事实，不做胶囊 */
   .ctx-sec-pill {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
     font-family: var(--mono);
-    font-size: 11px;
-    padding: 2px 7px;
-    border-radius: 5px;
-    background: var(--panel-alt);
-    border: 1px solid var(--line);
-    color: var(--text-sec);
+    font-size: 10.5px;
+    padding: 1px 0 1px 7px;
+    border: 0;
+    border-left: 2px solid var(--rule-strong);
+    border-radius: 0;
+    background: transparent;
+    color: var(--ink-2);
+    font-variant-numeric: tabular-nums;
   }
+  .ctx-sec-pill b { font-weight: 600; color: var(--ink); }
+  .ctx-sec-pill .muted { color: var(--ink-3); }
 
   /* ─── Git Diff Viewer ─── */
   .diff-file-nav {
@@ -1949,32 +1992,32 @@ export const CONSOLE_HTML = `<!doctype html>
   }
   .diff-file-pill {
     font-family: var(--mono);
-    font-size: 12px;
-    padding: 4px 10px;
-    border-radius: 6px;
-    background: var(--panel-alt);
-    border: 1px solid var(--line);
-    color: var(--text-sec);
+    font-size: 11.5px;
+    padding: 3px 9px;
+    border-radius: 0;
+    background: var(--panel-2);
+    border: 1px solid var(--rule);
+    color: var(--ink-2);
     cursor: pointer;
     display: inline-flex;
     align-items: center;
     gap: 6px;
   }
-  .diff-file-pill:hover { border-color: var(--accent); color: var(--accent); }
-  .diff-add-stat { color: var(--done); font-weight: 600; }
+  .diff-file-pill:hover { border-color: var(--ink); color: var(--ink); }
+  .diff-add-stat { color: var(--good); font-weight: 600; }
   .diff-del-stat { color: var(--bad); font-weight: 600; }
 
   .diff-block {
-    border: 1px solid var(--line);
-    border-radius: 8px;
+    border: 1px solid var(--rule);
+    border-radius: 2px;
     overflow: hidden;
     margin-bottom: 14px;
     background: var(--code-bg);
   }
   .diff-block-header {
     padding: 8px 12px;
-    background: var(--panel-alt);
-    border-bottom: 1px solid var(--line);
+    background: var(--panel-2);
+    border-bottom: 1px solid var(--rule);
     font-family: var(--mono);
     font-size: 12px;
     font-weight: 600;
@@ -2000,15 +2043,15 @@ export const CONSOLE_HTML = `<!doctype html>
     width: 44px;
     min-width: 44px;
     text-align: right;
-    color: var(--muted);
+    color: var(--ink-3);
     user-select: none;
     opacity: 0.65;
-    border-right: 1px solid var(--line);
+    border-right: 1px solid var(--rule);
     padding: 1px 6px;
   }
   .diff-table tr.diff-hunk td {
     background: var(--diff-hunk-bg);
-    color: var(--stage);
+    color: var(--move);
     font-weight: 600;
     padding: 3px 8px;
   }
@@ -2023,8 +2066,8 @@ export const CONSOLE_HTML = `<!doctype html>
 
   /* ─── Tables & Event Timeline ─── */
   table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
-  th { color: var(--muted); font-weight: 600; font-size: 11.5px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { color: var(--ink-3); font-weight: 600; font-size: 10.5px; letter-spacing: 0.04em; }
   tr:last-child td { border-bottom: 0; }
 
   .timeline-toolbar {
@@ -2035,7 +2078,7 @@ export const CONSOLE_HTML = `<!doctype html>
     gap: 8px 12px;
     margin-bottom: 12px;
     padding-bottom: 12px;
-    border-bottom: 1px solid var(--line);
+    border-bottom: 1px solid var(--rule);
   }
   .timeline-filters {
     display: flex;
@@ -2045,54 +2088,54 @@ export const CONSOLE_HTML = `<!doctype html>
   }
   .timeline-select, .timeline-search {
     padding: 4px 9px;
-    border-radius: 6px;
-    border: 1px solid var(--line);
-    background: var(--panel-alt);
-    color: var(--text);
+    border-radius: 2px;
+    border: 1px solid var(--rule);
+    background: var(--panel-2);
+    color: var(--ink);
     font: inherit;
     font-size: 12px;
   }
 
-  .timeline td.seq { width: 52px; font-family: var(--mono); color: var(--muted); font-weight: 600; }
-  .timeline td.time { width: 145px; white-space: nowrap; color: var(--muted); font-family: var(--mono); font-size: 11.5px; }
+  .timeline td.seq { width: 52px; font-family: var(--mono); color: var(--ink-3); font-weight: 600; }
+  .timeline td.time { width: 145px; white-space: nowrap; color: var(--ink-3); font-family: var(--mono); font-size: 11.5px; }
   .timeline td.type { width: 185px; white-space: nowrap; }
   .timeline td.run-col { width: 90px; white-space: nowrap; font-family: var(--mono); }
   .ev-summary {
     font-size: 12.5px;
-    color: var(--text);
+    color: var(--ink);
     margin-bottom: 3px;
     font-weight: 500;
   }
   details summary {
     cursor: pointer;
-    color: var(--muted);
+    color: var(--ink-3);
     font-size: 12px;
     user-select: none;
   }
-  details summary:hover { color: var(--accent); }
+  details summary:hover { color: var(--ink); }
   details pre {
     margin: 6px 0 0;
     padding: 10px 12px;
-    border-radius: 6px;
+    border-radius: 2px;
     background: var(--code-bg);
-    border: 1px solid var(--line);
+    border: 1px solid var(--rule);
     white-space: pre-wrap;
     word-break: break-word;
-    color: var(--text-sec);
+    color: var(--ink-2);
     max-height: 420px;
     overflow: auto;
   }
 
-  .muted { color: var(--muted); }
+  .muted { color: var(--ink-3); }
 
   /* 窄屏收口放在全部组件规则之后 —— 同样的选择器只有写在后边才盖得住基础样式 */
   @media (max-width: 1024px) {
-    .ov-task .ladder { display: none; }
+    .ov-task .ladder, .proj-row .ladder { display: none; }
     /* 把宽度还给详情区：侧栏收窄，指标条不落单块，状态机轨迹压到一屏 */
     #app { grid-template-columns: 260px minmax(0, 1fr); }
     .stat-box { flex: 1 1 96px; margin-right: 10px; padding-right: 10px; }
     .stat-box + .stat-box { padding-left: 10px; margin-right: 10px; }
-    .stat-value { font-size: 15px; }
+    .stat-value { font-size: 18px; }
     /* 窄屏去掉阶段之间的箭头，10 段主路径才能一屏读完，不必横向滚动 */
     .pipeline .arrow { display: none; }
     .pipeline .step { min-width: 64px; padding: 7px 6px 9px; }
@@ -2107,9 +2150,11 @@ export const CONSOLE_HTML = `<!doctype html>
   }
 
   @media (max-width: 900px) {
-    #app { grid-template-columns: 1fr; height: auto; overflow: visible; }
-    aside { height: auto; max-height: 48vh; border-right: 0; border-bottom: 1px solid var(--line); }
-    main#detail { height: auto; overflow: visible; padding: 16px; }
+    /* 三块纵向排队：侧栏 → 详情 → 状态栏，状态栏必须落在文档最后一行 */
+    #app { grid-template-columns: 1fr; grid-template-rows: auto auto 26px; height: auto; overflow: visible; }
+    aside { height: auto; max-height: 48vh; border-right: 0; border-bottom: 1px solid var(--rule); grid-row: 1; }
+    main#detail { height: auto; overflow: visible; padding: 16px; grid-row: 2; }
+    .statusbar { grid-row: 3; position: sticky; bottom: 0; }
   }
 </style>
 </head>
@@ -2118,9 +2163,11 @@ export const CONSOLE_HTML = `<!doctype html>
   <aside>
     <div class="brand-bar">
       <div class="brand-left">
-        <div class="brand-logo" aria-hidden="true">K</div>
+        <svg class="brand-glyph" viewBox="0 0 14 18" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+          <path d="M1 2V10.4L4.4 15.8h5.2L13 10.4V6.2" stroke-linejoin="miter"/>
+        </svg>
         <div class="brand-title">
-          <h1>Keel</h1>
+          <h1>KEEL</h1>
           <span class="brand-sub" id="count">加载中…</span>
         </div>
       </div>
@@ -2214,7 +2261,7 @@ export const CONSOLE_HTML = `<!doctype html>
     ['I8', '不变量 I8：终态一经写入，不可再变更。'],
     ['Run', '一次阶段执行，相当于一次 Agent 会话；会话销毁后，Run 记录仍留在 Fact Plane。'],
     ['Recipe / 预算水位', '每次 Run 的上下文配方，以及已用 / 上限的 token 预算。'],
-    ['Harness · L2', '执行该 Run 的 harness 与其能力等级（L0–L2），能力不足时显式降级。'],
+    ['Harness 与能力等级', '执行该 Run 的 harness 与其能力等级（L0–L2），能力不足时显式降级。'],
     ['产物 / 事件', 'Fact Plane 的 artifact 与 append-only event；页面上的数字都可由 readEvents 重建。'],
     ['control_mode', '谁在驾驶：auto / paused / human，与任务状态正交。']
   ];
@@ -2349,7 +2396,8 @@ export const CONSOLE_HTML = `<!doctype html>
     var remM = m % 60;
     // 停留时间会横跨数天，继续用小时会让「205h 12m」这种数字失去直觉
     var d = Math.floor(h / 24);
-    if (d >= 2) return d + '天 ' + (h % 24) + 'h';
+    // 跨天的停留用中文单位念出来；一天以内仍用 23h 5m 这种紧凑写法
+    if (d >= 1) return d + ' 天 ' + (h % 24) + ' 小时';
     return h + 'h ' + remM + 'm';
   }
 
@@ -2372,6 +2420,13 @@ export const CONSOLE_HTML = `<!doctype html>
     if (usd == null || usd === '' || isNaN(num) || num === 0) return '$0.00';
     if (num < 0.01) return '$' + num.toFixed(4);
     return '$' + num.toFixed(4);
+  }
+
+  /** 成本口径是机器字段（estimated / actual），页面上只说人话 */
+  function costBasisLabel(basis) {
+    if (basis === 'estimated') return '估算';
+    if (basis === 'actual') return '实付';
+    return basis;
   }
 
   /** 项目级汇总用：分位以上只留 2 位小数，别让 $1.6788 挡住「一块六毛八」的直觉 */
@@ -2439,13 +2494,21 @@ export const CONSOLE_HTML = `<!doctype html>
       '<span class="dot"></span>' + body + '</span>';
   }
 
+  /** Run 状态与任务状态同构：方块 + 中文 + 机器码，中文只在这里给出，别处仍用机器码。 */
+  var _runStatusLabels = {
+    PENDING: '等待', RUNNING: '运行中', SUCCEEDED: '成功',
+    FAILED: '失败', TIMEOUT: '超时', CANCELLED: '已取消',
+  };
   function runStatusBadge(st) {
     var k = 'neutral';
     if (st === 'SUCCEEDED' || st === ' pass' || st === 'pass' || st === 'actionable' || st === 'implemented') k = 'done';
     else if (st === 'RUNNING' || st === 'PENDING') k = 'stage';
     else if (st === 'FAILED' || st === 'TIMEOUT' || st === 'fail' || st === 'reject' || st === 'blocked') k = 'bad';
     else if (st === 'CANCELLED' || st === 'unclear' || st === 'needs_more') k = 'gate';
-    return '<span class="badge ' + k + '">' + esc(st) + '</span>';
+    var zh = _runStatusLabels[st];
+    return '<span class="badge ' + k + '" title="' + esc(st) + '"><span class="dot"></span>' +
+      (zh ? '<span class="badge-zh">' + zh + '</span>' : '') +
+      '<span class="badge-code">' + esc(st) + '</span></span>';
   }
 
   function fetchJSON(url) {
@@ -2589,7 +2652,6 @@ export const CONSOLE_HTML = `<!doctype html>
       var t = filtered[i];
       var isAct = t.id === state.selectedId;
       var runCount = t.run_count != null ? Number(t.run_count) : null;
-      var costNum = t.total_cost_usd != null ? Number(t.total_cost_usd) : 0;
       var cat = statusKind(t.status);
       var zh = statusLabel(t.status) || t.status;
       html += '<li data-id="' + esc(t.id) + '" class="task-item' + (isAct ? ' active' : '') + '">' +
@@ -2605,8 +2667,7 @@ export const CONSOLE_HTML = `<!doctype html>
               ? '<span class="task-mode">' + (t.control_mode === 'paused' ? '已暂停' : '人工') + '</span>' : '') +
             '<span class="task-repo" title="' + esc(t.repo) + '">' + esc(shortRepo(t.repo)) + '</span>' +
             '<span class="task-time">' +
-              (runCount ? runCount + ' 轮 · ' : '') +
-              (costNum > 0 ? fmtCostShort(costNum) + ' · ' : '') +
+              (runCount ? runCount + ' 轮，' : '') +
               esc(fmtListTime(t.updated_at)) +
             '</span>' +
           '</div>' +
@@ -2686,16 +2747,18 @@ export const CONSOLE_HTML = `<!doctype html>
     return 'terminal';
   }
 
-  /** 项目列表第二行：规模 + 非零状态 + 新鲜度，一行读完 */
-  function projectSubline(p) {
+  /** 项目列表第二行：只写规模和「有几种不在正轨」，时间另起一列右对齐 */
+  function projectFacts(p) {
     var bits = [p.counts.all + ' 个任务'];
-    if (p.counts.stage > 0) bits.push(p.counts.stage + ' 运行');
+    if (p.counts.stage > 0) bits.push(p.counts.stage + ' 个在跑');
     var waiting = p.counts.gate - p.needsYou;
-    if (waiting > 0) bits.push(waiting + ' 等待');
-    if (p.counts.done > 0) bits.push(p.counts.done + ' 完成');
-    if (p.counts.bad > 0) bits.push(p.counts.bad + ' 异常');
-    bits.push(fmtListTime(p.lastUpdated));
-    return bits.join(' · ');
+    if (waiting > 0) bits.push(waiting + ' 个等待');
+    if (p.counts.done > 0) bits.push(p.counts.done + ' 个完成');
+    if (p.counts.bad > 0) bits.push(p.counts.bad + ' 个异常');
+    return bits.join('，');
+  }
+  function projectSubline(p) {
+    return projectFacts(p) + '，最近更新 ' + fmtListTime(p.lastUpdated);
   }
 
   /** 项目页的一句话现状：先说有没有事等人，再说在跑的和等待中的 */
@@ -2719,8 +2782,8 @@ export const CONSOLE_HTML = `<!doctype html>
   }
 
   function projectRowCta(status) {
-    if (status === 'S-HUMAN_REVIEW') return '去决策 →';
-    if (status === 'S-NEED_CLARIFICATION') return '去回答 →';
+    if (status === 'S-HUMAN_REVIEW') return '去决策';
+    if (status === 'S-NEED_CLARIFICATION') return '去回答';
     return '';
   }
 
@@ -2763,7 +2826,8 @@ export const CONSOLE_HTML = `<!doctype html>
           '<span class="proj-item-name">' + esc(shortRepo(p.repo)) + '</span>' +
           (p.needsYou > 0 ? '<span class="proj-attention">' + p.needsYou + ' 待处理</span>' : '') +
         '</div>' +
-        '<div class="proj-item-sub">' + esc(projectSubline(p)) + '</div>' +
+        '<div class="proj-item-sub"><span class="facts">' + esc(projectFacts(p)) + '</span>' +
+          '<span class="time">' + esc(fmtListTime(p.lastUpdated)) + '</span></div>' +
       '</li>';
     }
     list.innerHTML = html || '<li class="empty" style="padding:24px 12px">没有匹配的项目</li>';
@@ -2786,7 +2850,7 @@ export const CONSOLE_HTML = `<!doctype html>
     var meta = [c.all + ' 个任务', p.runs + ' 轮'];
     if (p.cost > 0) meta.push('累计 ' + fmtCostShort(p.cost));
     if (p.budget > 0) meta.push('预算 ' + fmtCostShort(p.budget));
-    meta.push('最近更新 ' + fmtListTime(p.lastUpdated));
+    meta.push(fmtListTime(p.lastUpdated) + ' 更新');
 
     var counts = statusCounts(p.tasks);
     var filterDefs = [['all', '全部'], ['stage', '运行中'], ['gate', '待介入'], ['done', '已完成'], ['bad', '异常']];
@@ -2823,7 +2887,7 @@ export const CONSOLE_HTML = `<!doctype html>
       var rows = groups[gk];
       if (rows.length === 0) continue;
       var hint = projectGroupHint(gk);
-      body += '<section class="proj-group">' +
+      body += '<section class="proj-group ' + gk + '">' +
         '<div class="proj-group-head">' +
           '<h3 class="proj-group-title ' + gk + '">' + groupNames[gk] +
             '<span class="n">' + rows.length + '</span></h3>' +
@@ -2836,6 +2900,7 @@ export const CONSOLE_HTML = `<!doctype html>
         body += '<li class="proj-row" data-task-id="' + esc(t.id) + '">' +
           badge(t.status, true) +
           '<span class="proj-row-title" title="' + esc(t.title) + '">' + esc(t.title) + '</span>' +
+          ladderHtml(t.status) +
           '<span class="proj-row-time">更新 ' + esc(fmtListTime(t.updated_at)) + '</span>' +
           (cta ? '<span class="proj-row-cta">' + cta + '</span>' : '') +
         '</li>';
@@ -2851,7 +2916,7 @@ export const CONSOLE_HTML = `<!doctype html>
       '<div class="view-head">' +
         '<h2 class="cockpit-title" title="' + esc(p.repo) + '">' + esc(shortRepo(p.repo)) + '</h2>' +
         '<p class="proj-summary">' + projectSummary(p) + '</p>' +
-        '<p class="proj-meta">' + esc(meta.join(' · ')) + '</p>' +
+        '<p class="proj-meta">' + esc(meta.join('，')) + '</p>' +
       '</div>' +
       '<div class="view-body">' +
         '<div class="proj-toolbar">' + filterHtml +
@@ -3005,7 +3070,7 @@ export const CONSOLE_HTML = `<!doctype html>
 
   function renderOverviewMetrics(s) {
     var html = '<div class="summary-grid">' +
-      statBox('运行次数', String(s.runs), s.runs > 0 ? s.runs_ok + ' 成功 · ' + s.runs_failed + ' 失败' : '这段时间没有 Run') +
+      statBox('运行次数', String(s.runs), s.runs > 0 ? s.runs_ok + ' 成功，' + s.runs_failed + ' 失败' : '这段时间没有 Run') +
       statBox('完成任务', String(s.tasks_done), s.tasks_failed > 0 ? s.tasks_failed + ' 个失败 / 驳回 / 放弃' : '全部走到 S-DONE') +
       statBox('问题闭环', String(s.issues_solved), '完成任务的关联 feedback 去重数') +
       statBox('成本', fmtCost(s.cost), s.runs > 0 ? '平均每次 ' + fmtCost(s.cost / s.runs) : '—') +
@@ -3036,7 +3101,7 @@ export const CONSOLE_HTML = `<!doctype html>
     var html = '<div class="card">' +
       '<div class="card-header"><h3>近 14 天运行</h3>' +
         '<div class="ov-strip-legend">' +
-          '<span><i style="background:var(--stage)"></i>成功</span>' +
+          '<span><i style="background:var(--good)"></i>成功</span>' +
           '<span><i style="background:var(--bad)"></i>失败</span>' +
         '</div>' +
       '</div>' +
@@ -3404,38 +3469,31 @@ export const CONSOLE_HTML = `<!doctype html>
       if (s === status) {
         cls += ' current' + (s === 'S-DONE' ? ' done-term' : '');
         dur = currentDur;
-        metaText = s === 'S-DONE' ? '✓ 已完成' : (currentDur != null ? '● ' + fmtDurationMs(currentDur) : '● 进行中');
+        metaText = s === 'S-DONE' ? '已完成' : (currentDur != null ? fmtDurationMs(currentDur) : '进行中');
       } else if (traj.visited[s]) {
         cls += ' done';
         dur = traj.durationByState[s] != null ? traj.durationByState[s] : null;
-        metaText = '✓ ' + (dur != null ? fmtDurationMs(dur) : '已通过');
+        metaText = dur != null ? fmtDurationMs(dur) : '已通过';
       } else if (i < traj.maxVisitedMainIdx) {
         cls += ' skipped';
-        metaText = '↷ 已跳过';
+        metaText = '已跳过';
       }
       if (s === departFrom) {
         cls += ' departed';
-        metaText = dur != null ? '↗ ' + fmtDurationMs(dur) : '↗ 分出';
+        metaText = dur != null ? '分出 ' + fmtDurationMs(dur) : '分出';
       }
 
       var pct = durationPct(dur, maxDur);
-      var title = s + (label !== shortName ? ' · ' + label : '') + (trId ? '（由 ' + trId + ' 转入）' : '');
+      var title = s + (label !== shortName ? '，' + label : '') + (trId ? '（由 ' + trId + ' 转入）' : '');
       if (s === departFrom) title += '（由此分出至 ' + (statusLabel(status) || status) + '）';
       var sinceAttr = (s === status && currentDur != null && traj.currentSince)
         ? ' data-since="' + esc(traj.currentSince) + '"'
         : '';
-      var prefixAttr = (s === status && dur != null) ? ' data-prefix="● "' : '';
       html += '<div class="' + cls + '"' + sinceAttr + ' title="' + esc(title) + '">' +
         '<span class="step-name">' + esc(label) + '</span>' +
-        '<div class="step-foot">' +
-          '<span class="step-meta"' + prefixAttr + '>' + esc(metaText) + '</span>' +
-        '</div>' +
-        (pct > 0 ? '<span class="step-bar"><i style="width:' + pct + '%"></i></span>' : '') +
+        '<span class="step-meta">' + esc(metaText) + '</span>' +
+        '<span class="step-bar"><i style="width:' + pct + '%"></i></span>' +
       '</div>';
-
-      if (i < MAIN_PATH.length - 1) {
-        html += '<div class="arrow">→</div>';
-      }
     }
     html += '</div></div>';
 
@@ -3443,7 +3501,7 @@ export const CONSOLE_HTML = `<!doctype html>
       var isBad = statusKind(status) === 'bad';
       var lastSev = traj.lastStatusEvent ? (traj.lastStatusEvent.payload || {}) : {};
       var fromNode = lastSev.from || '主路径';
-      var viaTr = lastSev.transition ? ' (' + lastSev.transition + ' · ' + (lastSev.event || '') + ')' : '';
+      var viaTr = lastSev.transition ? '（' + lastSev.transition + '，' + (lastSev.event || '') + '）' : '';
       var reason = findGateOrFailureReason(d, lastSev);
       var dwellHtml = currentDur != null
         ? '<span class="branch-dwell" data-prefix="已停留 ">已停留 ' + esc(fmtDurationMs(currentDur)) + '</span>'
@@ -3710,7 +3768,7 @@ export const CONSOLE_HTML = `<!doctype html>
         '</div>' +
         '<div class="evidence-note">该阶段已试 ' + attempts.length + ' 轮，最后一轮 ' +
           esc(trigger.status) + (trigger.error_kind ? '（' + esc(trigger.error_kind) + '）' : '') +
-          ' —— 重试额度用尽才升级人工，所以「再跑一次」不在选项里。</div>';
+          '，重试额度用尽才升级人工，所以「再跑一次」不在选项里。</div>';
     }
 
     return '<div class="decision-block">' +
@@ -3718,9 +3776,9 @@ export const CONSOLE_HTML = `<!doctype html>
       '<div class="decision-evidence">' +
         '<div class="evidence-row">' +
           '<span class="evidence-key">触发</span>' +
-          '<span class="evidence-val">Run <b>' + esc(trigger.stage) + ' #' + esc(trigger.attempt) + '</b> · ' +
-            esc(trigger.status) + (trigger.error_kind ? ' · <code>' + esc(trigger.error_kind) + '</code>' : '') +
-            ' · ' + esc(calcDuration(trigger.started_at, trigger.ended_at)) +
+          '<span class="evidence-val">Run <b>' + esc(trigger.stage) + ' #' + esc(trigger.attempt) + '</b>，' +
+            esc(trigger.status) + (trigger.error_kind ? '（<code>' + esc(trigger.error_kind) + '</code>）' : '') +
+            '，' + esc(calcDuration(trigger.started_at, trigger.ended_at)) +
           '</span>' +
         '</div>' +
         (trigger.error_detail
@@ -3819,9 +3877,11 @@ export const CONSOLE_HTML = `<!doctype html>
     var html = '';
     for (var j = 0; j < options.length; j++) {
       var o = options[j];
-      html += '<div class="option-card' + (o.terminal ? ' danger' : '') + '" data-option="' + o.key + '">' +
-        '<div class="option-title">' + esc(o.title) + '</div>' +
-        (o.terminal ? '<div class="option-terminal">终态 · 不可恢复</div>' : '') +
+      html += '<div class="option-card ' + esc(o.key) + (o.terminal ? ' danger' : '') + '" data-option="' + o.key + '">' +
+        '<div class="option-head">' +
+          '<span class="option-title">' + esc(o.title) + '</span>' +
+          (o.terminal ? '<span class="option-terminal">终态，不可恢复</span>' : '') +
+        '</div>' +
         '<div class="option-effect">' + esc(o.effect) + '</div>' +
         '<div class="option-note">' + esc(o.note) + '</div>' +
         '<textarea data-note-for="' + o.key + '" rows="2" placeholder="' +
@@ -3963,8 +4023,8 @@ export const CONSOLE_HTML = `<!doctype html>
     var text;
 
     if (isTerm) {
-      text = '<b>' + esc(label) + '</b> · 终态不可再变更（I8）。全程 ' +
-        (d.runs || []).length + ' 个 Run · ' + (d.artifacts || []).length + ' 个产物 · ' + (d.events || []).length + ' 个事件。';
+      text = '<b>' + esc(label) + '</b>，终态不可再变更（I8）。全程 ' +
+        (d.runs || []).length + ' 个 Run，' + (d.artifacts || []).length + ' 个产物，' + (d.events || []).length + ' 个事件。';
     } else {
       var hint = shortStatusReason(traj, status) || STATUS_HINTS[status] || '';
       text = '<b>' + esc(label) + '</b>' + (hint ? '：' + esc(hint) : '');
@@ -3984,9 +4044,9 @@ export const CONSOLE_HTML = `<!doctype html>
             : (statusLabel(n.to) || n.to);
           opts.push(n.id + ' ' + (n.on || []).map(eventLabel).join(' / ') + ' → ' + toLabel);
         }
-        text += '<span class="ss-next"> · 下一步：' + esc(opts.join('；') + (nexts.length > 3 ? ' 等' : '')) + '</span>';
+        text += '<span class="ss-next">。下一步：' + esc(opts.join('；') + (nexts.length > 3 ? ' 等' : '')) + '</span>';
       } else {
-        text += '<span class="ss-next"> · 当前状态没有可用的下一次转移。</span>';
+        text += '<span class="ss-next">。当前状态没有可用的下一次转移。</span>';
       }
     }
 
@@ -4086,10 +4146,10 @@ export const CONSOLE_HTML = `<!doctype html>
       '<h2 class="cockpit-title">' + esc(t.title) + '</h2>' +
       '<div class="cockpit-meta">' +
         '<span class="cockpit-meta-item">' + repoHtml + '</span>' +
-        '<span class="cockpit-meta-item">分支: <code>' + esc(t.work_branch || '—') + '</code> → <code>' + esc(t.base_branch || 'main') + '</code></span>' +
-        '<span class="cockpit-meta-item">创建: ' + esc(fmtTime(t.created_at)) + '</span>' +
-        '<span class="cockpit-meta-item">更新: ' + esc(fmtTime(t.updated_at)) + '</span>' +
-        (t.terminal_at ? '<span class="cockpit-meta-item">终态: ' + esc(fmtTime(t.terminal_at)) + '</span>' : '') +
+        '<span class="cockpit-meta-item">分支 <code>' + esc(t.work_branch || '—') + '</code> → <code>' + esc(t.base_branch || 'main') + '</code></span>' +
+        '<span class="cockpit-meta-item">创建于 ' + esc(fmtTime(t.created_at)) + '</span>' +
+        '<span class="cockpit-meta-item">更新于 ' + esc(fmtTime(t.updated_at)) + '</span>' +
+        (t.terminal_at ? '<span class="cockpit-meta-item">收于 ' + esc(fmtTime(t.terminal_at)) + '</span>' : '') +
       '</div>' +
       '</div>' +
       '<div class="view-body">' +
@@ -4097,28 +4157,28 @@ export const CONSOLE_HTML = `<!doctype html>
       renderHumanCallout(t) +
       '<div class="summary-grid">' +
         '<div class="stat-box">' +
-          '<div class="stat-label">总历时 (Duration)</div>' +
+          '<div class="stat-label">总历时</div>' +
           '<div class="stat-value">' + esc(calcDuration(t.created_at, t.terminal_at || t.updated_at)) + '</div>' +
-          '<div class="stat-sub">' + (t.terminal_at ? '已达不可变终态 (I8)' : '非终态 · 持续追踪中') + '</div>' +
+          '<div class="stat-sub">' + (t.terminal_at ? '已达不可变终态（I8）' : '非终态，持续追踪中') + '</div>' +
         '</div>' +
         '<div class="stat-box">' +
           '<div class="stat-label">Run 执行轮次</div>' +
           '<div class="stat-value">' + runs.length + ' <span style="font-size:12px;font-weight:500" class="muted">次</span></div>' +
-          '<div class="stat-sub">' + succRuns + ' 成功' + (failRuns > 0 ? ' · ' + failRuns + ' 失败' : '') + '</div>' +
+          '<div class="stat-sub">' + succRuns + ' 成功' + (failRuns > 0 ? '，' + failRuns + ' 失败' : '') + '</div>' +
         '</div>' +
         '<div class="stat-box">' +
-          '<div class="stat-label">Token 消耗 (In / Out)</div>' +
+          '<div class="stat-label">Token 消耗</div>' +
           '<div class="stat-value">' + fmtNum(totalTokensIn + totalTokensOut) + '</div>' +
-          '<div class="stat-sub">入 ' + fmtNum(totalTokensIn) + ' · 出 ' + fmtNum(totalTokensOut) + '</div>' +
+          '<div class="stat-sub">入 ' + fmtNum(totalTokensIn) + '，出 ' + fmtNum(totalTokensOut) + '</div>' +
         '</div>' +
         '<div class="stat-box">' +
-          '<div class="stat-label">累计成本 (Cost USD)</div>' +
+          '<div class="stat-label">累计成本</div>' +
           '<div class="stat-value">' + fmtCost(totalCost) + '</div>' +
-          '<div class="stat-sub">口径: ' + esc(costBasis || (totalCost > 0 ? 'estimated' : '—')) + (t.budget_usd ? ' / 预算 $' + esc(t.budget_usd) : '') + '</div>' +
+          '<div class="stat-sub">口径 ' + esc(costBasis ? costBasisLabel(costBasis) : (totalCost > 0 ? '估算' : '—')) + (t.budget_usd ? '，预算 $' + esc(t.budget_usd) : '') + '</div>' +
         '</div>' +
         '<div class="stat-box">' +
           '<div class="stat-label">Fact Plane 沉淀</div>' +
-          '<div class="stat-value">' + artifacts.length + ' 产物 · ' + events.length + ' 事件</div>' +
+          '<div class="stat-value" style="font-size:15px">' + artifacts.length + ' 产物，' + events.length + ' 事件</div>' +
           '<div class="stat-sub">可由 readEvents 完整重建</div>' +
         '</div>' +
       '</div>' +
@@ -4139,26 +4199,26 @@ export const CONSOLE_HTML = `<!doctype html>
 
     var html = '<div class="card">' +
       '<div class="card-header">' +
-        '<h3>RFC 工程规格书 · ' + esc(b.title || art.key || 'RFC') + ' <span class="badge purple">v' + esc(art.version) + (historyCount > 1 ? ' / 共' + historyCount + '版' : '') + '</span></h3>' +
+        '<h3>RFC 工程规格书：' + esc(b.title || art.key || 'RFC') + ' <span class="badge purple">v' + esc(art.version) + (historyCount > 1 ? ' / 共' + historyCount + '版' : '') + '</span></h3>' +
         '<span class="muted mono">' + esc(fmtTime(art.committed_at)) + '</span>' +
       '</div>';
 
     if (b.problem) {
       html += '<div class="rfc-section">' +
         '<h4 class="rfc-sec-title">问题描述 (Problem Statement)</h4>' +
-        '<div style="color:var(--text-sec);font-size:13.5px;line-height:1.7">' + esc(b.problem) + '</div>' +
+        '<div style="color:var(--ink-2);font-size:13.5px;line-height:1.7">' + esc(b.problem) + '</div>' +
       '</div>';
     }
 
     if (goals.length > 0 || nonGoals.length > 0) {
       html += '<div class="rfc-section"><div class="rfc-two-col">';
       if (goals.length > 0) {
-        html += '<div><h4 class="rfc-sec-title">目标 (Goals · ' + goals.length + ')</h4><ul class="rfc-list">';
+        html += '<div><h4 class="rfc-sec-title">目标（' + goals.length + '）</h4><ul class="rfc-list">';
         for (var g = 0; g < goals.length; g++) html += '<li>' + esc(goals[g]) + '</li>';
         html += '</ul></div>';
       }
       if (nonGoals.length > 0) {
-        html += '<div><h4 class="rfc-sec-title">非目标 (Non-Goals · ' + nonGoals.length + ')</h4><ul class="rfc-list">';
+        html += '<div><h4 class="rfc-sec-title">非目标（' + nonGoals.length + '）</h4><ul class="rfc-list">';
         for (var ng = 0; ng < nonGoals.length; ng++) html += '<li>' + esc(nonGoals[ng]) + '</li>';
         html += '</ul></div>';
       }
@@ -4169,7 +4229,7 @@ export const CONSOLE_HTML = `<!doctype html>
       html += '<div class="rfc-section">' +
         '<h4 class="rfc-sec-title">拟议方案 (Proposed Change)</h4>' +
         (pc.summary ? '<div style="font-weight:600;margin-bottom:6px">' + esc(pc.summary) + '</div>' : '') +
-        (pc.approach ? '<div style="white-space:pre-wrap;color:var(--text-sec);font-size:13.5px;line-height:1.7">' + esc(pc.approach) + '</div>' : '');
+        (pc.approach ? '<div style="white-space:pre-wrap;color:var(--ink-2);font-size:13.5px;line-height:1.7">' + esc(pc.approach) + '</div>' : '');
       if (areas.length > 0) {
         html += '<div class="file-tags">';
         for (var fa = 0; fa < areas.length; fa++) {
@@ -4182,7 +4242,7 @@ export const CONSOLE_HTML = `<!doctype html>
 
     if (acs.length > 0) {
       html += '<div class="rfc-section">' +
-        '<h4 class="rfc-sec-title">验收标准 (Acceptance Criteria · ' + acs.length + ')</h4>' +
+        '<h4 class="rfc-sec-title">验收标准（' + acs.length + '）</h4>' +
         '<table class="ac-table"><thead><tr><th>ID</th><th>验收判据</th><th>验证方式</th></tr></thead><tbody>';
       for (var c = 0; c < acs.length; c++) {
         var ac = acs[c] || {};
@@ -4223,7 +4283,7 @@ export const CONSOLE_HTML = `<!doctype html>
 
     var html = '<div class="card">' +
       '<div class="card-header">' +
-        '<h3>策略引擎裁决 · ' + esc(b.decision_point || art.key || 'policy') + '</h3>' +
+        '<h3>策略引擎裁决：' + esc(b.decision_point || art.key || 'policy') + '</h3>' +
         '<span class="badge ' + (isAuto ? 'done' : 'gate') + '">' + esc(b.decision || '—') + '</span>' +
       '</div>' +
       '<div style="margin-bottom:8px;font-size:13px"><b>裁决理由：</b>' + esc(b.reason || '—') +
@@ -4265,8 +4325,8 @@ export const CONSOLE_HTML = `<!doctype html>
     // 1. Feedback Origin
     html += '<div class="card">' +
       '<div class="card-header">' +
-        '<h3>需求起源 · ' + feedbacks.length + '</h3>' +
-        (feedbacks.length > 0 ? '<span class="badge stage">source: ' + esc(feedbacks[0].source) + '</span>' : '') +
+        '<h3>需求起源（' + feedbacks.length + '）</h3>' +
+        (feedbacks.length > 0 ? '<span class="badge stage">来源 ' + esc(feedbacks[0].source) + '</span>' : '') +
       '</div>';
     if (feedbacks.length === 0) {
       html += '<div class="muted">该任务未关联 feedback 表记录（可能由内部测试直接创建）。</div>';
@@ -4275,9 +4335,9 @@ export const CONSOLE_HTML = `<!doctype html>
         var fb = feedbacks[f];
         html += '<div style="margin-bottom:' + (f < feedbacks.length - 1 ? '12px' : '0') + '">' +
           '<div class="cockpit-meta" style="border-bottom:0;padding-bottom:6px">' +
-            '<span>外部引用: ' + formatExternalRefLink(fb.external_ref, d.task.repo) + '</span>' +
-            '<span>接收时间: ' + esc(fmtTime(fb.received_at)) + '</span>' +
-            '<span>Feedback ID: <code>' + esc(shortId(fb.id)) + '</code></span>' +
+            '<span>外部引用 ' + formatExternalRefLink(fb.external_ref, d.task.repo) + '</span>' +
+            '<span>接收时间 ' + esc(fmtTime(fb.received_at)) + '</span>' +
+            '<span>反馈 <code>' + esc(shortId(fb.id)) + '</code></span>' +
           '</div>' +
           '<div class="feedback-body">' + esc(fb.body) + '</div>' +
         '</div>';
@@ -4310,8 +4370,8 @@ export const CONSOLE_HTML = `<!doctype html>
     // 2. Stage Outcomes
     html += '<div class="card">' +
       '<div class="card-header">' +
-        '<h3>阶段评审结论 · ' + outcomes.length + '</h3>' +
-        '<span class="muted" style="font-size:12px">状态机转移守卫 (Guard) 的结构化输入源</span>' +
+        '<h3>阶段评审结论（' + outcomes.length + '）</h3>' +
+        '<span class="muted" style="font-size:12px">状态机转移守卫的结构化输入源</span>' +
       '</div>';
     if (outcomes.length === 0) {
       html += '<div class="muted">暂无阶段结论产物。</div>';
@@ -4328,7 +4388,7 @@ export const CONSOLE_HTML = `<!doctype html>
           '</div>' +
           '<div class="outcome-reason">' + esc(ob.reason || '—') + '</div>' +
           '<details data-expand-id="outcome-raw-' + esc(stg) + '-' + esc(oa.version) + '">' +
-            '<summary>v' + esc(oa.version) + ' · ' + esc(fmtShortTime(oa.committed_at)) + ' · JSON</summary>' +
+            '<summary>v' + esc(oa.version) + '，' + esc(fmtShortTime(oa.committed_at)) + '，JSON</summary>' +
             '<pre class="mono">' + esc(JSON.stringify(ob, null, 2)) + '</pre>' +
           '</details>' +
         '</div>';
@@ -4349,11 +4409,11 @@ export const CONSOLE_HTML = `<!doctype html>
 
     // 5. Other Artifacts (state, checkpoint, critic_review, capability_request)
     if (others.length > 0) {
-      html += '<div class="card"><div class="card-header"><h3>其他结构化产物 · ' + others.length + '</h3></div>';
+      html += '<div class="card"><div class="card-header"><h3>其他结构化产物（' + others.length + '）</h3></div>';
       for (var x = 0; x < others.length; x++) {
         var xa = others[x].latest;
         html += '<details data-expand-id="art-other-' + esc(xa.kind) + '-' + esc(xa.key) + '" style="margin-bottom:8px">' +
-          '<summary><code>' + esc(xa.kind) + '</code>' + (xa.key ? ' · <code>' + esc(xa.key) + '</code>' : '') +
+          '<summary><code>' + esc(xa.kind) + '</code>' + (xa.key ? '，<code>' + esc(xa.key) + '</code>' : '') +
           ' v' + esc(xa.version) + ' <span class="muted">(' + esc(fmtTime(xa.committed_at)) + ')</span></summary>' +
           '<pre class="mono">' + esc(JSON.stringify(xa.body, null, 2)) + '</pre>' +
         '</details>';
@@ -4379,7 +4439,7 @@ export const CONSOLE_HTML = `<!doctype html>
 
     var html = '<div class="card">' +
       '<div class="card-header">' +
-        '<h3>执行轮次与上下文组装 · ' + runs.length + '</h3>' +
+        '<h3>执行轮次与上下文组装（' + runs.length + '）</h3>' +
         '<span class="muted" style="font-size:12px">Session 销毁后 Run 记录与 Context 快照永久留存于 Fact Plane</span>' +
       '</div>';
 
@@ -4399,26 +4459,26 @@ export const CONSOLE_HTML = `<!doctype html>
         '<div class="run-card-head">' +
           '<div class="run-card-left">' +
             '<span class="run-stage-badge">' + esc(run.stage) + ' #' + esc(run.attempt) + '</span>' +
-            '<span class="badge neutral">Role: ' + esc(run.role || '—') + '</span>' +
+            '<span class="badge neutral">角色 ' + esc(run.role || '—') + '</span>' +
             runStatusBadge(run.status) +
-            '<span class="badge purple">Harness: ' + esc(run.harness_id || '—') + (run.harness_tier ? ' · ' + esc(run.harness_tier) : '') + '</span>' +
+            '<span class="badge purple">harness ' + esc(run.harness_id || '—') + (run.harness_tier ? '，' + esc(run.harness_tier) : '') + '</span>' +
           '</div>' +
           '<div style="display:flex;align-items:center;gap:8px">' +
             (run.id ? '<button type="button" class="copy-btn filter-run-btn" data-run-id="' + esc(run.id) + '">查看此 Run 事件</button>' : '') +
           '</div>' +
         '</div>' +
         '<div class="run-metrics-row">' +
-          '<span>耗时: <b>' + esc(calcDuration(run.started_at, run.ended_at)) + '</b></span>' +
-          '<span>Tokens: <b>' + fmtNum(tokIn + tokOut) + '</b> (入 ' + fmtNum(tokIn) + ' / 出 ' + fmtNum(tokOut) + ')</span>' +
-          '<span>成本: <b>' + fmtCost(run.cost_usd) + '</b>' + (run.cost_basis ? ' (' + esc(run.cost_basis) + ')' : '') + '</span>' +
-          '<span>开始: ' + esc(fmtShortTime(run.started_at)) + '</span>' +
-          '<span>结束: ' + esc(fmtShortTime(run.ended_at)) + '</span>' +
-          (run.id ? '<span>Run ID: <code>' + esc(shortId(run.id)) + '</code></span>' : '') +
+          '<span>耗时 <b>' + esc(calcDuration(run.started_at, run.ended_at)) + '</b></span>' +
+          '<span>Tokens <b>' + fmtNum(tokIn + tokOut) + '</b>（入 ' + fmtNum(tokIn) + '，出 ' + fmtNum(tokOut) + '）</span>' +
+          '<span>成本 <b>' + fmtCost(run.cost_usd) + '</b>' + (run.cost_basis ? '（' + esc(costBasisLabel(run.cost_basis)) + '）' : '') + '</span>' +
+          '<span>开始 ' + esc(fmtShortTime(run.started_at)) + '</span>' +
+          '<span>结束 ' + esc(fmtShortTime(run.ended_at)) + '</span>' +
+          (run.id ? '<span>Run <code>' + esc(shortId(run.id)) + '</code></span>' : '') +
         '</div>';
 
       if (run.error_kind || run.error_detail) {
         html += '<div class="branch-callout bad" style="margin-top:8px">' +
-          '<div class="branch-callout-head">错误类型: <code>' + esc(run.error_kind || 'ERROR') + '</code></div>' +
+          '<div class="branch-callout-head">错误类型 <code>' + esc(run.error_kind || 'ERROR') + '</code></div>' +
           (run.error_detail ? '<div class="branch-callout-reason mono">' + esc(run.error_detail) + '</div>' : '') +
         '</div>';
       }
@@ -4431,24 +4491,25 @@ export const CONSOLE_HTML = `<!doctype html>
         var dropped = Array.isArray(ctx.dropped) ? ctx.dropped : [];
         html += '<div class="ctx-box">' +
           '<div class="ctx-head">' +
-            '<span><b>ContextBuilder</b> · Recipe <code>' + esc(ctx.recipe_id || run.role || '—') + '</code> (v' + esc(ctx.recipe_version || '1') + ')</span>' +
-            '<span class="mono">预算水位: <b>' + fmtNum(usedTok) + '</b> / ' + fmtNum(budTok) + ' tokens (' + pct.toFixed(1) + '%)</span>' +
+            '<span><b>ContextBuilder</b> 用 Recipe <code>' + esc(ctx.recipe_id || run.role || '—') + '</code>（v' + esc(ctx.recipe_version || '1') + '）拼装</span>' +
+            '<span class="mono">预算水位 <b>' + fmtNum(usedTok) + '</b> / ' + fmtNum(budTok) + ' tokens（' + pct.toFixed(1) + '%）</span>' +
           '</div>' +
           '<div class="progress-track"><div class="progress-fill" style="width:' + pct.toFixed(1) + '%"></div></div>' +
           '<div class="ctx-sections">';
         for (var s = 0; s < secs.length; s++) {
           var sec = secs[s];
-          html += '<span class="ctx-sec-pill"><b>' + esc(sec.id) + '</b> · ' + fmtNum(sec.tokens) + ' tok · <span class="muted">' + esc(sec.source_ref) + '</span></span>';
+          html += '<span class="ctx-sec-pill" title="' + esc(sec.source_ref) + '"><b>' + esc(sec.id) + '</b>' + fmtNum(sec.tokens) + ' tok<span class="muted">' + esc(sec.source_ref) + '</span></span>';
         }
         if (dropped.length > 0) {
-          html += '<span class="badge bad">已裁剪丢弃: ' + dropped.length + ' 项</span>';
+          html += '<span class="badge bad"><span class="dot"></span>' +
+            '<span class="badge-zh">已裁剪丢弃 ' + dropped.length + ' 项</span></span>';
         }
         html += '</div></div>';
       }
 
       if (diff && diff.files_changed && diff.files_changed.length > 0) {
         html += '<div style="margin-top:8px;font-size:12px" class="mono muted">' +
-          '产生工作区代码变更: <b>' + diff.files_changed.length + ' 个文件</b> (' + fmtNum(diff.patch_chars) + ' chars) — 可在「代码变更」Tab 查看完整 Diff' +
+          '产生工作区代码变更 <b>' + diff.files_changed.length + ' 个文件</b>（' + fmtNum(diff.patch_chars) + ' 字符），可在「代码变更」标签页查看完整 Diff' +
         '</div>';
       }
 
@@ -4457,7 +4518,7 @@ export const CONSOLE_HTML = `<!doctype html>
     html += '</div>';
 
     if (timers.length > 0) {
-      html += '<div class="card"><div class="card-header"><h3>持久化定时器 · ' + timers.length + '</h3></div>' +
+      html += '<div class="card"><div class="card-header"><h3>持久化定时器（' + timers.length + '）</h3></div>' +
         '<table><thead><tr><th>类型 (Kind)</th><th>状态 (State)</th><th>关联 Run</th><th>到期时间 (Due)</th><th>触发时间 (Fired)</th></tr></thead><tbody>';
       for (var t = 0; t < timers.length; t++) {
         var tm = timers[t];
@@ -4524,7 +4585,7 @@ export const CONSOLE_HTML = `<!doctype html>
     var diffEvents = extractDiffEvents(d.events || []);
     var html = '<div class="card">' +
       '<div class="card-header">' +
-        '<h3>工作区代码变更 · ' + diffEvents.length + '</h3>' +
+        '<h3>工作区代码变更（' + diffEvents.length + '）</h3>' +
         '<span class="muted" style="font-size:12px">由 collectChanges 采集并持久化于事件流</span>' +
       '</div>';
 
@@ -4557,8 +4618,8 @@ export const CONSOLE_HTML = `<!doctype html>
     }
 
     html += '<div class="run-metrics-row" style="margin-bottom:12px">' +
-      '<span>阶段: <b>' + esc(p.stage || 'develop') + ' #' + esc(p.attempt || 1) + '</b> (事件 #' + esc(activeEv.seq) + ')</span>' +
-      '<span>变更文件: <b>' + parsedFiles.length + '</b> 个</span>' +
+      '<span>阶段 <b>' + esc(p.stage || 'develop') + ' #' + esc(p.attempt || 1) + '</b>（事件 #' + esc(activeEv.seq) + '）</span>' +
+      '<span>变更文件 <b>' + parsedFiles.length + '</b> 个</span>' +
       '<span class="diff-add-stat">+' + totalAdd + ' 行新增</span>' +
       '<span class="diff-del-stat">-' + totalDel + ' 行删除</span>' +
       (p.patch_truncated ? '<span class="badge gate">Patch 已截断</span>' : '') +
@@ -4619,32 +4680,32 @@ export const CONSOLE_HTML = `<!doctype html>
     var p = ev.payload || {};
     var t = ev.type;
     if (t === 'TaskStatusChanged') {
-      return (p.transition ? '[' + p.transition + '] ' : '') + (p.from || '∅') + ' → ' + (p.to || '?') + (p.event ? ' (触发: ' + p.event + ')' : '');
+      return (p.transition ? '[' + p.transition + '] ' : '') + (p.from || '∅') + ' → ' + (p.to || '?') + (p.event ? '（触发 ' + p.event + '）' : '');
     }
     if (t === 'RunCreated') {
-      return '创建 Run: ' + (p.stage || '') + ' #' + (p.attempt || 1) + (p.idempotency_key ? ' (' + p.idempotency_key + ')' : '');
+      return '创建 Run ' + (p.stage || '') + ' #' + (p.attempt || 1) + (p.idempotency_key ? '（' + p.idempotency_key + '）' : '');
     }
     if (t === 'ContextBuilt') {
       var secCnt = Array.isArray(p.sections) ? p.sections.length : 0;
-      return 'Recipe ' + (p.recipe_id || '') + ': ' + fmtNum(p.total_tokens) + ' / ' + fmtNum(p.budget_tokens) + ' tokens (' + secCnt + ' sections)';
+      return 'Recipe ' + (p.recipe_id || '') + ' 组装 ' + fmtNum(p.total_tokens) + ' / ' + fmtNum(p.budget_tokens) + ' tokens（' + secCnt + ' 段）';
     }
     if (t === 'ProposalAccepted' || t === 'ProposalSubmitted' || t === 'ProposalRejected') {
-      return '产物提案: kind=' + (p.kind || '') + (p.key ? ' key=' + p.key : '') + (p.attempt ? ' (attempt #' + p.attempt + ')' : '');
+      return '产物提案 kind=' + (p.kind || '') + (p.key ? ' key=' + p.key : '') + (p.attempt ? '（第 ' + p.attempt + ' 次）' : '');
     }
     if (t === 'WorkspaceDiffCollected') {
       var fCnt = Array.isArray(p.files_changed) ? p.files_changed.length : 0;
-      return '阶段 ' + (p.stage || '') + ' #' + (p.attempt || 1) + ': ' + fCnt + ' 个文件变更 (' + fmtNum(p.patch_chars || 0) + ' chars)';
+      return '阶段 ' + (p.stage || '') + ' #' + (p.attempt || 1) + '，' + fCnt + ' 个文件变更（' + fmtNum(p.patch_chars || 0) + ' 字符）';
     }
     if (t === 'PolicyEvaluated') {
-      return '判定点 ' + (p.point || '') + ' → 决策: ' + (p.decision || '');
+      return '判定点 ' + (p.point || '') + ' → 决策 ' + (p.decision || '');
     }
     if (t === 'SideEffectApplied' || t === 'SideEffectIntent') {
-      if (p.kind === 'CreatePullRequest') return p.kind + ': PR #' + (p.pr_number || '') + ' (' + (p.pr_url || '') + ')';
-      if (p.kind === 'CreateBranch') return p.kind + ': ' + (p.branch || '');
+      if (p.kind === 'CreatePullRequest') return '开 PR #' + (p.pr_number || '') + '（' + (p.pr_url || '') + '）';
+      if (p.kind === 'CreateBranch') return '建分支 ' + (p.branch || '');
       return (p.kind || t) + (p.transition ? ' [' + p.transition + ']' : '');
     }
     if (t === 'TaskCreated') {
-      return '初始化任务 (trace_id: ' + shortId(p.trace_id) + ')';
+      return '初始化任务（trace ' + shortId(p.trace_id) + '）';
     }
     var raw = JSON.stringify(p);
     return raw.length > 110 ? raw.slice(0, 110) + '…' : raw;
@@ -4673,7 +4734,7 @@ export const CONSOLE_HTML = `<!doctype html>
 
     var html = '<div class="card">' +
       '<div class="card-header">' +
-        '<h3>事实事件时间线 · ' + filtered.length + ' / ' + events.length + '</h3>' +
+        '<h3>事实事件时间线（' + filtered.length + ' / ' + events.length + '）</h3>' +
         '<div style="display:flex;gap:6px">' +
           '<button type="button" class="copy-btn" id="expand-all-events">全部展开 JSON</button>' +
           '<button type="button" class="copy-btn" id="collapse-all-events">全部收起</button>' +
@@ -4758,10 +4819,10 @@ export const CONSOLE_HTML = `<!doctype html>
       '<div class="card-header">' +
         '<h3>状态机轨迹</h3>' +
         '<div class="legend-bar">' +
-          '<span class="legend-item"><span class="legend-swatch" style="background:var(--done)"></span>已实际通过</span>' +
-          '<span class="legend-item"><span class="legend-swatch" style="background:var(--accent)"></span>当前所处状态</span>' +
-          '<span class="legend-item"><span class="legend-swatch" style="border:1px dashed var(--muted)"></span>已跳过分支</span>' +
-          '<span class="legend-item"><span class="legend-swatch" style="background:var(--line)"></span>未到达</span>' +
+          '<span class="legend-item"><span class="legend-swatch" style="background:var(--good)"></span>已实际通过</span>' +
+          '<span class="legend-item"><span class="legend-swatch" style="background:var(--ink)"></span>当前所处状态</span>' +
+          '<span class="legend-item"><span class="legend-swatch" style="border:1px dashed var(--ink-3)"></span>已跳过分支</span>' +
+          '<span class="legend-item"><span class="legend-swatch" style="background:var(--rule)"></span>未到达</span>' +
         '</div>' +
       '</div>' +
       renderPipeline(d) +
