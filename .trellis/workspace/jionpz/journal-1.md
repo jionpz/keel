@@ -601,3 +601,24 @@ console 完成可读性/项目性改造：中文状态徽章、一句话现状�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 13: 控制台口令登录与会话鉴权
+
+**Date**: 2026-11-04
+**Task**: 控制台口令登录与会话鉴权
+**Branch**: `feat/console-login-auth`
+
+### Summary
+
+控制台从无鉴权改为强制口令登录：scrypt 哈希 + 常量时间比较、进程内会话与 HttpOnly/SameSite=Strict Cookie、按 IP 5 次/5 分钟与全局 20 次/5 分钟限流；新增与主页面同配色的登录页和顶栏退出入口；/healthz 对匿名只返回 {ok}；KEEL_CONSOLE_HOST 可配置对外但鉴权不降级。pnpm run check 731 通过，浏览器与 0.0.0.0 局域网实测通过。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `909a7af` | (see git log) |
+
+### Status
+
+[OK] **Completed**

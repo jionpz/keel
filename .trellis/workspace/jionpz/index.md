@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 12
+- **Total Sessions**: 13
 - **Last Active**: 2026-11-04
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~603 | Active |
+| `journal-1.md` | ~624 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 13 | 2026-11-04 | 控制台口令登录与会话鉴权 | `909a7af` | `feat/console-login-auth` |
 | 12 | 2026-11-04 | 修复工作区基线与生命周期（P0+P1） | `c0ad554` | `main` |
 | 11 | 2026-11-04 | 人工闸门决策页 | `a2e4a6d`, `c1837b8` | `main` |
 | 10 | 2026-11-04 | 人工闸门入口：keel decide / keel answer 与控制台可复制命令 | `23cb377` | `main` |
