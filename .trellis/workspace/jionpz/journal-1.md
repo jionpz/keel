@@ -575,7 +575,7 @@ console 完成可读性/项目性改造：中文状态徽章、一句话现状�
 
 | Hash | Message |
 |------|---------|
-| (pending) | (see git log) |
+| `08e9c88` | (see git log) |
 
 ### Status
 
