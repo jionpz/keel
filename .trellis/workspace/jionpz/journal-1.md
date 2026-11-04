@@ -580,3 +580,24 @@ console 完成可读性/项目性改造：中文状态徽章、一句话现状�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 12: 修复工作区基线与生命周期（P0+P1）
+
+**Date**: 2026-11-04
+**Task**: 修复工作区基线与生命周期（P0+P1）
+**Branch**: `main`
+
+### Summary
+
+落地 7 项 review 发现：CreateBranch 用 branchCreated 区分分支新建（删除后重建不伪造 base_sha）；CIPassed/CIFailed 必填 source 并落 TaskStatusChanged.payload.source；KEEL_HOME 从 cwd 向上解析、blob 根跟随 KEEL_HOME；T-015/T-024 增加 CleanWorkspace，清理失败写 SideEffectIntent 不回滚终态；ensureWorktree 路径校验 fail closed、陈旧元数据 prune 重试；新增 keel unlock 与 lock_timeout hint；decide reject 仅在已有 worktree 时准备工作区。pnpm run check 全绿（50 files / 700 tests）。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c0ad554` | (see git log) |
+
+### Status
+
+[OK] **Completed**

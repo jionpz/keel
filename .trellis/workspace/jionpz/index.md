@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 11
+- **Total Sessions**: 12
 - **Last Active**: 2026-11-04
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~533 | Active |
+| `journal-1.md` | ~603 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 12 | 2026-11-04 | 修复工作区基线与生命周期（P0+P1） | `c0ad554` | `main` |
 | 11 | 2026-11-04 | 人工闸门决策页 | `a2e4a6d`, `c1837b8` | `main` |
 | 10 | 2026-11-04 | 人工闸门入口：keel decide / keel answer 与控制台可复制命令 | `23cb377` | `main` |
 | 9 | 2026-11-04 | 接入自动化 poller：多仓库 issue 常驻扫描 | `3c9e604`, `8472c5f` | `main` |
