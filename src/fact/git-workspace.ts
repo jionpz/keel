@@ -33,14 +33,40 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { err, makeError, ok, type Result } from '../contracts/errors.js'
 import { withFileLock } from './file-lock.js'
+import { authEnvFor, gitAuthSecrets, readTokenFromEnv, redactSecrets } from './github-auth.js'
 import { resolveKeelHome, validateAttachedDir } from './project-root.js'
 import { workspaceError } from './workspace-error.js'
 
-const exec = promisify(execFile)
+type ExecResult = { readonly stdout: string; readonly stderr: string }
+
+/**
+ * git 子进程执行器。
+ *
+ * 抽成注入点不是为了「换个假 git 跑测试」，而是为了在真实 git 之上
+ * 捕获实际传给它的 argv 与 env —— 认证注入的安全性断言(header 在、token 不在 argv)
+ * 只能这样验证，起一个 https git server 既慢又证明不了 argv 干净。
+ */
+export type GitExec = (
+  file: string,
+  args: readonly string[],
+  opts?: { readonly env?: NodeJS.ProcessEnv },
+) => Promise<ExecResult>
+
+const execAsync = promisify(execFile)
+
+const defaultExec: GitExec = async (file, args, opts = {}) => {
+  const { stdout, stderr } = await execAsync(file, [...args], {
+    encoding: 'utf8',
+    ...(opts.env === undefined ? {} : { env: opts.env }),
+  })
+  return { stdout, stderr }
+}
 
 export interface GitWorkspaceOptions {
   /** 根目录。默认从 KEEL_HOME 解析为绝对路径 */
   readonly root?: string
+  /** 测试注入的 git 执行器；缺省用 `promisify(execFile)` */
+  readonly exec?: GitExec
 }
 
 export interface WorktreeInfo {
@@ -77,9 +103,11 @@ export function branchFor(taskId: string): string {
 
 export class GitWorkspace {
   private readonly root: string
+  private readonly exec: GitExec
 
   constructor(opts: GitWorkspaceOptions = {}) {
     this.root = opts.root ?? resolveKeelHome()
+    this.exec = opts.exec ?? defaultExec
   }
 
   private bareRepoPath(repoId: string): string {
@@ -123,7 +151,7 @@ export class GitWorkspace {
         gitDir = ensured.value
       }
 
-      const synced = await this.syncBase(gitDir, baseBranch)
+      const synced = await this.syncBase(gitDir, remoteUrl, baseBranch)
       if (!synced.ok) return synced
 
       return ok({
@@ -160,10 +188,10 @@ export class GitWorkspace {
         const args = exists
           ? ['worktree', 'add', wt, branch]
           : ['worktree', 'add', '-b', branch, wt, project.baseSha]
-        await exec('git', ['-C', project.gitDir, ...args])
+        await this.execGit(['-C', project.gitDir, ...args])
         return ok({ ...info, created: true })
       } catch (e) {
-        return err(workspaceError('worktree_failed', { path: wt, branch, reason: msg(e) }))
+        return err(workspaceError('worktree_failed', { path: wt, branch, reason: this.redact(e) }))
       }
     })
   }
@@ -185,11 +213,11 @@ export class GitWorkspace {
       return err(makeError('WORKSPACE_ERROR', `worktree 不存在：${wt}`))
     }
     try {
-      const { stdout: status } = await exec('git', ['-C', wt, 'status', '--porcelain'])
+      const { stdout: status } = await this.execGit(['-C', wt, 'status', '--porcelain'])
       if (status.trim() === '') return ok(null)
 
-      await exec('git', ['-C', wt, 'add', '-A'])
-      await exec('git', [
+      await this.execGit(['-C', wt, 'add', '-A'])
+      await this.execGit([
         '-C',
         wt,
         '-c',
@@ -202,10 +230,10 @@ export class GitWorkspace {
         '-m',
         message,
       ])
-      const { stdout: sha } = await exec('git', ['-C', wt, 'rev-parse', 'HEAD'])
+      const { stdout: sha } = await this.execGit(['-C', wt, 'rev-parse', 'HEAD'])
       return ok(sha.trim())
     } catch (e) {
-      return err(makeError('WORKSPACE_ERROR', `提交失败：${msg(e)}`))
+      return err(makeError('WORKSPACE_ERROR', `提交失败：${this.redact(e)}`))
     }
   }
 
@@ -213,7 +241,7 @@ export class GitWorkspace {
   async headSha(project: PreparedProject, taskId: string): Promise<Result<string>> {
     const branch = branchFor(taskId)
     try {
-      const { stdout } = await exec('git', [
+      const { stdout } = await this.execGit([
         '-C',
         project.gitDir,
         'rev-parse',
@@ -221,7 +249,7 @@ export class GitWorkspace {
       ])
       return ok(stdout.trim())
     } catch (e) {
-      return err(makeError('WORKSPACE_ERROR', `读取分支 ${branch} HEAD 失败：${msg(e)}`))
+      return err(makeError('WORKSPACE_ERROR', `读取分支 ${branch} HEAD 失败：${this.redact(e)}`))
     }
   }
 
@@ -240,16 +268,15 @@ export class GitWorkspace {
       return err(makeError('WORKSPACE_ERROR', `分支不存在：${branch}`))
     }
     try {
-      const { stdout } = await exec('git', [
-        '-C',
-        project.gitDir,
-        'push',
-        remoteUrl,
-        `${branch}:${branch}`,
-      ])
+      const { stdout } = await this.execGit(
+        ['-C', project.gitDir, 'push', remoteUrl, `${branch}:${branch}`],
+        { auth: remoteUrl },
+      )
       return ok(stdout.trim())
     } catch (e) {
-      return err(makeError('WORKSPACE_ERROR', `push ${branch} 到 ${remoteUrl} 失败：${msg(e)}`))
+      return err(
+        makeError('WORKSPACE_ERROR', `push ${branch} 到 ${remoteUrl} 失败：${this.redact(e)}`),
+      )
     }
   }
 
@@ -257,10 +284,10 @@ export class GitWorkspace {
   async status(taskId: string): Promise<Result<string>> {
     const wt = this.worktreePath(taskId)
     try {
-      const { stdout } = await exec('git', ['-C', wt, 'status', '--porcelain'])
+      const { stdout } = await this.execGit(['-C', wt, 'status', '--porcelain'])
       return ok(stdout)
     } catch (e) {
-      return err(makeError('WORKSPACE_ERROR', msg(e)))
+      return err(makeError('WORKSPACE_ERROR', this.redact(e)))
     }
   }
 
@@ -275,12 +302,12 @@ export class GitWorkspace {
       const wt = this.worktreePath(taskId)
       if (!existsSync(wt)) return ok(undefined)
       try {
-        await exec('git', ['-C', project.gitDir, 'worktree', 'remove', '--force', wt])
+        await this.execGit(['-C', project.gitDir, 'worktree', 'remove', '--force', wt])
         return ok(undefined)
       } catch {
         // worktree 元数据可能已损坏；直接删目录并 prune
         await rm(wt, { recursive: true, force: true })
-        await exec('git', ['-C', project.gitDir, 'worktree', 'prune']).catch(() => undefined)
+        await this.execGit(['-C', project.gitDir, 'worktree', 'prune']).catch(() => undefined)
         return ok(undefined)
       }
     })
@@ -325,31 +352,38 @@ export class GitWorkspace {
     await rm(tmp, { recursive: true, force: true })
 
     try {
-      await exec('git', ['clone', '--bare', remoteUrl, tmp])
+      await this.execGit(['clone', '--bare', remoteUrl, tmp], { auth: remoteUrl })
       // 持锁期间不会有两个进程同时 rename；目标已存在说明锁失效，宁可报错
       await rename(tmp, bare)
       return ok(bare)
     } catch (e) {
       await rm(tmp, { recursive: true, force: true }).catch(() => undefined)
-      return err(workspaceError('git_dir_invalid', { path: bare, detail: msg(e) }))
+      return err(workspaceError('git_dir_invalid', { path: bare, detail: this.redact(e) }))
     }
   }
 
   /** fetch 基线分支并解析成 commit。只同步 base，不 fetch 全部分支。 */
-  private async syncBase(gitDir: string, baseBranch: string): Promise<Result<string>> {
+  private async syncBase(
+    gitDir: string,
+    remoteUrl: string,
+    baseBranch: string,
+  ): Promise<Result<string>> {
     try {
-      await exec('git', [
-        '-C',
-        gitDir,
-        'fetch',
-        '--prune',
-        'origin',
-        `+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`,
-      ])
+      await this.execGit(
+        [
+          '-C',
+          gitDir,
+          'fetch',
+          '--prune',
+          'origin',
+          `+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`,
+        ],
+        { auth: remoteUrl },
+      )
     } catch (e) {
       // 远端没有该分支时 fetch 本身就失败（couldn't find remote ref）。
       // 对用户来说这与「ref 解析不到」是同一件事：base 配错了，改 base 或建分支。
-      const reason = msg(e)
+      const reason = this.redact(e)
       if (/couldn't find remote ref|unknown revision|not our ref/i.test(reason)) {
         return err(workspaceError('base_missing', { remote: 'origin', base: baseBranch }))
       }
@@ -363,7 +397,7 @@ export class GitWorkspace {
     }
 
     try {
-      const { stdout } = await exec('git', [
+      const { stdout } = await this.execGit([
         '-C',
         gitDir,
         'rev-parse',
@@ -377,7 +411,7 @@ export class GitWorkspace {
 
   private async isBareRepo(path: string): Promise<boolean> {
     try {
-      const { stdout } = await exec('git', ['-C', path, 'rev-parse', '--is-bare-repository'])
+      const { stdout } = await this.execGit(['-C', path, 'rev-parse', '--is-bare-repository'])
       return stdout.trim() === 'true'
     } catch {
       return false
@@ -386,11 +420,38 @@ export class GitWorkspace {
 
   private async branchExists(gitDir: string, branch: string): Promise<boolean> {
     try {
-      await exec('git', ['-C', gitDir, 'rev-parse', '--verify', `refs/heads/${branch}`])
+      await this.execGit(['-C', gitDir, 'rev-parse', '--verify', `refs/heads/${branch}`])
       return true
     } catch {
       return false
     }
+  }
+
+  /**
+   * 统一 git 调用入口。
+   *
+   * `auth` 存在时注入 GitHub https 认证（只对本次子进程生效）；
+   * 本地操作、无 token、或 ssh/file remote 一律不传 env ——
+   * 没有认证可加时保持与改动前完全一致的调用形态。
+   */
+  private async execGit(
+    args: readonly string[],
+    opts: { readonly auth?: string } = {},
+  ): Promise<ExecResult> {
+    if (opts.auth === undefined) return this.exec('git', args)
+    const auth = authEnvFor(opts.auth, readTokenFromEnv())
+    if (Object.keys(auth).length === 0) return this.exec('git', args)
+    return this.exec('git', args, { env: { ...process.env, ...auth } })
+  }
+
+  /** 可能出现在 git 输出里的凭据形态（明文 token + 它的 base64） */
+  private secrets(): readonly string[] {
+    return gitAuthSecrets(readTokenFromEnv())
+  }
+
+  /** git 错误统一脱敏：所有 `msg(e)` 出口都必须过这里，避免未来新增调用点漏掉 */
+  private redact(e: unknown): string {
+    return redactSecrets(msg(e), this.secrets())
   }
 
   /** per-repo 锁：clone / fetch / worktree 共用一把，避免共享 git 状态被并发写 */
@@ -403,7 +464,7 @@ export class GitWorkspace {
     try {
       await mkdir(locks, { recursive: true })
     } catch (e) {
-      return err(workspaceError('lock_failed', { lock: locks, op, detail: msg(e) }))
+      return err(workspaceError('lock_failed', { lock: locks, op, detail: this.redact(e) }))
     }
     return withFileLock(join(locks, `repo-${repoId}.lock`), op, fn)
   }

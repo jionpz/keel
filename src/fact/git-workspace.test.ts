@@ -10,7 +10,7 @@
  *   - attached：用户工作树在 run 前后**逐字节不变**。
  */
 
-import { execFileSync } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import {
   existsSync,
@@ -24,9 +24,11 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   branchFor,
+  type GitExec,
   GitWorkspace,
   type PreparedProject,
   type ProjectBinding,
@@ -474,5 +476,294 @@ describe('push 到远程', () => {
       encoding: 'utf8',
     })
     expect(branches).toContain(branchFor(taskId))
+  })
+})
+
+// ───────────────────── git 传输认证（11-03-git-transport-auth） ─────────────────────
+
+const TOKEN = 'ghp_transport_injection_test'
+const AUTH_B64 = Buffer.from(`oauth2:${TOKEN}`).toString('base64')
+
+interface ExecCall {
+  readonly args: readonly string[]
+  readonly env: NodeJS.ProcessEnv | undefined
+}
+
+const realExecAsync = promisify(execFile)
+
+const realExec: GitExec = async (file, args) => {
+  const { stdout, stderr } = await realExecAsync(file, [...args], { encoding: 'utf8' })
+  return { stdout, stderr }
+}
+
+/** 临时设置 token 并在结束后恢复 —— 不把凭据留在其他用例的环境里 */
+async function withToken<T>(fn: () => Promise<T>): Promise<T> {
+  const savedKeel = process.env.KEEL_GITHUB_TOKEN
+  const savedGithub = process.env.GITHUB_TOKEN
+  process.env.KEEL_GITHUB_TOKEN = TOKEN
+  delete process.env.GITHUB_TOKEN
+  try {
+    return await fn()
+  } finally {
+    if (savedKeel === undefined) delete process.env.KEEL_GITHUB_TOKEN
+    else process.env.KEEL_GITHUB_TOKEN = savedKeel
+    if (savedGithub === undefined) delete process.env.GITHUB_TOKEN
+    else process.env.GITHUB_TOKEN = savedGithub
+  }
+}
+
+/** 临时移除 token —— 用于验证「无 token 时调用形态与改动前一致」 */
+async function withNoToken<T>(fn: () => Promise<T>): Promise<T> {
+  const savedKeel = process.env.KEEL_GITHUB_TOKEN
+  const savedGithub = process.env.GITHUB_TOKEN
+  delete process.env.KEEL_GITHUB_TOKEN
+  delete process.env.GITHUB_TOKEN
+  try {
+    return await fn()
+  } finally {
+    if (savedKeel === undefined) delete process.env.KEEL_GITHUB_TOKEN
+    else process.env.KEEL_GITHUB_TOKEN = savedKeel
+    if (savedGithub === undefined) delete process.env.GITHUB_TOKEN
+    else process.env.GITHUB_TOKEN = savedGithub
+  }
+}
+
+/** 临时设置一组 GIT_CONFIG_* —— 验证注入时操作者既有配置不被覆盖 */
+async function withGitConfigEnv<T>(env: Record<string, string>, fn: () => Promise<T>): Promise<T> {
+  const keys = Object.keys(env)
+  const saved = new Map(keys.map((k) => [k, process.env[k]]))
+  for (const [k, v] of Object.entries(env)) process.env[k] = v
+  try {
+    return await fn()
+  } finally {
+    for (const [k, v] of saved) {
+      if (v === undefined) delete process.env[k]
+      else process.env[k] = v
+    }
+  }
+}
+
+function expectNoSecretInArgv(args: readonly string[]): void {
+  const joined = args.join(' ')
+  expect(joined).not.toContain(TOKEN)
+  expect(joined).not.toContain(AUTH_B64)
+}
+
+describe('git 传输认证 · https 注入', () => {
+  it('clone 携带 extraheader；token 只在 env 里，不进 argv，错误已脱敏', async () => {
+    const calls: ExecCall[] = []
+    const fake: GitExec = async (_file, args, opts) => {
+      calls.push({ args: [...args], env: opts?.env })
+      throw new Error(`fatal: could not read Username for 'https://github.com': ${TOKEN}`)
+    }
+    const g = new GitWorkspace({ root, exec: fake })
+
+    await withToken(async () => {
+      const r = await g.ensureBareRepo(repoId, 'https://github.com/acme/widget.git')
+      expect(r.ok).toBe(false)
+      if (r.ok) return
+      // 错误 detail 必须已脱敏：明文与 base64 都不许出现
+      expect(r.error.detail).not.toContain(TOKEN)
+      expect(r.error.detail).not.toContain(AUTH_B64)
+      expect(r.error.detail).toContain('***')
+    })
+
+    const clone = calls.find((c) => c.args.includes('clone'))
+    expect(clone).toBeDefined()
+    if (clone === undefined) return
+    expect(clone.env?.GIT_CONFIG_COUNT).toBe('1')
+    expect(clone.env?.GIT_CONFIG_KEY_0).toBe('http.https://github.com/.extraheader')
+    expect(clone.env?.GIT_CONFIG_VALUE_0).toBe(`AUTHORIZATION: basic ${AUTH_B64}`)
+    expectNoSecretInArgv(clone.args)
+  })
+
+  it('fetch 携带 extraheader；ssh remote 不注入', async () => {
+    mkdirSync(join(root, 'repos'), { recursive: true })
+    const bare = join(root, 'repos', `${repoId}.git`)
+    execFileSync('git', ['clone', '-q', '--bare', `file://${origin}`, bare])
+
+    const calls: ExecCall[] = []
+    const sha = 'c'.repeat(40)
+    const fake: GitExec = async (_file, args, opts) => {
+      calls.push({ args: [...args], env: opts?.env })
+      if (args.includes('--is-bare-repository')) return { stdout: 'true\n', stderr: '' }
+      if (args.includes('fetch')) return { stdout: '', stderr: '' }
+      if (args.includes('rev-parse')) return { stdout: `${sha}\n`, stderr: '' }
+      throw new Error(`unexpected git call: ${args.join(' ')}`)
+    }
+    const g = new GitWorkspace({ root, exec: fake })
+
+    await withToken(async () => {
+      const r = await g.prepareProject(managed, 'https://github.com/acme/widget.git', 'main')
+      expect(r.ok).toBe(true)
+      if (r.ok) expect(r.value.baseSha).toBe(sha)
+    })
+
+    const fetch = calls.find((c) => c.args.includes('fetch'))
+    expect(fetch).toBeDefined()
+    if (fetch === undefined) return
+    expect(fetch.env?.GIT_CONFIG_KEY_0).toBe('http.https://github.com/.extraheader')
+    expect(fetch.env?.GIT_CONFIG_VALUE_0).toBe(`AUTHORIZATION: basic ${AUTH_B64}`)
+    expectNoSecretInArgv(fetch.args)
+
+    // ssh 部署：同一个 token 环境下，fetch 不产生任何 extraheader
+    calls.length = 0
+    await withToken(async () => {
+      const r = await g.prepareProject(managed, 'ssh://git@github.com/acme/widget.git', 'main')
+      expect(r.ok).toBe(true)
+    })
+    const sshFetch = calls.find((c) => c.args.includes('fetch'))
+    expect(sshFetch).toBeDefined()
+    expect(sshFetch?.env).toBeUndefined()
+  })
+
+  it('push 携带 extraheader；token 不进 argv', async () => {
+    const calls: ExecCall[] = []
+    const taskId = randomUUID()
+    const fake: GitExec = async (_file, args, opts) => {
+      calls.push({ args: [...args], env: opts?.env })
+      return { stdout: '', stderr: '' }
+    }
+    const g = new GitWorkspace({ root, exec: fake })
+    const project: PreparedProject = {
+      repoId,
+      gitDir: origin,
+      baseBranch: 'main',
+      baseRef: 'refs/remotes/origin/main',
+      baseSha: headOf(origin),
+      fetchedAt: new Date().toISOString(),
+    }
+
+    await withToken(async () => {
+      const r = await g.push(project, taskId, 'https://github.com/acme/widget.git')
+      expect(r.ok).toBe(true)
+    })
+
+    const push = calls.find((c) => c.args.includes('push'))
+    expect(push).toBeDefined()
+    if (push === undefined) return
+    expect(push.env?.GIT_CONFIG_KEY_0).toBe('http.https://github.com/.extraheader')
+    expect(push.env?.GIT_CONFIG_VALUE_0).toBe(`AUTHORIZATION: basic ${AUTH_B64}`)
+    expectNoSecretInArgv(push.args)
+  })
+
+  it('无 token 时 https remote 也不传 env —— 调用形态与改动前一致', async () => {
+    mkdirSync(join(root, 'repos'), { recursive: true })
+    const bare = join(root, 'repos', `${repoId}.git`)
+    execFileSync('git', ['clone', '-q', '--bare', `file://${origin}`, bare])
+
+    const calls: ExecCall[] = []
+    const sha = 'd'.repeat(40)
+    const fake: GitExec = async (_file, args, opts) => {
+      calls.push({ args: [...args], env: opts?.env })
+      if (args.includes('--is-bare-repository')) return { stdout: 'true\n', stderr: '' }
+      if (args.includes('fetch')) return { stdout: '', stderr: '' }
+      if (args.includes('rev-parse')) return { stdout: `${sha}\n`, stderr: '' }
+      throw new Error(`unexpected git call: ${args.join(' ')}`)
+    }
+    const g = new GitWorkspace({ root, exec: fake })
+
+    await withNoToken(async () => {
+      const r = await g.prepareProject(managed, 'https://github.com/acme/widget.git', 'main')
+      expect(r.ok).toBe(true)
+    })
+
+    const fetch = calls.find((c) => c.args.includes('fetch'))
+    expect(fetch).toBeDefined()
+    // 关键：不是「env 里没有 header」，而是**根本不传 env** —— 与改动前一字不差
+    expect(fetch?.env).toBeUndefined()
+  })
+
+  it('既有 GIT_CONFIG_* 真正随注入传给 git，不被覆盖', async () => {
+    const calls: ExecCall[] = []
+    const taskId = randomUUID()
+    const fake: GitExec = async (_file, args, opts) => {
+      calls.push({ args: [...args], env: opts?.env })
+      return { stdout: '', stderr: '' }
+    }
+    const g = new GitWorkspace({ root, exec: fake })
+    const project: PreparedProject = {
+      repoId,
+      gitDir: origin,
+      baseBranch: 'main',
+      baseRef: 'refs/remotes/origin/main',
+      baseSha: headOf(origin),
+      fetchedAt: new Date().toISOString(),
+    }
+
+    await withGitConfigEnv(
+      {
+        GIT_CONFIG_COUNT: '1',
+        GIT_CONFIG_KEY_0: 'core.pager',
+        GIT_CONFIG_VALUE_0: 'less',
+      },
+      () =>
+        withToken(async () => {
+          const r = await g.push(project, taskId, 'https://github.com/acme/widget.git')
+          expect(r.ok).toBe(true)
+        }),
+    )
+
+    const push = calls.find((c) => c.args.includes('push'))
+    expect(push).toBeDefined()
+    if (push === undefined) return
+    // 操作者的项原样保留，认证项追加为第 2 项
+    expect(push.env?.GIT_CONFIG_COUNT).toBe('2')
+    expect(push.env?.GIT_CONFIG_KEY_0).toBe('core.pager')
+    expect(push.env?.GIT_CONFIG_VALUE_0).toBe('less')
+    expect(push.env?.GIT_CONFIG_KEY_1).toBe('http.https://github.com/.extraheader')
+  })
+
+  it('fetch 失败的 stderr 也脱敏 —— fetch_failed 不泄漏明文或 base64', async () => {
+    mkdirSync(join(root, 'repos'), { recursive: true })
+    const bare = join(root, 'repos', `${repoId}.git`)
+    execFileSync('git', ['clone', '-q', '--bare', `file://${origin}`, bare])
+
+    const fake: GitExec = async (_file, args) => {
+      if (args.includes('--is-bare-repository')) return { stdout: 'true\n', stderr: '' }
+      if (args.includes('fetch')) {
+        // execFile 的错误把 stderr 挂成属性；msg() 优先取 stderr
+        const e = new Error('Command failed') as Error & { stderr?: string }
+        e.stderr = `${TOKEN} fatal: Authentication failed for header=AUTHORIZATION: basic ${AUTH_B64}`
+        throw e
+      }
+      throw new Error(`unexpected git call: ${args.join(' ')}`)
+    }
+    const g = new GitWorkspace({ root, exec: fake })
+
+    await withToken(async () => {
+      const r = await g.prepareProject(managed, 'https://github.com/acme/widget.git', 'main')
+      expect(r.ok).toBe(false)
+      if (r.ok) return
+      expect(r.error.detail).toMatch(/^\[fetch_failed\]/)
+      expect(r.error.detail).not.toContain(TOKEN)
+      expect(r.error.detail).not.toContain(AUTH_B64)
+      expect(r.error.detail).toContain('***')
+    })
+  })
+
+  it('本地操作不注入 GIT_CONFIG_*，commit 的签名钉死保持原样', async () => {
+    const calls: ExecCall[] = []
+    const spy: GitExec = async (file, args, opts) => {
+      calls.push({ args: [...args], env: opts?.env })
+      return realExec(file, args)
+    }
+    const g = new GitWorkspace({ root, exec: spy })
+
+    await withToken(async () => {
+      const p = await prepare(g) // file:// remote：远程操作同样不注入
+      const taskId = randomUUID()
+      const wt = await g.ensureWorktree(p, taskId)
+      expect(wt.ok).toBe(true)
+      if (!wt.ok) return
+      writeFileSync(join(wt.value.path, 'local.txt'), 'x\n')
+      expect((await g.commitAll(taskId, 'feat: local')).ok).toBe(true)
+      expect((await g.status(taskId)).ok).toBe(true)
+    })
+
+    for (const call of calls) expect(call.env).toBeUndefined()
+    const commit = calls.find((c) => c.args.includes('commit'))
+    expect(commit?.args).toContain('commit.gpgsign=false')
+    expect(commit?.args).toContain('user.email=keel@localhost')
   })
 })

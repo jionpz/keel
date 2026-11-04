@@ -21,22 +21,21 @@ import type {
   PullRequestInfo,
   PullRequestInput,
 } from '../contracts/git-provider.js'
+import { readTokenFromEnv } from './github-auth.js'
+import { isGitHubHost, parseRemoteUrl } from './github-remote.js'
+
+/**
+ * 兼容 re-export：现有调用点(run-task / ingest-issue / 验收测试)
+ * 继续从本模块 import，不因模块拆分而改动。
+ */
+export type { ParsedRemote } from './github-remote.js'
+export { isGitHubHost, parseRemoteUrl, readTokenFromEnv }
 
 /** 公网 GitHub 的 API 根。企业 host 由 apiRootForHost 推导。 */
 export const DEFAULT_API_ROOT = 'https://api.github.com'
 
 const OWNER_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/
 const REPO_RE = /^[A-Za-z0-9._-]+$/
-
-/**
- * 接受 github.com 与企业 GHES 的常见域名 `github.*`（如 github.example.com、
- * github.corp.example）。刻意不接受任意 host：本 provider 是 GitHub 专用，
- * 把 gitlab.com 之类当成 GHES 只会把请求打到错误的服务。
- */
-export function isGitHubHost(host: string): boolean {
-  const h = host.toLowerCase()
-  return h === 'github.com' || (h.startsWith('github.') && !h.startsWith('github.com.'))
-}
 
 /**
  * 公网走 api.github.com；GHES 3.x 的 REST 根在 `/api/v3`。
@@ -46,71 +45,6 @@ export function apiRootForHost(host: string): string {
   return host.toLowerCase() === 'github.com'
     ? DEFAULT_API_ROOT
     : `https://${host.toLowerCase()}/api/v3`
-}
-
-export interface ParsedRemote {
-  readonly host: string
-  readonly owner: string
-  readonly repo: string
-  /** 归一化后的 https remote，用于事件与 repo 查找 */
-  readonly remoteUrl: string
-}
-
-/**
- * 解析 remote URL —— owner/repo 与 host 的唯一事实源。
- *
- * 支持 https / http / ssh 与 SCP-like（git@host:owner/repo.git）。
- * 不接受 file:// 等本地路径：它们不是 GitHub remote。
- */
-export function parseRemoteUrl(remoteUrl: string): Result<ParsedRemote> {
-  const trimmed = remoteUrl.trim()
-  let host: string
-  let path: string
-
-  // SCP-like 语法不会被 new URL() 正确解析，先单独处理
-  const scp = /^[^@/\s]+@([^:/\s]+):(.+)$/.exec(trimmed)
-  if (scp !== null) {
-    host = scp[1] as string
-    path = scp[2] as string
-  } else {
-    let url: URL
-    try {
-      url = new URL(trimmed)
-    } catch {
-      return err(makeError('WORKSPACE_ERROR', `无法解析 remote URL:${remoteUrl}`))
-    }
-    if (url.protocol !== 'https:' && url.protocol !== 'http:' && url.protocol !== 'ssh:') {
-      return err(makeError('WORKSPACE_ERROR', `不支持的 remote 协议:${url.protocol}`))
-    }
-    host = url.hostname
-    path = url.pathname
-  }
-
-  if (!isGitHubHost(host)) {
-    return err(makeError('WORKSPACE_ERROR', `不是 GitHub host:${host}(${remoteUrl})`))
-  }
-
-  const normalized = path
-    .replace(/^\/+/, '')
-    .replace(/\/+$/, '')
-    .replace(/\.git$/i, '')
-  const parts = normalized.split('/')
-  if (parts.length !== 2) {
-    return err(makeError('WORKSPACE_ERROR', `无法从 remote URL 解析 owner/repo:${remoteUrl}`))
-  }
-  const owner = parts[0] as string
-  const repo = parts[1] as string
-  if (!OWNER_RE.test(owner) || !REPO_RE.test(repo) || repo === '.' || repo === '..') {
-    return err(makeError('WORKSPACE_ERROR', `owner/repo 非法:${owner}/${repo}`))
-  }
-
-  const normalizedHost = host.toLowerCase()
-  return ok({
-    host: normalizedHost,
-    owner,
-    repo,
-    remoteUrl: `https://${normalizedHost}/${owner}/${repo}.git`,
-  })
 }
 
 const POLL_INTERVAL_MS = 10_000
@@ -133,10 +67,6 @@ export interface GitHubProviderOptions {
   readonly pollTimeoutMs?: number
   /** 覆盖「无人上报」静默期 —— 测试用毫秒级 */
   readonly emptySettleMs?: number
-}
-
-export function readTokenFromEnv(): string | undefined {
-  return process.env.KEEL_GITHUB_TOKEN ?? process.env.GITHUB_TOKEN
 }
 
 /**
