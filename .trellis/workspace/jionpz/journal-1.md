@@ -422,3 +422,25 @@ console 完成可读性/项目性改造：中文状态徽章、一句话现状�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 7: GHES host 支持收尾：契约测试与 spec 落地
+
+**Date**: 2026-11-04
+**Task**: GHES host 支持收尾：契约测试与 spec 落地
+**Branch**: `main`
+
+### Summary
+
+复核 77f7008 后补齐 github-provider 契约测试（42→55 用例：host 白名单、URL 归一/拒绝、API root 三级优先级与空白非 http(s) fail-closed），新增 backend/github-provider.md 并接入 spec 索引与环境变量矩阵；prd/implement 勾选验收并如实记录未覆盖项（无 GHES 实例、preflight.ts 仍硬编码 github.com、http remote 跨层比对限制），任务已归档。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2d61e53` | (see git log) |
+| `aea6768` | (see git log) |
+
+### Status
+
+[OK] **Completed**

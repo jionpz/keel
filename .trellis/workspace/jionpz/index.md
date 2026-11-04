@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 6
-- **Last Active**: 2026-11-03
+- **Total Sessions**: 7
+- **Last Active**: 2026-11-04
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~424 | Active |
+| `journal-1.md` | ~446 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 7 | 2026-11-04 | GHES host 支持收尾：契约测试与 spec 落地 | `2d61e53`, `aea6768` | `main` |
 | 6 | 2026-11-03 | Console 双模式筛选 | `7efdba8`, `56953e5`, `55d06bc`, `38d836d`, `bab2646` | `main` |
 | 5 | 2026-10-27 | 只读控制台 + demo APP 真实闭环 | `e8c7718`, `9045785`, `1af85b1` | `main` |
 | 4 | 2026-08-29 | Claude Code 第二 Harness：接入并收尾 | `2867719` | `feat/second-harness` |
