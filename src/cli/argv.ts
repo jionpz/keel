@@ -42,6 +42,10 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
 }
 
 function parseValue(raw: string): string | number {
-  const n = Number(raw)
-  return raw !== '' && Number.isFinite(n) ? n : raw
+  // 空白串不能先被 Number() 归成 0：`--label '   '` 与 `--label 0` 是两件事，
+  // 前者必须留给下游按「空白」拒绝，而不是变成一个合法值。
+  const trimmed = raw.trim()
+  if (trimmed === '') return raw
+  const n = Number(trimmed)
+  return Number.isFinite(n) ? n : raw
 }

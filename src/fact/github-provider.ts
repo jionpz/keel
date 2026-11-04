@@ -22,7 +22,7 @@ import type {
   PullRequestInput,
 } from '../contracts/git-provider.js'
 import { readTokenFromEnv } from './github-auth.js'
-import { isGitHubHost, parseRemoteUrl } from './github-remote.js'
+import { isGitHubHost, type ParsedRemote, parseRemoteUrl } from './github-remote.js'
 
 /**
  * 兼容 re-export：现有调用点(run-task / ingest-issue / 验收测试)
@@ -90,6 +90,37 @@ export interface IssueInfo {
   readonly state: 'open' | 'closed'
   readonly isPullRequest: boolean
 }
+
+/**
+ * 列表视图 —— 刻意不含 `body`：
+ * poller 只需要「去哪儿取」与「是否已处理」，正文由 ingest 侧再读一次。
+ */
+export interface ListedIssue {
+  readonly number: number
+  readonly title: string
+  readonly state: 'open' | 'closed'
+  readonly isPullRequest: boolean
+  readonly labels: readonly string[]
+}
+
+export interface IssueList {
+  readonly issues: readonly ListedIssue[]
+  /** 触到 maxPages 上限且最后一页仍是满页 —— 可能还有更多，不静默截断 */
+  readonly truncated: boolean
+}
+
+/**
+ * 把 repo 的 remote 归一化为 Issue URL。
+ *
+ * 纯函数：SSH / https / SCP-like remote 都走同一个 `ParsedRemote`，
+ * 避免 poller 直接拿 `repo.remote_url` 拼出 `git@host:...` 这种非 URL。
+ */
+export function issueUrlFor(parsed: ParsedRemote, number: number): string {
+  return `https://${parsed.host}/${parsed.owner}/${parsed.repo}/issues/${number}`
+}
+
+const LIST_PAGE_SIZE = 100
+const LIST_MAX_PAGES = 10
 
 export interface ParsedIssueUrl {
   readonly remoteUrl: string
@@ -380,6 +411,78 @@ export class GitHubProvider implements PullRequestGateway, CiGateway {
     return ok(checkRuns.length > 0 ? 'passed' : 'unreported')
   }
 
+  /**
+   * 列出某仓库带指定 label 的 open issue（poller 的扫描入口）。
+   *
+   * 三个刻意的判断：
+   *   - **过滤 PR**：issues API 会把 PR 混进结果，`pull_request !== undefined` 一律丢弃；
+   *   - **分页**：每页 100 条，读完不足一页即停；触到 `maxPages` 上限时
+   *     返回 `truncated: true`，不静默截断（100 条单页上限会漏 issue）；
+   *   - **同轮去重**：分页期间 issue 状态变化可能导致跨页重复，按 number 保留首条。
+   *
+   * label 为空直接拒绝：GitHub 在 `labels=` 为空时会退化成列出全部 open issue，
+   * 那等于跨过 label 闸门。
+   */
+  async listOpenIssues(
+    remoteUrl: string,
+    label: string,
+    opts: { readonly maxPages?: number } = {},
+  ): Promise<Result<IssueList>> {
+    const trimmedLabel = label.trim()
+    if (trimmedLabel === '') {
+      return err(
+        makeError(
+          'WORKSPACE_ERROR',
+          'listOpenIssues 需要非空 label：空 label 会列出全部 open issue，跨过 label 闸门',
+        ),
+      )
+    }
+    const maxPages = opts.maxPages ?? LIST_MAX_PAGES
+    if (!Number.isInteger(maxPages) || maxPages < 1) {
+      return err(makeError('WORKSPACE_ERROR', `maxPages 必须是正整数，收到:${maxPages}`))
+    }
+
+    const parsed = parseRemoteUrl(remoteUrl)
+    if (!parsed.ok) return parsed
+    const { host, owner, repo } = parsed.value
+    const slug = `${owner}/${repo}`
+
+    /** 跨页按 number 去重；Map 保留首次出现的顺序 */
+    const byNumber = new Map<number, ListedIssue>()
+    let truncated = false
+
+    for (let page = 1; page <= maxPages; page++) {
+      // URLSearchParams 负责编码 label 里的空格 / 中文 / 斜杠 —— 手拼 query 会在这里出错
+      const query = new URLSearchParams({
+        state: 'open',
+        labels: trimmedLabel,
+        per_page: String(LIST_PAGE_SIZE),
+        page: String(page),
+      })
+      const r = await this.request(host, `/repos/${slug}/issues?${query.toString()}`)
+      if (!r.ok) return r
+      if (r.value.status !== 200) {
+        return err(makeError('WORKSPACE_ERROR', `列出 Issue 返回非预期状态 HTTP ${r.value.status}`))
+      }
+      if (!Array.isArray(r.value.json)) {
+        return err(makeError('PROTOCOL_ERROR', `Issue 列表响应不是数组:${slug} page=${page}`))
+      }
+
+      for (const raw of r.value.json) {
+        const issue = parseListedIssue(raw)
+        if (!issue.ok) return issue
+        if (issue.value.isPullRequest) continue
+        if (!byNumber.has(issue.value.number)) byNumber.set(issue.value.number, issue.value)
+      }
+
+      // 不足一页 = 没有下一页。满页且已到上限 = 可能还有，如实标 truncated。
+      if (r.value.json.length < LIST_PAGE_SIZE) break
+      if (page === maxPages) truncated = true
+    }
+
+    return ok({ issues: [...byNumber.values()], truncated })
+  }
+
   async getIssue(remoteUrl: string, issueNumber: number): Promise<Result<IssueInfo>> {
     const parsed = parseRemoteUrl(remoteUrl)
     if (!parsed.ok) return parsed
@@ -416,6 +519,45 @@ export class GitHubProvider implements PullRequestGateway, CiGateway {
       isPullRequest: raw.pull_request !== undefined,
     })
   }
+}
+
+/**
+ * 解析列表元素。形状不对 = 契约被破坏（PROTOCOL_ERROR），不是「跳过这一条」——
+ * 静默跳过会让漏掉的 issue 永远不被发现。
+ */
+function parseListedIssue(raw: unknown): Result<ListedIssue> {
+  if (typeof raw !== 'object' || raw === null) {
+    return err(makeError('PROTOCOL_ERROR', 'Issue 列表包含非对象元素'))
+  }
+  const item = raw as {
+    number?: unknown
+    title?: unknown
+    state?: unknown
+    labels?: unknown
+    pull_request?: unknown
+  }
+  if (typeof item.number !== 'number' || typeof item.title !== 'string') {
+    return err(makeError('PROTOCOL_ERROR', 'Issue 列表元素缺少 number/title'))
+  }
+  return ok({
+    number: item.number,
+    title: item.title,
+    state: item.state === 'closed' ? 'closed' : 'open',
+    isPullRequest: item.pull_request !== undefined,
+    labels: labelNames(item.labels),
+  })
+}
+
+function labelNames(raw: unknown): readonly string[] {
+  if (!Array.isArray(raw)) return []
+  const names: string[] = []
+  for (const label of raw) {
+    if (typeof label === 'object' && label !== null) {
+      const name = (label as { name?: unknown }).name
+      if (typeof name === 'string') names.push(name)
+    }
+  }
+  return names
 }
 
 function sleep(ms: number): Promise<void> {

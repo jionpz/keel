@@ -125,6 +125,37 @@ keel status <taskId>
 
 `local` 一行只在 attached 模式出现，且只读（`git status` / `git rev-list`）。
 
+## 接入自动化（poller）
+
+生产环境不需要人工反复跑 `run-issue`：`keel poller` 常驻扫描所有已注册的
+github repo，把 open issue 自动 ingest 并驱动到当前可停处。
+
+label 按**仓库**配置，不是全局开关（A/B/C 多个项目可以用不同 label）：
+
+```bash
+# 注册时指定扫描 label；不传则默认 keel
+keel register-repo https://github.com/you/project --issue-label keel
+
+# 常驻：缺省每 60s 一轮，缺省 --ci real（需要 KEEL_GITHUB_TOKEN）
+KEEL_GITHUB_TOKEN="$(gh auth token)" keel poller --interval 60000 --ci real
+```
+
+行为约定：
+
+- 每轮查 `repo WHERE provider = 'github'`，逐个仓库用**它自己的** `issue_label`
+  拉 `state=open` 的 issue；PR 会被过滤（issues API 会把 PR 混进来）。
+- 分页每页 100 条、单仓库单轮最多 10 页（1000 条）；触顶时日志出现
+  `"truncated":true`，不静默截断。
+- 新 issue → `runIssue`（ingest + 驱动）；已有 task 且非终态 → 继续驱动；
+  终态 task → 跳过。去重复用 `feedback(source, external_ref)` 唯一键。
+- 单个 issue / 仓库失败只记一行错误，下一轮重试，不终止整轮。
+- 每轮输出一行结构化 JSON（`event:"poll"`，字段 `repos / scanned / ingested /
+  driven / skipped / errors / truncated`），错误 detail 经 `redactSecrets` 脱敏，
+  不打印 issue body。
+- `SIGTERM` / `SIGINT` 后不再认领新 issue，当前 run 结束后退出。
+  正在执行的 run 没有外部取消接口，因此不会强杀（强杀会留下 `RUNNING` run）。
+- poller 只负责扫描与驱动；到期收割仍归 `keel timer-worker`，两者不互相替代。
+
 ## 开发
 
 ```bash

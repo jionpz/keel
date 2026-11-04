@@ -39,6 +39,12 @@ describe('parseArgs(零依赖 argv 解析)', () => {
     expect(p.flags.help).toBe(true)
   })
 
+  it('空白值保留为字符串，不被 Number() 归成 0', () => {
+    // `--label '   '` 与 `--label 0` 必须能区分：前者要按「空白」拒绝
+    expect(parseArgs(['--label', '   ']).flags.label).toBe('   ')
+    expect(parseArgs(['--label', '0']).flags.label).toBe(0)
+  })
+
   it('未知位置参数保留', () => {
     const p = parseArgs(['run-task', 'abc', '--events'])
     expect(p.positionals).toEqual(['run-task', 'abc'])
@@ -90,11 +96,25 @@ describe('命令分发 · switch 分支与 HELP 清单不得漂移', () => {
     expect(dispatchedCommands()).toContain('run-issue')
   })
 
+  it('poller(常驻扫描)已接线', () => {
+    expect(dispatchedCommands()).toContain('poller')
+  })
+
   it('register-repo 的 --local-path 出现在 HELP 中', () => {
     // 参数只加到 parseArgs 而不改 HELP，会让用户以为不能用本地项目绑定
     const line = source.split('\n').find((l) => l.trimStart().startsWith('register-repo '))
     expect(line, 'HELP 里找不到 register-repo 行').toBeDefined()
     expect(line).toContain('--local-path')
+  })
+
+  it('register-repo 的 --issue-label 与 poller 的 --interval 出现在 HELP 中', () => {
+    const register = source.split('\n').find((l) => l.trimStart().startsWith('register-repo '))
+    expect(register, 'HELP 里找不到 register-repo 行').toBeDefined()
+    expect(register).toContain('--issue-label')
+
+    const poller = source.split('\n').find((l) => l.trimStart().startsWith('poller '))
+    expect(poller, 'HELP 里找不到 poller 行').toBeDefined()
+    expect(poller).toContain('--interval')
   })
 })
 
@@ -115,7 +135,7 @@ describe('--ci 取值清单不得漂移', () => {
   it('每处帮助文本里的 --ci 清单都与 CI_MODES 一致', () => {
     const expected = CI_MODES.join('|')
     expect(CI_MODES.length).toBeGreaterThan(1)
-    for (const file of ['./index.ts', './run-task.ts', './run-issue.ts']) {
+    for (const file of ['./index.ts', './run-task.ts', './run-issue.ts', './poller.ts']) {
       const lists = ciFlagLists(readFileSync(new URL(file, import.meta.url), 'utf8'))
       expect(lists.length, `${file} 未列出 --ci 取值`).toBeGreaterThan(0)
       for (const list of lists) {
@@ -160,7 +180,7 @@ describe('--harness 取值清单不得漂移', () => {
   it('每处帮助文本里的 --harness 清单都与 HARNESS_IDS 一致', () => {
     const expected = HARNESS_IDS.join('|')
     expect(HARNESS_IDS.length).toBeGreaterThan(1)
-    for (const file of ['./index.ts', './run-task.ts', './run-issue.ts']) {
+    for (const file of ['./index.ts', './run-task.ts', './run-issue.ts', './poller.ts']) {
       const lists = harnessFlagLists(readFileSync(new URL(file, import.meta.url), 'utf8'))
       expect(lists.length, `${file} 未列出 --harness 取值`).toBeGreaterThan(0)
       for (const list of lists) {

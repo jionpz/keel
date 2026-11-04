@@ -69,10 +69,12 @@ async function run(args: readonly string[]): Promise<RunResult> {
   }
 }
 
-async function repoRow(remoteUrl: string): Promise<{ id: string; local_path: string | null }> {
+async function repoRow(
+  remoteUrl: string,
+): Promise<{ id: string; local_path: string | null; issue_label: string }> {
   const r = await asOwner((c) =>
-    c.query<{ id: string; local_path: string | null }>(
-      `SELECT id, local_path FROM repo WHERE remote_url = $1`,
+    c.query<{ id: string; local_path: string | null; issue_label: string }>(
+      `SELECT id, local_path, issue_label FROM repo WHERE remote_url = $1`,
       [remoteUrl],
     ),
   )
@@ -84,6 +86,17 @@ async function repoRow(remoteUrl: string): Promise<{ id: string; local_path: str
 async function repoCount(): Promise<number> {
   const r = await asOwner((c) => c.query('SELECT id FROM repo'))
   return r.rows.length
+}
+
+async function defaultBranchOf(remoteUrl: string): Promise<string> {
+  const r = await asOwner((c) =>
+    c.query<{ default_branch: string }>(`SELECT default_branch FROM repo WHERE remote_url = $1`, [
+      remoteUrl,
+    ]),
+  )
+  const row = r.rows[0]
+  if (row === undefined) throw new Error(`repo 不存在：${remoteUrl}`)
+  return row.default_branch
 }
 
 describe('首次注册与绑定', () => {
@@ -182,6 +195,85 @@ describe('重复注册与更新', () => {
     expect(r.exitCode).toBe(1)
     expect(r.stderr).toMatch(/^register-repo: \[origin_mismatch\]/)
     expect((await repoRow(remote('widgets'))).local_path).toBe(good)
+  })
+})
+
+describe('仓库级 issue_label', () => {
+  it('新建不带 --issue-label → 默认 keel', async () => {
+    const r = await run([remote('plain')])
+    expect(r.exitCode).toBeUndefined()
+    expect((await repoRow(remote('plain'))).issue_label).toBe('keel')
+  })
+
+  it('新建带 --issue-label → 写入显式值（并 trim）', async () => {
+    const r = await run([remote('widgets'), '--issue-label', '  需 review  '])
+    expect(r.exitCode).toBeUndefined()
+    expect(r.stdout).toContain('issueLabel: 需 review')
+    expect((await repoRow(remote('widgets'))).issue_label).toBe('需 review')
+  })
+
+  it('重复注册不带 flag → 保留原 label', async () => {
+    await run([remote('widgets'), '--issue-label', 'triage'])
+    await run([remote('widgets')])
+    expect((await repoRow(remote('widgets'))).issue_label).toBe('triage')
+  })
+
+  it('重复注册带不同 label → 更新；只改 label 不影响 local_path', async () => {
+    const dir = gitRepo('widgets', 'https://github.com/acme/widgets')
+    await run([remote('widgets'), '--local-path', dir, '--issue-label', 'triage'])
+
+    const r = await run([remote('widgets'), '--issue-label', 'keel'])
+    expect(r.exitCode).toBeUndefined()
+    const row = await repoRow(remote('widgets'))
+    expect(row.issue_label).toBe('keel')
+    expect(row.local_path).toBe(dir)
+  })
+
+  it('纯数字 label 也是合法名称（argv 会把它解析成 number）', async () => {
+    const r = await run([remote('widgets'), '--issue-label', '2024'])
+    expect(r.exitCode).toBeUndefined()
+    expect((await repoRow(remote('widgets'))).issue_label).toBe('2024')
+  })
+
+  it('空白 label → 写库前拒绝，零写入', async () => {
+    for (const bad of ['', '   ']) {
+      const r = await run([remote('x'), '--issue-label', bad])
+      expect(r.exitCode).toBe(1)
+      expect(r.stderr).toMatch(/^register-repo: --issue-label 不能为空白/)
+    }
+    expect(await repoCount()).toBe(0)
+  })
+
+  it('--issue-label 不带值 → 拒绝', async () => {
+    const r = await run([remote('x'), '--issue-label'])
+    expect(r.exitCode).toBe(1)
+    expect(r.stderr).toMatch(/--issue-label 需要一个非空 label/)
+    expect(await repoCount()).toBe(0)
+  })
+})
+
+describe('--default-branch 的取值纪律（argv 空白串不再归零后的回归）', () => {
+  it('省略 → main', async () => {
+    await run([remote('plain')])
+    expect(await defaultBranchOf(remote('plain'))).toBe('main')
+  })
+
+  it('纯数字分支名（argv 会解析成 number）不被静默换成 main', async () => {
+    const r = await run([remote('release'), '--default-branch', '2024'])
+    expect(r.exitCode).toBeUndefined()
+    expect(await defaultBranchOf(remote('release'))).toBe('2024')
+  })
+
+  it('空白值 / 只写标志 → 拒绝，零写入', async () => {
+    for (const args of [
+      [remote('x'), '--default-branch', '   '],
+      [remote('x'), '--default-branch'],
+    ]) {
+      const r = await run(args)
+      expect(r.exitCode).toBe(1)
+      expect(r.stderr).toMatch(/^register-repo: --default-branch /)
+    }
+    expect(await repoCount()).toBe(0)
   })
 })
 

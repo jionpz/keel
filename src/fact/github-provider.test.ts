@@ -18,6 +18,7 @@ import {
   apiRootForHost,
   GitHubProvider,
   isGitHubHost,
+  issueUrlFor,
   ownerRepo,
   parseIssueUrl,
   parseRemoteUrl,
@@ -592,6 +593,159 @@ describe('parseRemoteUrl 归一与拒绝路径', () => {
       expect(r.value.host).toBe('github.com')
       expect(r.value.remoteUrl).toBe('https://github.com/acme/widget.git')
     }
+  })
+})
+
+describe('listOpenIssues —— poller 的扫描入口', () => {
+  /** issues API 的列表元素形状；extra 用来模拟 PR / 跨页重复 */
+  function listed(n: number, extra: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      number: n,
+      title: `issue ${n}`,
+      state: 'open',
+      labels: [{ name: 'keel' }],
+      ...extra,
+    }
+  }
+
+  function parsedRemote(remoteUrl: string) {
+    const r = parseRemoteUrl(remoteUrl)
+    if (!r.ok) throw new Error(`parseRemoteUrl 失败:${remoteUrl}`)
+    return r.value
+  }
+
+  it('过滤 pull_request、保留 label 与状态', async () => {
+    routes.set(routeKey('GET', '/repos/acme/widget/issues?'), () => ({
+      status: 200,
+      json: [
+        listed(1, { labels: [{ name: 'keel' }, { name: 'bug' }] }),
+        listed(2, { pull_request: { url: 'https://api.github.com/repos/acme/widget/pulls/2' } }),
+      ],
+    }))
+
+    const r = await provider().listOpenIssues(REMOTE, 'keel')
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value.truncated).toBe(false)
+    expect(r.value.issues).toEqual([
+      {
+        number: 1,
+        title: 'issue 1',
+        state: 'open',
+        isPullRequest: false,
+        labels: ['keel', 'bug'],
+      },
+    ])
+  })
+
+  it('分页拼接两页，并按 number 丢弃跨页重复', async () => {
+    const requests: string[] = []
+    routes.set(routeKey('GET', '/repos/acme/widget/issues?'), (req) => {
+      requests.push(req.url)
+      const page = new URL(`http://x${req.url}`).searchParams.get('page')
+      if (page === '1') {
+        return {
+          status: 200,
+          json: Array.from({ length: 100 }, (_, i) => listed(i + 1)),
+        }
+      }
+      // 第二页:一条与第一页重复 + 两条新的；不足 100 即停
+      return { status: 200, json: [listed(2), listed(101), listed(102)] }
+    })
+
+    const r = await provider().listOpenIssues(REMOTE, 'keel')
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value.issues).toHaveLength(102)
+    expect(r.value.issues.map((i) => i.number)).toContain(101)
+    expect(new Set(r.value.issues.map((i) => i.number)).size).toBe(102)
+    expect(requests).toHaveLength(2)
+    expect(requests[0]).toContain('per_page=100')
+    expect(requests[1]).toContain('page=2')
+  })
+
+  it('触到 maxPages 上限且最后一页是满页 → truncated:true（不静默截断）', async () => {
+    routes.set(routeKey('GET', '/repos/acme/widget/issues?'), (req) => {
+      const page = Number(new URL(`http://x${req.url}`).searchParams.get('page'))
+      return {
+        status: 200,
+        json: Array.from({ length: 100 }, (_, i) => listed((page - 1) * 100 + i + 1)),
+      }
+    })
+
+    const r = await provider().listOpenIssues(REMOTE, 'keel', { maxPages: 2 })
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value.issues).toHaveLength(200)
+    expect(r.value.truncated).toBe(true)
+  })
+
+  it('label 含空格 / 斜杠 / 中文时 query 正确编码', async () => {
+    let requested: string | undefined
+    routes.set(routeKey('GET', '/repos/acme/widget/issues?'), (req) => {
+      requested = req.url
+      return { status: 200, json: [] }
+    })
+
+    const label = '需 review/评审'
+    const r = await provider().listOpenIssues(REMOTE, label)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value.issues).toEqual([])
+    expect(requested).toBeDefined()
+    const params = new URL(`http://x${requested}`).searchParams
+    expect(params.get('labels')).toBe(label)
+    expect(params.get('state')).toBe('open')
+  })
+
+  it('空 label 拒绝且不发请求 —— 空 labels 会列出全部 open issue', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    const r = await provider().listOpenIssues(REMOTE, '   ')
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('WORKSPACE_ERROR')
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('非 GitHub host 拒绝', async () => {
+    const r = await provider().listOpenIssues('https://gitlab.com/acme/widget.git', 'keel')
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('WORKSPACE_ERROR')
+  })
+
+  it('响应不是数组 → PROTOCOL_ERROR', async () => {
+    routes.set(routeKey('GET', '/repos/acme/widget/issues?'), () => ({
+      status: 200,
+      json: { message: 'unexpected' },
+    }))
+    const r = await provider().listOpenIssues(REMOTE, 'keel')
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('PROTOCOL_ERROR')
+  })
+
+  it('列表元素形状不对 → PROTOCOL_ERROR（不静默跳过）', async () => {
+    routes.set(routeKey('GET', '/repos/acme/widget/issues?'), () => ({
+      status: 200,
+      json: [{ number: '1' }],
+    }))
+    const r = await provider().listOpenIssues(REMOTE, 'keel')
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('PROTOCOL_ERROR')
+  })
+
+  it('issueUrlFor 归一化 https / ssh / GHES remote', () => {
+    expect(issueUrlFor(parsedRemote('https://github.com/acme/widget.git'), 3)).toBe(
+      'https://github.com/acme/widget/issues/3',
+    )
+    expect(issueUrlFor(parsedRemote('git@github.com:acme/widget.git'), 7)).toBe(
+      'https://github.com/acme/widget/issues/7',
+    )
+    expect(issueUrlFor(parsedRemote('ssh://git@github.example.com/acme/widget'), 9)).toBe(
+      'https://github.example.com/acme/widget/issues/9',
+    )
   })
 })
 
