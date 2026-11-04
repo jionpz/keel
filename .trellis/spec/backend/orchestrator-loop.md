@@ -23,6 +23,21 @@
 CLI 把 `finalStatus`（走到哪）与 `stopReason`（为什么停）分行打印：
 只有前者时，「卡住」和「等人」在输出里长得一模一样。
 
+## S-PR_OPEN 的两条 CI 路径
+
+| 路径 | 条件 | 事件 `source` | step note |
+|---|---|---|---|
+| 真实网关 | 注入 `opts.ci` | `github` | `外部 CI（GitHub）：passed/failed` |
+| 注入回调 | 无 `opts.ci`，有 `opts.externalCi` | `simulated` | `外部 CI（模拟）：passed/failed` |
+| 都没有 | — | 不推进 | 停 `awaiting-external-ci` |
+
+真实路径要求 `workspace.mode === 'worktree'`，因为它要读该 Task 分支的 head SHA；
+回调路径不读 SHA，只把外部结论转成事件。
+
+两条路径都把 `source` 交给 driver，最终落到 `TaskStatusChanged.payload.source`。
+**不要**在 loop 里省掉这个字段或统一写成同一个值 —— 事件流必须能区分
+「真跑的 CI」与「注入的模拟结果」，否则回看历史时无法判断一次 S-DONE 有多可信。
+
 ## 阶段态没有待执行 run：先判证据，再判故障
 
 ```

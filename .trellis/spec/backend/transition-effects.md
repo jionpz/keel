@@ -13,7 +13,7 @@
 | 命令 | 事件 | 副作用要点 |
 |---|---|---|
 | `pnpm keel decide … approve` | `HumanApproved` | `CreateBranch` **必须注入 workspace**，否则只记意图、分支并不存在 |
-| `pnpm keel decide … reject` | `HumanRejected` | 无副作用 |
+| `pnpm keel decide … reject` | `HumanRejected` | `CleanWorkspace`（T-015）：移除工作树，分支保留 |
 | `pnpm keel decide … rework` | `HumanRequestedRework` | `nextRun('brainstorm')` |
 | `pnpm keel answer … --text` | `ClarificationReceived` + `feedbackId` | 真写 `task_feedback`；取消澄清 timer；`nextRun('pm')` |
 
@@ -36,6 +36,37 @@
 两段写：feedback 先落（append-only），control 事务随后完成状态 / 事件 / run / 链接。
 framing 成「一个事务」是错的；代价是中途失败会留一条未被引用的 feedback 行，
 入口必须在错误里把它的 id 报出来。
+
+## 终态清理：事实先成立，副作用如实记账
+
+`T-015`（`→ S-REJECTED`）与 `T-024`（`→ S-DONE`）都带 `CleanWorkspace`；
+`T-027` / `T-040` 的清理语义不变；`T-041`（`→ S-FAILED`）**仍然只保留现场**。
+清理只移除 worktree 目录，分支与提交历史留在 git 目录里。
+
+`decide … reject` 的工作区绑定是**按需**的（`cleanupDriverIfNeeded`）：先看
+`$KEEL_HOME/worktrees/<taskId>` 是否存在，存在才 `loadTaskWorkspace`（含 fetch）；
+不存在就用无绑定 driver，不为一个没开工的任务 clone / fetch。准备失败也不阻断驳回
+—— 人的决定不该被网络卡住，此时 `CleanWorkspace` 如实记 `SideEffectIntent`。
+
+`cleanWorkspace` 的两条纪律：
+
+1. **失败不写 `SideEffectApplied`**。`GitWorkspace.remove` 返回 `Result`；
+   失败时写 `SideEffectIntent`（`payload.reason` 带原因），返回 `outcome: 'intent'`。
+   写成 Applied 会让事件流声称「已清理」而磁盘上还留着工作树 —— 那是在污染
+   唯一的事实来源。
+2. **失败不回滚终态**。S-DONE / S-REJECTED 是已经成立的事实，清理只是副作用；
+   `cleanWorkspace` 不抛异常，`TaskStatusChanged` 照常写入。
+
+## CI 事件必须带来源
+
+`CIPassed` / `CIFailed` 的 `source` 是**必填**字段：`simulated`（注入回调 / CLI 缺省）
+或 `github`（`CiGateway` 读真实 Checks / Status）。值落到
+`TaskStatusChanged.payload.source`，事件流因此不读代码就能回答
+「这次 CI 是真跑的，还是模拟的」。
+
+- 用必填字段而不是默认值：默认值会让「忘了传」悄悄变成「真 CI」。
+- 非 CI 事件**不多出** `source` 键（`driver.test.ts` 钉住）。
+- CLI 缺省仍是 `--ci passed`；是否改成 `real` 是产品决策，不在副作用层解决。
 
 ## 裁决理由：`advance` 的第 4 参
 

@@ -14,11 +14,11 @@
 
 import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { ok, type Result } from '../../contracts/errors.js'
+import { err, makeError, ok, type Result } from '../../contracts/errors.js'
 import type {
   PullRequestGateway,
   PullRequestInfo,
@@ -610,6 +610,16 @@ describe('CreateBranch 基线证据', () => {
     expect(r.length).toBe(1)
   }
 
+  /**
+   * seed 夹具为了 PR 场景把任务分支预先推到了 origin，裸克隆会把它带进
+   * refs/heads。这里删掉它，模拟「develop 还没建过这条分支」的真实首次。
+   */
+  function deletePreSeededBranch(project: PreparedProject, taskId: string): void {
+    execFileSync('git', ['-C', project.gitDir, 'branch', '-D', branchFor(taskId)], {
+      stdio: 'pipe',
+    })
+  }
+
   async function branchEvents(taskId: string): Promise<Record<string, unknown>[]> {
     const evs = await eventsOf(taskId)
     return evs
@@ -621,6 +631,7 @@ describe('CreateBranch 基线证据', () => {
     const { taskId, repoId } = await seedTaskWithRemote()
     const git = new GitWorkspace({ root })
     const project = await prepareFor(git, repoId)
+    deletePreSeededBranch(project, taskId)
 
     await applyCreateBranch(taskId, git, project)
 
@@ -633,10 +644,51 @@ describe('CreateBranch 基线证据', () => {
     expect(ev?.reused).toBe(false)
   })
 
+  it('worktree 被删后重放：worktree 重建但分支复用，base_sha 沿用首次记录', async () => {
+    const { taskId, repoId } = await seedTaskWithRemote()
+    const git = new GitWorkspace({ root })
+    const first = await prepareFor(git, repoId)
+    deletePreSeededBranch(first, taskId)
+    await applyCreateBranch(taskId, git, first)
+
+    // 远端 main 前进；worktree 被外部删除（git 元数据仍在）
+    writeFileSync(join(origin, 'README.md'), '# base\n\nadvanced\n')
+    execFileSync('git', ['-C', origin, 'commit', '-qam', 'advance main'], { stdio: 'pipe' })
+    const second = await prepareFor(git, repoId)
+    expect(second.baseSha, '文档化前提：本次 prepare 的基线确实前进了').not.toBe(first.baseSha)
+    rmSync(join(root, 'worktrees', taskId), { recursive: true, force: true })
+
+    await applyCreateBranch(taskId, git, second)
+
+    const evs = await branchEvents(taskId)
+    expect(evs.length).toBe(2)
+    expect(evs[1]?.reused, 'reused 描述的是分支，不是 worktree').toBe(true)
+    expect(evs[1]?.base_sha, '分支起点不能被本次 prepare 改写').toBe(first.baseSha)
+    expect(evs[1]?.base_sha).not.toBe(second.baseSha)
+    expect(evs[1]?.fetched_at).toBe(first.fetchedAt)
+  })
+
+  it('没有历史事件（老 task）：base_sha 如实写 null，不编造起点', async () => {
+    const { taskId, repoId } = await seedTaskWithRemote()
+    const git = new GitWorkspace({ root })
+    const project = await prepareFor(git, repoId)
+    // 分支在功能上线前就存在：直接建 worktree，不经过 CreateBranch 事件
+    const wt = await git.ensureWorktree(project, taskId)
+    expect(wt.ok).toBe(true)
+
+    await applyCreateBranch(taskId, git, project)
+
+    const [ev] = await branchEvents(taskId)
+    expect(ev?.reused).toBe(true)
+    expect(ev?.base_sha).toBeNull()
+    expect(ev?.fetched_at).toBeNull()
+  })
+
   it('重放：reused=true，base_sha 与首次一致（不按本次 prepare 重算）', async () => {
     const { taskId, repoId } = await seedTaskWithRemote()
     const git = new GitWorkspace({ root })
     const project = await prepareFor(git, repoId)
+    deletePreSeededBranch(project, taskId)
 
     await applyCreateBranch(taskId, git, project)
     // 第二次 prepare 可能已经 fetch 到更新的 origin/main —— 但 worktree 没动
@@ -654,6 +706,7 @@ describe('CreateBranch 基线证据', () => {
     const { taskId, repoId } = await seedTaskWithRemote()
     const git = new GitWorkspace({ root })
     const first = await prepareFor(git, repoId)
+    deletePreSeededBranch(first, taskId)
     await applyCreateBranch(taskId, git, first)
 
     // 远端 main 前进
@@ -677,5 +730,88 @@ describe('CreateBranch 基线证据', () => {
       },
     ).trim()
     expect(wtHead).toBe(first.baseSha)
+  })
+})
+
+// ──────────────────── 终态清理的记账（P1-4 / P1-5）────────────────────
+
+describe('CleanWorkspace 记账', () => {
+  async function applyClean(
+    taskId: string,
+    git: GitWorkspace,
+    project: PreparedProject,
+  ): Promise<{ kind: string; outcome: string; detail: string }> {
+    const event: TransitionEvent = { type: 'PolicyEvaluated', decision: 'auto_develop' }
+    const r = await asRole('keel_control', (c) =>
+      applyEffects(
+        c,
+        {
+          taskId,
+          traceId: 'trace-clean-test',
+          event,
+          transitionId: 'T-024',
+          now: NOW,
+          policy: new RuleBasedPolicyEngine(DEFAULT_RULESET),
+          workspace: { git, repoId: project.repoId, project },
+        },
+        [{ kind: 'CleanWorkspace' }],
+      ),
+    )
+    expect(r.length).toBe(1)
+    const first = r[0]
+    if (first === undefined) throw new Error('unreachable')
+    return first
+  }
+
+  it('成功：worktree 目录消失、分支保留，事件是 SideEffectApplied', async () => {
+    const { taskId, repoId } = await seedTaskWithRemote()
+    const git = new GitWorkspace({ root })
+    const project = await prepareFor(git, repoId)
+    const wt = await git.ensureWorktree(project, taskId)
+    expect(wt.ok).toBe(true)
+
+    const result = await applyClean(taskId, git, project)
+    expect(result.outcome).toBe('applied')
+    expect(existsSync(join(root, 'worktrees', taskId))).toBe(false)
+
+    // 清除的是工作树，不是历史
+    execFileSync('git', [
+      '-C',
+      project.gitDir,
+      'rev-parse',
+      '--verify',
+      `refs/heads/${branchFor(taskId)}`,
+    ])
+
+    const evs = await eventsOf(taskId)
+    expect(
+      evs.filter((e) => e.type === 'SideEffectApplied' && e.payload.kind === 'CleanWorkspace'),
+    ).toHaveLength(1)
+  })
+
+  it('失败：写 SideEffectIntent（带原因），不写 Applied，也不抛异常', async () => {
+    const { taskId, repoId } = await seedTaskWithRemote()
+    const git = new GitWorkspace({ root })
+    const project = await prepareFor(git, repoId)
+
+    const failing = {
+      remove: async () =>
+        err(makeError('WORKSPACE_ERROR', '[worktree_failed] path="/x" reason="permission denied"')),
+    } as unknown as GitWorkspace
+
+    const result = await applyClean(taskId, failing, project)
+    expect(result.outcome).toBe('intent')
+    expect(result.detail).toContain('permission denied')
+
+    const evs = await eventsOf(taskId)
+    const intent = evs.find(
+      (e) => e.type === 'SideEffectIntent' && e.payload.kind === 'CleanWorkspace',
+    )
+    expect(intent, '清理失败必须留下意图记录').toBeDefined()
+    expect(String(intent?.payload.reason)).toContain('permission denied')
+    expect(
+      evs.some((e) => e.type === 'SideEffectApplied' && e.payload.kind === 'CleanWorkspace'),
+      '没做成不能记成已做成',
+    ).toBe(false)
   })
 })

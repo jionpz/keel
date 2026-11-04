@@ -275,7 +275,7 @@ describe('里程碑：S-NEW → S-DONE', () => {
     await stageOutcome(taskId, 'review', 'pass')
     await step({ type: 'RunSucceeded', stage: 'review' }, 'S-PR_OPEN')
 
-    await step({ type: 'CIPassed' }, 'S-DONE')
+    await step({ type: 'CIPassed', source: 'simulated' }, 'S-DONE')
 
     // 1. 终态与 terminal_at
     expect(await statusOf(taskId)).toBe('S-DONE')
@@ -313,6 +313,18 @@ describe('里程碑：S-NEW → S-DONE', () => {
       expect(p.from).toMatch(/^S-/)
       expect(p.to).toMatch(/^S-/)
     }
+
+    // CI 来源落进 payload：不读代码也能回答「这次 CI 是真跑的，还是模拟的」
+    const ciPayloads = evs.value
+      .filter((e) => e.type === 'TaskStatusChanged')
+      .map((e) => e.payload as { event: string; source?: string })
+    expect(ciPayloads.find((p) => p.event === 'CIPassed')?.source).toBe('simulated')
+    // 非 CI 事件不多出 source 键
+    expect(
+      ciPayloads
+        .filter((p) => p.event !== 'CIPassed' && p.event !== 'CIFailed')
+        .every((p) => !('source' in p)),
+    ).toBe(true)
 
     // 4. Policy 裁决被落成产物
     const decision = await store.latest(taskId, 'policy_decision', 'rfc_ready')
@@ -572,7 +584,7 @@ describe('幂等：同一事件投递两次，副作用只发生一次', () => {
     await driver.advance(taskId, { type: 'Cancelled' }, NOW)
     expect(await statusOf(taskId)).toBe('S-ABANDONED')
 
-    const r = await driver.advance(taskId, { type: 'CIPassed' }, NOW)
+    const r = await driver.advance(taskId, { type: 'CIPassed', source: 'simulated' }, NOW)
     expect(r.ok && r.value.advanced).toBe(false)
     expect(await statusOf(taskId)).toBe('S-ABANDONED')
   })

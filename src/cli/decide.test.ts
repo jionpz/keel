@@ -11,12 +11,17 @@
  * 只有「不需要验证副作用、只想验证事件映射」的用例才注入假 advancer。
  */
 
+import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ok, type Result } from '../contracts/errors.js'
 import type { AdvanceOptions, AdvanceOutcome } from '../control/driver/driver.js'
 import type { TransitionEvent } from '../control/transition/types.js'
 import { asOwner, closePool } from '../fact/db.js'
+import { branchFor, GitWorkspace } from '../fact/git-workspace.js'
 import type { TaskStatus } from '../shared/ids.js'
 import { type Advancer, answerTask, decideTask } from './decide.js'
 
@@ -245,6 +250,109 @@ describe('decide · 真实 driver 落库', () => {
       ]),
     )
     expect(run.rows[0]).toMatchObject({ stage: 'brainstorm', status: 'PENDING' })
+  })
+})
+
+// ──────────────────── decide · reject 的工作区清理 ────────────────────
+
+/**
+ * 驳回可能发生在两个位置：还没开工（没有 worktree）或干到一半（有 worktree）。
+ * T-015 现在带 CleanWorkspace —— 这两条路径必须分别成立：
+ * 有工作树时真的删掉（保留分支），没有时**不要**为它去 clone / fetch。
+ */
+describe('decide · reject 清理工作树', () => {
+  let origin: string
+  let keelHome: string
+  let savedHome: string | undefined
+
+  beforeEach(() => {
+    origin = mkdtempSync(join(tmpdir(), 'keel-decide-origin-'))
+    keelHome = mkdtempSync(join(tmpdir(), 'keel-decide-home-'))
+    execFileSync('git', ['init', '-q', '-b', 'main', '.'], { cwd: origin })
+    execFileSync('git', ['config', 'user.email', 'o@test'], { cwd: origin })
+    execFileSync('git', ['config', 'user.name', 'o'], { cwd: origin })
+    // 夹具不继承操作者全局签名配置：签名程序在无人值守环境里可能提示或变慢
+    execFileSync('git', ['config', 'commit.gpgsign', 'false'], { cwd: origin })
+    writeFileSync(join(origin, 'README.md'), '# base\n')
+    execFileSync('git', ['add', '.'], { cwd: origin })
+    execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: origin })
+
+    savedHome = process.env.KEEL_HOME
+    process.env.KEEL_HOME = keelHome
+  })
+
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.KEEL_HOME
+    else process.env.KEEL_HOME = savedHome
+    rmSync(origin, { recursive: true, force: true })
+    rmSync(keelHome, { recursive: true, force: true })
+  })
+
+  async function seedReviewTask(): Promise<{ taskId: string; repoId: string }> {
+    const repoId = randomUUID()
+    const taskId = randomUUID()
+    await asOwner(async (c) => {
+      await c.query(
+        `INSERT INTO repo (id, provider, remote_url, default_branch) VALUES ($1,'local',$2,'main')`,
+        [repoId, `file://${origin}`],
+      )
+      await c.query(
+        `INSERT INTO task (id, status, control_mode, title, repo_id, base_branch, work_branch)
+         VALUES ($1,'S-HUMAN_REVIEW','auto','驳回清理',$2,'main',$3)`,
+        [taskId, repoId, branchFor(taskId)],
+      )
+    })
+    return { taskId, repoId }
+  }
+
+  it('已有工作树：真的移除 worktree，分支与提交历史保留', async () => {
+    const { taskId, repoId } = await seedReviewTask()
+    const git = new GitWorkspace({ root: keelHome })
+    const prepared = await git.prepareProject(
+      { mode: 'managed', repoId },
+      `file://${origin}`,
+      'main',
+    )
+    expect(prepared.ok, prepared.ok ? '' : prepared.error.detail).toBe(true)
+    if (!prepared.ok) return
+    const wt = await git.ensureWorktree(prepared.value, taskId)
+    expect(wt.ok, wt.ok ? '' : wt.error.detail).toBe(true)
+
+    const worktreePath = git.preservePath(taskId)
+    expect(existsSync(worktreePath)).toBe(true)
+
+    const r = await decideTask(taskId, 'reject', { now: NOW, note: '不做' })
+    expect(r.ok, r.ok ? '' : r.error.detail).toBe(true)
+    if (!r.ok) return
+    expect(r.value.transitionId).toBe('T-015')
+    expect(r.value.effects).toContainEqual({
+      kind: 'CleanWorkspace',
+      outcome: 'applied',
+      detail: '已移除 worktree',
+    })
+    expect(existsSync(worktreePath)).toBe(false)
+
+    // 清理只删工作树，不改写历史：分支仍在，且是一个完整 commit SHA
+    const sha = execFileSync(
+      'git',
+      ['-C', prepared.value.gitDir, 'rev-parse', '--verify', `refs/heads/${branchFor(taskId)}`],
+      { encoding: 'utf8' },
+    ).trim()
+    expect(sha).toMatch(/^[0-9a-f]{40}$/)
+  })
+
+  it('没有工作树：不为没开工的任务 clone / fetch，驳回照常成功', async () => {
+    const { taskId, repoId } = await seedReviewTask()
+
+    const r = await decideTask(taskId, 'reject', { now: NOW })
+    expect(r.ok, r.ok ? '' : r.error.detail).toBe(true)
+    if (!r.ok) return
+    expect(r.value.effects).toContainEqual(
+      expect.objectContaining({ kind: 'CleanWorkspace', outcome: 'intent' }),
+    )
+
+    // 没有工作树 → 不该触发 prepareProject；否则裸仓库会被克隆出来
+    expect(existsSync(join(keelHome, 'repos', `${repoId}.git`))).toBe(false)
   })
 })
 

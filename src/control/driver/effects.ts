@@ -399,7 +399,9 @@ async function createBranch(c: PoolClient, ctx: EffectContext): Promise<AppliedE
   const wt = await git.ensureWorktree(project, ctx.taskId)
   if (!wt.ok) throw new Error(`建 worktree 失败：${wt.error.detail}`)
 
-  const evidence = wt.value.created
+  // 基线只在新分支从本次 baseSha 长出来时才是本次的。
+  // worktree 被清理后重建时，worktree 是新的，分支不是 —— 证据必须沿用旧的。
+  const evidence = wt.value.branchCreated
     ? { base_ref: project.baseRef, base_sha: project.baseSha, fetched_at: project.fetchedAt }
     : await baselineOfExistingBranch(c, ctx.taskId, project)
 
@@ -413,7 +415,7 @@ async function createBranch(c: PoolClient, ctx: EffectContext): Promise<AppliedE
       branch: wt.value.branch,
       worktree: wt.value.path,
       ...evidence,
-      reused: !wt.value.created,
+      reused: !wt.value.branchCreated,
     },
     ctx.now,
   )
@@ -451,10 +453,35 @@ async function baselineOfExistingBranch(
   }
 }
 
-/** 清理工作区。分支保留在裸仓库里 —— 移除的是工作树，不是历史 */
+/**
+ * 清理工作区。分支保留在裸仓库里 —— 移除的是工作树，不是历史。
+ *
+ * 失败**不回滚终态**：S-DONE / S-REJECTED 是已经成立的事实，
+ * 清理只是副作用。但也不能写成 `SideEffectApplied` —— 那会让事件流
+ * 声称「已清理」而磁盘上还留着工作树。如实写 `SideEffectIntent`，
+ * 失败原因进 payload，供运维重试。
+ */
 async function cleanWorkspace(c: PoolClient, ctx: EffectContext): Promise<AppliedEffect> {
   if (ctx.workspace === undefined) return recordIntent(c, ctx, { kind: 'CleanWorkspace' })
-  await ctx.workspace.git.remove(ctx.workspace.project, ctx.taskId)
+
+  const removed = await ctx.workspace.git.remove(ctx.workspace.project, ctx.taskId)
+  if (!removed.ok) {
+    const reason = removed.error.detail
+    await emit(
+      c,
+      ctx,
+      'SideEffectIntent',
+      {
+        kind: 'CleanWorkspace',
+        transition: ctx.transitionId,
+        dedupe_key: ctx.taskId,
+        reason,
+      },
+      ctx.now,
+    )
+    return { kind: 'CleanWorkspace', outcome: 'intent', detail: reason }
+  }
+
   await emit(
     c,
     ctx,

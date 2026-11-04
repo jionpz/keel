@@ -211,7 +211,41 @@ describe('编排器 CI 接线(opts.ci 优先)', () => {
     expect(ci.calls[0]?.remoteUrl).toBe(`file://${origin}`)
 
     const stepsNote = result.value.steps.map((s) => s.note).join('|')
-    expect(stepsNote).toContain('外部 CI：passed')
+    expect(stepsNote).toContain('外部 CI（GitHub）：passed')
+
+    // 事件流本身能区分来源,不需要回头看 step note
+    const events = await asOwner((c) =>
+      c.query<{ payload: Record<string, unknown> }>(
+        `SELECT payload FROM event WHERE task_id=$1 AND type='TaskStatusChanged'
+         ORDER BY seq DESC LIMIT 1`,
+        [taskId],
+      ),
+    )
+    expect(events.rows[0]?.payload).toMatchObject({ event: 'CIPassed', source: 'github' })
+  })
+
+  it('externalCi 注入（模拟）→ payload.source=simulated，note 标模拟', async () => {
+    const { taskId, repoId } = await seedTaskAtPrOpen()
+    const git = new GitWorkspace({ root })
+    const project = await prepareFor(git, repoId)
+
+    const result = await runTaskToCompletion(taskId, depsFor(repoId, git, project), {
+      maxSteps: 2,
+      externalCi: async () => 'passed',
+    })
+    expect(result.ok, result.ok ? '' : result.error.detail).toBe(true)
+    if (!result.ok) return
+    expect(result.value.finalStatus).toBe('S-DONE')
+    expect(result.value.steps.map((s) => s.note).join('|')).toContain('外部 CI（模拟）：passed')
+
+    const events = await asOwner((c) =>
+      c.query<{ payload: Record<string, unknown> }>(
+        `SELECT payload FROM event WHERE task_id=$1 AND type='TaskStatusChanged'
+         ORDER BY seq DESC LIMIT 1`,
+        [taskId],
+      ),
+    )
+    expect(events.rows[0]?.payload).toMatchObject({ event: 'CIPassed', source: 'simulated' })
   })
 
   it('waitForCi=failed → CIFailed → T-025 → 回 S-DEVELOPING 并开新 develop run', async () => {
@@ -252,6 +286,11 @@ describe('编排器 CI 接线(opts.ci 优先)', () => {
         [taskId],
       ),
     )
-    expect(events.rows[0]?.payload).toMatchObject({ from: 'S-PR_OPEN', to: 'S-DEVELOPING' })
+    expect(events.rows[0]?.payload).toMatchObject({
+      from: 'S-PR_OPEN',
+      to: 'S-DEVELOPING',
+      event: 'CIFailed',
+      source: 'github',
+    })
   })
 })

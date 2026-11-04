@@ -152,6 +152,7 @@ describe('ensureWorktree · 生命周期', () => {
     expect(wt.ok).toBe(true)
     if (!wt.ok) return
     expect(wt.value.created).toBe(true)
+    expect(wt.value.branchCreated).toBe(true)
     expect(wt.value.branch).toBe(branchFor(taskId))
     expect(headOf(wt.value.path)).toBe(p.baseSha)
     expect(readFileSync(join(wt.value.path, 'README.md'), 'utf8')).toContain('# base')
@@ -168,6 +169,73 @@ describe('ensureWorktree · 生命周期', () => {
     if (!a.ok || !b.ok) return
     expect(b.value.path).toBe(a.value.path)
     expect(b.value.created).toBe(false)
+    expect(b.value.branchCreated).toBe(false)
+  })
+
+  it('worktree 被外部删除后重建：复用原分支，HEAD 停在分支 tip 而不是新基线', async () => {
+    const g = ws()
+    const p = await prepare(g)
+    const taskId = randomUUID()
+
+    const first = await g.ensureWorktree(p, taskId)
+    if (!first.ok) return
+    writeFileSync(join(first.value.path, 'work.txt'), 'work\n')
+    const commit = await g.commitAll(taskId, 'work')
+    expect(commit.ok && commit.value).not.toBeNull()
+    if (!commit.ok || commit.value === null) return
+
+    // 远端前进，重新 prepare 会拿到更新的 baseSha
+    writeFileSync(join(origin, 'next.txt'), 'next\n')
+    execFileSync('git', ['add', '.'], { cwd: origin })
+    execFileSync('git', ['commit', '-q', '-m', 'next'], { cwd: origin })
+    const p2 = await prepare(g)
+    expect(p2.baseSha).not.toBe(p.baseSha)
+
+    // 模拟被外部删除（git 元数据仍在）—— add 会先失败，prune 后重试成功
+    rmSync(first.value.path, { recursive: true, force: true })
+
+    const again = await g.ensureWorktree(p2, taskId)
+    expect(again.ok, again.ok ? '' : again.error.detail).toBe(true)
+    if (!again.ok) return
+    expect(again.value.created).toBe(true)
+    expect(again.value.branchCreated).toBe(false)
+    expect(headOf(again.value.path)).toBe(commit.value)
+    expect(headOf(again.value.path)).not.toBe(p2.baseSha)
+  })
+
+  it('路径被普通目录占用 → fail closed，不删除目录', async () => {
+    const g = ws()
+    const p = await prepare(g)
+    const taskId = randomUUID()
+    const wtPath = join(root, 'worktrees', taskId)
+    mkdirSync(wtPath, { recursive: true })
+    writeFileSync(join(wtPath, 'keep.txt'), 'do not delete\n')
+
+    const r = await g.ensureWorktree(p, taskId)
+    expect(r.ok).toBe(false)
+    if (!r.ok) {
+      expect(r.error.detail).toMatch(/^\[worktree_failed\]/)
+      expect(r.error.detail).toContain(wtPath)
+      expect(r.error.detail).toContain('(not a worktree)')
+    }
+    expect(readFileSync(join(wtPath, 'keep.txt'), 'utf8')).toBe('do not delete\n')
+  })
+
+  it('目录存在但 checkout 在别的分支 → fail closed，报告期望与实际分支', async () => {
+    const g = ws()
+    const p = await prepare(g)
+    const taskId = randomUUID()
+    const first = await g.ensureWorktree(p, taskId)
+    if (!first.ok) return
+    execFileSync('git', ['-C', first.value.path, 'checkout', '-q', '-b', 'other'])
+
+    const r = await g.ensureWorktree(p, taskId)
+    expect(r.ok).toBe(false)
+    if (!r.ok) {
+      expect(r.error.detail).toMatch(/^\[worktree_failed\]/)
+      expect(r.error.detail).toContain(branchFor(taskId))
+      expect(r.error.detail).toContain('actual="other"')
+    }
   })
 
   it('基线的 ref 被移动后，已准备的 worktree 仍锚定原 commit', async () => {
@@ -323,6 +391,7 @@ describe('并发 · 同一 repo 的共享 git 状态', () => {
     expect(a.ok && b.ok).toBe(true)
     if (!a.ok || !b.ok) return
     expect([a.value.created, b.value.created].filter(Boolean)).toHaveLength(1)
+    expect([a.value.branchCreated, b.value.branchCreated].filter(Boolean)).toHaveLength(1)
     expect(a.value.path).toBe(b.value.path)
   })
 })

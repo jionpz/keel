@@ -97,7 +97,7 @@
 | `T-012` | `S-RFC_READY` | `PolicyEvaluated` | `decision=auto_develop` | `S-DEVELOPING` | 建工作分支（幂等）；创建 `run(develop, n+1)` |
 | `T-013` | `S-RFC_READY` | `PolicyEvaluated` | `decision != auto_develop` | `S-HUMAN_REVIEW` | 通知人工（`security_review` 同样走这里） |
 | `T-014` | `S-HUMAN_REVIEW` | `HumanApproved` | — | `S-DEVELOPING` | 建工作分支（幂等）；创建 `run(develop, n+1)` |
-| `T-015` | `S-HUMAN_REVIEW` | `HumanRejected` | — | `S-REJECTED` ★ | — |
+| `T-015` | `S-HUMAN_REVIEW` | `HumanRejected` | — | `S-REJECTED` ★ | 清理工作区（分支保留） |
 | `T-016` | `S-HUMAN_REVIEW` | `HumanRequestedRework` | — | `S-BRAINSTORM` | 创建 `run(brainstorm, n+1)` |
 | `T-017` | `S-DEVELOPING` | `RunSucceeded` | — | `S-QA` | 创建 `run(qa, n+1)`（`T-019` QA 返工后会二次进入） |
 | `T-018` | `S-QA` | `RunSucceeded` | `qa_verdict=pass` | `S-REVIEW` | 创建 `run(review, n+1)`（`T-022` 评审返工后会二次进入） |
@@ -106,7 +106,7 @@
 | `T-021` | `S-REVIEW` | `RunSucceeded` | `review_verdict=pass` | `S-PR_OPEN` | **创建 PR（幂等）** |
 | `T-022` | `S-REVIEW` | `RunSucceeded` | `review_verdict=fail ∧ dev_attempts < max` | `S-DEVELOPING` | 创建 `run(develop, n+1)`，附评审意见 |
 | `T-023` | `S-REVIEW` | `RunSucceeded` | `review_verdict=fail ∧ dev_attempts ≥ max` | `S-HUMAN_REVIEW` | 通知人工 |
-| `T-024` | `S-PR_OPEN` | `CIPassed` | — | `S-DONE` ★ | 按配置可自动 merge |
+| `T-024` | `S-PR_OPEN` | `CIPassed` | — | `S-DONE` ★ | 按配置可自动 merge；清理工作区（分支保留） |
 | `T-025` | `S-PR_OPEN` | `CIFailed` | `dev_attempts < max` | `S-DEVELOPING` | 创建 `run(develop, n+1)`，附 CI 日志 |
 | `T-026` | `S-PR_OPEN` | `CIFailed` | `dev_attempts ≥ max` | `S-HUMAN_REVIEW` | 通知人工 |
 | `T-027` | `S-PR_OPEN` | `PRClosed` | — | `S-ABANDONED` ★ | 清理工作区 |

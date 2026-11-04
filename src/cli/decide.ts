@@ -7,7 +7,9 @@
  *
  * 本模块只做三件事：
  *   1. 预检（status + control_mode）—— 用 `keel_control` 读一次，不满足就**零写入**退出；
- *   2. 需要工作区的决定（approve）先准备项目，让 T-014 的 CreateBranch 真的建分支；
+ *   2. 需要工作区的决定先准备项目：approve 让 T-014 的 CreateBranch 真的建分支；
+ *      reject 让 T-015 的 CleanWorkspace 真的移除工作树（没有工作树时不准备，
+ *      免得为一个「什么都还没做」的任务去 clone / fetch）；
  *   3. 把结果翻译成「发生了什么 + 下一步」，而不是把裸事件名丢给用户。
  *
  * 不在这里做的事：控制台的写路径（控制台只转调本模块，不复制状态机逻辑）、
@@ -15,6 +17,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { existsSync } from 'node:fs'
 import { err, makeError, ok, type Result } from '../contracts/errors.js'
 import {
   type AdvanceOptions,
@@ -26,6 +29,7 @@ import { RuleBasedPolicyEngine } from '../control/policy/engine.js'
 import { DEFAULT_RULESET } from '../control/policy/ruleset.js'
 import type { TransitionEvent } from '../control/transition/types.js'
 import { asRole } from '../fact/db.js'
+import { GitWorkspace } from '../fact/git-workspace.js'
 import type { ControlMode, TaskStatus } from '../shared/ids.js'
 import { parseArgs } from './argv.js'
 import { loadTaskWorkspace } from './task-workspace.js'
@@ -150,6 +154,22 @@ async function workspaceDriver(taskId: string): Promise<Result<WorkflowDriver>> 
   return ok(new WorkflowDriver(new RuleBasedPolicyEngine(DEFAULT_RULESET), binding))
 }
 
+/**
+ * reject 的终态清理需要工作区，但**只在已经有工作树时**才准备。
+ *
+ * 被驳回的任务可能停在两种位置：还没开工（S-RFC_READY 转人工，没有 worktree），
+ * 或已经在开发/验收（有 worktree）。前者不该为一个什么都没做的任务去 clone / fetch。
+ *
+ * 准备失败（仓库不可达等）**不阻断驳回**：驳回是人的决定，不该被网络卡住；
+ * 此时退回无绑定的 driver，`CleanWorkspace` 会如实记一条 `SideEffectIntent`
+ * 而不是假装清理完成 —— 工作树留给人事后手工移除。
+ */
+async function cleanupDriverIfNeeded(taskId: string): Promise<WorkflowDriver | undefined> {
+  if (!existsSync(new GitWorkspace().preservePath(taskId))) return undefined
+  const built = await workspaceDriver(taskId)
+  return built.ok ? built.value : undefined
+}
+
 export async function decideTask(
   taskId: string,
   decision: Decision,
@@ -169,6 +189,8 @@ export async function decideTask(
     const built = await workspaceDriver(taskId)
     if (!built.ok) return built
     driver = built.value
+  } else if (decision === 'reject') {
+    driver = (await cleanupDriverIfNeeded(taskId)) ?? plainDriver()
   } else {
     driver = plainDriver()
   }

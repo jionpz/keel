@@ -22,7 +22,7 @@ afterEach(() => {
   rmSync(sandbox, { recursive: true, force: true })
 })
 
-describe('resolveKeelHome', () => {
+describe('resolveKeelHome · 显式 KEEL_HOME', () => {
   it('相对 KEEL_HOME 按给定 cwd 解析为绝对路径', () => {
     const home = resolveKeelHome({ KEEL_HOME: '.keel' }, sandbox)
     expect(home).toBe(join(sandbox, '.keel'))
@@ -33,7 +33,7 @@ describe('resolveKeelHome', () => {
     expect(canonicalizeDir(home).ok).toBe(true)
   })
 
-  it('不同 cwd 传入同一个相对值 → 两个不同的项目根（所以必须固化）', () => {
+  it('不同 cwd 传入同一个相对值 → 两个不同的项目根（显式值必须被尊重）', () => {
     const a = resolveKeelHome({ KEEL_HOME: '.keel' }, sandbox)
     const other = join(sandbox, 'other')
     mkdirSync(other)
@@ -43,12 +43,69 @@ describe('resolveKeelHome', () => {
     expect(b).toBe(join(other, '.keel'))
   })
 
+  it('空字符串视为未设置，走向上查找', () => {
+    mkdirSync(join(sandbox, '.keel'))
+    const nested = join(sandbox, 'src', 'cli')
+    mkdirSync(nested, { recursive: true })
+    expect(resolveKeelHome({ KEEL_HOME: '' }, nested)).toBe(join(sandbox, '.keel'))
+  })
+
   it('符号链接根收敛到真实路径', () => {
     const real = join(sandbox, 'real-home')
     mkdirSync(real)
     symlinkSync(real, join(sandbox, 'link-home'))
     const home = resolveKeelHome({ KEEL_HOME: 'link-home' }, sandbox)
     expect(home).toBe(real)
+  })
+})
+
+describe('resolveKeelHome · 从 cwd 向上查找项目根', () => {
+  it('嵌套目录命中父级已有的 .keel', () => {
+    mkdirSync(join(sandbox, '.keel'))
+    const nested = join(sandbox, 'src', 'control', 'driver')
+    mkdirSync(nested, { recursive: true })
+    expect(resolveKeelHome({}, nested)).toBe(join(sandbox, '.keel'))
+  })
+
+  it('最近的 .keel 优先于更上层的项目根', () => {
+    mkdirSync(join(sandbox, '.git'))
+    const pkg = join(sandbox, 'packages', 'a')
+    mkdirSync(join(pkg, '.keel'), { recursive: true })
+    expect(resolveKeelHome({}, pkg)).toBe(join(pkg, '.keel'))
+  })
+
+  it('.git 目录所在层是项目根，并在那里创建 .keel', () => {
+    mkdirSync(join(sandbox, '.git'))
+    const nested = join(sandbox, 'src')
+    mkdirSync(nested)
+    expect(resolveKeelHome({}, nested)).toBe(join(sandbox, '.keel'))
+    expect(canonicalizeDir(join(sandbox, '.keel')).ok).toBe(true)
+  })
+
+  it('worktree / submodule 的 .git 文件不算项目根，继续向上', () => {
+    mkdirSync(join(sandbox, '.git'))
+    // 模拟 worktree：.git 是文件，指向父仓库的 git 目录
+    const wt = join(sandbox, 'worktrees', 'task')
+    mkdirSync(wt, { recursive: true })
+    writeFileSync(join(wt, '.git'), 'gitdir: ../../.git/worktrees/task\n')
+    expect(resolveKeelHome({}, wt)).toBe(join(sandbox, '.keel'))
+  })
+
+  it('文件系统根也没有标记 → 回退 <cwd>/.keel', () => {
+    // 临时目录的祖先里不会有 .keel / .git；用 sandbox 本身验证回退
+    const nested = join(sandbox, 'plain', 'deep')
+    mkdirSync(nested, { recursive: true })
+    const home = resolveKeelHome({}, nested)
+    expect(home).toBe(join(nested, '.keel'))
+  })
+
+  it('同一棵树内不同子目录解析到同一个根', () => {
+    mkdirSync(join(sandbox, '.git'))
+    mkdirSync(join(sandbox, 'a', 'b'), { recursive: true })
+    mkdirSync(join(sandbox, 'c'), { recursive: true })
+    expect(resolveKeelHome({}, join(sandbox, 'a', 'b'))).toBe(
+      resolveKeelHome({}, join(sandbox, 'c')),
+    )
   })
 })
 

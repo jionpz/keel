@@ -220,7 +220,8 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
     guard: null,
     guardText: '—',
     to: 'S-REJECTED',
-    effects: [],
+    // 驳回即终态：不保留工作树。分支留在 git 目录里，历史不丢。
+    effects: [{ kind: 'CleanWorkspace' }],
     ignoresControlMode: false,
   },
   {
@@ -317,7 +318,9 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
     guard: null,
     guardText: '—',
     to: 'S-DONE',
-    effects: [{ kind: 'MaybeAutoMerge' }],
+    // CI 通过即交付：先按配置尝试 merge（当前只记意图），再清理工作树。
+    // 分支与提交历史保留 —— PR 仍然可以被审阅、被重新打开。
+    effects: [{ kind: 'MaybeAutoMerge' }, { kind: 'CleanWorkspace' }],
     ignoresControlMode: false,
   },
   {

@@ -14,7 +14,7 @@
 
 import { execFile } from 'node:child_process'
 import { mkdirSync, realpathSync, statSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { err, ok, type Result } from '../contracts/errors.js'
 import { normalizeRemoteUrl } from './remote-url.js'
@@ -25,14 +25,52 @@ const exec = promisify(execFile)
 /**
  * 解析项目根为绝对路径。
  *
- * 相对 `KEEL_HOME` 按**进程启动时的 cwd** 解析一次；目录不存在则创建。
+ * 优先级：
+ *   1. 显式 `KEEL_HOME`（按 cwd 解析；保持既有语义）
+ *   2. 从 cwd 向上查找最近的已有 `.keel` 目录
+ *   3. 从 cwd 向上查找最近的 `.git` **目录**，在其所在层创建 `.keel`
+ *   4. 都没有 → `<cwd>/.keel`
+ *
+ * 为什么向上找：默认 `.keel` 如果永远相对 cwd，从 `src/cli` 和仓库根启动
+ * 会得到两个项目根，git 锁、worktree、仓库副本全部对不上——同一份代码
+ * 变成两个世界。项目树内任意子目录启动必须命中同一个根。
+ *
+ * `.git` 只认目录：worktree / submodule 的 `.git` 是文件，指向别处的
+ * 公共 git 目录；把它们当成项目根会落到一个没有仓库内容的上层目录。
+ *
  * 返回 `realpath` 后的结果，保证同一物理目录只有一个名字。
  */
 export function resolveKeelHome(
   env: NodeJS.ProcessEnv = process.env,
   cwd: string = process.cwd(),
 ): string {
-  const abs = resolve(cwd, env.KEEL_HOME ?? '.keel')
+  const explicit = env.KEEL_HOME
+  if (explicit !== undefined && explicit !== '') return ensureDir(resolve(cwd, explicit))
+  return ensureDir(findProjectHome(cwd))
+}
+
+function findProjectHome(cwd: string): string {
+  const start = resolve(cwd)
+  let dir = start
+  for (;;) {
+    const keel = join(dir, '.keel')
+    if (isDirectory(keel)) return keel
+    if (isDirectory(join(dir, '.git'))) return keel
+    const parent = dirname(dir)
+    if (parent === dir) return join(start, '.keel')
+    dir = parent
+  }
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+function ensureDir(abs: string): string {
   mkdirSync(abs, { recursive: true })
   return realpathSync(abs)
 }

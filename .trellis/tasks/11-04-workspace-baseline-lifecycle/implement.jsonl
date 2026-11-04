@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/git-workspace.md", "reason": "工作区根、worktree 基线与 per-repo 锁的现有纪律；P0-1 / P0-3 / P1-6 / P1-7 直接修改这里描述的行为"}
+{"file": ".trellis/spec/backend/transition-effects.md", "reason": "副作用幂等、CreateBranch 证据与终态清理约定；P0-1 / P1-4 / P1-5 必须遵守"}
+{"file": ".trellis/spec/backend/orchestrator-loop.md", "reason": "S-PR_OPEN 的 CI 等待与停止原因；P0-2 修改 CI 事件来源与 step note"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Result / KeelError / WORKSPACE_ERROR 契约；remove 失败与 unlock 错误必须沿用"}
+{"file": ".trellis/spec/backend/cli-lifecycle.md", "reason": "新增 keel unlock 子命令的分发与连接池生命周期"}

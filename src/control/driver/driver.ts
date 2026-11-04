@@ -345,6 +345,10 @@ export class WorkflowDriver {
             to: result.next_status,
             transition: result.id,
             event: event.type,
+            // CI 结果必须能区分模拟与真实；其它事件不多出这个键
+            ...(event.type === 'CIPassed' || event.type === 'CIFailed'
+              ? { source: event.source }
+              : {}),
           }),
           traceId,
           now,

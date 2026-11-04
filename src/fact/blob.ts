@@ -21,6 +21,7 @@
 import { createHash } from 'node:crypto'
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { resolveKeelHome } from './project-root.js'
 
 /** 超过此大小走 blob（ADR-0004） */
 export const BLOB_THRESHOLD_BYTES = 256 * 1024
@@ -31,8 +32,20 @@ export interface BlobRef {
   preview: string
 }
 
-export function blobRoot(): string {
-  return process.env.KEEL_BLOB_DIR ?? '.keel/blob'
+/**
+ * blob 根：显式 `KEEL_BLOB_DIR` 优先，否则跟随 `KEEL_HOME` 的 `<root>/blob`。
+ *
+ * 不再独立使用 cwd 相对的 `.keel/blob`：blob 是 artifact 的正文，
+ * 它和 Fact 库必须属于同一个项目根，否则换目录启动会「数据库里有引用、
+ * 磁盘上找不到文件」。
+ */
+export function blobRoot(
+  env: NodeJS.ProcessEnv = process.env,
+  cwd: string = process.cwd(),
+): string {
+  const override = env.KEEL_BLOB_DIR
+  if (override !== undefined && override !== '') return override
+  return join(resolveKeelHome(env, cwd), 'blob')
 }
 
 /** 内容寻址路径：<root>/<h[0:2]>/<h[2:]> —— 分片避免单目录文件过多 */

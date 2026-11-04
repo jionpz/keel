@@ -54,7 +54,7 @@ describe('转移表完备性', () => {
       { type: 'Dispatch' },
       { type: 'Cancelled' },
       { type: 'UnrecoverableError' },
-      { type: 'CIPassed' },
+      { type: 'CIPassed', source: 'simulated' },
     ]
     for (const status of TERMINAL_STATUSES) {
       for (const event of events) {
@@ -206,7 +206,7 @@ describe('端到端：docs/07-flows.md 流程一（Excel 日期筛选）', () =>
     step({ type: 'RunSucceeded', stage: 'review' }, facts({ verdict: 'pass' }))
     expect(status).toBe('S-PR_OPEN')
 
-    step({ type: 'CIPassed' })
+    step({ type: 'CIPassed', source: 'simulated' })
     expect(status).toBe('S-DONE')
 
     expect(path.map((p) => p.id)).toEqual([
@@ -220,6 +220,24 @@ describe('端到端：docs/07-flows.md 流程一（Excel 日期筛选）', () =>
       'T-021',
       'T-024',
     ])
+  })
+
+  it('终态清理：T-015 / T-024 清工作区，T-041 仍保留现场', () => {
+    const rejected = transition('S-HUMAN_REVIEW', 'auto', { type: 'HumanRejected' }, facts())
+    expect(rejected.matched && rejected.id).toBe('T-015')
+    expect(rejected.matched && rejected.effects).toContainEqual({ kind: 'CleanWorkspace' })
+
+    const done = transition('S-PR_OPEN', 'auto', { type: 'CIPassed', source: 'simulated' }, facts())
+    expect(done.matched && done.id).toBe('T-024')
+    // 先 merge、后清理；顺序有意义
+    expect(done.matched && done.effects).toEqual([
+      { kind: 'MaybeAutoMerge' },
+      { kind: 'CleanWorkspace' },
+    ])
+
+    const failed = transition('S-DEVELOPING', 'auto', { type: 'UnrecoverableError' }, facts())
+    expect(failed.matched && failed.id).toBe('T-041')
+    expect(failed.matched && failed.effects).toEqual([{ kind: 'PreserveWorkspace' }])
   })
 
   it('复杂需求走 T-013 转人工，而不是自动开发', () => {

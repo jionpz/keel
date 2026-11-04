@@ -50,6 +50,8 @@ export function runForever(deps: WorkerDeps, opts?: RunForeverOptions): Promise<
   `pool.end()` 报错只说明连接被对端提前关掉，不能把成功的命令变成失败。
 - 子命令里**不要**再自己写 `finally { closePool() }` —— 会重复，且新命令一定漏。
   `pollerMain` 里保留的那一份是为了「不经过 runCli 直接调用」时也成立，`closePool` 幂等。
+- 不连 DB 的子命令（如 `unlock`）同样走 `dispatch` / `runCli`：`closePool` 在池
+  未创建时是 no-op，不为它开特例。
 
 **常驻循环退出**
 

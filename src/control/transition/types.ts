@@ -33,13 +33,20 @@ export type TransitionEvent =
   | { readonly type: 'HumanApproved' }
   | { readonly type: 'HumanRejected' }
   | { readonly type: 'HumanRequestedRework' }
-  | { readonly type: 'CIPassed' }
-  | { readonly type: 'CIFailed' }
+  /**
+   * CI 结果必须带来源：模拟结果与真实 GitHub Actions 在事件流里必须可区分。
+   * 用一个必填字段而不是默认值 —— 默认值会让「忘了传」悄悄变成「真 CI」。
+   */
+  | { readonly type: 'CIPassed'; readonly source: CiSource }
+  | { readonly type: 'CIFailed'; readonly source: CiSource }
   | { readonly type: 'PRClosed' }
   | { readonly type: 'Cancelled' }
   | { readonly type: 'UnrecoverableError' }
 
 export type TransitionEventType = TransitionEvent['type']
+
+/** CI 结果来源 —— 事件流据此回答「这次 CI 是真跑的，还是模拟的」 */
+export type CiSource = 'simulated' | 'github'
 
 // ─────────────────────────────── Facts ───────────────────────────────
 

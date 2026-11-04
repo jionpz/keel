@@ -94,8 +94,12 @@ await this.execGit(['-C', wt, '-c', 'user.email=keel@localhost', '-c', 'user.nam
 分支都是 `ai/task-<前 8 位>`。attached 模式**只读用户工作树**：
 只 `fetch` / `worktree add`，不 commit、不 checkout、不写文件（测试断言前后字节一致）。
 
-`KEEL_HOME` 在进程启动时解析成绝对路径（默认 `<cwd>/.keel`），
-之后所有路径都基于它 —— 不让 cwd 中途变化改变已绑定项目的位置。
+`KEEL_HOME` 在进程启动时解析成绝对路径：
+显式设置时按 cwd 解析；未设置时从 cwd **向上**找最近的已有 `.keel` 目录，
+否则找最近的 `.git` **目录**并在同层创建 `.keel`，都没有才回退 `<cwd>/.keel`。
+`.git` 只认目录 —— worktree / submodule 的 `.git` 是文件，不能当项目根。
+这样项目树内任意子目录启动都命中同一个根；项目树外启动仍需显式 `KEEL_HOME`。
+默认 blob 根跟随 `KEEL_HOME`（`<KEEL_HOME>/blob`），显式 `KEEL_BLOB_DIR` 优先。
 
 ## 开工前同步：基线是 SHA，不是 ref 名
 
@@ -117,13 +121,27 @@ const prepared = await git.prepareProject(binding, remoteUrl, baseBranch)
 
 ## 重放语义
 
-`ensureWorktree` 幂等：worktree 存在 → `created: false`，分支不动。
+`ensureWorktree` 幂等，但**两个「新建」必须分开**：
+
+- `created`：本次是否新建 worktree；
+- `branchCreated`：本次是否新建分支。
+
+worktree 被清理后重放时 `created=true` / `branchCreated=false`：
+worktree 是新的，分支不是，起点仍是当初那次 prepare 的 commit。
+
 `CreateBranch` 事件因此分两种情况：
 
-- 首次：`base_ref` / `base_sha` / `fetched_at` 取自本次 `prepareProject`，`reused: false`；
-- 复用：读该 task 最近一条 `CreateBranch` 事件，**沿用旧 `base_sha`**，`reused: true` ——
-  本次 prepare 可能已经 fetch 到更新的 commit，但那条分支没有跟着移动，
-  证据必须描述分支真正的起点。老 task 没有历史事件时写 `base_sha: null`，不编造。
+- `branchCreated=true`：`base_ref` / `base_sha` / `fetched_at` 取自本次 `prepareProject`，
+  `reused: false`；
+- `branchCreated=false`：读该 task 最近一条 `CreateBranch` 事件，**沿用旧 `base_sha`**，
+  `reused: true` —— 本次 prepare 可能已经 fetch 到更新的 commit，但那条分支没有
+  跟着移动，证据必须描述分支真正的起点。老 task 没有历史事件时写 `base_sha: null`，
+  不编造。
+
+路径已存在时先 `inspectWorktree`：`.git` 必须存在，`rev-parse --abbrev-ref HEAD`
+必须等于期望分支。不满足就 fail closed（错误带 expected/actual），**不删目录**
+（可能含未提交内容）。路径被外部删除但 git 元数据还在时，`worktree add` 失败后
+`worktree prune` 再重试一次 —— 否则 task 会永久卡在 `worktree_failed`。
 
 ## 并发与锁
 
@@ -132,6 +150,11 @@ const prepared = await git.prepareProject(binding, remoteUrl, baseBranch)
 `op` 只出现在错误与 `owner.json` 里，不参与锁路径）。
 锁目录里的 `owner.json` 只用于诊断，**不自动破锁** ——
 在慢 fetch 上自动删锁会让两个进程同时持锁，比等待更糟。
+
+恢复入口是人显式执行的 `keel unlock <repoId> [--force]`：
+无 `--force` 只报告持有者并拒绝，`--force` 才删除锁目录。
+`lock_timeout` 错误带 `hint` 字段指向这条命令；`GitWorkspace` 的锁固定传
+`hint="pnpm keel unlock <repoId> --force"`。
 
 ## 错误契约
 
@@ -147,6 +170,10 @@ code 全集：`local_path_missing` / `not_a_git_worktree` / `origin_mismatch` /
 
 `base_missing` 是 `fetch_failed` 的一个特例：git 对不存在的 ref 报的是
 `couldn't find remote ref`，按 stderr 归类，不把「分支名写错」混进「网络故障」。
+
+`remove` 只经 `Result` 报错、不抛异常：调用方（`cleanWorkspace`）据此把失败
+写成 `SideEffectIntent`，而不是让已经成立的终态回滚。`git worktree remove`
+失败时退回直接删目录；目录真的删掉才算成功，`prune` 只是尽力而为。
 
 ---
 

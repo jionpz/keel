@@ -79,6 +79,14 @@ export interface WorktreeInfo {
 export interface WorktreeResult extends WorktreeInfo {
   /** 本次调用是否真的创建了 worktree；false 表示幂等复用 */
   readonly created: boolean
+  /**
+   * 本次调用是否真的创建了分支。
+   *
+   * 与 `created` 分开：worktree 被清理后重放时，worktree 是新建的，
+   * 但分支早已存在、起点是**当初**那次 prepare 的 commit。
+   * 基线证据只能在前者为 true 时取本次 `baseSha`。
+   */
+  readonly branchCreated: boolean
 }
 
 export type ProjectBinding =
@@ -172,6 +180,12 @@ export class GitWorkspace {
    * 可以安全重放的原因（docs/04-state-machine.md §5.2）。
    *
    * 创建时锚定 `project.baseSha` 而不是 `baseRef`：ref 会被并发 fetch 移动。
+   *
+   * 两个容易被「目录存在」骗过的场景在这里收紧：
+   *   - 目录存在但不是该分支的 worktree 根（比如被普通目录占用、或 checkout
+   *     到了别的分支）→ **fail closed**，不删目录（可能含未提交内容）；
+   *   - 目录被外部删除但 git 仍留着 worktree 元数据 → `worktree add` 会失败，
+   *     先 `worktree prune` 再重试一次，而不是让 task 永久卡在 worktree_failed。
    */
   async ensureWorktree(project: PreparedProject, taskId: string): Promise<Result<WorktreeResult>> {
     return this.withRepoLock(project.repoId, 'worktree', async () => {
@@ -179,19 +193,38 @@ export class GitWorkspace {
       const wt = this.worktreePath(taskId)
       const info = { path: wt, branch, gitDir: project.gitDir }
 
-      if (existsSync(wt)) return ok({ ...info, created: false })
+      if (existsSync(wt)) {
+        const inspected = await this.inspectWorktree(wt, branch)
+        if (!inspected.ok) return err(inspected.error)
+        return ok({ ...info, created: false, branchCreated: false })
+      }
 
       await mkdir(join(this.root, 'worktrees'), { recursive: true })
+      // 分支已存在（worktree 被清理后又被重放）则复用，否则从基线建
+      const branchCreated = !(await this.branchExists(project.gitDir, branch))
+      const args = branchCreated
+        ? ['worktree', 'add', '-b', branch, wt, project.baseSha]
+        : ['worktree', 'add', wt, branch]
       try {
-        // 分支已存在（worktree 被清理后又被重放）则复用，否则从基线建
-        const exists = await this.branchExists(project.gitDir, branch)
-        const args = exists
-          ? ['worktree', 'add', wt, branch]
-          : ['worktree', 'add', '-b', branch, wt, project.baseSha]
         await this.execGit(['-C', project.gitDir, ...args])
-        return ok({ ...info, created: true })
-      } catch (e) {
-        return err(workspaceError('worktree_failed', { path: wt, branch, reason: this.redact(e) }))
+        return ok({ ...info, created: true, branchCreated })
+      } catch (first) {
+        // 陈旧元数据（目录被手工删除）会让 add 失败；prune 后重试一次。
+        // 仍然失败才是真的失败，错误里带上两次尝试的原因。
+        try {
+          await this.execGit(['-C', project.gitDir, 'worktree', 'prune'])
+          await this.execGit(['-C', project.gitDir, ...args])
+          return ok({ ...info, created: true, branchCreated })
+        } catch (second) {
+          return err(
+            workspaceError('worktree_failed', {
+              path: wt,
+              branch,
+              reason: this.redact(first),
+              retry_reason: this.redact(second),
+            }),
+          )
+        }
       }
     })
   }
@@ -296,6 +329,9 @@ export class GitWorkspace {
    *
    * **分支保留在 git 目录里** —— 移除的是工作树，不是历史。
    * 用于 S-DONE / S-REJECTED / S-ABANDONED。
+   *
+   * 失败只经 `Result` 返回，不抛异常：调用方（`cleanWorkspace`）要据此
+   * 把「没做成」写成 `SideEffectIntent`，而不是让整个转移事务回滚。
    */
   async remove(project: PreparedProject, taskId: string): Promise<Result<void>> {
     return this.withRepoLock(project.repoId, 'remove', async () => {
@@ -304,9 +340,20 @@ export class GitWorkspace {
       try {
         await this.execGit(['-C', project.gitDir, 'worktree', 'remove', '--force', wt])
         return ok(undefined)
-      } catch {
-        // worktree 元数据可能已损坏；直接删目录并 prune
-        await rm(wt, { recursive: true, force: true })
+      } catch (removeErr) {
+        // worktree 元数据可能已损坏；退回直接删目录。
+        // 目录真的删掉了才算清理成功，prune 只是尽力而为（下次 ensure 会再 prune）。
+        try {
+          await rm(wt, { recursive: true, force: true })
+        } catch (rmErr) {
+          return err(
+            workspaceError('worktree_failed', {
+              path: wt,
+              reason: this.redact(removeErr),
+              fallback_reason: this.redact(rmErr),
+            }),
+          )
+        }
         await this.execGit(['-C', project.gitDir, 'worktree', 'prune']).catch(() => undefined)
         return ok(undefined)
       }
@@ -428,6 +475,37 @@ export class GitWorkspace {
   }
 
   /**
+   * 校验「目录存在」确实是「这个 task 的 worktree」。
+   *
+   * 只读：不 checkout、不删除。目录被普通文件占用、或 checkout 在别的分支时，
+   * 继续复用会把 agent 的改动落到错误的地方，所以这里 fail closed。
+   */
+  private async inspectWorktree(wt: string, branch: string): Promise<Result<void>> {
+    if (!existsSync(join(wt, '.git'))) {
+      return err(
+        workspaceError('worktree_failed', { path: wt, branch, actual: '(not a worktree)' }),
+      )
+    }
+    try {
+      const { stdout } = await this.execGit(['-C', wt, 'rev-parse', '--abbrev-ref', 'HEAD'])
+      const actual = stdout.trim()
+      if (actual !== branch) {
+        return err(workspaceError('worktree_failed', { path: wt, branch, actual }))
+      }
+      return ok(undefined)
+    } catch (e) {
+      return err(
+        workspaceError('worktree_failed', {
+          path: wt,
+          branch,
+          actual: '(unreadable)',
+          reason: this.redact(e),
+        }),
+      )
+    }
+  }
+
+  /**
    * 统一 git 调用入口。
    *
    * `auth` 存在时注入 GitHub https 认证（只对本次子进程生效）；
@@ -466,7 +544,9 @@ export class GitWorkspace {
     } catch (e) {
       return err(workspaceError('lock_failed', { lock: locks, op, detail: this.redact(e) }))
     }
-    return withFileLock(join(locks, `repo-${repoId}.lock`), op, fn)
+    return withFileLock(join(locks, `repo-${repoId}.lock`), op, fn, {
+      hint: `pnpm keel unlock ${repoId} --force`,
+    })
   }
 }
 

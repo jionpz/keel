@@ -202,7 +202,7 @@ describe('v0.1 完成判据（合并：真实编排 + 真实 GitHub PR/CI）', (
 
       // ── 1. 走到终态，且最后一步由真实 CI 驱动 ──
       expect(result.value.finalStatus).toBe('S-DONE')
-      expect(result.value.steps.map((s) => s.note).join('|')).toContain('外部 CI：passed')
+      expect(result.value.steps.map((s) => s.note).join('|')).toContain('外部 CI（GitHub）：passed')
 
       // ── 2. 事件流能完整重建全过程 ──
       const evs = await store.readEvents(taskId, 0, 1000)

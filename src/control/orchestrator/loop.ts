@@ -229,11 +229,11 @@ export async function runTaskToCompletion(
         if (!ciResult.ok) return err(ciResult.error)
         const adv = await deps.driver.advance(
           taskId,
-          { type: ciResult.value === 'passed' ? 'CIPassed' : 'CIFailed' },
+          { type: ciResult.value === 'passed' ? 'CIPassed' : 'CIFailed', source: 'github' },
           deps.now(),
         )
         if (!adv.ok) return err(adv.error)
-        steps.push(record(state.status, adv, null, `外部 CI：${ciResult.value}`))
+        steps.push(record(state.status, adv, null, `外部 CI（GitHub）：${ciResult.value}`))
         continue
       }
       if (opts.externalCi === undefined) {
@@ -242,11 +242,11 @@ export async function runTaskToCompletion(
       const ci = await opts.externalCi(taskId)
       const adv = await deps.driver.advance(
         taskId,
-        { type: ci === 'passed' ? 'CIPassed' : 'CIFailed' },
+        { type: ci === 'passed' ? 'CIPassed' : 'CIFailed', source: 'simulated' },
         deps.now(),
       )
       if (!adv.ok) return err(adv.error)
-      steps.push(record(state.status, adv, null, `外部 CI：${ci}`))
+      steps.push(record(state.status, adv, null, `外部 CI（模拟）：${ci}`))
       continue
     }
 

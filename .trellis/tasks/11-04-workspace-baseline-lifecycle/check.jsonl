@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "pnpm run check 的质量门槛与测试分层；最终验收按此执行"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "防假绿与错误契约；检查 SideEffectIntent 与 remove 的 Result 是否真的被断言"}
+{"file": ".trellis/spec/backend/git-workspace.md", "reason": "测试夹具必须关 commit 签名；worktree 生命周期断言按此检查"}
+{"file": ".trellis/spec/backend/transition-effects.md", "reason": "检查 T-015 / T-024 的 effects 与幂等语义是否一致"}
+{"file": ".trellis/spec/backend/cli-lifecycle.md", "reason": "检查 unlock 子命令是否通过统一分发并正确关闭连接池"}

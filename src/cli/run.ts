@@ -25,6 +25,7 @@ import { runIssueMain } from './run-issue.js'
 import { runTaskMain } from './run-task.js'
 import { statusMain } from './status.js'
 import { timerWorkerMain } from './timer-worker.js'
+import { unlockMain } from './unlock.js'
 
 export const VERSION = '0.1.0'
 
@@ -44,6 +45,7 @@ export const HELP = `keel — AI Engineering Runtime CLI
   ingest-issue <issueUrl> [--label <name>] [--repo <uuid>]   GitHub Issue → task
   run-issue <issueUrl> [--label <name>] [--max-steps N] [--ci passed|failed|real] [--model <id>] [--harness omp|claude] [--wall-clock <秒>]   Issue → task → 驱动到终态
   poller [--interval <ms>] [--ci passed|failed|real] [--model <id>] [--harness omp|claude] [--wall-clock <秒>]   常驻扫描各仓库 label 下的 open issue 并驱动
+  unlock <repoId> [--force]        清理 SIGKILL 留下的 per-repo 锁（无 --force 只报告持有者）
 
 选项:
   --help, -h   显示帮助
@@ -88,6 +90,9 @@ export async function dispatch(argv: readonly string[]): Promise<void> {
       return
     case 'poller':
       await pollerMain(rest)
+      return
+    case 'unlock':
+      unlockMain(rest)
       return
     case '--version':
     case '-v':

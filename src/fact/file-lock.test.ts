@@ -90,6 +90,20 @@ describe('withFileLock', () => {
     expect(readOwner(lock)).toBeDefined()
   })
 
+  it('timeout 错误携带调用方给的恢复提示 —— 运维不用猜命令', async () => {
+    mkdirSync(lock)
+    const r = await withFileLock(lock, 'prepare', async () => ok(undefined), {
+      timeoutMs: 40,
+      pollMs: 10,
+      hint: 'pnpm keel unlock r1 --force',
+    })
+    expect(r.ok).toBe(false)
+    if (!r.ok) {
+      expect(r.error.detail).toMatch(/^\[lock_timeout\]/)
+      expect(r.error.detail).toContain('hint="pnpm keel unlock r1 --force"')
+    }
+  })
+
   it('fn 抛异常也会释放锁', async () => {
     await expect(
       withFileLock(lock, 'x', async (): Promise<Result<void>> => {

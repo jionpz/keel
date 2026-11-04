@@ -107,10 +107,15 @@ keel register-repo https://github.com/you/project --local-path ~/code/project
 只是对象库换成了你的工作树 —— Keel 只对它执行 `fetch` / `worktree add`，
 不 commit、不 checkout、不改文件。
 
-- `KEEL_HOME` 在进程启动时解析为绝对路径，默认 `<当前目录>/.keel`；
-  项目已绑定后，换目录启动不会改变它的位置。
+- `KEEL_HOME` 在进程启动时解析为绝对路径：显式设置时按当前目录解析；
+  未设置时从 cwd 向上找最近的 `.keel` 目录，否则找最近的 `.git` 目录并在
+  同层创建 `.keel`。项目树内从任意子目录启动都会命中同一个根；
+  在项目树外启动请显式设置 `KEEL_HOME`。
+- 默认 blob 根跟随 `KEEL_HOME`（`<KEEL_HOME>/blob`）；显式 `KEEL_BLOB_DIR` 仍然优先。
 - 开工前会 fetch 一次基线分支，并把 **commit SHA** 记进 `CreateBranch` 事件；
   PR 从哪个 commit 长出来可以直接查。分支名变了不算数 —— 基线是 SHA。
+- 到达终态（`S-DONE` / `S-REJECTED` / `S-ABANDONED`）会移除 worktree，
+  **分支与提交历史保留**；`S-FAILED` 刻意保留现场供诊断。
 
 查看绑定与基线：
 

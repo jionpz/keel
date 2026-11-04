@@ -25,6 +25,11 @@ export interface FileLockOptions {
   readonly pollMs?: number
   /** 超过这个时长只作为「疑似陈旧」写进错误，不自动破锁 */
   readonly staleMs?: number
+  /**
+   * 超时错误里附带的恢复提示（例如 `keel unlock <repoId> --force`）。
+   * 只作为文案，不改变锁的行为 —— 自动破锁会引入双重持锁窗口。
+   */
+  readonly hint?: string
   readonly sleep?: (ms: number) => Promise<void>
   readonly now?: () => number
 }
@@ -69,6 +74,7 @@ export async function withFileLock<T>(
             op,
             waited_ms: waited,
             holder: describeHolder(lockDir, staleMs, now),
+            hint: opts.hint,
           }),
         )
       }
@@ -84,7 +90,7 @@ export async function withFileLock<T>(
   }
 }
 
-interface OwnerInfo {
+export interface OwnerInfo {
   readonly pid?: number
   readonly host?: string
   readonly started_at?: string
