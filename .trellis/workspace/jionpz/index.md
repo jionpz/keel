@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 9
+- **Total Sessions**: 10
 - **Last Active**: 2026-11-04
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~490 | Active |
+| `journal-1.md` | ~511 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 10 | 2026-11-04 | 人工闸门入口：keel decide / keel answer 与控制台可复制命令 | `23cb377` | `main` |
 | 9 | 2026-11-04 | 接入自动化 poller：多仓库 issue 常驻扫描 | `3c9e604`, `8472c5f` | `main` |
 | 8 | 2026-11-04 | git 传输认证：私有 https remote 注入凭据 | `48b0dff`, `f2c634f` | `main` |
 | 7 | 2026-11-04 | GHES host 支持收尾：契约测试与 spec 落地 | `2d61e53`, `aea6768` | `main` |

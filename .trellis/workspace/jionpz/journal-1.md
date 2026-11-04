@@ -488,3 +488,24 @@ console 完成可读性/项目性改造：中文状态徽章、一句话现状�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 10: 人工闸门入口：keel decide / keel answer 与控制台可复制命令
+
+**Date**: 2026-11-04
+**Task**: 人工闸门入口：keel decide / keel answer 与控制台可复制命令
+**Branch**: `main`
+
+### Summary
+
+状态机里 T-014/T-015/T-016/T-007 一直有定义但没有任何代码发事件，任务停在 S-HUMAN_REVIEW 无限期卡住。新增 src/cli/decide.ts（keel decide approve|reject|rework --note、keel answer --text），三条纪律：预检(status+control_mode)在写入之前、control_mode≠auto 如实拒绝、approve 注入真实 workspace（抽出共用的 task-workspace.ts）。LinkFeedback 在事件带 feedbackId 时真写 task_feedback，否则维持记录意图；answer 因 feedback 只能由 keel_ingress 写而是两段写，失败时把孤立 feedback id 报出来。advance 新增第 4 参 { note }，同事务补 HumanDecision 事件。控制台新增只读 .human-callout，只给可复制命令、不加写端点。全量 pnpm run check 48 文件 652 通过。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `23cb377` | (see git log) |
+
+### Status
+
+[OK] **Completed**
