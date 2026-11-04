@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   apiRootForHost,
   GitHubProvider,
+  isGitHubHost,
   ownerRepo,
   parseIssueUrl,
   parseRemoteUrl,
@@ -532,6 +533,66 @@ describe('GHES host 解析', () => {
     expect(ownerRepo('https://gitlab.com/a/b.git').ok).toBe(false)
     expect(parseIssueUrl('https://gitlab.com/a/b/issues/1').ok).toBe(false)
   })
+
+  it('host 白名单:github.com / github.* 接受,github.com.* 排除', () => {
+    expect(isGitHubHost('github.com')).toBe(true)
+    expect(isGitHubHost('GitHub.com')).toBe(true)
+    expect(isGitHubHost('github.example.com')).toBe(true)
+    expect(isGitHubHost('github.corp.example')).toBe(true)
+    expect(isGitHubHost('github.com.evil.com')).toBe(false)
+    expect(isGitHubHost('ghe.corp.example')).toBe(false)
+    expect(ownerRepo('https://github.com.evil.com/acme/widget.git').ok).toBe(false)
+  })
+})
+
+describe('parseRemoteUrl 归一与拒绝路径', () => {
+  it('尾斜杠与 .git 一起剥离', () => {
+    const r = parseRemoteUrl('https://github.com/acme/widget.git/')
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.value.repo).toBe('widget')
+  })
+
+  it('.git 只剥离一次', () => {
+    const r = parseRemoteUrl('https://github.com/acme/widget.git.git')
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.value.repo).toBe('widget.git')
+  })
+
+  it('path 必须恰好两段:单段拒绝', () => {
+    expect(parseRemoteUrl('https://github.com/acme').ok).toBe(false)
+  })
+
+  it('path 必须恰好两段:三段拒绝', () => {
+    expect(parseRemoteUrl('https://github.com/acme/widget/extra').ok).toBe(false)
+  })
+
+  it('repo 为 `..` 拒绝(路径穿越)', () => {
+    const r = parseRemoteUrl('git@github.com:acme/..')
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('WORKSPACE_ERROR')
+  })
+
+  it('owner 为 `..` 拒绝(路径穿越)', () => {
+    expect(parseRemoteUrl('git@github.com:../widget').ok).toBe(false)
+    expect(parseRemoteUrl('https://github.com/../widget').ok).toBe(false)
+  })
+
+  it('file:// 等本地路径拒绝', () => {
+    const r = parseRemoteUrl('file:///tmp/repo')
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('WORKSPACE_ERROR')
+  })
+
+  it('host 统一小写', () => {
+    const r = parseRemoteUrl('https://GitHub.COM/acme/widget.git')
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.value.host).toBe('github.com')
+      expect(r.value.remoteUrl).toBe('https://github.com/acme/widget.git')
+    }
+  })
 })
 
 describe('API root 按 host 推导', () => {
@@ -603,5 +664,55 @@ describe('API root 按 host 推导', () => {
     expect(String(fetchSpy.mock.calls[0]?.[0])).toBe(
       'https://api.github.com/repos/acme/widget/issues/1',
     )
+  })
+
+  it('opts.apiRoot 优先级高于 KEEL_GITHUB_API_ROOT', async () => {
+    process.env.KEEL_GITHUB_API_ROOT = 'https://env.example/api/v3'
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(issueJson, { status: 200 }))
+
+    const p = new GitHubProvider({ apiRoot: 'https://explicit.example/api/v3', token: 't' })
+    const r = await p.getIssue('https://github.example.com/acme/widget.git', 1)
+    expect(r.ok).toBe(true)
+    expect(String(fetchSpy.mock.calls[0]?.[0])).toBe(
+      'https://explicit.example/api/v3/repos/acme/widget/issues/1',
+    )
+  })
+
+  it('空白 opts.apiRoot → WORKSPACE_ERROR 且不发请求', async () => {
+    delete process.env.KEEL_GITHUB_API_ROOT
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+
+    const p = new GitHubProvider({ apiRoot: '   ', token: 't' })
+    const r = await p.getIssue('https://github.com/acme/widget.git', 1)
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('WORKSPACE_ERROR')
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('非 http(s) 的 opts.apiRoot → WORKSPACE_ERROR 且不发请求', async () => {
+    delete process.env.KEEL_GITHUB_API_ROOT
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+
+    const p = new GitHubProvider({ apiRoot: 'ftp://gateway.example', token: 't' })
+    const r = await p.getIssue('https://github.com/acme/widget.git', 1)
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('WORKSPACE_ERROR')
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('非 http(s) 的 KEEL_GITHUB_API_ROOT → WORKSPACE_ERROR 且不发请求', async () => {
+    process.env.KEEL_GITHUB_API_ROOT = 'ftp://gateway.example/api/v3'
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+
+    const p = new GitHubProvider({ token: 't' })
+    const r = await p.getIssue('https://github.example.com/acme/widget.git', 1)
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('WORKSPACE_ERROR')
+    expect(fetchSpy).not.toHaveBeenCalled()
   })
 })

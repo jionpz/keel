@@ -30,7 +30,7 @@ const REPO_RE = /^[A-Za-z0-9._-]+$/
 
 /**
  * 接受 github.com 与企业 GHES 的常见域名 `github.*`（如 github.example.com、
- * github.example.com）。刻意不接受任意 host：本 provider 是 GitHub 专用，
+ * github.corp.example）。刻意不接受任意 host：本 provider 是 GitHub 专用，
  * 把 gitlab.com 之类当成 GHES 只会把请求打到错误的服务。
  */
 export function isGitHubHost(host: string): boolean {
