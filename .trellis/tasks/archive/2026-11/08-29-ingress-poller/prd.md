@@ -46,14 +46,24 @@
 
 ## Acceptance Criteria
 
-- [ ] A/B/C 三个仓库配置不同 label 时，各自 label 下的 open issue 都被拾取。
-- [ ] 仓库 issue 超过 100 条时，第二页及以后被拾取；触顶 1000 条时日志出现
+- [x] A/B/C 三个仓库配置不同 label 时，各自 label 下的 open issue 都被拾取。
+- [x] 仓库 issue 超过 100 条时，第二页及以后被拾取；触顶 1000 条时日志出现
       `truncated: true`。
-- [ ] 已关闭 issue、已终态 task 不重复驱动。
-- [ ] 重复 tick 不产生 duplicate task / duplicate run。
-- [ ] SIGTERM 后停止认领新工作并退出（当前 run 结束后；见 Constraints）。
-- [ ] 单行结构化日志可解析，token 不出现。
-- [ ] `pnpm run check` 全绿。
+- [x] 已关闭 issue、已终态 task 不重复驱动。
+- [x] 重复 tick 不产生 duplicate task / duplicate run。
+- [x] SIGTERM 后停止认领新工作并退出（当前 run 结束后；见 Constraints）。
+- [x] 单行结构化日志可解析，token 不出现。
+- [x] `pnpm run check` 全绿。
+
+## 验收记录
+
+- 实现提交见 Phase 3.4；`pnpm run check` 全绿（629 passed / 5 skipped）。
+- **未覆盖（如实记录）**：
+  1. 没有起 stub GitHub + 真库跑完整一轮，也没有手工对真实 GitHub 发 SIGTERM；
+     行为由注入式单测与 provider stub server 测试证明。
+  2. 硬取消未实现：SIGTERM 只保证不再认领新工作，正在跑的 run 结束后才退出（PRD 已记录的 AC 偏离）。
+  3. 复核查出的两个**跨任务**遗留未在本任务修：其它碰库 CLI 子命令退出时仍挂住（`pg` Pool 未关闭）；
+     `timer-worker` 的 SIGTERM 忙等。poller 自己已在 `finally` 关闭连接池。
 
 ## Constraints
 
