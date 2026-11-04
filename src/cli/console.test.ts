@@ -111,6 +111,11 @@ describe('keel console', () => {
       expect(html).toContain('data-mode="overview"')
       expect(html).toContain('data-mode="projects"')
       expect(html).toContain('id="statusbar"')
+      // 项目页：按行动分组、待处理徽章、筛选项随列表 —— 掉一个就是回到指标仪表盘
+      expect(html).toContain('需要你处理')
+      expect(html).toContain('proj-attention')
+      expect(html).toContain('proj-filters')
+      expect(html).toContain('needsYou')
       expect(html).toContain("fetchJSON('/api/stats')")
       // 人工闸门提示条：可点的按钮 + 一行等价的 CLI 命令
       expect(html).toContain('human-callout')

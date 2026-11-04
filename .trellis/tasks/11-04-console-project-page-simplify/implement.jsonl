@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/frontend/console-guidelines.md", "reason": "控制台单文件形态、只读写路径、三种视图与视觉纪律"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端范围只覆盖 console,不要外推通用规范"}

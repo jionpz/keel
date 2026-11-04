@@ -549,7 +549,9 @@ export const CONSOLE_HTML = `<!doctype html>
   }
   .task-sub .task-time { flex: 0 0 auto; margin-left: auto; }
 
-  /* ─── Project List（项目模式侧栏） ─── */
+  /* ─── Project List（项目模式侧栏） ───
+     一项两行：先回答「哪个项目、有没有事等我」，再给规模与新鲜度。
+     仓库地址只进 title；provider 由短名（owner/repo 或 local/name）自然区分。 */
   #project-list {
     list-style: none;
     margin: 0;
@@ -561,214 +563,154 @@ export const CONSOLE_HTML = `<!doctype html>
     gap: 1px;
   }
   #project-list li.proj-item {
-    padding: 6px 8px;
+    padding: 7px 8px;
     border-radius: 6px;
     cursor: pointer;
     transition: background 0.1s;
   }
   #project-list li.proj-item:hover { background: rgba(128, 128, 128, 0.10); }
   #project-list li.proj-item.active { background: var(--accent-soft); }
-  #project-list li.proj-item.active .proj-item-name > span:first-child { color: var(--accent); }
-  .proj-item-name {
+  #project-list li.proj-item.active .proj-item-name { color: var(--accent); }
+  .proj-item-top {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 6px;
+    gap: 8px;
+    min-width: 0;
+  }
+  .proj-item-name {
     font-weight: 500;
     font-size: 12.5px;
     color: var(--text);
-    margin-bottom: 1px;
-    min-width: 0;
-  }
-  .proj-item-name > span:first-child {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .proj-item-url {
+  .proj-attention {
+    flex: 0 0 auto;
     font-size: 10.5px;
-    color: var(--muted);
-    overflow: hidden;
-    text-overflow: ellipsis;
+    font-weight: 600;
+    color: var(--gate);
+    background: var(--gate-soft);
+    border-radius: 999px;
+    padding: 1px 7px;
+    font-variant-numeric: tabular-nums;
     white-space: nowrap;
-    direction: rtl;
-    text-align: left;
-    margin-bottom: 2px;
   }
-  .proj-item-counts {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
+  .proj-item-sub {
+    margin-top: 2px;
     font-size: 11px;
     color: var(--muted);
-    margin-bottom: 1px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-variant-numeric: tabular-nums;
   }
-  .proj-count { font-size: 11px; font-weight: 500; color: var(--muted); }
-  .proj-count.stage { color: var(--stage); }
-  .proj-count.gate { color: var(--gate); }
-  .proj-count.done { color: var(--done); }
-  .proj-count.bad { color: var(--bad); }
-  .proj-item-foot {
+
+  /* ─── Project View（项目模式主区） ───
+     一句话说清「有没有事等我」，任务按行动分组；不再摆指标带和状态分布图。 */
+  .proj-summary {
+    margin: 2px 0 0;
+    font-size: 14px;
+    line-height: 1.55;
+    color: var(--text);
+    max-width: 78ch;
+  }
+  .proj-summary .gate-text { color: var(--gate); font-weight: 600; }
+  .proj-summary .stage-text { color: var(--stage); font-weight: 600; }
+  .proj-summary .bad-text { color: var(--bad); font-weight: 600; }
+  .proj-meta {
+    margin: 4px 0 0;
+    font-size: 11.5px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .proj-toolbar {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 6px;
-    font-size: 11px;
-    color: var(--muted);
-    font-family: var(--mono);
-  }
-
-  /* ─── Project Overview（项目模式主区） ─── */
-  .proj-url {
-    font-family: var(--mono);
-    font-size: 11px;
-    color: var(--muted);
-    word-break: break-all;
-  }
-  /* 项目指标与任务详情共用一条发丝指标带，不再摆一排圆角卡片 */
-  .proj-stats {
-    display: flex;
+    gap: 8px 12px;
     flex-wrap: wrap;
-    gap: 0;
-    margin: 0 0 2px;
-    border-top: 1px solid var(--line);
+    padding-bottom: 10px;
     border-bottom: 1px solid var(--line);
   }
-  .proj-stat {
-    flex: 1 1 132px;
-    border: 0;
-    background: transparent;
-    border-radius: 0;
-    padding: 10px 14px 10px 0;
-    margin-right: 14px;
-  }
-  .proj-stat + .proj-stat {
-    border-left: 1px solid var(--line);
-    padding-left: 14px;
-  }
-  .proj-stat-lbl {
-    font-size: 11px;
-    color: var(--muted);
-    letter-spacing: 0;
-    text-transform: none;
-  }
-  .proj-stat-val {
-    font-family: var(--sans);
-    font-size: 16px;
-    font-weight: 600;
-    letter-spacing: -0.2px;
-    margin-top: 2px;
-  }
-  .proj-stat-sub {
+  .proj-toolbar-hint {
     font-size: 11.5px;
     color: var(--muted);
-    margin-top: 2px;
+    font-variant-numeric: tabular-nums;
   }
-  .proj-stat.stage .proj-stat-val { color: var(--stage); }
-  .proj-stat.gate .proj-stat-val { color: var(--gate); }
-  .proj-stat.done .proj-stat-val { color: var(--done); }
-  .proj-stat.bad .proj-stat-val { color: var(--bad); }
-  /* 状态分布：一条堆叠条 + 图例，比四个方块更能看出项目的形状 */
-  .proj-dist {
+  .proj-group {
+    padding: 14px 0 2px;
+    border-bottom: 1px solid var(--line);
+  }
+  .proj-group:last-child { border-bottom: 0; }
+  .proj-group-head {
     display: flex;
-    height: 10px;
-    border-radius: 6px;
-    overflow: hidden;
-    background: rgba(128, 128, 128, 0.14);
-    margin: 10px 0 8px;
-  }
-  .proj-dist i {
-    display: block;
-    height: 100%;
-  }
-  .proj-dist i.stage { background: var(--stage); }
-  .proj-dist i.gate { background: var(--gate); }
-  .proj-dist i.done { background: var(--done); }
-  .proj-dist i.bad { background: var(--bad); }
-  .proj-dist-legend {
-    display: flex;
+    align-items: baseline;
+    gap: 10px;
     flex-wrap: wrap;
-    gap: 12px;
-    font-size: 12px;
+    margin-bottom: 6px;
+  }
+  .proj-group-title {
+    margin: 0;
+    font-size: 12.5px;
+    font-weight: 600;
     color: var(--text-sec);
-  }
-  .proj-dist-legend .lg {
     display: inline-flex;
-    align-items: center;
-    gap: 5px;
+    align-items: baseline;
+    gap: 7px;
   }
-  .proj-dist-legend .sw {
-    width: 8px;
-    height: 8px;
-    border-radius: 2px;
-    display: inline-block;
-  }
-  .proj-table-wrap {
-    overflow-x: auto;
-  }
-  .proj-table {
-    width: 100%;
-    min-width: 560px;
-    border-collapse: collapse;
-    font-size: 12.5px;
-  }
-  .proj-table th {
-    text-align: left;
-    font-weight: 600;
+  .proj-group-title .n {
     font-size: 11.5px;
     color: var(--muted);
-    padding: 8px 10px;
-    border-bottom: 1px solid var(--line);
-    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
   }
-  .proj-table td {
-    padding: 9px 10px;
-    border-bottom: 1px solid var(--line);
-    vertical-align: middle;
+  .proj-group-title.needs { color: var(--gate); }
+  .proj-group-title.needs .n { color: var(--gate); }
+  .proj-group-hint { font-size: 11.5px; color: var(--muted); }
+  .proj-rows {
+    list-style: none;
+    margin: 0;
+    padding: 0;
   }
-  .proj-table tbody tr {
+  .proj-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 8px;
+    margin: 0 -8px;
+    border-radius: 6px;
     cursor: pointer;
-    transition: background 0.12s;
+    transition: background 0.1s;
   }
-  .proj-table tbody tr:hover { background: var(--panel-alt); }
-  .proj-table tbody tr.proj-empty,
-  .proj-table tbody tr.proj-empty:hover {
-    cursor: default;
-    background: none;
-  }
-  .proj-table .proj-empty {
-    padding: 22px 10px;
-    text-align: center;
-    color: var(--muted);
+  .proj-row:hover { background: rgba(128, 128, 128, 0.08); }
+  .proj-row .badge { flex: 0 0 auto; }
+  .proj-row-title {
+    flex: 1 1 auto;
+    min-width: 0;
     font-size: 12.5px;
-  }
-  .proj-table .ct-title {
-    font-weight: 600;
     color: var(--text);
-    max-width: 420px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .proj-table .ct-num {
-    font-family: var(--mono);
-    color: var(--text-sec);
-    white-space: nowrap;
+  .proj-row-time {
+    flex: 0 0 auto;
+    font-size: 11px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
   }
-  .proj-budget-bar {
-    height: 6px;
-    border-radius: 4px;
-    background: rgba(128, 128, 128, 0.16);
-    overflow: hidden;
-    margin-top: 6px;
+  .proj-row-cta {
+    flex: 0 0 auto;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--gate);
   }
-  .proj-budget-bar i {
-    display: block;
-    height: 100%;
-    background: var(--accent);
+  .proj-empty {
+    margin: 14px 0;
+    font-size: 12.5px;
+    color: var(--muted);
   }
-  .proj-budget-bar.over i { background: var(--bad); }
 
   /* ─── 概览（Overview） ─── */
   .ov-periods {
@@ -967,10 +909,9 @@ export const CONSOLE_HTML = `<!doctype html>
 
   /* 项目行：名字 + 状态计数 + 体量，一行读一个项目 */
   .ov-proj {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: baseline;
-    gap: 2px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
     padding: 8px;
     margin: 0 -8px;
     border-radius: 6px;
@@ -980,6 +921,13 @@ export const CONSOLE_HTML = `<!doctype html>
   }
   .ov-proj:last-child { border-bottom: 0; }
   .ov-proj:hover { background: rgba(128, 128, 128, 0.08); }
+  .ov-proj-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-width: 0;
+  }
   .ov-proj-name {
     font-size: 12.5px;
     font-weight: 500;
@@ -988,14 +936,7 @@ export const CONSOLE_HTML = `<!doctype html>
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .ov-proj-counts {
-    display: flex;
-    gap: 10px;
-    font-size: 11px;
-    font-variant-numeric: tabular-nums;
-  }
   .ov-proj-foot {
-    grid-column: 1 / -1;
     font-size: 11px;
     color: var(--muted);
     font-variant-numeric: tabular-nums;
@@ -1008,14 +949,6 @@ export const CONSOLE_HTML = `<!doctype html>
     background: rgba(128, 128, 128, 0.12);
     margin: 10px 0;
     width: 40%;
-  }
-
-  /* 窄屏优先保住状态/标题/成本/时间，分支在任务模式里仍能看 */
-  @media (max-width: 1280px) {
-    #app { grid-template-columns: 288px minmax(0, 1fr); }
-    .proj-table { min-width: 0; }
-    .proj-table .ct-title { max-width: 240px; }
-    .proj-table th:nth-child(3), .proj-table td:nth-child(3) { display: none; }
   }
 
   /* ─── Main Detail Area ─── */
@@ -2441,6 +2374,26 @@ export const CONSOLE_HTML = `<!doctype html>
     return '$' + num.toFixed(4);
   }
 
+  /** 项目级汇总用：分位以上只留 2 位小数，别让 $1.6788 挡住「一块六毛八」的直觉 */
+  function fmtCostShort(usd) {
+    var num = Number(usd);
+    if (usd == null || usd === '' || isNaN(num) || num === 0) return '$0.00';
+    if (num < 0.01) return '$' + num.toFixed(4);
+    return '$' + num.toFixed(2);
+  }
+
+  /** 列表用：MM-DD HH:mm。秒是核对级信息，留在详情页。 */
+  function fmtListTime(iso) {
+    if (!iso) return '—';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return String(iso);
+    var mm = String(d.getMonth() + 1).padStart(2, '0');
+    var dd = String(d.getDate()).padStart(2, '0');
+    var hh = String(d.getHours()).padStart(2, '0');
+    var mi = String(d.getMinutes()).padStart(2, '0');
+    return mm + '-' + dd + ' ' + hh + ':' + mi;
+  }
+
   function shortId(id) {
     return id ? String(id).slice(0, 8) : '—';
   }
@@ -2653,8 +2606,8 @@ export const CONSOLE_HTML = `<!doctype html>
             '<span class="task-repo" title="' + esc(t.repo) + '">' + esc(shortRepo(t.repo)) + '</span>' +
             '<span class="task-time">' +
               (runCount ? runCount + ' 轮 · ' : '') +
-              (costNum > 0 ? fmtCost(costNum) + ' · ' : '') +
-              esc(fmtShortTime(t.updated_at)) +
+              (costNum > 0 ? fmtCostShort(costNum) + ' · ' : '') +
+              esc(fmtListTime(t.updated_at)) +
             '</span>' +
           '</div>' +
         '</div>' +
@@ -2684,6 +2637,9 @@ export const CONSOLE_HTML = `<!doctype html>
           provider: t.repo_provider || '',
           tasks: [],
           counts: { all: 0, stage: 0, gate: 0, done: 0, bad: 0 },
+          // 「是否有事等我」只数能直接进决策页的状态；自动等待的闸门态不算，
+          // 否则项目列表会把「系统在等调度」误报成「人在等你」。
+          needsYou: 0,
           runs: 0,
           cost: 0,
           budget: 0,
@@ -2695,13 +2651,16 @@ export const CONSOLE_HTML = `<!doctype html>
       g.counts.all++;
       var k = statusKind(t.status);
       if (g.counts[k] != null) g.counts[k]++;
+      if (isGateStatus(t.status)) g.needsYou++;
       g.runs += Number(t.run_count || 0);
       g.cost += Number(t.total_cost_usd || 0);
       g.budget += Number(t.budget_usd || 0);
       if (!g.lastUpdated || String(t.updated_at || '') > g.lastUpdated) g.lastUpdated = t.updated_at || '';
       if (!g.repo && t.repo) g.repo = t.repo;
     }
+    // 先按「有没有事等我」，再按最近更新 —— 项目列表的第一行应该是当前要处理的
     order.sort(function (a, b) {
+      if (a.needsYou !== b.needsYou) return b.needsYou - a.needsYou;
       return String(b.lastUpdated).localeCompare(String(a.lastUpdated));
     });
     for (var j = 0; j < order.length; j++) {
@@ -2710,6 +2669,59 @@ export const CONSOLE_HTML = `<!doctype html>
       });
     }
     return order;
+  }
+
+  /**
+   * 项目页的分组口径（唯一判定处）：
+   *   needs    能直接进决策页的人工闸门（人工介入 / 待澄清）
+   *   stage    阶段态，有 Run 在跑
+   *   waiting  其余闸门态，等调度 / 策略 / 合并
+   *   terminal 终态
+   * 「待处理」= needs；筛选 chip 的「待介入」= needs + waiting，两者标签不同、含义不同。
+   */
+  function projectGroupOf(status) {
+    if (isGateStatus(status)) return 'needs';
+    if (statusKind(status) === 'stage') return 'stage';
+    if (statusKind(status) === 'gate') return 'waiting';
+    return 'terminal';
+  }
+
+  /** 项目列表第二行：规模 + 非零状态 + 新鲜度，一行读完 */
+  function projectSubline(p) {
+    var bits = [p.counts.all + ' 个任务'];
+    if (p.counts.stage > 0) bits.push(p.counts.stage + ' 运行');
+    var waiting = p.counts.gate - p.needsYou;
+    if (waiting > 0) bits.push(waiting + ' 等待');
+    if (p.counts.done > 0) bits.push(p.counts.done + ' 完成');
+    if (p.counts.bad > 0) bits.push(p.counts.bad + ' 异常');
+    bits.push(fmtListTime(p.lastUpdated));
+    return bits.join(' · ');
+  }
+
+  /** 项目页的一句话现状：先说有没有事等人，再说在跑的和等待中的 */
+  function projectSummary(p) {
+    var parts = [];
+    var waiting = p.counts.gate - p.needsYou;
+    if (p.needsYou > 0) parts.push('<b class="gate-text">' + p.needsYou + ' 个任务需要你处理</b>');
+    if (p.counts.stage > 0) parts.push('<b class="stage-text">' + p.counts.stage + ' 个在跑</b>');
+    if (waiting > 0) parts.push(waiting + ' 个等待中');
+    if (parts.length === 0) parts.push('没有进行中的任务');
+    var s = parts.join('，') + '。';
+    if (p.counts.bad > 0) s += '<b class="bad-text">' + p.counts.bad + ' 个异常收尾。</b>';
+    if (p.budget > 0 && p.cost > p.budget) s += '<b class="bad-text">已超预算。</b>';
+    return s;
+  }
+
+  function projectGroupHint(group) {
+    if (group === 'needs') return '点任务直接进入决策页';
+    if (group === 'waiting') return '等调度、策略或合并';
+    return '';
+  }
+
+  function projectRowCta(status) {
+    if (status === 'S-HUMAN_REVIEW') return '去决策 →';
+    if (status === 'S-NEED_CLARIFICATION') return '去回答 →';
+    return '';
   }
 
   function getFilteredProjects(projects) {
@@ -2746,22 +2758,12 @@ export const CONSOLE_HTML = `<!doctype html>
     var html = '';
     for (var i = 0; i < projects.length; i++) {
       var p = projects[i];
-      var chips = '';
-      if (p.counts.stage > 0) chips += '<span class="proj-count stage">运行 ' + p.counts.stage + '</span>';
-      if (p.counts.gate > 0) chips += '<span class="proj-count gate">待介入 ' + p.counts.gate + '</span>';
-      if (p.counts.done > 0) chips += '<span class="proj-count done">完成 ' + p.counts.done + '</span>';
-      if (p.counts.bad > 0) chips += '<span class="proj-count bad">异常 ' + p.counts.bad + '</span>';
-      html += '<li class="proj-item' + (p.id === state.selectedRepo ? ' active' : '') + '" data-repo-id="' + esc(p.id) + '">' +
-        '<div class="proj-item-name">' +
-          '<span>' + esc(shortRepo(p.repo)) + '</span>' +
-          (p.provider ? '<span class="mode-pill">' + esc(p.provider) + '</span>' : '') +
+      html += '<li class="proj-item' + (p.id === state.selectedRepo ? ' active' : '') + '" data-repo-id="' + esc(p.id) + '" title="' + esc(p.repo) + '">' +
+        '<div class="proj-item-top">' +
+          '<span class="proj-item-name">' + esc(shortRepo(p.repo)) + '</span>' +
+          (p.needsYou > 0 ? '<span class="proj-attention">' + p.needsYou + ' 待处理</span>' : '') +
         '</div>' +
-        '<div class="proj-item-url" title="' + esc(p.repo) + '">' + esc(p.repo) + '</div>' +
-        '<div class="proj-item-counts">' + chips + '</div>' +
-        '<div class="proj-item-foot">' +
-          '<span>' + p.counts.all + ' 个任务 · ' + p.runs + ' 轮</span>' +
-          '<span>' + (p.cost > 0 ? fmtCost(p.cost) + ' · ' : '') + esc(fmtShortTime(p.lastUpdated)) + '</span>' +
-        '</div>' +
+        '<div class="proj-item-sub">' + esc(projectSubline(p)) + '</div>' +
       '</li>';
     }
     list.innerHTML = html || '<li class="empty" style="padding:24px 12px">没有匹配的项目</li>';
@@ -2781,85 +2783,81 @@ export const CONSOLE_HTML = `<!doctype html>
     }
     state.selectedRepo = p.id;
     var c = p.counts;
-    var pct = function (n) { return c.all > 0 ? Math.round((n / c.all) * 100) : 0; };
-    var dist = '';
-    var legend = '';
-    var kinds = [['stage', '运行中'], ['gate', '待介入'], ['done', '已完成'], ['bad', '异常终态']];
-    for (var i = 0; i < kinds.length; i++) {
-      var kk = kinds[i][0];
-      if (c[kk] > 0) {
-        dist += '<i class="' + kk + '" style="width:' + pct(c[kk]) + '%"></i>';
-        legend += '<span class="lg"><span class="sw" style="background:var(--' + kk + ')"></span>' +
-          kinds[i][1] + ' <b class="mono">' + c[kk] + '</b></span>';
-      }
+    var meta = [c.all + ' 个任务', p.runs + ' 轮'];
+    if (p.cost > 0) meta.push('累计 ' + fmtCostShort(p.cost));
+    if (p.budget > 0) meta.push('预算 ' + fmtCostShort(p.budget));
+    meta.push('最近更新 ' + fmtListTime(p.lastUpdated));
+
+    var counts = statusCounts(p.tasks);
+    var filterDefs = [['all', '全部'], ['stage', '运行中'], ['gate', '待介入'], ['done', '已完成'], ['bad', '异常']];
+    var filterHtml = '<div class="filter-pills proj-filters" id="proj-filters">';
+    for (var f = 0; f < filterDefs.length; f++) {
+      var fk = filterDefs[f][0];
+      filterHtml += '<button type="button" class="filter-pill' + (state.statusCat === fk ? ' active' : '') +
+        '" data-cat="' + fk + '">' + esc(filterDefs[f][1]) +
+        '<span class="pill-n">' + (counts[fk] || 0) + '</span></button>';
     }
+    filterHtml += '</div>';
 
     var visible = [];
     for (var vi = 0; vi < p.tasks.length; vi++) {
       if (state.statusCat !== 'all' && statusKind(p.tasks[vi].status) !== state.statusCat) continue;
       visible.push(p.tasks[vi]);
     }
-    var tableHint = state.statusCat === 'all'
-      ? '点击行进入任务模式'
-      : '显示 ' + visible.length + ' / ' + p.tasks.length + ' 个任务 · 状态筛选生效中';
-    var html = '<div class="view">' +
-      '<div class="view-head">' +
-        '<div class="cockpit-top-row">' +
-          '<div class="cockpit-badges">' +
-            '<span class="badge stage"><span class="dot"></span>项目</span>' +
-            (p.provider ? '<span class="mode-pill">' + esc(p.provider) + '</span>' : '') +
-            '<span class="mode-pill">' + c.all + ' 个任务</span>' +
-          '</div>' +
+
+    var groups = { needs: [], stage: [], waiting: [], terminal: [] };
+    for (var gi = 0; gi < visible.length; gi++) groups[projectGroupOf(visible[gi].status)].push(visible[gi]);
+    // 终止态里把异常排前面：这是收尾了但值得多看一眼的那一类
+    groups.terminal.sort(function (a, b) {
+      var ar = statusKind(a.status) === 'bad' ? 0 : 1;
+      var br = statusKind(b.status) === 'bad' ? 0 : 1;
+      if (ar !== br) return ar - br;
+      return String(b.updated_at || '').localeCompare(String(a.updated_at || ''));
+    });
+
+    var groupOrder = ['needs', 'stage', 'waiting', 'terminal'];
+    var groupNames = { needs: '需要你处理', stage: '进行中', waiting: '等待中', terminal: '已收尾' };
+    var body = '';
+    for (var go = 0; go < groupOrder.length; go++) {
+      var gk = groupOrder[go];
+      var rows = groups[gk];
+      if (rows.length === 0) continue;
+      var hint = projectGroupHint(gk);
+      body += '<section class="proj-group">' +
+        '<div class="proj-group-head">' +
+          '<h3 class="proj-group-title ' + gk + '">' + groupNames[gk] +
+            '<span class="n">' + rows.length + '</span></h3>' +
+          (hint ? '<span class="proj-group-hint">' + hint + '</span>' : '') +
         '</div>' +
-        '<h2 class="cockpit-title">' + esc(shortRepo(p.repo)) + '</h2>' +
-        '<div class="proj-url">' + esc(p.repo || '—') + '</div>' +
-      '</div>' +
-      '<div class="view-body">' +
-        '<div class="proj-stats">' +
-          '<div class="proj-stat"><div class="proj-stat-lbl">任务</div><div class="proj-stat-val">' + c.all + '</div>' +
-            '<div class="proj-stat-sub">' + (c.stage + c.gate) + ' 个未完成</div></div>' +
-          '<div class="proj-stat stage"><div class="proj-stat-lbl">运行中</div><div class="proj-stat-val">' + c.stage + '</div>' +
-            '<div class="proj-stat-sub">阶段态有 Run 在跑</div></div>' +
-          '<div class="proj-stat gate"><div class="proj-stat-lbl">待介入</div><div class="proj-stat-val">' + c.gate + '</div>' +
-            '<div class="proj-stat-sub">等人或等条件</div></div>' +
-          '<div class="proj-stat done"><div class="proj-stat-lbl">已完成</div><div class="proj-stat-val">' + c.done + '</div>' +
-            '<div class="proj-stat-sub">终态不可再变更（I8）</div></div>' +
-          (c.bad > 0 ? '<div class="proj-stat bad"><div class="proj-stat-lbl">异常终态</div><div class="proj-stat-val">' + c.bad + '</div>' +
-            '<div class="proj-stat-sub">失败 / 驳回 / 放弃</div></div>' : '') +
-          '<div class="proj-stat"><div class="proj-stat-lbl">Run 轮次</div><div class="proj-stat-val">' + p.runs + '</div>' +
-            '<div class="proj-stat-sub">跨 ' + c.all + ' 个任务</div></div>' +
-          '<div class="proj-stat"><div class="proj-stat-lbl">累计成本</div><div class="proj-stat-val">' + fmtCost(p.cost) + '</div>' +
-            '<div class="proj-stat-sub">' + (p.budget > 0 ? '预算 ' + fmtCost(p.budget) : '未设预算') + '</div>' +
-            (p.budget > 0 ? '<div class="proj-budget-bar' + (p.cost > p.budget ? ' over' : '') + '">' +
-              '<i style="width:' + Math.min(100, Math.round((p.cost / p.budget) * 100)) + '%"></i></div>' : '') +
-          '</div>' +
-        '</div>' +
-        '<div class="card">' +
-          '<div class="card-header"><h3>状态分布</h3><span class="muted">按任务当前状态</span></div>' +
-          '<div class="proj-dist">' + dist + '</div>' +
-          '<div class="proj-dist-legend">' + legend + '</div>' +
-        '</div>' +
-        '<div class="card">' +
-          '<div class="card-header"><h3>项目任务</h3><span class="muted">' + esc(tableHint) + '</span></div>' +
-          '<div class="proj-table-wrap"><table class="proj-table"><thead><tr>' +
-            '<th>状态</th><th>标题</th><th>分支</th><th>轮次</th><th>成本</th><th>更新</th>' +
-          '</tr></thead><tbody>';
-    for (var j = 0; j < visible.length; j++) {
-      var t = visible[j];
-      html += '<tr data-task-id="' + esc(t.id) + '">' +
-        '<td>' + badge(t.status, true) + '</td>' +
-        '<td><div class="ct-title" title="' + esc(t.title) + '">' + esc(t.title) + '</div></td>' +
-        '<td class="ct-num">' + esc(t.work_branch || '—') + '</td>' +
-        '<td class="ct-num">' + Number(t.run_count || 0) + '</td>' +
-        '<td class="ct-num">' + (Number(t.total_cost_usd || 0) > 0 ? fmtCost(Number(t.total_cost_usd)) : '—') + '</td>' +
-        '<td class="ct-num">' + esc(fmtShortTime(t.updated_at)) + '</td>' +
-      '</tr>';
+        '<ul class="proj-rows">';
+      for (var r = 0; r < rows.length; r++) {
+        var t = rows[r];
+        var cta = projectRowCta(t.status);
+        body += '<li class="proj-row" data-task-id="' + esc(t.id) + '">' +
+          badge(t.status, true) +
+          '<span class="proj-row-title" title="' + esc(t.title) + '">' + esc(t.title) + '</span>' +
+          '<span class="proj-row-time">更新 ' + esc(fmtListTime(t.updated_at)) + '</span>' +
+          (cta ? '<span class="proj-row-cta">' + cta + '</span>' : '') +
+        '</li>';
+      }
+      body += '</ul></section>';
     }
     if (visible.length === 0) {
-      html += '<tr class="proj-empty"><td colspan="6">' +
-        (p.tasks.length === 0 ? '这个项目还没有任务' : '当前状态筛选下没有任务') + '</td></tr>';
+      body = '<p class="proj-empty">' +
+        (p.tasks.length === 0 ? '这个项目还没有任务。' : '当前筛选下没有任务。') + '</p>';
     }
-    html += '</tbody></table></div></div>' +
+
+    var html = '<div class="view">' +
+      '<div class="view-head">' +
+        '<h2 class="cockpit-title" title="' + esc(p.repo) + '">' + esc(shortRepo(p.repo)) + '</h2>' +
+        '<p class="proj-summary">' + projectSummary(p) + '</p>' +
+        '<p class="proj-meta">' + esc(meta.join(' · ')) + '</p>' +
+      '</div>' +
+      '<div class="view-body">' +
+        '<div class="proj-toolbar">' + filterHtml +
+          '<span class="proj-toolbar-hint">显示 ' + visible.length + ' / ' + p.tasks.length + '</span>' +
+        '</div>' +
+        body +
       '</div></div>';
     detailEl.innerHTML = html;
     syncHash();
@@ -2881,11 +2879,12 @@ export const CONSOLE_HTML = `<!doctype html>
     // 概览看的是全量，搜索/筛选在这里没有作用对象，整块收起来
     var controls = document.getElementById('explorer-controls');
     if (controls) controls.hidden = isOverview;
-    // 项目下拉只属于任务模式；状态 chip 在项目模式下筛的是项目内的任务表
+    // 项目下拉只属于任务模式；状态 chip 只在任务模式留在侧栏。
+    // 项目模式把 chip 放进任务列表上方 —— 它筛谁，就站在谁旁边。
     var row = document.getElementById('repo-filter-row');
     if (row) row.hidden = isProjects || isOverview;
     var filters = document.getElementById('status-filters');
-    if (filters) filters.hidden = isOverview;
+    if (filters) filters.hidden = isOverview || isProjects;
     var search = document.getElementById('task-search');
     if (search) {
       search.placeholder = isProjects ? '搜索项目名或仓库地址…' : '搜索任务标题、ID、仓库、分支…';
@@ -3113,7 +3112,7 @@ export const CONSOLE_HTML = `<!doctype html>
               '<span class="task-repo" title="' + esc(t.repo) + '">' + esc(shortRepo(t.repo)) + '</span>' +
               '<span class="ov-when">' +
                 (t.control_mode === 'paused' ? '已暂停，' : '') +
-                '更新 ' + esc(fmtShortTime(t.updated_at)) +
+                '更新 ' + esc(fmtListTime(t.updated_at)) +
               '</span>' +
             '</span>' +
           '</div>' +
@@ -3134,16 +3133,12 @@ export const CONSOLE_HTML = `<!doctype html>
     html += '<ul class="ov-projects">';
     for (var i = 0; i < projects.length; i++) {
       var p = projects[i];
-      html += '<li class="ov-proj" data-repo-id="' + esc(p.id) + '">' +
-        '<span class="ov-proj-name" title="' + esc(p.repo) + '">' + esc(shortRepo(p.repo)) + '</span>' +
-        '<span class="ov-proj-counts">' +
-          (p.counts.stage > 0 ? '<span class="proj-count stage">运行 ' + p.counts.stage + '</span>' : '') +
-          (p.counts.gate > 0 ? '<span class="proj-count gate">待介入 ' + p.counts.gate + '</span>' : '') +
-          '<span class="proj-count done">完成 ' + p.counts.done + '</span>' +
-          (p.counts.bad > 0 ? '<span class="proj-count bad">异常 ' + p.counts.bad + '</span>' : '') +
+      html += '<li class="ov-proj" data-repo-id="' + esc(p.id) + '" title="' + esc(p.repo) + '">' +
+        '<span class="ov-proj-top">' +
+          '<span class="ov-proj-name">' + esc(shortRepo(p.repo)) + '</span>' +
+          (p.needsYou > 0 ? '<span class="proj-attention">' + p.needsYou + ' 待处理</span>' : '') +
         '</span>' +
-        '<span class="ov-proj-foot">' + p.counts.all + ' 个任务，' + p.runs + ' 轮，' +
-          (p.cost > 0 ? fmtCost(p.cost) + '，' : '') + '最近更新 ' + esc(fmtShortTime(p.lastUpdated)) + '</span>' +
+        '<span class="ov-proj-foot">' + esc(projectSubline(p)) + '</span>' +
       '</li>';
     }
     html += '</ul></div>';
@@ -5059,6 +5054,13 @@ export const CONSOLE_HTML = `<!doctype html>
   });
 
   document.getElementById('detail').addEventListener('click', function (ev) {
+    // 项目页的状态 chip 就在任务列表上方，点了只重绘项目视图
+    var projFilter = ev.target.closest('.proj-filters .filter-pill[data-cat]');
+    if (projFilter) {
+      state.statusCat = projFilter.getAttribute('data-cat') || 'all';
+      renderProjectView();
+      return;
+    }
     // 概览的三种交互：切口径、点某一天、点项目
     var periodBtn = ev.target.closest('.ov-period[data-period]');
     if (periodBtn) {
