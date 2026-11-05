@@ -109,10 +109,25 @@ export const DEFAULT_RULES: readonly Rule[] = [
   },
   {
     // 唯一放行的规则，因此 priority 最低、也最容易被更严的规则压过
+    //
+    // 放行带：risk=low 且 complexity != 'high'。
+    //
+    // 为什么不再要求 complexity == 'low'（2026-11-05 放宽）：
+    // 旧条件让 medium 单方面否决放行，而 medium 不命中任何其他规则，
+    // 于是**低风险中等复杂度**的改动直接吃 DEFAULT_ACTION = human_review，
+    // 记录成 default_applied = true。这正是 docs/05-contracts/policy-engine.md §1.4
+    // 所说的「大量 default_applied = true 是规则覆盖不足的信号」。
+    //
+    // ⚠️ 这不是笔误，不要把 `!= 'high'` 改回 `== 'low'`：
+    // - 上界仍是 high：complexity=high 时 P4 不命中，且没有其他规则兜底，
+    //   由 DEFAULT_ACTION 判 human_review（default_applied = true）。高复杂度必须人工。
+    // - 安全边界不变：安全修复同时命中 P3 与 P4，严格性偏序取 security_review（P3 更严），
+    //   放宽 P4 不会把安全改动自动放行。
+    // - P1（risk=high）/ P2（>30 文件）的条件与动作不动，高风险与大改动照样升级。
     id: 'P4',
     points: ['rfc_ready'],
     priority: 100,
-    condition: "facts.complexity == 'low' && facts.risk == 'low'",
+    condition: "facts.risk == 'low' && facts.complexity != 'high'",
     action: 'auto_develop',
     stop: false,
   },
@@ -131,6 +146,8 @@ export const DEFAULT_RULES: readonly Rule[] = [
 ]
 
 export const DEFAULT_RULESET: Ruleset = {
-  version: '2026-08-24',
+  // 规则内容变了就要换版本号：契约保证 (ruleset_version, point, facts) 决定裁决结果，
+  // 沿用旧版本号会让历史 A-PolicyDecision 的 policy_version 指向另一套规则
+  version: '2026-11-05',
   rules: DEFAULT_RULES,
 }

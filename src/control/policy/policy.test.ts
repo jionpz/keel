@@ -152,6 +152,61 @@ describe('默认 deny', () => {
   })
 })
 
+// ──────────────── 放宽后的放行带：P4 = risk low 且 complexity != high ────────────────
+
+describe('auto_develop 放行带（P4 放宽后）', () => {
+  const lowRisk = {
+    risk: 'low',
+    security_related: false,
+    estimated_files_changed: 5,
+    critic_confidence: 0.85,
+  }
+
+  it('低风险 + 中等复杂度 → auto_develop，不再落到人工', () => {
+    const r = engine.evaluate('rfc_ready', { ...lowRisk, complexity: 'medium' }, AT)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value.decision).toBe('auto_develop')
+    // 命中即放行，不是靠默认 deny —— default_applied 必须如实为 false
+    expect(r.value.default_applied).toBe(false)
+    expect(r.value.matched_rules.map((m) => m.id)).toEqual(['P4'])
+  })
+
+  it('低风险 + 高复杂度 → 不命中任何规则，默认 deny 成 human_review', () => {
+    const r = engine.evaluate('rfc_ready', { ...lowRisk, complexity: 'high' }, AT)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value.decision).toBe('human_review')
+    // 高复杂度由 DEFAULT_ACTION 兜住，而不是被某条规则显式拦下
+    expect(r.value.default_applied).toBe(true)
+    expect(r.value.matched_rules).toEqual([])
+  })
+
+  it('高风险 + 中等复杂度 → human_review，P1 命中而非默认 deny', () => {
+    const r = engine.evaluate('rfc_ready', { ...lowRisk, risk: 'high', complexity: 'medium' }, AT)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value.decision).toBe('human_review')
+    expect(r.value.default_applied).toBe(false)
+    expect(r.value.matched_rules.map((m) => m.id)).toEqual(['P1'])
+  })
+
+  it('低风险 + 中等复杂度的安全修复 → 仍为 security_review（P3 压过放宽后的 P4）', () => {
+    // 放宽 P4 后 medium 也进入放行带，这是它与 P3 新出现的重叠区：
+    // 若严格性偏序被削弱或 P3 被误改，安全修复会被 auto_develop 吞掉
+    const r = engine.evaluate(
+      'rfc_ready',
+      { ...lowRisk, complexity: 'medium', security_related: true },
+      AT,
+    )
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value.decision).toBe('security_review')
+    expect(r.value.default_applied).toBe(false)
+    expect(r.value.matched_rules.map((m) => m.id).sort()).toEqual(['P3', 'P4'])
+  })
+})
+
 describe('纯函数', () => {
   it('相同输入重复求值 100 次，结果深相等', () => {
     const facts: FactSet = {
