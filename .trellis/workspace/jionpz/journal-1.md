@@ -691,3 +691,24 @@ P4 条件改为 risk=low && complexity!=high，中等复杂度低风险不再默
 ### Status
 
 [OK] **Completed**
+
+
+## Session 17: S-HUMAN_REVIEW 超时自动收尾
+
+**Date**: 2026-11-05
+**Task**: S-HUMAN_REVIEW 超时自动收尾
+**Branch**: `main`
+
+### Summary
+
+人工裁决不再无限期挂起：复用澄清 TTL 机制加 human_review_ttl（默认 24h，KEEL_HUMAN_REVIEW_TTL_H 可覆盖或关闭），5 条进入转移武装、3 条离开取消、T-028 收割到期转 S-ABANDONED；claimDueTimers 加 join task 状态过滤并只锁 timer 行；顺带修掉终态残留澄清 timer 的泄漏。全量 check 绿（868 passed / 5 skipped，C4 33 条一致），两处真反例先红后绿。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `37c8b0c` | (see git log) |
+
+### Status
+
+[OK] **Completed**
