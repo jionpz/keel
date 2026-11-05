@@ -668,3 +668,26 @@ console 完成可读性/项目性改造：中文状态徽章、一句话现状�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 16: 放宽 auto_develop 放行带
+
+**Date**: 2026-11-05
+**Task**: 放宽 auto_develop 放行带
+**Branch**: `main`
+
+### Summary
+
+P4 条件改为 risk=low && complexity!=high，中等复杂度低风险不再默认落 human_review；DEFAULT_ACTION / 严格性偏序未动。新增 policy-ruleset spec 记录放行带真值表与修改纪律，规则版本升 2026-11-05，回退反例实测会红。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7524dbd` | (see git log) |
+| `797129c` | (see git log) |
+| `2e084de` | (see git log) |
+
+### Status
+
+[OK] **Completed**

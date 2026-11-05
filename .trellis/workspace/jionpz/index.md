@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 15
+- **Total Sessions**: 16
 - **Last Active**: 2026-11-05
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~670 | Active |
+| `journal-1.md` | ~693 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 16 | 2026-11-05 | 放宽 auto_develop 放行带 | `7524dbd`, `797129c`, `2e084de` | `main` |
 | 15 | 2026-11-05 | 执行面模型路由：按阶段对接企业网关 | `edff9e8`, `1b4f3e6`, `b99de02` | `main` |
 | 14 | 2026-11-05 | 运行巡检落地：卡死判定改为进展信号 | `9fd5b87`, `4c7a26a`, `b4705e5` | `main` |
 | 13 | 2026-11-04 | 控制台口令登录与会话鉴权 | `909a7af` | `feat/console-login-auth` |
