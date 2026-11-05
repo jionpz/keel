@@ -118,11 +118,16 @@
 
 | ID | from | event | guard | to | side-effect |
 |---|---|---|---|---|---|
-| `T-030` | 任一阶段态 | `RunFailed` \| `RunTimeout` | `attempt < max_attempts(stage)` | 同状态 ⟲ | 创建 `run(stage, n+1)`，附失败原因 |
-| `T-031` | 任一阶段态 | `RunFailed` \| `RunTimeout` | `attempt ≥ max_attempts(stage)` | `S-HUMAN_REVIEW` | 通知人工，附全部失败记录 |
+| `T-030` | 任一阶段态 | `RunFailed` \| `RunTimeout` \| `RunStalled` | `attempt < max_attempts(stage)` | 同状态 ⟲ | 创建 `run(stage, n+1)`，附失败原因 |
+| `T-031` | 任一阶段态 | `RunFailed` \| `RunTimeout` \| `RunStalled` | `attempt ≥ max_attempts(stage)` | `S-HUMAN_REVIEW` | 通知人工，附全部失败记录 |
 
 > `RunTimeout` 与 `RunCancelled` 是 **Run 级**的区分。在 Task 级，
 > 超时与失败走同一条路 —— Task 只关心"这次没成"，原因留在 `run.error_kind`。
+>
+> `RunStalled` 是 `RunTimeout` 的**子类**：两者都让 run 以 `TIMEOUT` 收尾、
+> 走同一条重试/升人工路径；区别只在 `run.error_kind='RUN_STALLED'` 与
+> `RunStalled` 事件里的证据（沉默时长、最后进展类型、owner 心跳、孤儿清理结果）。
+> 不新增 Run 状态，是因为对调度而言"卡死"与"超时"的后续动作完全相同。
 
 ### 2.2 通用规则（适用于全部**非终态**）
 
@@ -268,7 +273,7 @@ task.control_mode  谁在驾驶     ──┘
 | `RUNNING` | | Session 已启动 |
 | `SUCCEEDED` | ★ | Proposal 通过校验并提交 |
 | `FAILED` | ★ | Harness 报错，或 Proposal 反复校验失败 |
-| `TIMEOUT` | ★ | 超过该 stage 的 wall-clock 上限 |
+| `TIMEOUT` | ★ | 超过该 stage 的硬上限，或进展沉默达到阈值（`error_kind='RUN_STALLED'`） |
 | `CANCELLED` | ★ | 被人工接管、Task 取消或预算耗尽中止 |
 
 ### 4.2 转移表
@@ -291,6 +296,13 @@ task.control_mode  谁在驾驶     ──┘
 
 > `R-007` 是 Proposal 机制的关键一环：校验失败**不等于** Run 失败。
 > 结构化产物写错了，先把错误告诉 Session 让它改 —— 这比直接判死重跑整个阶段便宜得多。
+
+> `R-009` 只描述「DB 墙钟 timer 到期」这一条路径。进展沉默由进程内
+> `StallSupervisor` 或独立 `Patrol` 直接在同一事务里把 run 置 `TIMEOUT`
+> 并写 `error_kind='RUN_STALLED'`，随后经 `driver.advance(RunStalled)`
+> 走 `T-030` / `T-031` —— 不新增 Run 级状态，也不绕过守卫：
+> `UPDATE ... WHERE status='RUNNING'` 与 `rowCount` 检查仍是最终裁判。
+> 详情见 `adr/0009-liveness-by-progress.md`。
 
 ---
 
@@ -338,7 +350,7 @@ idempotency_key = hash(task_id, stage, attempt)
 
 | 计时器 | 作用域 | 到期事件 | 默认值 |
 |---|---|---|---|
-| `wall_clock(stage)` | Run | `RunTimeout` → `R-009` | 按 stage 配置（180s v0.1；**Keel 侧 watchdog interrupt('timeout') 收割(方案 B)**,harness `--max-time` 作双保险） |
+| `wall_clock(run)` | Run | `RunTimeout` → `R-009` | progress 模式按 stage 硬上限（§6.1）；wallclock 模式为全局 180s；显式 `--wall-clock` 覆盖并打 warning |
 | `clarification_ttl` | Task | `TimerFired` → `T-008` | **24h**(issue #24,`src/shared/timers.ts`) |
 | `human_review_ttl` | Task | 仅通知升级，**不自动转移** | 待定 |
 
@@ -352,6 +364,62 @@ idempotency_key = hash(task_id, stage, attempt)
 > `TIMEOUT`，带 `RUNNING` guard）→ `T-030`/`T-031`。并发安全：
 > `SKIP LOCKED` + `WHERE status='RUNNING'`，双 worker 不双投。
 > 启动示例：`scripts/timer-worker.ts`。
+>
+> **常驻前提**：独立巡检挂在这个 worker 的常驻 drain 循环里
+> （`keel timer-worker --interval <ms>`）。单次 drain 也会跑**一轮**巡检，
+> 但只有常驻循环才会持续扫描；进程崩溃后的卡死 run 要等 worker 启动 /
+> 下一轮 drain 才被处理。
+
+### 6.1 每 stage 策略：沉默阈值与硬上限
+
+「卡死」按**进展信号**判定，不按总耗时 —— 长不等于卡住。`develop`
+合法跑 10 小时是常态，旧 `180s` 一刀切会误杀。
+
+| stage | `silenceMs`（无新进展） | `hardCapS`（总墙钟兜底） |
+|---|---|---|
+| `pm` | 5m | 30m |
+| `brainstorm` | 10m | 2h |
+| `critic` | 10m | 2h |
+| `rfc_draft` | 10m | 2h |
+| `develop` | 20m | 12h |
+| `qa` | 10m | 2h |
+| `review` | 10m | 2h |
+
+豁免与降级：
+
+- **human**：不判沉默、不设默认硬上限（`hardCapS: null`）；
+- **无 `CAP-STREAM`**：拿不到进展事件，`progressSource` 降为 `'none'`，
+  只保留硬上限；
+- **显式 `--wall-clock <秒>`**：覆盖所有 stage 硬上限（逃生阀），
+  并在启动时打 warning；
+- **`KEEL_LIVENESS_MODE=wallclock`**：整体退回改造前的全局 180s，
+  进程内 watchdog 与 DB timer 行为不变；非法值启动失败，不静默回退。
+
+硬上限仍由 `wall_clock` timer 承担（harness `--max-time` 作单轮双保险）；
+巡检**不重复计时**，只消费策略表。
+
+### 6.2 两层检测
+
+| 层 | 位置 | 覆盖的故障 | 判据 |
+|---|---|---|---|
+| 进程内 `StallSupervisor` | 编排进程 | 进程活着、模型静默（挂起、死循环、流断） | 单调时钟上 `now - lastProgressAt ≥ silenceMs` → `interrupt('stalled')` |
+| 独立 `Patrol` | timer worker | 编排进程崩溃 / 被 SIGKILL，无人中断 | `owner_heartbeat_at` 过期且沉默超过该 run 持久化的 `silence_ms` |
+
+两者互补，职责不重叠。`run_liveness.silence_ms` 由 supervisor 启动时写入，
+巡检只读它 —— 独立进程无法重算策略，重算会把 human / 无信号 run 误判成卡死
+（NULL 表示「不做沉默判定」）。巡检用 `stall_reported_at` 做幂等 claim，
+并发 worker 只收割一次。
+
+判定结果：
+
+- run → `TIMEOUT`，`error_kind='RUN_STALLED'`；
+- 事件 `RunStalled`，payload 带 `silence_ms` / `last_progress_at` /
+  `last_kind` / `owner_heartbeat_at` / `source`(`supervisor`|`patrol`) /
+  `orphan_killed`；
+- Task 级走 `T-030`（重试）或 `T-031`（升人工），与 `RunTimeout` 同路。
+
+**保守方向**：遥测写失败、liveness 行缺失、启动时间无法校验时，
+一律**不收割**（宁可由硬上限兜底），绝不误杀活着的长任务。
 
 ---
 

@@ -4,3 +4,5 @@
 {"file": ".trellis/spec/backend/error-handling.md", "reason": "核对 RUN_STALLED 的 retryable 与错误形状"}
 {"file": ".trellis/spec/backend/harness-adapter.md", "reason": "核对增量解析没有破坏子进程与会话契约"}
 {"file": ".trellis/spec/backend/orchestrator-loop.md", "reason": "核对停止原因、单进程前提与不静默修复"}
+{"file": "docs/05-contracts/session-manager.md", "reason": "核对执行层/契约层 SessionSpec 的边界与不可序列化字段"}
+{"file": ".trellis/spec/backend/session-context.md", "reason": "核对进展回调没有破坏 withPrompt 的追加语义"}

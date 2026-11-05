@@ -24,10 +24,12 @@ import {
   printNonDoneReport,
   printRunResult,
   type RunTaskResult,
+  readLivenessMode,
   resolveCiGateway,
   resolveHarness,
   resolveModelForHarness,
   runTask,
+  warnWallClockOverride,
 } from './run-task.js'
 
 export interface RunIssueOptions {
@@ -36,7 +38,7 @@ export interface RunIssueOptions {
   readonly repoId?: string
   readonly maxSteps?: number
   readonly ci?: CiMode
-  /** 透传 runTask;验收慢模型可抬高墙钟 */
+  /** 透传 runTask;显式覆盖 stage 墙钟硬上限 */
   readonly wallClockS?: number
   /** 透传 runTask 的 `--model`；省略则按 harness 解析 */
   readonly model?: string | number | boolean
@@ -136,9 +138,11 @@ ingest 一个 GitHub Issue 并把产生的 task 驱动到终态。
 --harness 缺省 omp，也可设 KEEL_HARNESS；非法值拒绝（不静默回退）。
 --model 对 omp 缺省 ${DEFAULT_OMP_MODEL}，也可设 KEEL_MODEL；空白值拒绝（不静默回退）。
 claude 未指定 --model / KEEL_MODEL 时不传 --model。
---wall-clock 单次 run 的墙钟上限秒，缺省 180；只接受正整数，非法值拒绝（不静默回退）。`)
+--wall-clock 显式覆盖 stage 墙钟硬上限（秒）；缺省按 stage 策略（develop 12h）；只接受正整数，非法值拒绝。`)
     return
   }
+  const mode = readLivenessMode('run-issue')
+  if (mode === undefined) return
   const issueUrl = positionals[0] as string
   const label = typeof flags.label === 'string' ? flags.label : undefined
   const repoId = typeof flags.repo === 'string' ? flags.repo : undefined
@@ -172,6 +176,7 @@ claude 未指定 --model / KEEL_MODEL 时不传 --model。
     process.exitCode = 1
     return
   }
+  if (wallClock.value !== undefined) warnWallClockOverride('run-issue', wallClock.value, mode)
 
   const run = deps.runIssue ?? runIssue
   const result = await run({

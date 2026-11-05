@@ -14,6 +14,7 @@
 | [0006](./0006-session-recovery.md) | Session 恢复策略 | **Proposed** — restore 双路径未实现，刻意不转 Accepted（2026-08-26 复核） |
 | [0007](./0007-migration-and-query-layer.md) | 迁移工具与查询层 | **Accepted** — node-pg-migrate + raw pg |
 | [0008](./0008-wall-clock-semantics.md) | 墙钟语义：Run 级预算 | **Accepted** — 实现已落地，五连 5/5 验证（2026-10-25 追认） |
+| [0009](./0009-liveness-by-progress.md) | 卡死判定按进展信号，而非总耗时 | **Proposed** — 实现已落地，待全量验证 |
 
 ## Status 语义
 

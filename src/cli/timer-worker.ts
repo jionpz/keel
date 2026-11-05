@@ -5,6 +5,8 @@
  */
 
 import { WorkflowDriver } from '../control/driver/driver.js'
+import { livenessMode } from '../control/liveness/policy.js'
+import { LivenessStore } from '../control/liveness/store.js'
 import { RuleBasedPolicyEngine } from '../control/policy/engine.js'
 import { DEFAULT_RULESET } from '../control/policy/ruleset.js'
 import { drainAllDueTimers, runForever } from '../timer/worker.js'
@@ -19,10 +21,14 @@ export async function timerWorkerMain(argv: readonly string[]): Promise<void> {
     return
   }
 
+  // 非法 KEEL_LIVENESS_MODE 在这里就拒绝启动,而不是每轮 drain 才抛
+  const mode = livenessMode()
   const now = () => new Date().toISOString()
+  const store = new LivenessStore()
   const deps = {
     driver: new WorkflowDriver(new RuleBasedPolicyEngine(DEFAULT_RULESET)),
     now,
+    store,
   }
 
   const interval =
@@ -32,14 +38,20 @@ export async function timerWorkerMain(argv: readonly string[]): Promise<void> {
         ? Number(flags.interval)
         : undefined
 
-  if (interval === undefined || Number.isNaN(interval)) {
-    const stats = await drainAllDueTimers(deps)
-    console.log(
-      `timer-worker: clarificationFired=${stats.clarificationFired} runTimeout=${stats.runTimeout} skipped=${stats.skipped}`,
-    )
-    return
-  }
+  try {
+    if (interval === undefined || Number.isNaN(interval)) {
+      const stats = await drainAllDueTimers(deps)
+      console.log(
+        `timer-worker: clarificationFired=${stats.clarificationFired} runTimeout=${stats.runTimeout} ` +
+          `skipped=${stats.skipped} patrol(reaped=${stats.patrol.reaped}, killed=${stats.patrol.orphansKilled}, ` +
+          `errors=${stats.patrol.errors}) liveness=${mode}`,
+      )
+      return
+    }
 
-  console.log(`timer-worker: 常驻循环, interval=${interval}ms (SIGTERM 退出)`)
-  await runForever(deps, { intervalMs: interval })
+    console.log(`timer-worker: 常驻循环, interval=${interval}ms, liveness=${mode} (SIGTERM 退出)`)
+    await runForever(deps, { intervalMs: interval })
+  } finally {
+    await store.close()
+  }
 }

@@ -15,6 +15,7 @@ import { type ErrorKind, err, makeError, ok, type Result } from '../../contracts
 import type {
   HarnessAdapter,
   InterruptReason,
+  ProgressEvent,
   RunResult,
   RunSpec,
   WorkspaceDiff,
@@ -58,6 +59,11 @@ export interface SessionSpec {
   readonly adapter: HarnessAdapter
   /** 期望产出的产物 kind */
   readonly expect: { readonly kind: ProposalKind; readonly key: string }
+  /**
+   * 执行层进展遥测 —— **不是契约层字段**，不进入 RunSpec、不序列化。
+   * 只支持 CAP-STREAM 的 adapter 会回调；不传则行为与之前完全一致。
+   */
+  readonly onProgress?: (event: ProgressEvent) => void
 }
 
 /**
@@ -122,7 +128,10 @@ export class HarnessSessionManager {
       { ...spec.runSpec, idempotency_key: `${spec.runSpec.idempotency_key}#turn${turn}` },
       buildPrompt(input, spec),
     )
-    const started = await spec.adapter.startRun(runSpec)
+    const started = await spec.adapter.startRun(
+      runSpec,
+      spec.onProgress === undefined ? undefined : { onProgress: spec.onProgress },
+    )
     if (!started.ok) return err(started.error)
 
     const res = await spec.adapter.awaitResult(started.value)

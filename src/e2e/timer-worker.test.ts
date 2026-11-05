@@ -13,9 +13,11 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { WorkflowDriver } from '../control/driver/driver.js'
+import type { LivenessStore } from '../control/liveness/store.js'
 import { RuleBasedPolicyEngine } from '../control/policy/engine.js'
 import { DEFAULT_RULESET } from '../control/policy/ruleset.js'
 import { asOwner, closePool } from '../fact/db.js'
+import { EMPTY_PATROL_STATS } from '../timer/patrol.js'
 import { drainAllDueTimers } from '../timer/worker.js'
 
 const NOW = '2026-08-26T12:00:00Z'
@@ -163,6 +165,34 @@ describe('独立 timer worker(issue #26)', () => {
       c.query<{ state: string }>(`SELECT state FROM timer WHERE task_id=$1`, [taskId]),
     )
     expect(t.rows[0]?.state).toBe('cancelled') // 仅 cancel
+  })
+
+  it('W5: progress 模式挂巡检；wallclock 模式整体退回旧路径', async () => {
+    let patrolCalls = 0
+    const deps = {
+      driver: driver(),
+      now,
+      // 只作为「传了 store」的开关；本轮巡检被注入实现替换
+      store: {} as unknown as LivenessStore,
+      patrol: async () => {
+        patrolCalls++
+        return { ...EMPTY_PATROL_STATS, reaped: 2 }
+      },
+    }
+    const previous = process.env.KEEL_LIVENESS_MODE
+    try {
+      process.env.KEEL_LIVENESS_MODE = 'progress'
+      const stats = await drainAllDueTimers(deps)
+      expect(patrolCalls).toBe(1)
+      expect(stats.patrol.reaped).toBe(2)
+
+      process.env.KEEL_LIVENESS_MODE = 'wallclock'
+      await drainAllDueTimers(deps)
+      expect(patrolCalls).toBe(1)
+    } finally {
+      if (previous === undefined) delete process.env.KEEL_LIVENESS_MODE
+      else process.env.KEEL_LIVENESS_MODE = previous
+    }
   })
 })
 

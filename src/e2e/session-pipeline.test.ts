@@ -206,6 +206,75 @@ describe('R-007 · 校验失败不等于 Run 失败', () => {
     return { adapter, feedbacks }
   }
 
+  /** 模拟巡检在 zombie 返回成功之前把 run 收走（TIMEOUT + RUN_STALLED） */
+  function reapingAdapter(runId: string): OmpAdapter {
+    const adapter = new OmpAdapter()
+    // biome-ignore lint/suspicious/noExplicitAny: 测试桩
+    ;(adapter as any).startRun = async (spec: RunSpec) => ({
+      ok: true,
+      value: { run_id: spec.run.run_id, harness_id: 'omp' },
+    })
+    // biome-ignore lint/suspicious/noExplicitAny: 测试桩
+    ;(adapter as any).awaitResult = async () => {
+      await asOwner((c) =>
+        c.query(
+          `UPDATE run SET status='TIMEOUT', ended_at=$2, error_kind='RUN_STALLED' WHERE id=$1`,
+          [runId, NOW],
+        ),
+      )
+      return {
+        ok: true,
+        value: {
+          status: 'SUCCEEDED',
+          text: '```json\n{"schema_version":"1.0","run_id":"r1","stage":"pm","verdict":"actionable","reason":"ok"}\n```',
+          proposals: [],
+          usage: { tokens_in: 1, tokens_out: 1, cost_usd: 0, cost_basis: 'estimated' },
+          session_ref: 'sess-zombie',
+        },
+      }
+    }
+    // biome-ignore lint/suspicious/noExplicitAny: 测试桩
+    ;(adapter as any).dispose = async () => ({ ok: true, value: {} })
+    return adapter
+  }
+
+  /** 一个「只会以 TIMEOUT 收场」的 stub：把 interrupt 的 reason 记下来，供断言 */
+  function timeoutAdapter(reasons: string[]): OmpAdapter {
+    const adapter = new OmpAdapter()
+    // biome-ignore lint/suspicious/noExplicitAny: 测试桩
+    ;(adapter as any).startRun = async (spec: RunSpec) => ({
+      ok: true,
+      value: { run_id: spec.run.run_id, harness_id: 'omp' },
+    })
+    // biome-ignore lint/suspicious/noExplicitAny: 测试桩
+    ;(adapter as any).interrupt = async (_handle: unknown, reason: string) => {
+      reasons.push(reason)
+      return { ok: true, value: undefined }
+    }
+    // biome-ignore lint/suspicious/noExplicitAny: 测试桩
+    ;(adapter as any).awaitResult = async () => {
+      await new Promise((r) => setTimeout(r, 30))
+      return {
+        ok: true,
+        value: {
+          status: 'TIMEOUT',
+          text: null,
+          proposals: [],
+          usage: { tokens_in: null, tokens_out: null, cost_usd: null, cost_basis: 'unavailable' },
+          session_ref: null,
+        },
+      }
+    }
+    // biome-ignore lint/suspicious/noExplicitAny: 测试桩
+    ;(adapter as any).collectChanges = async () => ({
+      ok: true,
+      value: { files_changed: [], patch: null, commits: [], is_dirty: false },
+    })
+    // biome-ignore lint/suspicious/noExplicitAny: 测试桩
+    ;(adapter as any).dispose = async () => ({ ok: true, value: {} })
+    return adapter
+  }
+
   /** 必须连 run 一起铺 —— event.run_id 有外键约束 */
   async function seedTask(): Promise<{ taskId: string; runId: string }> {
     const repoId = randomUUID()
@@ -379,5 +448,97 @@ describe('R-007 · 校验失败不等于 Run 失败', () => {
     // 但拒绝被如实记录了
     const evs = await store.readEvents(taskId, 0, 100)
     expect(evs.ok && evs.value.filter((e) => e.type === 'ProposalRejected').length).toBe(2)
+  })
+
+  it('R11 · 巡检收割后 zombie 返回成功：不提交 artifact、不覆盖终态', async () => {
+    const { taskId, runId } = await seedTask()
+    const r = await runSessionUntilValid(
+      new HarnessSessionManager(),
+      {
+        runSpec: specFor(taskId, runId, '/tmp'),
+        adapter: reapingAdapter(runId),
+        expect: { kind: 'stage_outcome', key: 'pm' },
+      },
+      'x',
+      { now: NOW },
+    )
+
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    // run 已不是 RUNNING：按围栏失败返回，而不是当作提案不合格回灌
+    expect(r.error.kind).toBe('RUN_TIMEOUT')
+
+    const run = await asOwner((c) =>
+      c.query<{ status: string; error_kind: string | null }>(
+        `SELECT status, error_kind FROM run WHERE id=$1`,
+        [runId],
+      ),
+    )
+    expect(run.rows[0]).toEqual({ status: 'TIMEOUT', error_kind: 'RUN_STALLED' })
+
+    const arts = await asOwner((c) =>
+      c.query<{ n: string }>(`SELECT count(*) AS n FROM artifact WHERE task_id=$1`, [taskId]),
+    )
+    expect(Number(arts.rows[0]?.n)).toBe(0)
+
+    const evs = await asOwner((c) =>
+      c.query<{ type: string }>(`SELECT type FROM event WHERE run_id=$1`, [runId]),
+    )
+    expect(evs.rows.map((e) => e.type)).not.toContain('ProposalAccepted')
+  })
+
+  it('沉默到阈值 → interrupt("stalled") → RUN_STALLED', async () => {
+    const { taskId, runId } = await seedTask()
+    const reasons: string[] = []
+    const r = await runSessionUntilValid(
+      new HarnessSessionManager(),
+      {
+        runSpec: specFor(taskId, runId, '/tmp'),
+        adapter: timeoutAdapter(reasons),
+        expect: { kind: 'stage_outcome', key: 'pm' },
+      },
+      'x',
+      {
+        now: NOW,
+        liveness: {
+          policy: { silenceMs: 1, hardCapS: 600 },
+          wallNow: () => NOW,
+          checkIntervalMs: 1,
+        },
+      },
+    )
+
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('RUN_STALLED')
+    expect(reasons).toContain('stalled')
+  })
+
+  it('显式 wallClockMs 到点 → interrupt("timeout") → RUN_TIMEOUT（不误报 stalled）', async () => {
+    const { taskId, runId } = await seedTask()
+    const reasons: string[] = []
+    const r = await runSessionUntilValid(
+      new HarnessSessionManager(),
+      {
+        runSpec: specFor(taskId, runId, '/tmp'),
+        adapter: timeoutAdapter(reasons),
+        expect: { kind: 'stage_outcome', key: 'pm' },
+      },
+      'x',
+      {
+        now: NOW,
+        wallClockMs: 5,
+        liveness: {
+          policy: { silenceMs: 60_000, hardCapS: 600 },
+          wallNow: () => NOW,
+          checkIntervalMs: 1,
+        },
+      },
+    )
+
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('RUN_TIMEOUT')
+    expect(reasons).toEqual(['timeout'])
   })
 })

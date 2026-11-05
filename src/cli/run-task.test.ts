@@ -326,6 +326,43 @@ describe('--wall-clock 旗标', () => {
     const opts = await captureRunTaskOpts([randomUUID()])
     expect(opts === undefined || !('wallClockS' in opts)).toBe(true)
   })
+
+  it('显式 --wall-clock 打 warning：说明覆盖了 stage 硬上限', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await captureRunTaskOpts([randomUUID(), '--wall-clock', '600'])
+      const text = warnSpy.mock.calls.flat().join(' ')
+      expect(text).toContain('--wall-clock 600s 覆盖')
+      expect(text).toContain('12h')
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+
+  it('非法 KEEL_LIVENESS_MODE：启动即失败，文案点名变量与可选值', async () => {
+    const prevMode = process.env.KEEL_LIVENESS_MODE
+    const prevCode = process.exitCode
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    let entered = false
+    const stub: typeof runTask = async () => {
+      entered = true
+      return ok({ finalStatus: 'S-DONE', steps: [], stopReason: 'terminal', prUrl: null })
+    }
+    try {
+      process.env.KEEL_LIVENESS_MODE = 'sometimes'
+      await runTaskMain([randomUUID()], { runTask: stub })
+      expect(entered, '非法模式必须在进入编排之前失败').toBe(false)
+      expect(process.exitCode).toBe(1)
+      const text = errSpy.mock.calls.flat().join(' ')
+      expect(text).toContain('KEEL_LIVENESS_MODE=sometimes')
+      expect(text).toContain('progress | wallclock')
+    } finally {
+      errSpy.mockRestore()
+      if (prevMode === undefined) delete process.env.KEEL_LIVENESS_MODE
+      else process.env.KEEL_LIVENESS_MODE = prevMode
+      process.exitCode = prevCode
+    }
+  })
 })
 
 describe('停止原因 · CLI 输出与退出码', () => {

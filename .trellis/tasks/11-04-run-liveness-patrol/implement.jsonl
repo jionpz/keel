@@ -8,3 +8,5 @@
 {"file": "docs/05-contracts/harness-adapter.md", "reason": "interrupt / close / 会话能力的契约边界"}
 {"file": "docs/adr/0008-wall-clock-semantics.md", "reason": "既有墙钟决策（方案 B）与「预算归属」的已知边界"}
 {"file": "docs/08-cross-cutting.md", "reason": "预算兜底、并发上限与跨切面约束"}
+{"file": "docs/05-contracts/session-manager.md", "reason": "onProgress 放在执行层 SessionSpec；契约层不引入函数字段"}
+{"file": ".trellis/spec/backend/session-context.md", "reason": "SessionManager 只追加不替换；进展回调不得改变上下文下行桥"}

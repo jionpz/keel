@@ -25,6 +25,7 @@ import type {
 } from '../../contracts/harness-adapter.js'
 import { HarnessSessionManager } from '../../execution/session/manager.js'
 import { asOwner, closePool } from '../../fact/db.js'
+import type { CapabilityId } from '../../shared/ids.js'
 import { WorkflowDriver } from '../driver/driver.js'
 import { RuleBasedPolicyEngine } from '../policy/engine.js'
 import { DEFAULT_RULESET } from '../policy/ruleset.js'
@@ -43,6 +44,11 @@ class FailAdapter implements HarnessAdapter {
   emptyDevelopAttempts = new Set<number>()
   /** collectChanges 直接报错(用例 E) */
   collectFails = false
+  /** 声明的能力(用例 F 需要 CAP-STREAM 才会挂沉默检查) */
+  capabilities: CapabilityId[] = []
+  /** 挂起到被 interrupt 才返回 TIMEOUT(用例 F) */
+  hangUntilInterrupted = false
+  interrupted = false
 
   appendBody(body: Record<string, unknown>): void {
     this.pending.push(body)
@@ -52,7 +58,7 @@ class FailAdapter implements HarnessAdapter {
       harness_id: 'fail-stub',
       version: '0',
       tier: 'L0',
-      capabilities: [],
+      capabilities: this.capabilities,
       cost_basis: 'unavailable',
       limits: { max_input_bytes: null, max_wall_clock_s: null },
     }
@@ -66,6 +72,26 @@ class FailAdapter implements HarnessAdapter {
     return { ok: true, value: { run_id: spec.run.run_id, harness_id: 'fail-stub' } }
   }
   async awaitResult(_handle: RunHandle): Promise<{ ok: true; value: RunResult }> {
+    if (this.hangUntilInterrupted) {
+      await new Promise((r) => setTimeout(r, 60))
+      if (this.interrupted) {
+        return {
+          ok: true,
+          value: {
+            status: 'TIMEOUT',
+            text: null,
+            proposals: [],
+            usage: {
+              tokens_in: null,
+              tokens_out: null,
+              cost_usd: null,
+              cost_basis: 'unavailable',
+            },
+            session_ref: null,
+          },
+        }
+      }
+    }
     if (this.alwaysCancelled) {
       return {
         ok: true,
@@ -119,6 +145,7 @@ class FailAdapter implements HarnessAdapter {
     }
   }
   async interrupt(): Promise<{ ok: true; value: undefined }> {
+    this.interrupted = true
     return { ok: true, value: undefined }
   }
   async dispose(): Promise<{ ok: true; value: DisposeReport }> {
@@ -242,6 +269,53 @@ describe('R1(issue #23)· run 失败面', () => {
       .filter((r) => r.type === 'TaskStatusChanged')
       .map((r) => r.payload?.transition)
     expect(transitions).toContain('T-030') // 失败后走了重试转移
+  })
+
+  it('F.supervisor 判 stalled → run TIMEOUT/RUN_STALLED + RunStalled 事件 → T-030', async () => {
+    const taskId = await seedTask()
+    adapter.capabilities = ['CAP-STREAM']
+    adapter.hangUntilInterrupted = true
+    adapter.appendBody(goodPmOutcome())
+    adapter.appendBody(goodPmOutcome())
+
+    let mono = 0
+    await runTaskToCompletion(
+      taskId,
+      {
+        ...depsFor(),
+        // 每次读表都前进 10 分钟：pm 的 5 分钟沉默阈值必被突破
+        monotonicNow: () => (mono += 600_000),
+        livenessCheckIntervalMs: 1,
+      },
+      { maxSteps: 3 },
+    )
+
+    const runs = await asOwner((c) =>
+      c.query<{ attempt: number; status: string; error_kind: string | null }>(
+        `SELECT attempt, status, error_kind FROM run WHERE task_id=$1 AND stage='pm' ORDER BY attempt`,
+        [taskId],
+      ),
+    )
+    expect(runs.rows[0]).toMatchObject({ status: 'TIMEOUT', error_kind: 'RUN_STALLED' })
+
+    const evs = await asOwner((c) =>
+      c.query<{ type: string; payload: Record<string, unknown> }>(
+        `SELECT type, payload FROM event WHERE task_id=$1`,
+        [taskId],
+      ),
+    )
+    // 第一次 stall 后 T-030 建了 run2，它同样被判定 —— 每个 run 一条证据
+    const stalled = evs.rows.filter((e) => e.type === 'RunStalled')
+    expect(stalled.length).toBeGreaterThanOrEqual(1)
+    for (const e of stalled) expect(e.payload).toMatchObject({ source: 'supervisor' })
+    expect(Number(stalled[0]?.payload.silence_ms)).toBeGreaterThan(0)
+
+    // 与 RunTimeout 可区分：转移事件带的是 RunStalled，不是 RunTimeout
+    const transitions = evs.rows
+      .filter((e) => e.type === 'TaskStatusChanged')
+      .map((e) => e.payload.event)
+    expect(transitions).toContain('RunStalled')
+    expect(transitions).not.toContain('RunTimeout')
   })
 
   it('B.连续失败到 attempt=3 → T-031 → S-HUMAN_REVIEW', async () => {

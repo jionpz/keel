@@ -11,6 +11,8 @@
 import { err, makeError, ok, type Result } from '../contracts/errors.js'
 import type { HarnessAdapter } from '../contracts/harness-adapter.js'
 import { WorkflowDriver } from '../control/driver/driver.js'
+import { type LivenessMode, livenessMode } from '../control/liveness/policy.js'
+import { LivenessStore } from '../control/liveness/store.js'
 import {
   runTaskToCompletion,
   type StepRecord,
@@ -232,10 +234,42 @@ function stringifyArg(raw: unknown): string {
   return `「${String(raw)}」`
 }
 
+/**
+ * 启动期校验 `KEEL_LIVENESS_MODE`。
+ *
+ * 不把异常留给全局处理：一条清楚的 `keel run-task: KEEL_LIVENESS_MODE=... 非法`
+ * 比堆栈有用，也保证在任何数据库动作之前就停下。
+ */
+export function readLivenessMode(command: string): LivenessMode | undefined {
+  try {
+    return livenessMode()
+  } catch (error) {
+    console.error(`${command}: ${error instanceof Error ? error.message : String(error)}`)
+    process.exitCode = 1
+    return undefined
+  }
+}
+
+/**
+ * 显式 `--wall-clock` 会覆盖所有 stage 硬上限 —— 这是逃生阀，但必须说出来，
+ * 否则使用者会以为 stage 策略还在生效。
+ */
+export function warnWallClockOverride(
+  command: string,
+  explicitS: number,
+  mode: LivenessMode,
+): void {
+  const fallback =
+    mode === 'wallclock'
+      ? 'wallclock 模式默认 180s'
+      : 'LIVENESS_POLICY 的 stage 上限（develop 12h）'
+  console.warn(`${command}: --wall-clock ${explicitS}s 覆盖 ${fallback}`)
+}
+
 export interface RunTaskOptions {
   readonly maxSteps?: number
   readonly ci?: CiMode
-  /** 单次 run 墙钟上限秒(默认 180)。验收/慢模型可抬高,不改全局默认。 */
+  /** 显式覆盖 stage 墙钟硬上限(秒)。省略时 progress 模式按 stage 策略,wallclock 模式 180s。 */
   readonly wallClockS?: number
   /**
    * `--model` 原值。omp：省略则 KEEL_MODEL / 缺省 deepseek；
@@ -270,6 +304,9 @@ export async function runTask(
   const ci = opts.ci ?? 'passed'
   const maxSteps = opts.maxSteps ?? 30
 
+  // 非法模式在任何数据库动作前失败；巡检语义不能被一次拼写错误悄悄关掉。
+  const mode = livenessMode()
+
   const gateway = resolveCiGateway(ci)
   if (!gateway.ok) return gateway
 
@@ -293,35 +330,43 @@ export async function runTask(
   const binding = loaded.value
   const now = () => new Date().toISOString()
 
-  const result = await runTaskToCompletion(
-    taskId,
-    {
-      driver: new WorkflowDriver(
-        new RuleBasedPolicyEngine(DEFAULT_RULESET),
-        binding,
-        gateway.value,
-      ),
-      sessions: new HarnessSessionManager(),
-      adapter: createHarnessAdapter(harness.value, model.value),
-      workspace: { mode: 'worktree', ...binding },
-      now,
-      ...(opts.wallClockS === undefined ? {} : { wallClockS: opts.wallClockS }),
-    },
-    {
-      maxSteps,
-      ...(gateway.value === undefined
-        ? { externalCi: async () => (ci === 'failed' ? 'failed' : 'passed') }
-        : { ci: gateway.value }),
-    },
-  )
-  if (!result.ok) return result
+  // progress 模式下巡检在另一个进程里，只能通过 run_liveness 看到这个 run。
+  // 不接 store 时 supervisor 仍能保护活进程，但进程崩溃后的孤儿无人收割。
+  const livenessStore = mode === 'progress' ? new LivenessStore() : undefined
+  try {
+    const result = await runTaskToCompletion(
+      taskId,
+      {
+        driver: new WorkflowDriver(
+          new RuleBasedPolicyEngine(DEFAULT_RULESET),
+          binding,
+          gateway.value,
+        ),
+        sessions: new HarnessSessionManager(),
+        adapter: createHarnessAdapter(harness.value, model.value),
+        workspace: { mode: 'worktree', ...binding },
+        now,
+        ...(livenessStore === undefined ? {} : { livenessStore }),
+        ...(opts.wallClockS === undefined ? {} : { wallClockS: opts.wallClockS }),
+      },
+      {
+        maxSteps,
+        ...(gateway.value === undefined
+          ? { externalCi: async () => (ci === 'failed' ? 'failed' : 'passed') }
+          : { ci: gateway.value }),
+      },
+    )
+    if (!result.ok) return result
 
-  return ok({
-    finalStatus: result.value.finalStatus,
-    steps: result.value.steps,
-    stopReason: result.value.stopReason,
-    prUrl: await readPrUrl(taskId),
-  })
+    return ok({
+      finalStatus: result.value.finalStatus,
+      steps: result.value.steps,
+      stopReason: result.value.stopReason,
+      prUrl: await readPrUrl(taskId),
+    })
+  } finally {
+    await livenessStore?.close()
+  }
 }
 
 /**
@@ -406,9 +451,11 @@ export async function runTaskMain(
 --harness 缺省 omp，也可设 KEEL_HARNESS；非法值拒绝（不静默回退）。
 --model 对 omp 缺省 ${DEFAULT_OMP_MODEL}，也可设 KEEL_MODEL；空白值拒绝（不静默回退）。
 claude 未指定 --model / KEEL_MODEL 时不传 --model（不把 omp 缺省塞给 claude）。
---wall-clock 单次 run 的墙钟上限秒，缺省 180；只接受正整数，非法值拒绝（不静默回退）。`)
+--wall-clock 显式覆盖 stage 墙钟硬上限（秒）；缺省按 stage 策略（develop 12h）；只接受正整数，非法值拒绝。`)
     return
   }
+  const mode = readLivenessMode('run-task')
+  if (mode === undefined) return
   const taskId = positionals[0] as string
   const maxSteps =
     typeof flags['max-steps'] === 'number'
@@ -440,6 +487,7 @@ claude 未指定 --model / KEEL_MODEL 时不传 --model（不把 omp 缺省塞�
     process.exitCode = 1
     return
   }
+  if (wallClock.value !== undefined) warnWallClockOverride('run-task', wallClock.value, mode)
 
   const run = deps.runTask ?? runTask
   const result = await run(taskId, {

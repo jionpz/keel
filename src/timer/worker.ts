@@ -13,19 +13,36 @@
  */
 
 import type { WorkflowDriver } from '../control/driver/driver.js'
+import { livenessMode } from '../control/liveness/policy.js'
+import type { LivenessStore } from '../control/liveness/store.js'
 import { asRole } from '../fact/db.js'
 import { claimDueTimers } from './drain.js'
+import {
+  EMPTY_PATROL_STATS,
+  type PatrolDeps,
+  type PatrolStats,
+  patrolStalledRuns,
+} from './patrol.js'
 import { reapTimeoutRun } from './reap.js'
 
 export interface ReapStats {
   clarificationFired: number
   runTimeout: number
   skipped: number
+  /** 本轮巡检（progress 模式下才有） */
+  patrol: PatrolStats
 }
 
 export interface WorkerDeps {
   readonly driver: WorkflowDriver
   readonly now: () => string
+  /**
+   * liveness 存储；传入后 timer worker 同时承担 out-of-process 巡检。
+   * 缺省不巡检 —— 与旧部署兼容，也不让 timer worker 隐式依赖 liveness 表。
+   */
+  readonly store?: LivenessStore
+  /** 测试注入；缺省 `patrolStalledRuns` */
+  readonly patrol?: (deps: PatrolDeps) => Promise<PatrolStats>
 }
 
 /** 到期 run 墙钟 + 关联 RUNNING run(批量,供 reapTimeoutRun) */
@@ -58,7 +75,12 @@ async function dueWallClocks(now: string, limit = 50): Promise<DueWallClock[]> {
  * 幂等:重复调用不双投(claim SKIP LOCKED;标状态 only RUNNING)。
  */
 export async function drainAllDueTimers(deps: WorkerDeps): Promise<ReapStats> {
-  const stats: ReapStats = { clarificationFired: 0, runTimeout: 0, skipped: 0 }
+  const stats: ReapStats = {
+    clarificationFired: 0,
+    runTimeout: 0,
+    skipped: 0,
+    patrol: { ...EMPTY_PATROL_STATS },
+  }
 
   // 1) 澄清 TTL → T-008(ConsumeTimer 在 advance 事务内置 fired)
   const clar = await claimDueTimers(deps.now(), { limit: 50 })
@@ -92,6 +114,17 @@ export async function drainAllDueTimers(deps: WorkerDeps): Promise<ReapStats> {
     } else {
       stats.skipped++
     }
+  }
+
+  // 3) 孤儿 run 巡检：owner 心跳过期 + 无进展 → TIMEOUT/RUN_STALLED
+  // wallclock 模式整体退回旧路径（design.md §7），不巡检。
+  if (deps.store !== undefined && livenessMode() === 'progress') {
+    const patrol = deps.patrol ?? patrolStalledRuns
+    stats.patrol = await patrol({
+      driver: deps.driver,
+      store: deps.store,
+      now: deps.now,
+    })
   }
 
   return stats

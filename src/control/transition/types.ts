@@ -18,6 +18,8 @@ export type TransitionEvent =
   | { readonly type: 'RunSucceeded'; readonly stage: Stage }
   | { readonly type: 'RunFailed'; readonly stage: Stage }
   | { readonly type: 'RunTimeout'; readonly stage: Stage }
+  /** 无进展超过 stage 阈值（supervisor 或 patrol 判定）；行为与 RunTimeout 相同 */
+  | { readonly type: 'RunStalled'; readonly stage: Stage }
   /**
    * 澄清答复（T-007）。
    *

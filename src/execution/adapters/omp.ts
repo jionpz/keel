@@ -13,13 +13,14 @@ import type {
   HarnessDescriptor,
   InterruptReason,
   RunHandle,
+  RunHooks,
   RunResult,
   RunSpec,
   WorkspaceDiff,
 } from '../../contracts/harness-adapter.js'
 import type { CapabilityId } from '../../shared/ids.js'
 import { collectGitDiff, gitHeadSha } from './git-diff.js'
-import { parseOmpStream } from './omp-parse.js'
+import { OmpStreamParser, type ProgressEvent } from './omp-parse.js'
 import { tierOf } from './tier.js'
 
 /** 缺省模型。CLI / env 未指定时必须仍是这个值，避免五连基线漂移。 */
@@ -91,7 +92,7 @@ export class OmpAdapter implements HarnessAdapter {
     }
   }
 
-  async startRun(spec: RunSpec): Promise<Result<RunHandle>> {
+  async startRun(spec: RunSpec, hooks?: RunHooks): Promise<Result<RunHandle>> {
     // 契约要求：untrusted 而未声明该能力 → 拒绝，**不得降级执行**
     if (spec.workspace.untrusted && !OMP_CAPABILITIES.includes('CAP-UNTRUSTED_WORKSPACE')) {
       return err(
@@ -128,7 +129,7 @@ export class OmpAdapter implements HarnessAdapter {
       proc: null,
       promise: Promise.resolve(ok({} as RunResult)),
     }
-    state.promise = this.exec(spec, state)
+    state.promise = this.exec(spec, state, hooks)
     this.runs.set(spec.idempotency_key, state)
     return ok(handle)
   }
@@ -160,9 +161,9 @@ export class OmpAdapter implements HarnessAdapter {
     //   防 omp 派生的子进程逃逸。
     //   SIGTERM 先给优雅退出机会;兜底超时后 SIGKILL(进程可能无视 TERM 不退出)。
     state.aborted = true
-    // 方案 B:reason='timeout'(R-009 墙钟超时)与人工取消(R-010)分流 ——
-    // awaitResult 依 timeout 返回 TIMEOUT 而非 CANCELLED,使 T-030 可重试
-    state.timeout = _reason === 'timeout'
+    // 方案 B:reason='timeout'(R-009 墙钟超时)与 'stalled'(无进展)
+    // 都收敛为 TIMEOUT(可重试);错误种类由控制面按 supervisor 意图区分。
+    state.timeout = _reason === 'timeout' || _reason === 'stalled'
     const proc = state.proc
     if (proc === null || proc.pid === undefined) return ok(undefined)
     const group = -proc.pid
@@ -202,9 +203,43 @@ export class OmpAdapter implements HarnessAdapter {
     return undefined
   }
 
-  private async exec(spec: RunSpec, state: RunState): Promise<Result<RunResult>> {
+  private async exec(spec: RunSpec, state: RunState, hooks?: RunHooks): Promise<Result<RunResult>> {
     const argv = buildArgv(spec, this.model)
     const prompt = renderPrompt(spec)
+
+    // 增量解析：边读边把进展交给控制面；最终结果仍由 end() 给出，
+    // 与整段解析逐字段一致（parseOmpStream 也走同一个 parser）。
+    const parser = new OmpStreamParser()
+    let lastMessageUpdateAt = Number.NEGATIVE_INFINITY
+    let firstProgress = true
+    let childPid: number | undefined
+    let childStartedAt: string | null = null
+
+    const emitProgress = (event: ProgressEvent): void => {
+      const sink = hooks?.onProgress
+      if (sink === undefined) return
+      // 每个 token 都回调会淹掉控制面；合并到 250ms 一次。
+      if (event.kind === 'message_update') {
+        if (event.at - lastMessageUpdateAt < MESSAGE_UPDATE_THROTTLE_MS) return
+        lastMessageUpdateAt = event.at
+      }
+      // pid / pgid / startedAt 只随首个事件携带 —— 巡检清理孤儿进程用。
+      const withProcess =
+        firstProgress && childPid !== undefined
+          ? {
+              ...event,
+              pid: childPid,
+              pgid: childPid,
+              ...(childStartedAt === null ? {} : { startedAt: childStartedAt }),
+            }
+          : event
+      firstProgress = false
+      try {
+        sink(withProcess)
+      } catch {
+        // liveness 遥测失败不得影响 Run 结果
+      }
+    }
 
     const proc = await run(
       this.bin,
@@ -214,6 +249,11 @@ export class OmpAdapter implements HarnessAdapter {
       // 子进程创建后立即持有引用 —— interrupt 需要 kill 它
       (p) => {
         state.proc = p
+        childPid = p.pid
+        childStartedAt = new Date().toISOString()
+      },
+      (chunk) => {
+        for (const event of parser.push(chunk)) emitProgress(event)
       },
     )
 
@@ -231,7 +271,7 @@ export class OmpAdapter implements HarnessAdapter {
       })
     }
 
-    const parsed = parseOmpStream(proc.stdout)
+    const parsed = parser.end()
 
     if (proc.code !== 0) {
       const detail = parsed.nonJsonLines.join(' ') || proc.stderr || `exit ${proc.code}`
@@ -305,6 +345,9 @@ function renderPrompt(spec: RunSpec): string {
   return spec.context.sections.map((s) => s.content).join('\n\n')
 }
 
+/** `message_update` 合并窗口：避免每个 token 触发控制面 */
+const MESSAGE_UPDATE_THROTTLE_MS = 250
+
 interface ProcResult {
   code: number
   stdout: string
@@ -330,6 +373,7 @@ function run(
   cwd: string,
   spawnFn: typeof spawn = spawn,
   onSpawn?: (p: ChildProcess) => void,
+  onChunk?: (chunk: string) => void,
 ): Promise<ProcResult> {
   return new Promise((resolve) => {
     const p = spawnFn(bin, [...args], {
@@ -343,7 +387,10 @@ function run(
     let stdout = ''
     let stderr = ''
     p.stdout?.on('data', (d: Buffer) => {
-      stdout += d.toString('utf8')
+      const chunk = d.toString('utf8')
+      stdout += chunk
+      // 增量回调在进程结束前就把进展交出去；stdout 仍完整保留给 end()。
+      onChunk?.(chunk)
     })
     p.stderr?.on('data', (d: Buffer) => {
       stderr += d.toString('utf8')

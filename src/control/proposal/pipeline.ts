@@ -16,7 +16,7 @@ import type { PersistedArtifactKind } from '../../contracts/artifact-store.js'
 import { type KeelError, makeError } from '../../contracts/errors.js'
 import type { WorkspaceDiff } from '../../contracts/harness-adapter.js'
 import type { PolicyEngine } from '../../contracts/policy-engine.js'
-import type { Usage } from '../../contracts/types.js'
+import type { Stage, Usage } from '../../contracts/types.js'
 import type {
   HarnessSessionManager,
   SessionHandle,
@@ -25,7 +25,21 @@ import type {
 import { commitArtifactOn } from '../../fact/artifact-store.js'
 import { asRole } from '../../fact/db.js'
 import { ensureTraceId } from '../../fact/trace.js'
+import type { LivenessPolicy } from '../liveness/policy.js'
+import type { LivenessStore } from '../liveness/store.js'
+import { type StallEvidence, StallSupervisor } from '../liveness/supervisor.js'
 import { validateProposal, violationsToFeedback } from './validate.js'
+
+/** 进程内 liveness 的参数；不传 = 保持旧的纯墙钟行为 */
+export interface PipelineLivenessOptions {
+  readonly policy: LivenessPolicy
+  readonly wallNow: () => string
+  readonly store?: LivenessStore
+  readonly monotonicNow?: () => number
+  readonly checkIntervalMs?: number
+  readonly ownerHeartbeatMs?: number
+  readonly onStall?: (evidence: StallEvidence) => void
+}
 
 export interface PipelineOptions {
   /** 连续被拒多少次后判 Run 失败（R-006）。默认 3 */
@@ -42,6 +56,29 @@ export interface PipelineOptions {
    * → adapter 收敛 TIMEOUT(R-009)。可选;缺省不打断(R-007 行为不变)。
    */
   readonly wallClockMs?: number
+  /**
+   * 提交前闸门：在提案通过校验、但**尚未**把 run 置为 SUCCEEDED / 落 artifact 之前调用。
+   *
+   * 阶段专属的成功条件（例如 develop 必须真的改过工作区）必须在这里判定：
+   * `asRole` 正常返回即 COMMIT，若先置 SUCCEEDED 再由调用方判失败，
+   * 就会留下「run 成功、artifact 已提交」的假成功。
+   * 返回 `null` 放行；返回错误则整个 run 失败，且不触碰 run 状态。
+   */
+  readonly preCommitGate?: (candidate: PreCommitCandidate) => KeelError | null
+  /**
+   * 进程内沉默监管。传入后由 supervisor 负责「是否还在动」；
+   * 默认的 stage 硬上限由 DB timer 负责，因此调用方不再传 `wallClockMs`。
+   * 显式 `--wall-clock` 覆盖时两者可同时挂载：沉默判定看进展，总时长看显式值。
+   */
+  readonly liveness?: PipelineLivenessOptions
+}
+
+/** 提交前闸门看到的观测值。diff 的语义见 `PipelineOutcome.diff`。 */
+export interface PreCommitCandidate {
+  readonly stage: Stage
+  readonly diff: WorkspaceDiff | null
+  readonly diff_error: string | null
+  readonly usage: Usage
 }
 
 /** now 缺失即编程错误:事件时间是重放依据,不能由 DB 时钟决定 */
@@ -148,19 +185,44 @@ export async function runSessionUntilValid(
   let diff: WorkspaceDiff | null = null
   let diffError: string | null = null
 
-  const opened = await sessions.open(spec)
+  const liveness = opts.liveness
+  const supervisor =
+    liveness === undefined
+      ? null
+      : new StallSupervisor({
+          sessions,
+          policy: liveness.policy,
+          now: liveness.monotonicNow ?? (() => performance.now()),
+          wallNow: liveness.wallNow,
+          ...(liveness.store === undefined ? {} : { store: liveness.store }),
+          ...(liveness.checkIntervalMs === undefined
+            ? {}
+            : { checkIntervalMs: liveness.checkIntervalMs }),
+          ...(liveness.ownerHeartbeatMs === undefined
+            ? {}
+            : { ownerHeartbeatMs: liveness.ownerHeartbeatMs }),
+          ...(liveness.onStall === undefined ? {} : { onStall: liveness.onStall }),
+        })
+
+  // onProgress 必须随 open 一起登记 —— advance() 时 manager 才会把它交给 adapter
+  const sessionSpec: SessionSpec =
+    supervisor === null ? spec : { ...spec, onProgress: (event) => supervisor.noteProgress(event) }
+
+  const opened = await sessions.open(sessionSpec)
   if (!opened.ok) return { ok: false, error: opened.error, usage }
   const handle: SessionHandle = opened.value
 
-  // 方案 B(issue #26):墙钟 watchdog —— 会话总时长上限,到期 interrupt('timeout')。
-  // fire-and-forget:打断由 adapter 收敛(awaitResult 返 TIMEOUT → advance 返
-  // RUN_TIMEOUT err → 循环退出),不在这里 await。声明在函数顶层,finally 可见。
+  // 硬上限的默认路径是 DB wall_clock timer（进程崩溃后仍能收割），
+  // 因此 progress 模式默认不传 wallClockMs。显式 --wall-clock 覆盖时
+  // 调用方会传值，这里额外挂一个进程内 watchdog —— 没有 timer-worker 也生效。
   const watchdog: ReturnType<typeof setTimeout> | undefined =
     opts.wallClockMs !== undefined && opts.wallClockMs > 0
       ? setTimeout(() => {
           void sessions.interrupt(handle, 'timeout')
         }, opts.wallClockMs)
       : undefined
+
+  supervisor?.start(handle)
 
   try {
     let feedback: string[] = []
@@ -172,7 +234,22 @@ export async function runSessionUntilValid(
       })
       // 超时/取消/失败的轮次也要把**之前各轮**的累计带出去 ——
       // 出错的这一轮 Adapter 是否上报 usage 由它自己决定(OMP 中断时报 unavailable)
-      if (!turn.ok) return { ok: false, error: turn.error, usage }
+      if (!turn.ok) {
+        // 控制面负责把「supervisor 判定 stalled」映射为 RUN_STALLED ——
+        // adapter 只返回 TIMEOUT，不感知 liveness 语义。
+        if (supervisor?.interruptedByStalled === true && turn.error.kind === 'RUN_TIMEOUT') {
+          return {
+            ok: false,
+            error: makeError(
+              'RUN_STALLED',
+              `无进展超过阈值，已被 supervisor 中断：${turn.error.detail}`,
+              turn.error,
+            ),
+            usage,
+          }
+        }
+        return { ok: false, error: turn.error, usage }
+      }
       usage = addUsage(usage, turn.value.usage)
       diff = turn.value.diff
       diffError = turn.value.diff_error
@@ -192,6 +269,19 @@ export async function runSessionUntilValid(
         continue
       }
 
+      // 阶段专属成功条件必须先于围栏判定：asRole 正常返回即 COMMIT，
+      // 一旦先置 SUCCEEDED，调用方的失败判定就只能留下假成功。
+      const gate = opts.preCommitGate?.({
+        stage: spec.runSpec.run.stage,
+        diff,
+        diff_error: diffError,
+        usage,
+      })
+      if (gate !== null && gate !== undefined) return { ok: false, error: gate, usage }
+
+      const runId = spec.runSpec.run.run_id
+      const taskId = spec.runSpec.run.task_id
+
       const committed = await asRole('keel_control', async (c) => {
         // Policy 缺省视为「无裁决」——需要授权的 Proposal 会被第 4 步拒收
         const verdict = await validateProposal(proposal, {
@@ -200,6 +290,39 @@ export async function runSessionUntilValid(
           ...(opts.now === undefined ? {} : { now: opts.now }),
         })
         if (!verdict.accepted) return { ok: false as const, verdict }
+
+        // 提案归属：跨 run / 跨 Task 的提案不得写进本 run 的事实
+        if (proposal.produced_by_run !== runId || proposal.task_id !== taskId) {
+          return {
+            ok: false as const,
+            fenceError: makeError(
+              'PROTOCOL_ERROR',
+              `提案归属不匹配：proposal.run=${proposal.produced_by_run} task=${proposal.task_id}，` +
+                `当前 run=${runId} task=${taskId}`,
+            ),
+          }
+        }
+
+        // 围栏：只有仍处于 RUNNING 的 run 才能成功。
+        // 巡检 / 人工撤回可能已把 run 收走；影响 0 行时本事务不得写任何东西。
+        const fenced = await c.query(
+          `UPDATE run SET status='SUCCEEDED', ended_at=$2
+           WHERE id=$1 AND status='RUNNING'`,
+          [runId, requireNow(opts)],
+        )
+        if ((fenced.rowCount ?? 0) === 0) {
+          const current = await c.query<{ status: string }>(`SELECT status FROM run WHERE id=$1`, [
+            runId,
+          ])
+          const status = current.rows[0]?.status
+          return {
+            ok: false as const,
+            fenceError: makeError(
+              status === 'CANCELLED' ? 'RUN_CANCELLED' : 'RUN_TIMEOUT',
+              `run ${runId} 已不是 RUNNING（当前 ${status ?? '不存在'}），拒绝提交`,
+            ),
+          }
+        }
 
         // 校验通过 → 落库。写 event 拿 seq，再提交 artifact（同事务）
         const traceId = await ensureTraceId(c, proposal.task_id, requireNow(opts))
@@ -243,6 +366,11 @@ export async function runSessionUntilValid(
         }
       }
 
+      // 围栏失败不是「提案不合格」：不得回灌让模型重写，run 已被他人终结。
+      if ('fenceError' in committed) {
+        return { ok: false, error: committed.fenceError, usage }
+      }
+
       // R-007：把具体的拒绝理由回灌，让它改
       feedback = violationsToFeedback(committed.verdict.violations)
       rejections.push(feedback)
@@ -274,6 +402,7 @@ export async function runSessionUntilValid(
     }
   } finally {
     clearTimeout(watchdog)
+    supervisor?.stop()
     await sessions.close(handle)
   }
 }

@@ -101,7 +101,33 @@ export interface WorkspaceDiff {
   readonly is_dirty: boolean
 }
 
-export type InterruptReason = 'cancelled' | 'budget' | 'takeover' | 'timeout'
+export type InterruptReason = 'cancelled' | 'budget' | 'takeover' | 'timeout' | 'stalled'
+
+/**
+ * 执行层进展遥测 —— **只用于 liveness，不是 Fact**。
+ *
+ * `kind` 由 adapter 定义（OMP 用 `--mode=json` 的事件类型）；控制面只记录，
+ * 不据此判定业务含义，也不把事件重放建立在这些数据上。
+ */
+export interface ProgressEvent {
+  readonly kind: string
+  /**
+   * 单调时钟读数（毫秒），控制面注入。用于「多久没有新进展」，
+   * 不受系统墙钟跳变影响；持久化时间戳另用注入的 `now`。
+   */
+  readonly at: number
+  readonly sessionRef?: string
+  /** 首个事件携带；用于孤儿进程清理 */
+  readonly pid?: number
+  readonly pgid?: number
+  /** 进程启动时间（ISO），与 pid 一起防 PID 复用误杀 */
+  readonly startedAt?: string
+}
+
+/** 执行层钩子：不属于可序列化的 RunSpec，只随调用传递 */
+export interface RunHooks {
+  readonly onProgress?: (event: ProgressEvent) => void
+}
 
 export interface DisposeReport {
   /**
@@ -127,7 +153,7 @@ export interface HarnessAdapter {
    *   → 返回 CAPABILITY_UNSUPPORTED
    * - 相同 idempotency_key 的重复调用 → 返回已有句柄，不得启动第二个进程
    */
-  startRun(spec: RunSpec): Promise<Result<RunHandle>>
+  startRun(spec: RunSpec, hooks?: RunHooks): Promise<Result<RunHandle>>
 
   /** [v0.1 必须] 等待执行结束 */
   awaitResult(handle: RunHandle): Promise<Result<RunResult>>

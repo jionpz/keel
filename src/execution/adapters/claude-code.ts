@@ -159,7 +159,7 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
       return err(makeError('NOT_FOUND', `未知 run ${handle.run_id}`))
     }
     state.aborted = true
-    state.timeout = _reason === 'timeout'
+    state.timeout = _reason === 'timeout' || _reason === 'stalled'
     const proc = state.proc
     if (proc === null || proc.pid === undefined) return ok(undefined)
     const group = -proc.pid

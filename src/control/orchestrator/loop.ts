@@ -33,6 +33,9 @@ import { checkBudgetFuse } from '../budget/fuse.js'
 import { claimRunForExecution } from '../concurrency/limits.js'
 import { FactPlaneContextBuilder } from '../context/builder.js'
 import type { WorkflowDriver } from '../driver/driver.js'
+import { livenessMode, policyFor, runWallClockS } from '../liveness/policy.js'
+import type { LivenessStore } from '../liveness/store.js'
+import type { StallEvidence } from '../liveness/supervisor.js'
 import { runSessionUntilValid, ZERO_USAGE } from '../proposal/pipeline.js'
 import { loadDeclaredPolicyFacts } from '../proposal/validate.js'
 import { expectedArtifact, promptFor, ROLE_INSTRUCTIONS } from './prompts.js'
@@ -77,8 +80,16 @@ export interface OrchestratorDeps {
   readonly now: () => string
   /**
    * run 级墙钟上限秒(R-009,方案 B)。缺省 180;测试注入短值验证收割。
+   * 显式指定时覆盖 stage hard cap（--wall-clock 逃生阀）。
    */
   readonly wallClockS?: number
+  /** liveness 遥测写入；缺省时 supervisor 仍在进程内工作，但巡检看不到这个 run */
+  readonly livenessStore?: LivenessStore
+  /** 单调时钟（测试注入；默认 performance.now） */
+  readonly monotonicNow?: () => number
+  /** 测试注入：缩短沉默检查 / owner 心跳间隔 */
+  readonly livenessCheckIntervalMs?: number
+  readonly ownerHeartbeatMs?: number
 }
 
 export interface StepRecord {
@@ -298,6 +309,7 @@ export async function runTaskToCompletion(
         deps,
         state,
         steps,
+        executed.stall ?? null,
       )
       if (next === 'stopped-cancelled') {
         // 人工撤回(R-010):不重试;下一轮无 PENDING,loop 自然停
@@ -371,7 +383,13 @@ export async function runTaskToCompletion(
  */
 type ExecOutcome =
   | { readonly ok: true }
-  | { readonly ok: false; readonly error: KeelError; readonly usage: Usage }
+  | {
+      readonly ok: false
+      readonly error: KeelError
+      readonly usage: Usage
+      /** RUN_STALLED 时带上 supervisor 的判定证据（落事件 payload） */
+      readonly stall?: StallEvidence
+    }
 
 /** 跑一个 run：认领（PENDING→RUNNING）→ 造 Context → 真实 session → 校验落库 → 终态 */
 async function executeRun(
@@ -423,9 +441,25 @@ async function executeClaimedRun(
   const place = await resolveWorkspace(taskId, deps.workspace)
   if (!place.ok) return { ok: false, error: place.error, usage: ZERO_USAGE }
 
-  // 方案 B(issue #26):run 级墙钟 timer —— Keel 侧强制收割,不只靠 harness --max-time
-  const wallClockS = deps.wallClockS ?? 180 // run 级墙钟上限(R-009,方案 B;测试可注入)
-  await createRunWallClockTimer(taskId, pending.id, wallClockS, deps.now())
+  const descriptor = deps.adapter.describe()
+  const mode = livenessMode()
+  // 无进展信号的 harness 只保留硬上限；human 两者都关。
+  const policy = policyFor({
+    stage: pending.stage,
+    isHuman: descriptor.harness_id === 'human',
+    hasProgressSignal: descriptor.capabilities.includes('CAP-STREAM'),
+  })
+  // 方案 B(issue #26):run 级墙钟上限。
+  // progress 模式用 stage hard cap；wallclock 模式保持旧的全局 180s。
+  // 显式 --wall-clock 覆盖两者（R6 逃生阀）。
+  const explicitWallClock = deps.wallClockS !== undefined
+  const wallClockS = runWallClockS(mode, deps.wallClockS, policy)
+  if (wallClockS > 0) {
+    await createRunWallClockTimer(taskId, pending.id, wallClockS, deps.now())
+  }
+
+  /** supervisor 判定 stalled 时的证据；失败路径落进 RunStalled 事件 */
+  let stallEvidence: StallEvidence | null = null
 
   const outcome = await runSessionUntilValid(
     deps.sessions,
@@ -468,40 +502,58 @@ async function executeClaimedRun(
       // #1-02:capability_request 等需要授权的 Proposal 由同一 Policy 实例裁决
       policy: deps.driver.policyEngine,
       now: deps.now(),
-      // 方案 B:墙钟 watchdog(R-009 Keel 侧收割)
-      wallClockMs: wallClockS * 1000,
+      // wallclock 模式：旧的全局 watchdog；progress 模式默认由 supervisor
+      // 判沉默、DB timer 兜硬上限。显式 --wall-clock 是逃生阀：
+      // 两种模式都额外挂进程内 watchdog，保证没有 timer-worker 也按时收敛。
+      ...((mode === 'wallclock' || explicitWallClock) && wallClockS > 0
+        ? { wallClockMs: wallClockS * 1000 }
+        : {}),
+      ...(mode === 'progress'
+        ? {
+            liveness: {
+              policy,
+              wallNow: deps.now,
+              ...(deps.livenessStore === undefined ? {} : { store: deps.livenessStore }),
+              ...(deps.monotonicNow === undefined ? {} : { monotonicNow: deps.monotonicNow }),
+              ...(deps.livenessCheckIntervalMs === undefined
+                ? {}
+                : { checkIntervalMs: deps.livenessCheckIntervalMs }),
+              ...(deps.ownerHeartbeatMs === undefined
+                ? {}
+                : { ownerHeartbeatMs: deps.ownerHeartbeatMs }),
+              onStall: (evidence) => {
+                stallEvidence = evidence
+              },
+            },
+          }
+        : {}),
+      // develop 的「真改了吗」闸门必须发生在 run 置 SUCCEEDED 之前 ——
+      // 否则闸门失败时 run 已经是 SUCCEEDED，只能留下假成功。
+      preCommitGate: ({ diff }) => {
+        // 没有证据 ≠ 有证据表明没干活：采集失败（null）放行，事件里如实记录。
+        if (pending.stage !== 'develop' || diff === null) return null
+        if (diff.files_changed.length > 0 || diff.commits.length > 0) return null
+        return makeError(
+          'PROTOCOL_ERROR',
+          'develop 声称 implemented，但工作区在 git 上没有任何改动（0 文件、0 提交）。' +
+            '这一轮不算成功（可重试，T-030）：要么真的没干活，要么改动落在工作区之外。',
+        )
+      },
     },
   )
   // 失败也把累计 usage 带给调用方 —— 失败/超时的 run 花的钱与成功的一样真实
-  if (!outcome.ok) return { ok: false, error: outcome.error, usage: outcome.usage }
-
-  // ── develop 的「真改了吗」闸门 ──
-  //
-  // 没有这道闸门时，develop 判 SUCCEEDED 的唯一依据是模型自己那句
-  // `"verdict":"implemented"` —— 它什么都不改、只回一句话，Run 照样成功，
-  // 然后 QA/review 对着 RFC 空想。
-  //
-  // 判据用 **git 观测值**，不用模型自述。`diff === null` 表示采集失败：
-  // 没有证据 ≠ 有证据表明没干活，这种情况放行但在事件里如实记录，
-  // 否则「git 偶发读不到」会变成一整类莫名其妙的 RunFailed。
-  const diff = outcome.value.diff
-  if (
-    pending.stage === 'develop' &&
-    diff !== null &&
-    diff.files_changed.length === 0 &&
-    diff.commits.length === 0
-  ) {
-    await cancelRunWallClockTimer(pending.id)
+  if (!outcome.ok) {
     return {
       ok: false,
-      error: makeError(
-        'PROTOCOL_ERROR',
-        'develop 声称 implemented，但工作区在 git 上没有任何改动（0 文件、0 提交）。' +
-          '这一轮不算成功（可重试，T-030）：要么真的没干活，要么改动落在工作区之外。',
-      ),
-      usage: outcome.value.usage,
+      error: outcome.error,
+      usage: outcome.usage,
+      ...(stallEvidence === null ? {} : { stall: stallEvidence }),
     }
   }
+
+  // develop 的「真改了吗」闸门已在 pipeline 的 preCommitGate 里判定 ——
+  // 必须在 run 置 SUCCEEDED 之前，见 runSessionUntilValid 的围栏注释。
+  const diff = outcome.value.diff
 
   // 谁执行了这个 run 是事实，记在 run 行上（O 可观测 + ADR-0005）——
   // Human L0 e2e 据此断言「L0 路径真的被执行过」，而不是靠桩自己声称。
@@ -511,7 +563,6 @@ async function executeClaimedRun(
   //
   // 熔断检查在**同一事务**内：写回与核算之间不留窗口，
   // 崩溃重启后不会出现「成本已入账但该暂停的 Task 还在跑」。
-  const descriptor = deps.adapter.describe()
   const usage = outcome.value.usage
   const diffPayload = buildDiffPayload(
     pending.stage,
@@ -519,16 +570,16 @@ async function executeClaimedRun(
     diff,
     outcome.value.diff_error,
   )
-  await asRole('keel_control', async (c) => {
+  const metadata = await asRole('keel_control', async (c) => {
     const now = deps.now()
-    await c.query(
-      `UPDATE run SET status='SUCCEEDED', ended_at=$2, harness_id=$3, harness_tier=$4,
-              tokens_in=$5, tokens_out=$6, cost_usd=$7, cost_basis=$8
-       WHERE id=$1`,
+    // 围栏：run 必须已由 pipeline 在提交 artifact 的**同一事务**里置为 SUCCEEDED。
+    // 0 行说明 run 已被巡检 / 人工收走 —— 这里不得再写任何成功事实。
+    const updated = await c.query(
+      `UPDATE run SET harness_id=$2, harness_tier=$3,
+              tokens_in=$4, tokens_out=$5, cost_usd=$6, cost_basis=$7
+       WHERE id=$1 AND status='SUCCEEDED'`,
       [
         pending.id,
-        // 注入 now —— 重放不读时钟(ADR-0003),execute-run-attempt 断言据此钉死
-        now,
         descriptor.harness_id,
         descriptor.tier,
         usage.tokens_in,
@@ -537,7 +588,8 @@ async function executeClaimedRun(
         usage.cost_basis,
       ],
     )
-    // 工作区改动的观测记录 —— 与 run 终态**同事务**：
+    if ((updated.rowCount ?? 0) === 0) return { ok: false as const }
+    // 工作区改动的观测记录 —— 与 run 元数据**同事务**：
     // 分开写会出现「run 已 SUCCEEDED 但事件没落」或反之的半截事实。
     // 载体选 event 而不是 artifact：这是每次 run 追加的观测，不是要冻结的决策（无版本链）。
     const traceId = await ensureTraceId(c, taskId, now)
@@ -547,7 +599,19 @@ async function executeClaimedRun(
       [taskId, pending.id, JSON.stringify(diffPayload), traceId, now],
     )
     await checkBudgetFuse(c, taskId, now)
+    return { ok: true as const }
   })
+  if (!metadata.ok) {
+    await cancelRunWallClockTimer(pending.id)
+    return {
+      ok: false,
+      error: makeError(
+        'PROTOCOL_ERROR',
+        `run ${pending.id} 不是 SUCCEEDED，拒绝写成功元数据（可能已被巡检收割）`,
+      ),
+      usage,
+    }
+  }
   // run 已终态:墙钟 timer 不再需要(方案 B,防残留误触发)
   await cancelRunWallClockTimer(pending.id)
 
@@ -807,10 +871,11 @@ async function failRunAndAdvance(
   deps: OrchestratorDeps,
   state: { status: TaskStatus },
   steps: StepRecord[],
+  stall: StallEvidence | null = null,
 ): Promise<'advanced' | 'stopped-cancelled' | 'error'> {
-  // 失败类型 → run 状态:超时 / 人工撤回 / 其他(重试类)
+  // 失败类型 → run 状态:超时(含无进展) / 人工撤回 / 其他(重试类)
   const status =
-    runErr.kind === 'RUN_TIMEOUT'
+    runErr.kind === 'RUN_TIMEOUT' || runErr.kind === 'RUN_STALLED'
       ? 'TIMEOUT'
       : runErr.kind === 'RUN_CANCELLED'
         ? 'CANCELLED'
@@ -821,8 +886,8 @@ async function failRunAndAdvance(
   // unavailable),熔断检查在**同一事务**内 —— 与成功路径同一纪律。
   // 否则最烧钱的场景(R-007 回灌 × T-030 重试,每轮都失败)对 C-002 完全失明:
   // 每次重试都白烧一整个 run 的预算,熔断永远看不到。
-  await asRole('keel_control', async (c) => {
-    await c.query(
+  const settled = await asRole('keel_control', async (c) => {
+    const updated = await c.query(
       `UPDATE run SET status=$2, ended_at=$3, error_kind=$4, error_detail=$5,
               tokens_in=$6, tokens_out=$7, cost_usd=$8, cost_basis=$9
        WHERE id=$1 AND status='RUNNING'`,
@@ -838,20 +903,57 @@ async function failRunAndAdvance(
         usage.cost_basis,
       ],
     )
+    // run 已被巡检 / 人工终结：本次失败不能再入账，也不能再推进转移。
+    // 否则巡检收割后 zombie 会重复 emit 一次 RunTimeout / RunFailed。
+    if ((updated.rowCount ?? 0) === 0) return false
+
+    // 决策证据与终态同事务：RunStalled 不只是「run 结束了」，
+    // 还要能回答当时沉默了多久、最后一条进展是什么。
+    if (runErr.kind === 'RUN_STALLED') {
+      const now = deps.now()
+      const traceId = await ensureTraceId(c, taskId, now)
+      await c.query(
+        `INSERT INTO event (task_id, run_id, type, payload, trace_id, occurred_at)
+         VALUES ($1,$2,'RunStalled',$3::jsonb,$4,$5)`,
+        [
+          taskId,
+          pending.id,
+          JSON.stringify({
+            silence_ms: stall?.silenceMs ?? null,
+            last_progress_at: stall?.lastProgressAt ?? null,
+            last_kind: stall?.lastKind ?? null,
+            owner_heartbeat_at: stall?.ownerHeartbeatAt ?? null,
+            source: stall?.source ?? 'supervisor',
+            orphan_killed: stall?.orphanKilled ?? null,
+          }),
+          traceId,
+          now,
+        ],
+      )
+    }
+
     await checkBudgetFuse(c, taskId, deps.now())
+    return true
   })
   // run 已终态:墙钟 timer 不再需要(方案 B,防残留误触发)
   await cancelRunWallClockTimer(pending.id)
+
+  // 已由他人终结：不 emit、不 advance，也不按 CANCELLED 返回 stopped —— 直接收手。
+  if (!settled) return 'advanced'
 
   // 人工撤回:不重试(R-010)。run 已脱离 PENDING,下一轮无 PENDING → 停。
   if (status === 'CANCELLED') {
     return 'stopped-cancelled'
   }
 
+  // 无进展与超时都落 TIMEOUT，但事件类型必须可区分：
+  // 「卡住」和「跑太久」是两种可观察的失败，消费方据此做不同诊断。
   const event =
-    status === 'TIMEOUT'
-      ? ({ type: 'RunTimeout', stage: pending.stage } as const)
-      : ({ type: 'RunFailed', stage: pending.stage } as const)
+    runErr.kind === 'RUN_STALLED'
+      ? ({ type: 'RunStalled', stage: pending.stage } as const)
+      : status === 'TIMEOUT'
+        ? ({ type: 'RunTimeout', stage: pending.stage } as const)
+        : ({ type: 'RunFailed', stage: pending.stage } as const)
 
   const adv = await deps.driver.advance(taskId, event, deps.now())
   if (!adv.ok) return 'error'

@@ -19,6 +19,7 @@ import { join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import type { RunSpec } from '../contracts/harness-adapter.js'
 import { WorkflowDriver } from '../control/driver/driver.js'
+import { LivenessStore } from '../control/liveness/store.js'
 import { runTaskToCompletion } from '../control/orchestrator/loop.js'
 import { RuleBasedPolicyEngine } from '../control/policy/engine.js'
 import { DEFAULT_RULESET } from '../control/policy/ruleset.js'
@@ -169,4 +170,70 @@ describe('Human L0 · 人工作为 Harness 在编排循环中跑通 PM 阶段', 
     )
     expect(t004, 'PM 结论应经 T-004 推进状态').toBeDefined()
   })
+
+  it('人回复耗时 10h（远超旧 180s）也不被静默监管或墙钟带走', async () => {
+    const taskId = await seedTask()
+    const inbox = new SlowInbox()
+    const livenessStore = new LivenessStore()
+
+    try {
+      // 单调时钟直接推到 10h 之后：若有任何「超过 180s 就中断」的路径，
+      // 第一次沉默检查就会命中。human 的正确行为是什么都不做。
+      const result = await runTaskToCompletion(
+        taskId,
+        {
+          driver: new WorkflowDriver(new RuleBasedPolicyEngine(DEFAULT_RULESET)),
+          sessions: new HarnessSessionManager(),
+          adapter: new HumanAdapter(inbox),
+          workspace: { mode: 'fixed', path: ws },
+          now: () => '2026-08-26T10:00:00Z',
+          monotonicNow: () => 10 * 3600_000,
+          livenessCheckIntervalMs: 1,
+          livenessStore,
+        },
+        { maxSteps: 2 },
+      )
+
+      // 与快速回复的用例同构：PM 完成、循环按 maxSteps 停在 S-RFC_DRAFT
+      expect(result.ok).toBe(false)
+      if (result.ok) return
+      expect(result.error.detail).toContain('S-RFC_DRAFT')
+
+      const run = await asOwner((c) =>
+        c.query<{ id: string; status: string }>(
+          `SELECT id, status FROM run WHERE task_id=$1 AND stage='pm'`,
+          [taskId],
+        ),
+      )
+      expect(run.rows[0]?.status).toBe('SUCCEEDED')
+
+      // human 不挂 wall_clock timer，也不写沉默阈值（巡检因此不会误杀）
+      const timers = await asOwner((c) =>
+        c.query<{ n: string }>(
+          `SELECT count(*) AS n FROM timer WHERE task_id=$1 AND kind='wall_clock'`,
+          [taskId],
+        ),
+      )
+      expect(Number(timers.rows[0]?.n)).toBe(0)
+
+      await livenessStore.drain()
+      const liveness = await asOwner((c) =>
+        c.query<{ silence_ms: number | null }>(
+          `SELECT silence_ms FROM run_liveness WHERE run_id=$1`,
+          [run.rows[0]?.id],
+        ),
+      )
+      expect(liveness.rows[0]?.silence_ms).toBeNull()
+    } finally {
+      await livenessStore.close()
+    }
+  })
 })
+
+/** 回复慢 30ms 的人 —— 用真实等待证明监管没有因为「时间长」就中断 */
+class SlowInbox extends SyncInbox {
+  override async await(runId: string): Promise<{ text: string } | null> {
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    return super.await(runId)
+  }
+}

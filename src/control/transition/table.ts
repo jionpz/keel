@@ -359,7 +359,7 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
   {
     id: 'T-030',
     from: 'ANY_STAGE',
-    on: ['RunFailed', 'RunTimeout'],
+    on: ['RunFailed', 'RunTimeout', 'RunStalled'],
     guard: (f) => f.stage_attempts < f.max_stage_attempts,
     guardText: 'attempt < max_attempts(stage)',
     to: 'SELF',
@@ -369,7 +369,7 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
   {
     id: 'T-031',
     from: 'ANY_STAGE',
-    on: ['RunFailed', 'RunTimeout'],
+    on: ['RunFailed', 'RunTimeout', 'RunStalled'],
     guard: (f) => f.stage_attempts >= f.max_stage_attempts,
     guardText: 'attempt ≥ max_attempts(stage)',
     to: 'S-HUMAN_REVIEW',

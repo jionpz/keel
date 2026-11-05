@@ -14,6 +14,7 @@ export const ERROR_KINDS = [
   'PROTOCOL_ERROR',
   'SCHEMA_VIOLATION',
   'RUN_TIMEOUT',
+  'RUN_STALLED',
   'RUN_CANCELLED',
   'WORKSPACE_ERROR',
   'BUDGET_EXCEEDED',
@@ -44,6 +45,8 @@ export const RETRYABLE: Readonly<Record<ErrorKind, boolean>> = {
   SCHEMA_VIOLATION: true,
   /** 超过 wall-clock */
   RUN_TIMEOUT: true,
+  /** 无进展超过 stage 阈值 —— 换个 session 可能继续 */
+  RUN_STALLED: true,
   /** 人工取消 / 预算熔断 */
   RUN_CANCELLED: false,
   /** 分支冲突、工作区脏 */

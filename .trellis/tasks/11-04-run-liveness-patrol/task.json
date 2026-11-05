@@ -3,7 +3,7 @@
   "name": "run-liveness-patrol",
   "title": "运行巡检：按进展信号判定卡死并干预",
   "description": "用进展心跳 + 巡检替代总时长墙钟作为卡死判据；保留墙钟作为显式预算/兜底",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

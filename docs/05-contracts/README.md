@@ -70,6 +70,7 @@ Error {
 | `PROTOCOL_ERROR` | ✅ | Harness 输出无法解析 |
 | `SCHEMA_VIOLATION` | ✅ | Proposal 不符合 schema → 走 `R-007` 回灌 |
 | `RUN_TIMEOUT` | ✅ | 超过 wall-clock |
+| `RUN_STALLED` | ✅ | 进展沉默达到阈值（supervisor / patrol）—— run 状态同为 `TIMEOUT`，事件为 `RunStalled` |
 | `RUN_CANCELLED` | ❌ | 人工取消 / 预算熔断 |
 | `WORKSPACE_ERROR` | ✅ | 分支冲突、工作区脏 |
 | `BUDGET_EXCEEDED` | ❌ | 触发 `C-002` |

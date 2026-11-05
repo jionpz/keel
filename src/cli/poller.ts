@@ -29,8 +29,10 @@ import {
   DEFAULT_OMP_MODEL,
   parseCiMode,
   parseWallClock,
+  readLivenessMode,
   resolveHarness,
   resolveModelForHarness,
+  warnWallClockOverride,
 } from './run-task.js'
 
 /** `--interval <ms>`：只接受正整数，非法值不静默回退缺省 60000 */
@@ -113,7 +115,7 @@ const HELP = `用法: keel poller [--interval <ms>] [--ci passed|failed|real] [-
                        缺省 real;real 需要 KEEL_GITHUB_TOKEN
   --model <id>         对 omp 缺省 ${DEFAULT_OMP_MODEL},也可设 KEEL_MODEL;空白值拒绝
   --harness omp|claude 缺省 omp,也可设 KEEL_HARNESS;非法值拒绝
-  --wall-clock <秒>    单次 run 的墙钟上限秒,缺省 180;只接受正整数
+  --wall-clock <秒>    显式覆盖 stage 墙钟硬上限;缺省按 stage 策略(develop 12h);只接受正整数
 
 label 从 repo.issue_label 读取,不提供 --label:每个仓库可以不同。
 timer-worker 负责到期收割,poller 不处理 wall-clock timer。`
@@ -159,6 +161,9 @@ export async function pollerMain(
     process.exitCode = 1
     return
   }
+  // 常驻进程启动时就校验：非法模式不能让它在每轮认领后才失败
+  const mode = readLivenessMode('poller')
+  if (mode === undefined) return
 
   const ci = resolveCiFlag(flags.ci)
   if (!ci.ok) {
@@ -184,6 +189,7 @@ export async function pollerMain(
     process.exitCode = 1
     return
   }
+  if (wallClock.value !== undefined) warnWallClockOverride('poller', wallClock.value, mode)
 
   // 列出 issue 必须有凭据（provider 在无 token 时直接 AUTH_FAILED）。
   // 前置检查避免「每轮每个仓库一条 AUTH_FAILED，进程还在常驻」的空转。

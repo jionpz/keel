@@ -12,9 +12,15 @@
 
 import { describe, expect, it } from 'vitest'
 import type { WorkflowDriver } from '../control/driver/driver.js'
+import { EMPTY_PATROL_STATS } from './patrol.js'
 import { type ReapStats, runForever, type TimerSignalSource, type WorkerDeps } from './worker.js'
 
-const ZERO: ReapStats = { clarificationFired: 0, runTimeout: 0, skipped: 0 }
+const ZERO: ReapStats = {
+  clarificationFired: 0,
+  runTimeout: 0,
+  skipped: 0,
+  patrol: { ...EMPTY_PATROL_STATS },
+}
 
 /** 不碰库的 deps:测试注入 drain,driver 只是类型占位 */
 const deps: WorkerDeps = {

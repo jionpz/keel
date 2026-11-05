@@ -27,12 +27,12 @@ import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
-import type { RunSpec } from '../../contracts/harness-adapter.js'
+import type { ProgressEvent, RunSpec } from '../../contracts/harness-adapter.js'
 import { TIER_REQUIREMENTS } from '../../shared/ids.js'
 import { CLAUDE_CAPABILITIES } from './claude-code.js'
 import { HUMAN_CAPABILITIES, HumanAdapter, type HumanInbox } from './human.js'
 import { buildArgv, DEFAULT_OMP_MODEL, OMP_CAPABILITIES, OmpAdapter } from './omp.js'
-import { parseOmpStream } from './omp-parse.js'
+import { OmpStreamParser, parseOmpStream } from './omp-parse.js'
 import { tierOf } from './tier.js'
 
 const FIXTURE = fileURLToPath(
@@ -101,6 +101,150 @@ describe('parseOmpStream —— 用真实抓到的事件流', () => {
     const parsed = parseOmpStream('{"type":"agent_end","messages":[]}\n')
     expect(parsed.usage.cost_usd).toBeNull()
     expect(parsed.usage.cost_basis).toBe('unavailable')
+  })
+})
+
+describe('OmpStreamParser —— 增量解析与进展事件', () => {
+  it('任意 chunk 切分下，最终 ParsedRun 与整段解析逐字段一致', async () => {
+    const full = await readFile(FIXTURE, 'utf8')
+    const expected = parseOmpStream(full)
+
+    for (const size of [1, 3, 11, 97, full.length]) {
+      const parser = new OmpStreamParser(() => 0)
+      for (let i = 0; i < full.length; i += size) parser.push(full.slice(i, i + size))
+      expect(parser.end()).toEqual(expected)
+    }
+  })
+
+  it('半行不解析；跨 chunk 拼接后只产出一个事件', () => {
+    const parser = new OmpStreamParser(() => 7)
+    expect(parser.push('{"type":"turn_')).toEqual([])
+    expect(parser.push('start"}\n')).toEqual([{ kind: 'turn_start', at: 7 }])
+  })
+
+  it('一个 chunk 含多行时逐行产出；空 chunk / 纯换行不产生事件', () => {
+    const parser = new OmpStreamParser(() => 1)
+    const events = parser.push(
+      '{"type":"session","id":"s1"}\n{"type":"agent_start"}\n\n{"type":"turn_start"}\n',
+    )
+    expect(events.map((e) => e.kind)).toEqual(['session', 'agent_start', 'turn_start'])
+    expect(events[0]).toMatchObject({ kind: 'session', sessionRef: 's1' })
+    expect(parser.push('')).toEqual([])
+    expect(parser.push('\n')).toEqual([])
+  })
+
+  it('尾部无换行：push 不出事件，end() 仍能解析', () => {
+    const parser = new OmpStreamParser(() => 2)
+    expect(parser.push('{"type":"agent_end","messages":[]}')).toEqual([])
+    const parsed = parser.end()
+    expect(parsed.sawAgentEnd).toBe(true)
+  })
+
+  it('进展事件覆盖工具执行；advisor_cost_changed 不算', () => {
+    const parser = new OmpStreamParser(() => 3)
+    const events = parser.push(
+      [
+        '{"type":"turn_start"}',
+        '{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta"}}',
+        '{"type":"tool_execution_start"}',
+        '{"type":"tool_execution_update"}',
+        '{"type":"tool_execution_end"}',
+        '{"type":"advisor_cost_changed"}',
+        '{"type":"turn_end"}',
+        '{"type":"agent_end","messages":[]}',
+      ].join('\n') + '\n',
+    )
+    expect(events.map((e) => e.kind)).toEqual([
+      'turn_start',
+      'message_update',
+      'tool_execution_start',
+      'tool_execution_update',
+      'tool_execution_end',
+      'turn_end',
+      'agent_end',
+    ])
+  })
+
+  it('非 JSON 错误行仍进 nonJsonLines；进程异常结束时已产出的进展不丢', () => {
+    const parser = new OmpStreamParser(() => 4)
+    const events = parser.push('{"type":"turn_start"}\nError: boom\n')
+    expect(events.map((e) => e.kind)).toEqual(['turn_start'])
+    const parsed = parser.end()
+    expect(parsed.nonJsonLines).toEqual(['Error: boom'])
+    expect(parsed.sawAgentEnd).toBe(false)
+  })
+})
+
+describe('OmpAdapter · onProgress 进展通道', () => {
+  function streamingSpawn(chunks: readonly string[], pid = 4321): typeof spawn {
+    return ((_bin: string, _args: readonly string[]) => {
+      const p = new EventEmitter() as EventEmitter & {
+        pid: number
+        stdout: Readable
+        stderr: Readable
+      }
+      p.pid = pid
+      p.stdout = Readable.from([...chunks])
+      p.stderr = Readable.from([])
+      p.stdout.on('end', () => p.emit('close', 0))
+      return p
+    }) as unknown as typeof spawn
+  }
+
+  it('运行期间逐 chunk 回调；首个事件带 pid / pgid / startedAt', async () => {
+    const chunks = [
+      '{"type":"session","id":"s1"}\n{"type":"agent_start"}\n',
+      '{"type":"turn_start"}\n{"type":"tool_execution_start"}\n',
+      '{"type":"agent_end","messages":[]}\n',
+    ]
+    const seen: ProgressEvent[] = []
+    const adapter = new OmpAdapter({ spawnFn: streamingSpawn(chunks) })
+    const started = await adapter.startRun(spec(), {
+      onProgress: (event) => seen.push(event),
+    })
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+    await adapter.awaitResult(started.value)
+
+    expect(seen.map((e) => e.kind)).toEqual([
+      'session',
+      'agent_start',
+      'turn_start',
+      'tool_execution_start',
+      'agent_end',
+    ])
+    expect(seen[0]).toMatchObject({ pid: 4321, pgid: 4321 })
+    expect(seen[0]?.startedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+    // 进程信息只随首个事件携带，避免每条心跳重复写
+    expect(seen[1]?.pid).toBeUndefined()
+  })
+
+  it('message_update 在 adapter 层合并（250ms 窗口）', async () => {
+    const many = Array.from(
+      { length: 5 },
+      () => '{"type":"message_update","assistantMessageEvent":{"type":"text_delta"}}',
+    ).join('\n')
+    const chunks = [`${many}\n{"type":"agent_end","messages":[]}\n`]
+    const seen: ProgressEvent[] = []
+    const adapter = new OmpAdapter({ spawnFn: streamingSpawn(chunks) })
+    const started = await adapter.startRun(spec(), {
+      onProgress: (event) => seen.push(event),
+    })
+    if (!started.ok) return
+    await adapter.awaitResult(started.value)
+
+    expect(seen.filter((e) => e.kind === 'message_update')).toHaveLength(1)
+  })
+
+  it('不传 onProgress 时行为不变', async () => {
+    const adapter = new OmpAdapter({
+      spawnFn: streamingSpawn(['{"type":"agent_end","messages":[]}\n']),
+    })
+    const started = await adapter.startRun(spec())
+    if (!started.ok) return
+    const res = await adapter.awaitResult(started.value)
+    expect(res.ok).toBe(true)
+    expect(res.ok && res.value.status).toBe('SUCCEEDED')
   })
 })
 

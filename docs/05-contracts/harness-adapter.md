@@ -267,7 +267,7 @@ Adapter 在 `startRun` 时记下当时 HEAD 作为基线，`collectChanges` 相�
 ### 3.5 `interrupt()` `[v0.1 必须]`
 
 ```
-interrupt(handle: RunHandle, reason: "cancelled" | "budget" | "takeover" | "timeout") -> void | Error
+interrupt(handle: RunHandle, reason: "cancelled" | "budget" | "takeover" | "timeout" | "stalled") -> void | Error
 ```
 
 无 `CAP-INTERRUPT` 时降级为强杀进程 —— 该次 Run 作废（`R-010`）。
@@ -277,6 +277,11 @@ interrupt(handle: RunHandle, reason: "cancelled" | "budget" | "takeover" | "time
 > `cancelled` / `budget` / `takeover`（人工 / 预算 / 接管）收敛为
 > `CANCELLED` → `RUN_CANCELLED`（不重试，`R-010`）。
 > 区分是 R-009 与 R-010 的语义要求：墙钟超时该重试，人工撤销不该。
+>
+> `stalled`（进展沉默）同样收敛为 `RunResult.status='TIMEOUT'`，但错误归因为
+> `RUN_STALLED`（可重试）。**Adapter 不感知、也不映射 `RUN_STALLED`**：
+> 它只负责因中断返回 `TIMEOUT`；是超时还是卡死由编排层根据中断意图判定
+> （见 `adr/0009-liveness-by-progress.md`）。`RunResult` 不新增状态。
 
 ### 3.6 `dispose()` `[v0.1 必须]`
 
@@ -318,6 +323,28 @@ HarnessEvent {
 
 无 `CAP-STREAM` 时预算只能在 Run 结束后核算 —— 意味着**超支已经发生**。
 这是 `CAP-STREAM` 缺失的真实代价，应在选型时纳入考虑。
+
+> **v0.1 实现形态（2026-11-05）**：`observe()` 迭代器尚未落地，Adapter 通过
+> `startRun(spec, hooks)` 的 `onProgress(event)` 同步回调上报进展：
+>
+> ```
+> ProgressEvent {
+>   kind:      string        // adapter 定义，如 OMP 的 JSON 事件类型
+>   at:        number        // 单调时钟读数，控制面注入
+>   sessionRef?: string
+>   pid?: number
+>   pgid?: number
+>   startedAt?: string       // ISO；与 pid 一起防 PID 复用误杀
+> }
+> ```
+>
+> `onProgress` **只用于 liveness 遥测，不是 Fact**：控制面只记录
+> 「多久没有新进展」，不据此判定业务含义，也不把事件重放建立在这些数据上。
+> 首个事件携带的 `pid/pgid/startedAt` 是孤儿进程清理的线索；没有它们时
+> 巡检选择不 kill（保守方向）。
+>
+> 无 `CAP-STREAM` ⇒ 拿不到进展信号，`progressSource` 降为 `'none'`，
+> 只保留 stage 硬上限。
 
 ---
 

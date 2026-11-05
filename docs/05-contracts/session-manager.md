@@ -171,8 +171,12 @@ restore(checkpoint: A-Checkpoint, context: Context) -> SessionHandle | Error
 ```
 close(handle: SessionHandle, reason: CloseReason) -> CloseReport | Error
 
-CloseReason = "completed" | "failed" | "timeout" | "cancelled" | "takeover"
+CloseReason = "completed" | "failed" | "timeout" | "cancelled" | "takeover" | "stalled"
 ```
+
+`stalled` 表示「进展沉默达到阈值」：进程内 `StallSupervisor` 或独立
+`Patrol` 判定后中断。它不新增 Run 状态 —— run 仍以 `TIMEOUT` +
+`error_kind='RUN_STALLED'` 收尾，重试/升人工路径与超时相同。
 
 `close` 前必须先 `checkpoint()`（`reason = "cancelled"` 的强杀情形除外）。
 

@@ -61,7 +61,7 @@ export interface TurnOutcome {
   readonly needs: readonly CapabilityId[]
 }
 
-export type CloseReason = 'completed' | 'failed' | 'timeout' | 'cancelled' | 'takeover'
+export type CloseReason = 'completed' | 'failed' | 'timeout' | 'cancelled' | 'takeover' | 'stalled'
 
 export interface CloseReport {
   readonly checkpointed: boolean

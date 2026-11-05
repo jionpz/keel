@@ -1,5 +1,5 @@
 /**
- * OMP `--mode=json` 事件流解析 —— 纯函数。
+ * OMP `--mode=json` 事件流解析 —— 纯函数 + 有状态增量解析器。
  *
  * 事实来源：`research/omp-interface.md` §2（本机实测 omp v17.4.2）。
  *
@@ -8,9 +8,10 @@
  * 两者分开，各测各的。
  */
 
+import type { ProgressEvent as RunProgressEvent } from '../../contracts/harness-adapter.js'
 import type { Usage } from '../../contracts/types.js'
 
-/** 实测到的事件类型 */
+/** 实测到的事件类型（顶层） */
 export type OmpEventType =
   | 'session'
   | 'agent_start'
@@ -20,6 +21,44 @@ export type OmpEventType =
   | 'message_end'
   | 'turn_end'
   | 'agent_end'
+  | 'tool_execution_start'
+  | 'tool_execution_update'
+  | 'tool_execution_end'
+  | 'advisor_cost_changed'
+
+/**
+ * 算作「Run 还在动」的事件。
+ *
+ * - `message_update` 的嵌套类型（thinking_* / toolcall_* / text_*）都算；
+ * - 工具执行阶段没有文本，也必须算进展，否则长编译会被误判卡死；
+ * - `advisor_cost_changed` 是纯成本通知，不证明模型在动。
+ */
+export type ProgressKind =
+  | 'session'
+  | 'agent_start'
+  | 'turn_start'
+  | 'message_update'
+  | 'turn_end'
+  | 'agent_end'
+  | 'tool_execution_start'
+  | 'tool_execution_update'
+  | 'tool_execution_end'
+
+const PROGRESS_KINDS: ReadonlySet<string> = new Set<ProgressKind>([
+  'session',
+  'agent_start',
+  'turn_start',
+  'message_update',
+  'turn_end',
+  'agent_end',
+  'tool_execution_start',
+  'tool_execution_update',
+  'tool_execution_end',
+])
+
+export interface ProgressEvent extends RunProgressEvent {
+  readonly kind: ProgressKind
+}
 
 export interface ParsedRun {
   /** 首个 session 事件的 id —— resume 句柄 */
@@ -52,6 +91,119 @@ interface OmpMessage {
   usage?: OmpUsage
 }
 
+interface OmpEvent {
+  type?: string
+  id?: string
+  message?: OmpMessage
+  messages?: OmpMessage[]
+}
+
+/**
+ * 有状态增量解析器。
+ *
+ * 只消费完整行；半行留在缓冲区，等下一个 chunk。非 JSON 行继续进
+ * `nonJsonLines`，不会因为流式化丢失错误信息。
+ */
+export class OmpStreamParser {
+  private buffer = ''
+  private sessionRef: string | null = null
+  private text = ''
+  private nonTextBlocks = 0
+  private sawAgentEnd = false
+  private readonly nonJsonLines: string[] = []
+  private usage: OmpUsage = {}
+
+  /**
+   * @param now 单调时钟。控制面注入；默认 `performance.now()`（同进程单调）。
+   *            parser 不读系统墙钟 —— 墙钟跳变不得影响 liveness。
+   */
+  constructor(private readonly now: () => number = () => performance.now()) {}
+
+  /** 消费一个 chunk，返回其中完整行产生的进展事件 */
+  push(chunk: string): ProgressEvent[] {
+    this.buffer += chunk
+    const events: ProgressEvent[] = []
+
+    for (;;) {
+      const newline = this.buffer.indexOf('\n')
+      if (newline < 0) break
+      const line = this.buffer.slice(0, newline)
+      this.buffer = this.buffer.slice(newline + 1)
+
+      const kind = this.consume(line)
+      if (kind === null) continue
+      events.push({
+        kind,
+        at: this.now(),
+        ...(this.sessionRef === null ? {} : { sessionRef: this.sessionRef }),
+      })
+    }
+
+    return events
+  }
+
+  /** 冲刷残留行，返回与 `parseOmpStream(完整 stdout)` 等价的最终结果 */
+  end(): ParsedRun {
+    if (this.buffer.trim() !== '') this.consume(this.buffer)
+    this.buffer = ''
+
+    return {
+      sessionRef: this.sessionRef,
+      text: this.text.trim(),
+      usage: toUsage(this.usage),
+      nonTextBlocks: this.nonTextBlocks,
+      nonJsonLines: this.nonJsonLines,
+      sawAgentEnd: this.sawAgentEnd,
+    }
+  }
+
+  /** 解析一行；返回进展类型，或 null（非 JSON / 非进展事件） */
+  private consume(raw: string): ProgressKind | null {
+    const line = raw.trim()
+    if (line === '') return null
+    if (!line.startsWith('{')) {
+      // omp 的错误信息走这里（如 "Error: Session ... not found."）
+      this.nonJsonLines.push(line)
+      return null
+    }
+
+    let e: OmpEvent
+    try {
+      e = JSON.parse(line) as OmpEvent
+    } catch {
+      this.nonJsonLines.push(line)
+      return null
+    }
+
+    const type = e.type
+
+    if (type === 'session') {
+      if (typeof e.id === 'string') this.sessionRef = e.id
+      return 'session'
+    }
+
+    if (type === 'agent_end') {
+      this.sawAgentEnd = true
+      for (const m of e.messages ?? []) {
+        if (m.role !== 'assistant') continue
+        const r = collectText(m.content ?? [])
+        this.text += r.text
+        this.nonTextBlocks += r.skipped
+        if (m.usage !== undefined) this.usage = m.usage
+      }
+      return 'agent_end'
+    }
+
+    // turn_end / message_end 也带 usage，取最后一次见到的
+    if ((type === 'turn_end' || type === 'message_end') && e.message?.usage !== undefined) {
+      this.usage = e.message.usage
+    }
+
+    if (type !== undefined && PROGRESS_KINDS.has(type)) return type as ProgressKind
+    return null
+  }
+}
+
 /**
  * 解析完整的 NDJSON 输出。
  *
@@ -60,61 +212,9 @@ interface OmpMessage {
  * 于是后续 --resume 报 not found。见 research/omp-interface.md §1。
  */
 export function parseOmpStream(stdout: string): ParsedRun {
-  let sessionRef: string | null = null
-  let text = ''
-  let nonTextBlocks = 0
-  let sawAgentEnd = false
-  const nonJsonLines: string[] = []
-  let usage: OmpUsage = {}
-
-  for (const raw of stdout.split('\n')) {
-    const line = raw.trim()
-    if (line === '') continue
-    if (!line.startsWith('{')) {
-      // omp 的错误信息走这里（如 "Error: Session ... not found."）
-      nonJsonLines.push(line)
-      continue
-    }
-
-    let e: { type?: string; id?: string; message?: OmpMessage; messages?: OmpMessage[] }
-    try {
-      e = JSON.parse(line)
-    } catch {
-      nonJsonLines.push(line)
-      continue
-    }
-
-    if (e.type === 'session' && typeof e.id === 'string') {
-      sessionRef = e.id
-      continue
-    }
-
-    if (e.type === 'agent_end') {
-      sawAgentEnd = true
-      for (const m of e.messages ?? []) {
-        if (m.role !== 'assistant') continue
-        const r = collectText(m.content ?? [])
-        text += r.text
-        nonTextBlocks += r.skipped
-        if (m.usage !== undefined) usage = m.usage
-      }
-      continue
-    }
-
-    // turn_end / message_end 也带 usage，取最后一次见到的
-    if ((e.type === 'turn_end' || e.type === 'message_end') && e.message?.usage !== undefined) {
-      usage = e.message.usage
-    }
-  }
-
-  return {
-    sessionRef,
-    text: text.trim(),
-    usage: toUsage(usage),
-    nonTextBlocks,
-    nonJsonLines,
-    sawAgentEnd,
-  }
+  const parser = new OmpStreamParser(() => 0)
+  parser.push(stdout)
+  return parser.end()
 }
 
 /**
