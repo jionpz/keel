@@ -806,3 +806,41 @@ token 优先级 KEEL > GITHUB > gh(按 host)；三个入口在写入前 fail fas
 ### Next Steps
 
 - 父任务仅剩 poller-single-instance（需先补 design.md）
+
+
+## Session 21: 常驻进程单实例锁（#73 第 2 项）
+
+**Date**: 2026-11-05
+**Task**: 常驻进程单实例锁（#73 第 2 项）
+**Branch**: `main`
+
+### Summary
+
+poller 与 timer-worker 用 PostgreSQL 会话级 advisory lock 强制同库单实例；拿不到锁非 0 退出，崩溃自动释放。
+
+### Main Changes
+
+- 新增 src/fact/resident-lock.ts：专用 pg.Client + pg_try_advisory_lock(classid, objid)，release 幂等，lockErrorMessage 脱敏连接串。
+- pollerMain / timerWorkerMain 启动期取锁；poller 在任何 repo 读取前，timer-worker 在创建 LivenessStore 前；单次 timer-worker 也持锁。
+- 释放收口在各自 finally：poller 先 release 再关池；timer-worker 先 store.close 再 release。取锁后全部代码纳入 try/finally。
+- CLI 测试全部注入 acquireLock；真实锁语义由 resident-lock 真实 Postgres 测试覆盖（含裸 Client 断连模拟 kill -9）。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1ab1a60` | (see git log) |
+| `213815e` | (see git log) |
+
+### Testing
+
+- [OK] pnpm run check 全绿：63 test files，915 passed / 5 skipped（skip 为既有）。
+- [OK] 反例验证：锁不释放时 resident-lock 测试变红；objid 固定时双角色共存用例变红。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 待确认：推送 main 并关闭 GitHub issue #73。
