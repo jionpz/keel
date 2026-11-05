@@ -211,7 +211,7 @@ Load `trellis-brainstorm`; stay in planning.
 Lightweight: `prd.md` can be enough. Complex: finish `prd.md`, `design.md`, and `implement.md`.
 Multi-deliverable scope: consider a parent task plus independently verifiable child tasks; dependencies must be written in child artifacts, not implied by tree position.
 Sub-agent mode: curate `implement.jsonl` and `check.jsonl` as spec/research manifests before start.
-Before start, check the three blocking cases in Request Triage. If none applies, run `task.py start` yourself and open the first reply with one line stating what you understood the goal, scope, and exclusions to be. If one applies, ask.
+Before start, check the three blocking cases in Request Triage. If none applies, run `task.py start` yourself and open the first reply with one line stating what you understood the goal, scope, and exclusions to be, plus any decision you recorded without asking. If one applies, ask.
 [/workflow-state:planning]
 
 <!-- Per-turn breadcrumb: shown throughout Phase 1 when codex.dispatch_mode=inline.
@@ -225,7 +225,7 @@ Load `trellis-brainstorm`; stay in planning.
 Lightweight: `prd.md` can be enough. Complex: finish `prd.md`, `design.md`, and `implement.md`.
 Multi-deliverable scope: consider a parent task plus independently verifiable child tasks; dependencies must be written in child artifacts, not implied by tree position.
 Inline mode: skip jsonl curation; Phase 2 reads artifacts/specs via `trellis-before-dev`.
-Before start, check the three blocking cases in Request Triage. If none applies, run `task.py start` yourself and open the first reply with one line stating what you understood the goal, scope, and exclusions to be. If one applies, ask.
+Before start, check the three blocking cases in Request Triage. If none applies, run `task.py start` yourself and open the first reply with one line stating what you understood the goal, scope, and exclusions to be, plus any decision you recorded without asking. If one applies, ask.
 [/workflow-state:planning-inline]
 
 ### Phase 2: Execute
@@ -246,6 +246,7 @@ Tools: `trellis-implement` / `trellis-research` are sub-agent types only (Task/A
 Flow: `trellis-implement` -> `trellis-check` -> `trellis-update-spec` -> commit (Phase 3.4) -> `/trellis:finish-work`.
 Main-session default: dispatch implement/check sub-agents. Sub-agent self-exemption: if already running as `trellis-implement`, do NOT spawn another `trellis-implement` or `trellis-check`; if already running as `trellis-check`, do NOT spawn another `trellis-check` or `trellis-implement`. Dispatch is main session only.
 Dispatch prompt starts with `Active task: <task path from task.py current>`. Read context: jsonl entries -> `prd.md` -> `design.md if present` -> `implement.md if present`.
+First turn after `task.py start`: open with one line stating the understood goal, scope, exclusions, and any decision recorded without asking. Say it now if it was skipped — otherwise no later turn repeats this.
 [/workflow-state:in_progress]
 
 <!-- Per-turn breadcrumb: shown while status='in_progress' when
@@ -257,6 +258,7 @@ Dispatch prompt starts with `Active task: <task path from task.py current>`. Rea
 Flow: `trellis-before-dev` -> edit -> `trellis-check` -> validation -> `trellis-update-spec` -> commit (Phase 3.4) -> `/trellis:finish-work`.
 Do not dispatch implement/check sub-agents in inline mode.
 Read context: `prd.md` -> `design.md if present` -> `implement.md if present`, plus relevant spec/research loaded by skills.
+First turn after `task.py start`: open with one line stating the understood goal, scope, exclusions, and any decision recorded without asking. Say it now if it was skipped — otherwise no later turn repeats this.
 [/workflow-state:in_progress-inline]
 
 ### Phase 3: Finish
@@ -454,7 +456,7 @@ Skip this step. Context is loaded directly by the `trellis-before-dev` skill in 
 
 #### 1.4 Activate task `[required · once]`
 
-After the self-check against Request Triage passes, flip the task status to `in_progress`. Do not wait for approval — the three blocking cases are the only reason to stop here.
+After the self-check against Request Triage passes, flip the task status to `in_progress`. Do not wait for approval — the three blocking cases are the only reason to stop here **for an answer**. The Requirement Convergence Gate and PRD Convergence Pass still decide whether the artifacts are ready; they are self-checks you run, not approval waits.
 
 ```bash
 python3 ./.trellis/scripts/task.py start <task-dir>
@@ -464,7 +466,7 @@ For lightweight tasks, `prd.md` can be enough. For complex tasks, `prd.md`, `des
 
 After this command succeeds, the breadcrumb auto-switches to `[workflow-state:in_progress]`, and the rest of Phase 2 / 3 follows.
 
-Open the first post-start reply with one line stating what you understood the goal, scope, and exclusions to be. That line replaces the old pre-start approval: the user corrects course at the first visible step instead of before it.
+Open the first post-start reply with one line stating what you understood the goal, scope, and exclusions to be, plus any decision you recorded without asking. That line replaces the old pre-start approval: the user corrects course at the first visible step instead of before it. This also covers the case the blocking test deliberately lets through — a user-owned choice whose options share the same acceptance criteria. Decide it, record it in `prd.md`, and name it here; what is forbidden is deciding it silently.
 
 If `task.py start` errors with a session-identity message (no context key from hook input, `TRELLIS_CONTEXT_ID`, or platform-native session env), follow the hint in the error to set up session identity, then retry.
 
@@ -498,7 +500,7 @@ Goal: turn completed planning artifacts into code that passes quality checks.
 Spawn the implement sub-agent:
 
 - **Agent type**: `trellis-implement`
-- **Task description**: Implement the reviewed task artifacts, consulting materials under `{TASK_DIR}/research/`; finish by running project lint and type-check
+- **Task description**: Implement the task artifacts, consulting materials under `{TASK_DIR}/research/`; finish by running project lint and type-check
 - **Dispatch prompt guard**: The prompt MUST start with `Active task: <task path>`, then tell the spawned agent it is already the `trellis-implement` sub-agent and must implement directly, not spawn another `trellis-implement` / `trellis-check`.
 
 The platform hook/plugin auto-handles:
@@ -513,7 +515,7 @@ The platform hook/plugin auto-handles:
 Spawn the implement sub-agent:
 
 - **Agent type**: `trellis-implement`
-- **Task description**: Implement the reviewed task artifacts, consulting materials under `{TASK_DIR}/research/`; finish by running project lint and type-check
+- **Task description**: Implement the task artifacts, consulting materials under `{TASK_DIR}/research/`; finish by running project lint and type-check
 - **Dispatch prompt guard**: The prompt MUST start with `Active task: <task path>`, then explicitly say the spawned agent is already `trellis-implement` and must implement directly without spawning another `trellis-implement` / `trellis-check`.
 
 The pull-based sub-agent definition auto-handles the context load requirement:
@@ -527,7 +529,7 @@ The pull-based sub-agent definition auto-handles the context load requirement:
 Spawn the implement sub-agent:
 
 - **Agent type**: `trellis-implement`
-- **Task description**: Implement the reviewed task artifacts, consulting materials under `{TASK_DIR}/research/`; finish by running project lint and type-check
+- **Task description**: Implement the task artifacts, consulting materials under `{TASK_DIR}/research/`; finish by running project lint and type-check
 - **Dispatch prompt guard**: Tell the spawned agent it is already the `trellis-implement` sub-agent and must implement directly, not spawn another `trellis-implement` / `trellis-check`.
 
 The platform prelude auto-handles the context load requirement:
@@ -541,7 +543,7 @@ The platform prelude auto-handles the context load requirement:
 1. Load the `trellis-before-dev` skill to read project guidelines
 2. Read `{TASK_DIR}/prd.md`, then `design.md` if present, then `implement.md` if present
 3. Consult materials under `{TASK_DIR}/research/`
-4. Implement the code per reviewed artifacts
+4. Implement the code per the task artifacts
 5. Run project lint and type-check
 
 [/codex-inline, Kilo, Antigravity, Devin]

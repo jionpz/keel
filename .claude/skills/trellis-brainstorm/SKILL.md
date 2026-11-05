@@ -11,7 +11,9 @@ Planning is what happens before code, not a permission slip. A request to build,
 
 The user does not have to approve the plan before implementation begins. What the plan must satisfy is the self-check described below, and the first post-start reply states what you understood so the user can correct course at the first visible step.
 
-While one of the three blocking cases remains unresolved — an unresolved product / scope / risk trade-off whose options lead to different acceptance criteria; a request that exceeds one task; or a destructive or irreversible action — end the turn with exactly one highest-value question and do not run `task.py start`. Technical details are not decisions: implementation path, naming, and test shape are yours to choose.
+While one of the three blocking cases remains unresolved — an unresolved product / scope / risk trade-off that neither repository evidence nor the user's words settle, whose options lead to different acceptance criteria; a request that exceeds one task; or a destructive or irreversible action — end the turn with exactly one highest-value question and do not run `task.py start`. Technical details are not decisions: implementation path, naming, and test shape are yours to choose.
+
+A user-owned decision that does not meet the acceptance-criteria test is **not** a blocking case: decide it, record it under Key Decisions in `prd.md`, and name it in the first post-start line so the user can correct it there. That is what keeps "never choose on the user's behalf" from turning every wording choice into a question — what is forbidden is choosing it *silently*, not choosing it.
 
 ## Non-Negotiable Evidence Rule
 
@@ -19,7 +21,7 @@ If a question can be answered by exploring the codebase, explore the codebase in
 
 This is mandatory. Before asking the user a question, first check whether the answer is already available in code, tests, configs, docs, existing specs, or task history.
 
-Do not ask the user to confirm facts that the repository can answer. Ask only for product intent, preference, scope, risk tolerance, acceptance behavior, or decisions that remain ambiguous after inspection.
+Do not ask the user to confirm facts that the repository can answer. Ask only for product intent, preference, scope, risk tolerance, or acceptance behavior — and only when the answer would change the acceptance criteria (see the blocking test in the Planning Contract).
 
 Repository evidence establishes current behavior and technical constraints. The user's intended behavior, feature scope boundaries, and UX preferences are never answerable by repository evidence alone, even when an existing pattern exists; existing patterns are options and recommendation evidence, not decisions.
 
@@ -58,7 +60,7 @@ Use a concise title from the user's request. Use a slug without a date prefix. `
 6. When no blocking case remains, create or update `design.md` and `implement.md` for complex tasks.
 7. Run the requirement convergence gate, then the PRD convergence pass.
 8. Present the final planning summary. Then run the self-check in step 9.
-9. If no blocking case applies, run `task.py start` in the same turn and open the next reply with one line stating the goal, scope, and exclusions you understood — that line is the user's early-correction point. If the artifacts change materially later, redo the self-check and say so.
+9. If no blocking case applies, run `task.py start` in the same turn and open the next reply with one line stating the goal, scope, and exclusions you understood, plus any decision you recorded without asking — that line is the user's early-correction point. If the artifacts change materially later, redo the self-check and say so.
 
 Do not invent a project-specific product/spec hierarchy. If the repository already has product, domain, or spec docs, use them. If it does not, proceed with the evidence that exists.
 
@@ -75,7 +77,7 @@ Each question must include:
 
 Do not ask process questions such as whether to search, inspect files, or continue brainstorming. Do the evidence work directly. Ask the user only when the remaining issue is a product decision, preference, scope boundary, or risk tolerance choice.
 
-Recommendations are not default selections. Never choose a recommended product decision on the user's behalf merely because the user asked for implementation.
+Recommendations are not default selections. Never choose a **blocking** product decision on the user's behalf merely because the user asked for implementation. A decision that does not meet the blocking test is recorded as a stated decision in `prd.md` and surfaced in the first post-start line — recorded, not smuggled.
 
 Do not manufacture clarification questions when the request and repository evidence already resolve every decision. In that case, proceed directly to the final planning summary and the self-check.
 
@@ -131,7 +133,7 @@ Before the self-check, verify all of the following:
 - the user outcome and product value are explicit
 - in-scope and out-of-scope behavior are explicit
 - acceptance criteria describe observable outcomes
-- user-owned product, scope, UX, compatibility, and risk decisions are resolved
+- user-owned product, scope, UX, compatibility, and risk decisions are resolved — by repository evidence, by a decision recorded in `prd.md` that does not meet the blocking test, or by being escalated as a blocking case
 - blocking open questions are empty
 - technical unknowns are researched or explicitly deferred without changing MVP behavior
 
