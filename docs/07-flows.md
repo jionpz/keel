@@ -35,7 +35,7 @@
 | 14 | 起草 RFC | `T-010` | `[写]` `run(rfc_draft, 1)` → `S-RFC_DRAFT` |
 | 15 | RFC 定稿，含 `policy_facts` | — | `[写]` `A-RFC@1`：`risk=low, complexity=low, files=4, security=false` |
 | 16 | RFC **冻结** | `T-011` | → `S-RFC_READY`（不变量 `I7`） |
-| 17 | Policy 求值 | `[P]` `rfc_ready` | 命中 P4（`complexity==low && risk==low`）→ `auto_develop`；`default_applied=false` |
+| 17 | Policy 求值 | `[P]` `rfc_ready` | 命中 P4（`risk==low && complexity!=high`，2026-11-05 放宽）→ `auto_develop`；`default_applied=false` |
 | 18 | 建工作分支（幂等）+ 派发开发 | `T-012` | `[写]` `run(develop, 1)` → `S-DEVELOPING`；分支 `ai/task-<id>` |
 | 19 | Developer 实现 | — | `[读]` `A-RFC@1`（**冻结版，经 `getAsOf`**）、开发规范、git 状态、相关代码 |
 | 20 | 收集工作区变更 | — | `WorkspaceDiff`：4 个文件；`[写]` Event `WorkspaceDiffCollected` + `A-StageOutcome(develop, implemented)`。**测得 0 文件 0 提交 → develop 不算成功**（T-030 重试），不再是「模型说实现了就算」 |
