@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/transition-effects.md", "reason": "核对副作用可用站点与双向白名单断言是否仍然成立"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量门槛、反例验证要求与 review 清单"}

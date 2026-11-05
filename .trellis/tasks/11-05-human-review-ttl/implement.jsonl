@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/transition-effects.md", "reason": "副作用白名单与 firstRun/nextRun 可用站点，新增 T-028 与 StartTimer/CancelTimer 需遵守"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移写法、角色授权与测试隔离，timer 表 CHECK 约束变更需遵守"}
+{"file": ".trellis/spec/backend/orchestrator-loop.md", "reason": "stopReason 必填与阶段态判据，loop 新增 S-HUMAN_REVIEW 收割分支需遵守"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试分层与 mock 纪律，到期收割与反例用例需遵守"}
