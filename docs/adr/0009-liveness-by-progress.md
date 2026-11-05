@@ -1,6 +1,6 @@
 # ADR-0009 · 卡死判定按进展信号，而非总耗时
 
-**Status**: **Proposed** — 实现已落地，待全量验证后转 Accepted
+**Status**: **Accepted** — 2026-11-05 通过；实现已落地并通过全量验证
 **Date**: 2026-11-05
 **Related**: ADR-0008（墙钟语义）；`RunStalled` / `RUN_STALLED`；`T-030` / `T-031`；`11-04-run-liveness-patrol`
 
