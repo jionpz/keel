@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 13
-- **Last Active**: 2026-11-04
+- **Total Sessions**: 14
+- **Last Active**: 2026-11-05
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~624 | Active |
+| `journal-1.md` | ~647 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 14 | 2026-11-05 | 运行巡检落地：卡死判定改为进展信号 | `9fd5b87`, `4c7a26a`, `b4705e5` | `main` |
 | 13 | 2026-11-04 | 控制台口令登录与会话鉴权 | `909a7af` | `feat/console-login-auth` |
 | 12 | 2026-11-04 | 修复工作区基线与生命周期（P0+P1） | `c0ad554` | `main` |
 | 11 | 2026-11-04 | 人工闸门决策页 | `a2e4a6d`, `c1837b8` | `main` |

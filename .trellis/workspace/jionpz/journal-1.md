@@ -622,3 +622,26 @@ console 完成可读性/项目性改造：中文状态徽章、一句话现状�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 14: 运行巡检落地：卡死判定改为进展信号
+
+**Date**: 2026-11-05
+**Task**: 运行巡检落地：卡死判定改为进展信号
+**Branch**: `main`
+
+### Summary
+
+实现 run_liveness 遥测、进程内 StallSupervisor 与独立 Patrol；新增 RunStalled 事件并复用 T-030/T-031；成功/失败路径加 run 状态围栏；human 与无 CAP-STREAM 豁免；补 run-liveness spec。全量 check 782 passed、e2e 47 passed，任务已归档。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9fd5b87` | (see git log) |
+| `4c7a26a` | (see git log) |
+| `b4705e5` | (see git log) |
+
+### Status
+
+[OK] **Completed**
