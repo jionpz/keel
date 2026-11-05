@@ -16,7 +16,7 @@
 3. **编排器与落库**
    - [ ] `OrchestratorDeps` 增加 `modelProfile` / `modelAllowlist` / `modelOverride`
    - [ ] `executeClaimedRun` 解析并写入 `runSpec.model`
-   - [ ] 迁移 `1000000000006_run_requested_model.sql`
+   - [ ] 迁移 `1000000000008_run_requested_model.sql`（`0007` 已被 run_liveness 占用）
    - [ ] 认领后 `UPDATE run SET requested_model`
    - [ ] 解析失败走 `failRunAndAdvance`，不 spawn
 

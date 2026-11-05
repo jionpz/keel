@@ -81,7 +81,7 @@ const requestedModel = resolveStageModel({
 
 ### 2.3 数据库
 
-新增迁移 `1000000000006_run_requested_model.sql`：
+新增迁移 `1000000000008_run_requested_model.sql`（`0007` 已被 run_liveness 占用）：
 
 ```sql
 ALTER TABLE run ADD COLUMN requested_model text;

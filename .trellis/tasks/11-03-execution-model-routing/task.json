@@ -3,7 +3,7 @@
   "name": "execution-model-routing",
   "title": "执行面模型对接企业网关",
   "description": "对应 #70 §4：缺省模型可配、per-stage 路由集中定义、落库与 spawn 一致",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,
