@@ -60,6 +60,15 @@ Trellis 默认要求每个任务停下来问两次：建任务前一次、计划
 
 ## 自检（`trellis update` 之后、在仓库根目录跑）
 
+三条自检已由 `scripts/check-workflow-overrides.ts` 自动执行，挂在 `pnpm run check` 链上
+（`check:workflow`）。**正常情况下不需要手跑**——下面的手工版保留下来，是为了在不想跑全量
+check 时快速定位，以及在没有 pnpm 的环境里核对。
+
+自动版与手工版的两点差异，都是有意的：
+
+- 旧措辞扫描**多扫**三份 `change-workflow.md`（它们同样被 `trellis update` 覆盖）；断言也从 8 个文件变成 11 个。
+- 旧措辞按**大小写不敏感**匹配——英文句子大小写回退同样说明有人把旧版贴了回来。
+
 ```bash
 # 1) 判据锚点：workflow.md 与三份 brainstorm 各 ≥1
 grep -c "three blocking cases" .trellis/workflow.md \

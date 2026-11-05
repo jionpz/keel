@@ -26,7 +26,8 @@
     "check:generated": "sh scripts/check-generated.sh",
     "check:transitions": "tsx scripts/check-transition-table.ts",
     "check:purity": "tsx scripts/check-purity.ts",
-    "check": "pnpm run lint && pnpm run typecheck && pnpm run boundaries && pnpm run check:generated && pnpm run check:transitions && pnpm run check:purity && pnpm run test"
+    "check:workflow": "tsx scripts/check-workflow-overrides.ts",
+    "check": "pnpm run lint && pnpm run typecheck && pnpm run boundaries && pnpm run check:generated && pnpm run check:transitions && pnpm run check:purity && pnpm run check:workflow && pnpm run test"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.0.0",
