@@ -645,3 +645,26 @@ console 完成可读性/项目性改造：中文状态徽章、一句话现状�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 15: 执行面模型路由：按阶段对接企业网关
+
+**Date**: 2026-11-05
+**Task**: 执行面模型路由：按阶段对接企业网关
+**Branch**: `main`
+
+### Summary
+
+新增 model-routing：default/enterprise 阶段表、四级优先级、allowlist 启动期预检；omp RunSpec.model 与 run.requested_model 同源落库；claude 行为不变。迁移 0008 单独提交。pnpm run check 827 passed | 5 skipped；任务已归档。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `edff9e8` | (see git log) |
+| `1b4f3e6` | (see git log) |
+| `b99de02` | (see git log) |
+
+### Status
+
+[OK] **Completed**
