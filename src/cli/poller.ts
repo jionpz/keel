@@ -9,6 +9,7 @@
  */
 
 import { err, makeError, ok, type Result } from '../contracts/errors.js'
+import { preflightModelRouting } from '../execution/model-routing.js'
 import { asRole, closePool } from '../fact/db.js'
 import { GitHubProvider, type IssueList, readTokenFromEnv } from '../fact/github-provider.js'
 import {
@@ -30,8 +31,9 @@ import {
   parseCiMode,
   parseWallClock,
   readLivenessMode,
+  readModelRoutingEnv,
   resolveHarness,
-  resolveModelForHarness,
+  resolveOptionalModel,
   warnWallClockOverride,
 } from './run-task.js'
 
@@ -117,6 +119,11 @@ const HELP = `用法: keel poller [--interval <ms>] [--ci passed|failed|real] [-
   --harness omp|claude 缺省 omp,也可设 KEEL_HARNESS;非法值拒绝
   --wall-clock <秒>    显式覆盖 stage 墙钟硬上限;缺省按 stage 策略(develop 12h);只接受正整数
 
+环境变量:
+  KEEL_MODEL_PROFILE   default|enterprise(缺省 default);enterprise 按阶段使用企业网关目录
+  KEEL_MODEL_ALLOWLIST 逗号分隔的允许模型;必须覆盖 profile 下所有阶段可能 spawn 的模型,
+                      否则启动即失败(不会等每轮 ingest 写库后才在 run 上失败)
+
 label 从 repo.issue_label 读取,不提供 --label:每个仓库可以不同。
 timer-worker 负责到期收割,poller 不处理 wall-clock timer。`
 
@@ -164,6 +171,9 @@ export async function pollerMain(
   // 常驻进程启动时就校验：非法模式不能让它在每轮认领后才失败
   const mode = readLivenessMode('poller')
   if (mode === undefined) return
+  // 模型路由的拼写错误同理：常驻期间不能每轮都用缺省模型静默跑
+  const routing = readModelRoutingEnv('poller')
+  if (routing === undefined) return
 
   const ci = resolveCiFlag(flags.ci)
   if (!ci.ok) {
@@ -177,9 +187,22 @@ export async function pollerMain(
     process.exitCode = 1
     return
   }
-  const model = resolveModelForHarness(harness.value, flags.model, process.env.KEEL_MODEL)
+  const model = resolveOptionalModel(flags.model, process.env.KEEL_MODEL)
   if (!model.ok) {
     console.error(`poller: ${model.error.detail}`)
+    process.exitCode = 1
+    return
+  }
+  // allowlist 必须覆盖 profile 下所有可能 spawn 的模型：常驻进程不能等每轮
+  // runIssue 的 ingest 写完之后才在第一个 run 上失败。
+  const preflight = preflightModelRouting({
+    harnessId: harness.value,
+    profile: routing.profile,
+    allowlist: routing.allowlist,
+    ...(model.value === undefined ? {} : { override: model.value }),
+  })
+  if (!preflight.ok) {
+    console.error(`poller: ${preflight.error.detail}`)
     process.exitCode = 1
     return
   }

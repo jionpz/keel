@@ -195,6 +195,8 @@ RunSpec {
     wall_clock_s: integer
     budget_usd:   number | null
   }
+
+  model?:           string          // 本次 run 请求的模型；Harness 支持 CAP-MODEL_OVERRIDE 时生效
 }
 ```
 
@@ -205,6 +207,9 @@ RunSpec {
 - `output_contract.mode = "native"` 而无 `CAP-STRUCTURED_OUTPUT`
   → 返回 `CAPABILITY_UNSUPPORTED`；调用方应改用 `post_validate`
 - 相同 `idempotency_key` 的重复调用 → 返回已有 `RunHandle`，**不得启动第二个进程**
+- `model` 是调用方按 stage 路由出的最终值（见 `.trellis/tasks/11-03-execution-model-routing`）：
+  与 `run.requested_model` 同源；不支持 `CAP-MODEL_OVERRIDE` 的 Harness 应忽略它，
+  而不是静默换成一个不同的模型
 
 ### 3.3 `awaitResult()` `[v0.1 必须]`
 

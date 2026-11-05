@@ -123,6 +123,7 @@ Task 作用的目标仓库。
 | `harness_id` | `text` | 用了哪个 Harness |
 | `harness_tier` | `text` | 该 Harness 实际生效的能力级别 `L0` \| `L1` \| `L2` |
 | `session_ref` | `text` | Harness 侧的 session handle；仅当声明 `CAP-RESUME` 时有值 |
+| `requested_model` | `text` | 本次 run 请求的模型（与 spawn 的 `--model` 同源）；`NULL` = 旧数据 / 未指定 |
 | `idempotency_key` | `text` | 派生自 `(task_id, stage, attempt)` |
 | `started_at` / `ended_at` | `timestamptz` | |
 | `error_kind` / `error_detail` | `text` | 仅失败态有值 |

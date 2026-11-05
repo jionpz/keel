@@ -26,6 +26,12 @@ import {
   requireClaudeReady,
 } from '../execution/adapters/claude-code.js'
 import { DEFAULT_OMP_MODEL, OmpAdapter } from '../execution/adapters/omp.js'
+import {
+  type ModelProfile,
+  parseAllowlist,
+  parseProfile,
+  preflightModelRouting,
+} from '../execution/model-routing.js'
 import { HarnessSessionManager } from '../execution/session/manager.js'
 import { asRole } from '../fact/db.js'
 import { GitHubProvider, readTokenFromEnv } from '../fact/github-provider.js'
@@ -250,6 +256,33 @@ export function readLivenessMode(command: string): LivenessMode | undefined {
   }
 }
 
+export interface ModelRoutingEnv {
+  readonly profile: ModelProfile
+  readonly allowlist: readonly string[]
+}
+
+/**
+ * 启动期校验模型路由环境变量。
+ *
+ * 非法值必须在进入驱动之前失败：常驻 poller 否则会在每轮认领之后才暴露
+ * 同一个拼写错误，而运行中的每个 run 都已按缺省模型跑掉了。
+ */
+export function readModelRoutingEnv(command: string): ModelRoutingEnv | undefined {
+  const profile = parseProfile(process.env.KEEL_MODEL_PROFILE)
+  if (!profile.ok) {
+    console.error(`${command}: ${profile.error.detail}`)
+    process.exitCode = 1
+    return undefined
+  }
+  const allowlist = parseAllowlist(process.env.KEEL_MODEL_ALLOWLIST)
+  if (!allowlist.ok) {
+    console.error(`${command}: ${allowlist.error.detail}`)
+    process.exitCode = 1
+    return undefined
+  }
+  return { profile: profile.value, allowlist: allowlist.value }
+}
+
 /**
  * 显式 `--wall-clock` 会覆盖所有 stage 硬上限 —— 这是逃生阀，但必须说出来，
  * 否则使用者会以为 stage 策略还在生效。
@@ -321,8 +354,27 @@ export async function runTask(
     if (!ready.ok) return ready
   }
 
-  const model = resolveModelForHarness(harness.value, opts.model, process.env.KEEL_MODEL)
-  if (!model.ok) return model
+  // 模型路由：非法 profile / allowlist 在任何数据库动作前失败（R6）。
+  const profile = parseProfile(process.env.KEEL_MODEL_PROFILE)
+  if (!profile.ok) return profile
+  const allowlist = parseAllowlist(process.env.KEEL_MODEL_ALLOWLIST)
+  if (!allowlist.ok) return allowlist
+  // 只有显式 --model / KEEL_MODEL 才是 override。omp 的缺省由
+  // resolveStageModel 按 profile 补齐；在这里提前套缺省会让 enterprise 永远失效。
+  // adapter 也只拿显式值：omp 的 fallback 用同一个 DEFAULT_OMP_MODEL，
+  // 编排器则用 spec.model 覆盖它 —— 模型解析只有 resolveStageModel 一处。
+  const override = resolveOptionalModel(opts.model, process.env.KEEL_MODEL)
+  if (!override.ok) return override
+
+  // allowlist 必须覆盖本次 profile 下所有可能 spawn 的模型 —— 否则会在
+  // 认领之后才失败；这里在任何数据库动作前用同一套解析预检。
+  const preflight = preflightModelRouting({
+    harnessId: harness.value,
+    profile: profile.value,
+    allowlist: allowlist.value,
+    ...(override.value === undefined ? {} : { override: override.value }),
+  })
+  if (!preflight.ok) return preflight
 
   // 持久项目根 → 绑定项目 → 同步基线。失败即不创建 run。
   const loaded = await loadTaskWorkspace(taskId)
@@ -343,9 +395,12 @@ export async function runTask(
           gateway.value,
         ),
         sessions: new HarnessSessionManager(),
-        adapter: createHarnessAdapter(harness.value, model.value),
+        adapter: createHarnessAdapter(harness.value, override.value),
         workspace: { mode: 'worktree', ...binding },
         now,
+        modelProfile: profile.value,
+        modelAllowlist: allowlist.value,
+        ...(override.value === undefined ? {} : { modelOverride: override.value }),
         ...(livenessStore === undefined ? {} : { livenessStore }),
         ...(opts.wallClockS === undefined ? {} : { wallClockS: opts.wallClockS }),
       },
@@ -451,11 +506,16 @@ export async function runTaskMain(
 --harness 缺省 omp，也可设 KEEL_HARNESS；非法值拒绝（不静默回退）。
 --model 对 omp 缺省 ${DEFAULT_OMP_MODEL}，也可设 KEEL_MODEL；空白值拒绝（不静默回退）。
 claude 未指定 --model / KEEL_MODEL 时不传 --model（不把 omp 缺省塞给 claude）。
+KEEL_MODEL_PROFILE 可选 default|enterprise（缺省 default）：enterprise 按阶段使用企业网关目录；
+非法值启动即报错。KEEL_MODEL_ALLOWLIST 可选逗号分隔的允许模型；必须覆盖 profile 下所有阶段
+可能 spawn 的模型，否则启动即拒绝（不会等 run 认领后才失败）。
 --wall-clock 显式覆盖 stage 墙钟硬上限（秒）；缺省按 stage 策略（develop 12h）；只接受正整数，非法值拒绝。`)
     return
   }
   const mode = readLivenessMode('run-task')
   if (mode === undefined) return
+  // 模型路由的拼写错误同样要在进入驱动之前暴露
+  if (readModelRoutingEnv('run-task') === undefined) return
   const taskId = positionals[0] as string
   const maxSteps =
     typeof flags['max-steps'] === 'number'
@@ -475,7 +535,8 @@ claude 未指定 --model / KEEL_MODEL 时不传 --model（不把 omp 缺省塞�
     process.exitCode = 1
     return
   }
-  const model = resolveModelForHarness(harness.value, flags.model, process.env.KEEL_MODEL)
+  // 只把**显式** --model / KEEL_MODEL 传给 runTask；omp 缺省由模型路由补齐
+  const model = resolveOptionalModel(flags.model, process.env.KEEL_MODEL)
   if (!model.ok) {
     console.error(`run-task: ${model.error.detail}`)
     process.exitCode = 1

@@ -28,6 +28,8 @@ const ENV_KEYS = ['KEEL_GITHUB_TOKEN', 'GITHUB_TOKEN'] as const
 const saved = new Map<string, string | undefined>(ENV_KEYS.map((k) => [k, process.env[k]]))
 const savedModel = process.env.KEEL_MODEL
 const savedHarness = process.env.KEEL_HARNESS
+const savedModelProfile = process.env.KEEL_MODEL_PROFILE
+const savedModelAllowlist = process.env.KEEL_MODEL_ALLOWLIST
 const savedAnthropic = process.env.ANTHROPIC_API_KEY
 const savedAuthToken = process.env.ANTHROPIC_AUTH_TOKEN
 
@@ -38,6 +40,8 @@ beforeEach(async () => {
   for (const k of ENV_KEYS) delete process.env[k]
   delete process.env.KEEL_MODEL
   delete process.env.KEEL_HARNESS
+  delete process.env.KEEL_MODEL_PROFILE
+  delete process.env.KEEL_MODEL_ALLOWLIST
   delete process.env.ANTHROPIC_API_KEY
   delete process.env.ANTHROPIC_AUTH_TOKEN
 
@@ -85,6 +89,16 @@ afterAll(async () => {
     delete process.env.KEEL_HARNESS
   } else {
     process.env.KEEL_HARNESS = savedHarness
+  }
+  if (savedModelProfile === undefined) {
+    delete process.env.KEEL_MODEL_PROFILE
+  } else {
+    process.env.KEEL_MODEL_PROFILE = savedModelProfile
+  }
+  if (savedModelAllowlist === undefined) {
+    delete process.env.KEEL_MODEL_ALLOWLIST
+  } else {
+    process.env.KEEL_MODEL_ALLOWLIST = savedModelAllowlist
   }
   if (savedAnthropic === undefined) {
     delete process.env.ANTHROPIC_API_KEY
@@ -180,6 +194,43 @@ describe('run-issue 组合命令', () => {
     if (r.ok) return
     expect(r.error.kind).toBe('CAPABILITY_UNSUPPORTED')
     expect(r.error.detail).toMatch(/空白/)
+    expect(await countRows('feedback')).toBe(0)
+    expect(await countRows('task')).toBe(0)
+  })
+
+  it('非法 KEEL_MODEL_PROFILE 先于 ingest 失败(零写入)', async () => {
+    await registerRepoMain([REMOTE])
+    process.env.KEEL_MODEL_PROFILE = 'enterprize'
+
+    const r = await runIssue({
+      issueUrl: ISSUE_URL,
+      ci: 'passed',
+      github: github(),
+      now: NOW,
+    })
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('CAPABILITY_UNSUPPORTED')
+    expect(r.error.detail).toContain('KEEL_MODEL_PROFILE=enterprize')
+    expect(await countRows('feedback')).toBe(0)
+    expect(await countRows('task')).toBe(0)
+  })
+
+  it('allowlist 未覆盖 profile 模型 → 先于 ingest 失败(零写入)', async () => {
+    await registerRepoMain([REMOTE])
+    // 语法合法，但缺省 profile 会 spawn deepseek-v4-flash —— 清单里没有它。
+    process.env.KEEL_MODEL_ALLOWLIST = 'moonshotai/Kimi-K3'
+
+    const r = await runIssue({
+      issueUrl: ISSUE_URL,
+      ci: 'passed',
+      github: github(),
+      now: NOW,
+    })
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('CAPABILITY_UNSUPPORTED')
+    expect(r.error.detail).toContain('KEEL_MODEL_ALLOWLIST')
     expect(await countRows('feedback')).toBe(0)
     expect(await countRows('task')).toBe(0)
   })

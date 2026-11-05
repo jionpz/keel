@@ -19,12 +19,16 @@ import type {
   WorkspaceDiff,
 } from '../../contracts/harness-adapter.js'
 import type { CapabilityId } from '../../shared/ids.js'
+import { DEFAULT_OMP_MODEL } from '../model-routing.js'
 import { collectGitDiff, gitHeadSha } from './git-diff.js'
 import { OmpStreamParser, type ProgressEvent } from './omp-parse.js'
 import { tierOf } from './tier.js'
 
-/** 缺省模型。CLI / env 未指定时必须仍是这个值，避免五连基线漂移。 */
-export const DEFAULT_OMP_MODEL = 'deepseek-v4-flash'
+/**
+ * 缺省模型。字面量在 `model-routing.ts`（唯一事实源），这里只 re-export ——
+ * 两份定义会让「改一处忘另一处」以静默的模型漂移出现。
+ */
+export { DEFAULT_OMP_MODEL }
 
 /** 实测确认的能力集（research/omp-interface.md §7） */
 export const OMP_CAPABILITIES: readonly CapabilityId[] = [
@@ -298,9 +302,12 @@ export class OmpAdapter implements HarnessAdapter {
  * RunSpec → omp argv。
  *
  * 纯函数，可单测而无需起进程。每一项的依据见 research/omp-interface.md。
+ *
+ * 模型优先取 `spec.model`（编排器按 stage 解析出的最终值），没有才用
+ * adapter 构造时的 `fallbackModel`。两者都来自模型路由，不会各算一次。
  */
-export function buildArgv(spec: RunSpec, defaultModel: string): string[] {
-  const argv = ['-p', '--mode=json', '--model', defaultModel]
+export function buildArgv(spec: RunSpec, fallbackModel: string): string[] {
+  const argv = ['-p', '--mode=json', '--model', spec.model ?? fallbackModel]
 
   argv.push('--cwd', spec.workspace.path)
 

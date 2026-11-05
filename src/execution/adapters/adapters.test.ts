@@ -349,6 +349,19 @@ describe('buildArgv', () => {
     expect(argv[i + 1]).toBe('gpt-5.2')
     expect(argv).not.toContain(DEFAULT_OMP_MODEL)
   })
+
+  it('spec.model 覆盖 adapter fallback —— 编排器按 stage 路由出的最终值', () => {
+    const argv = buildArgv(spec({ model: 'moonshotai/Kimi-K3' }), 'fallback-model')
+    const i = argv.indexOf('--model')
+    expect(argv[i + 1]).toBe('moonshotai/Kimi-K3')
+    expect(argv).not.toContain('fallback-model')
+  })
+
+  it('没有 spec.model 时仍用 fallback（旧调用方行为不变）', () => {
+    const argv = buildArgv(spec(), 'fallback-model')
+    const i = argv.indexOf('--model')
+    expect(argv[i + 1]).toBe('fallback-model')
+  })
 })
 
 /**

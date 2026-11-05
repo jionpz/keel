@@ -138,6 +138,44 @@ describe('pollerMain · 参数与凭据前置', () => {
     expect(text).toContain('repo.issue_label')
   })
 
+  it('非法 KEEL_MODEL_PROFILE → 启动即拒绝，不进入轮询', async () => {
+    process.env.KEEL_GITHUB_TOKEN = 't'
+    const prevProfile = process.env.KEEL_MODEL_PROFILE
+    const listRepos = vi.fn()
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      process.env.KEEL_MODEL_PROFILE = 'enterprize'
+      await pollerMain([], { listRepos })
+
+      expect(process.exitCode).toBe(1)
+      expect(listRepos).not.toHaveBeenCalled()
+      expect(errSpy.mock.calls.map((c) => String(c[0])).join('\n')).toContain('KEEL_MODEL_PROFILE')
+    } finally {
+      if (prevProfile === undefined) delete process.env.KEEL_MODEL_PROFILE
+      else process.env.KEEL_MODEL_PROFILE = prevProfile
+    }
+  })
+
+  it('allowlist 未覆盖 profile 模型 → 启动即拒绝，不进入轮询', async () => {
+    process.env.KEEL_GITHUB_TOKEN = 't'
+    const prevAllowlist = process.env.KEEL_MODEL_ALLOWLIST
+    const listRepos = vi.fn()
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      process.env.KEEL_MODEL_ALLOWLIST = 'moonshotai/Kimi-K3'
+      await pollerMain([], { listRepos })
+
+      expect(process.exitCode).toBe(1)
+      expect(listRepos).not.toHaveBeenCalled()
+      expect(errSpy.mock.calls.map((c) => String(c[0])).join('\n')).toContain(
+        'KEEL_MODEL_ALLOWLIST',
+      )
+    } finally {
+      if (prevAllowlist === undefined) delete process.env.KEEL_MODEL_ALLOWLIST
+      else process.env.KEEL_MODEL_ALLOWLIST = prevAllowlist
+    }
+  })
+
   it('空白 token 视为缺凭据（否则常驻进程每轮撞 401）', async () => {
     process.env.KEEL_GITHUB_TOKEN = '   '
     const listRepos = vi.fn()

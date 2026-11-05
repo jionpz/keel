@@ -57,6 +57,14 @@ export interface RunSpec {
     readonly mode: PermissionMode
   }
   readonly limits: Limits
+  /**
+   * 本次 run 请求的模型（最终值）。
+   *
+   * omp 用它替换 adapter 构造时的缺省；claude 忽略它（模型来自构造参数，
+   * 未显式指定就不传 `--model`）。编排器把同一个值写进 `run.requested_model`,
+   * 所以落库值与实际 spawn 的 `--model` 必须同源 —— 不允许调用方各算一次。
+   */
+  readonly model?: string
 }
 
 export interface RunResult {

@@ -21,6 +21,7 @@ import type { CiGateway } from '../../contracts/ci-gateway.js'
 import { err, type KeelError, makeError, ok, type Result } from '../../contracts/errors.js'
 import type { HarnessAdapter, WorkspaceDiff } from '../../contracts/harness-adapter.js'
 import type { Usage } from '../../contracts/types.js'
+import { type ModelProfile, resolveStageModel } from '../../execution/model-routing.js'
 import type { HarnessSessionManager } from '../../execution/session/manager.js'
 import { commitArtifactOn } from '../../fact/artifact-store.js'
 import { asRole } from '../../fact/db.js'
@@ -90,6 +91,15 @@ export interface OrchestratorDeps {
   /** 测试注入：缩短沉默检查 / owner 心跳间隔 */
   readonly livenessCheckIntervalMs?: number
   readonly ownerHeartbeatMs?: number
+  /**
+   * 显式模型覆盖（`--model` / `KEEL_MODEL` 合并后的值），**不含**缺省。
+   * 缺省由 `resolveStageModel` 按 profile 补齐 —— 否则 enterprise profile 永远轮不到生效。
+   */
+  readonly modelOverride?: string
+  /** 模型 profile；缺省 `default`（与改动前行为一致） */
+  readonly modelProfile?: ModelProfile
+  /** 非空时最终模型必须命中（`KEEL_MODEL_ALLOWLIST`）；缺省不校验 */
+  readonly modelAllowlist?: readonly string[]
 }
 
 export interface StepRecord {
@@ -442,6 +452,21 @@ async function executeClaimedRun(
   if (!place.ok) return { ok: false, error: place.error, usage: ZERO_USAGE }
 
   const descriptor = deps.adapter.describe()
+
+  // ── 模型解析：认领之后、spawn 之前 ──
+  //
+  // 解析失败就不 spawn（R6）。同一个值同时进 runSpec.model 与
+  // run.requested_model —— 两处各算一次会出现「库里记 A、实际跑 B」，
+  // 而两边各自看起来都自洽（R5）。
+  const requested = resolveRequestedModel(pending.stage, descriptor.harness_id, deps)
+  if (!requested.ok) return { ok: false, error: requested.error, usage: ZERO_USAGE }
+  await asRole('keel_control', (c) =>
+    c.query('UPDATE run SET requested_model=$2 WHERE id=$1', [
+      pending.id,
+      requested.value.requestedModel,
+    ]),
+  )
+
   const mode = livenessMode()
   // 无进展信号的 harness 只保留硬上限；human 两者都关。
   const policy = policyFor({
@@ -493,6 +518,9 @@ async function executeClaimedRun(
             ? { allowed_tools: ['read', 'write'], mode: 'auto' }
             : { allowed_tools: ['read'], mode: 'auto' },
         limits: { wall_clock_s: wallClockS, budget_usd: null, max_turns: 8 },
+        // 与 run.requested_model 同源（见上方 resolveRequestedModel）；
+        // claude 不消费这个字段，它的模型来自 adapter 构造参数。
+        ...(requested.value.spawnModel === undefined ? {} : { model: requested.value.spawnModel }),
       },
       adapter: deps.adapter,
       expect,
@@ -633,6 +661,38 @@ async function executeClaimedRun(
   }
 
   return { ok: true }
+}
+
+/** 一次 run 的模型解析结果。`spawnModel` 只对 omp 有值（进入 RunSpec） */
+interface RequestedRunModel {
+  readonly spawnModel: string | undefined
+  readonly requestedModel: string | null
+}
+
+/**
+ * 解析本次 run 的模型。
+ *
+ * omp 按 stage 走 `resolveStageModel`（profile / allowlist / 显式覆盖）。
+ * 其余 harness 不改行为：claude 的模型来自构造参数（未显式指定就不传
+ * `--model`），RunSpec 不带 model；`requested_model` 只记录显式 override
+ * （可能为 NULL）—— 那正是它实际 spawn 的模型来源。
+ */
+function resolveRequestedModel(
+  stage: Stage,
+  harnessId: string,
+  deps: OrchestratorDeps,
+): Result<RequestedRunModel> {
+  if (harnessId !== 'omp') {
+    return ok({ spawnModel: undefined, requestedModel: deps.modelOverride ?? null })
+  }
+  const resolved = resolveStageModel({
+    stage,
+    override: deps.modelOverride,
+    profile: deps.modelProfile ?? 'default',
+    allowlist: deps.modelAllowlist ?? [],
+  })
+  if (!resolved.ok) return resolved
+  return ok({ spawnModel: resolved.value, requestedModel: resolved.value })
 }
 
 /**

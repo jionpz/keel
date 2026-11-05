@@ -202,6 +202,12 @@ describe('buildClaudeArgv', () => {
     expect(argv).not.toContain(DEFAULT_OMP_MODEL)
   })
 
+  it('spec.model 不被消费 —— claude 的模型只来自构造参数', () => {
+    const argv = buildClaudeArgv(spec({ model: 'moonshotai/Kimi-K3' }))
+    expect(argv).not.toContain('--model')
+    expect(argv).not.toContain('moonshotai/Kimi-K3')
+  })
+
   it('空工具列表 → --tools 空串', () => {
     const argv = buildClaudeArgv(spec())
     const i = argv.indexOf('--tools')

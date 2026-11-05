@@ -32,6 +32,8 @@ const ENV_KEYS = ['KEEL_GITHUB_TOKEN', 'GITHUB_TOKEN'] as const
 const saved = new Map<string, string | undefined>(ENV_KEYS.map((k) => [k, process.env[k]]))
 const savedModel = process.env.KEEL_MODEL
 const savedHarness = process.env.KEEL_HARNESS
+const savedModelProfile = process.env.KEEL_MODEL_PROFILE
+const savedModelAllowlist = process.env.KEEL_MODEL_ALLOWLIST
 const savedAnthropic = process.env.ANTHROPIC_API_KEY
 const savedAuthToken = process.env.ANTHROPIC_AUTH_TOKEN
 
@@ -49,6 +51,8 @@ beforeEach(() => {
   setToken(undefined)
   delete process.env.KEEL_MODEL
   delete process.env.KEEL_HARNESS
+  delete process.env.KEEL_MODEL_PROFILE
+  delete process.env.KEEL_MODEL_ALLOWLIST
   delete process.env.ANTHROPIC_API_KEY
   // 网关凭据同样是合法认证路径 —— 断言必须与「本机是否配了网关」解耦
   delete process.env.ANTHROPIC_AUTH_TOKEN
@@ -71,6 +75,16 @@ afterAll(async () => {
     delete process.env.KEEL_HARNESS
   } else {
     process.env.KEEL_HARNESS = savedHarness
+  }
+  if (savedModelProfile === undefined) {
+    delete process.env.KEEL_MODEL_PROFILE
+  } else {
+    process.env.KEEL_MODEL_PROFILE = savedModelProfile
+  }
+  if (savedModelAllowlist === undefined) {
+    delete process.env.KEEL_MODEL_ALLOWLIST
+  } else {
+    process.env.KEEL_MODEL_ALLOWLIST = savedModelAllowlist
   }
   if (savedAnthropic === undefined) {
     delete process.env.ANTHROPIC_API_KEY
@@ -144,6 +158,36 @@ describe('runTask · --ci real 缺 token 时不进 loop', () => {
     if (r.ok) return
     expect(r.error.kind).toBe('CAPABILITY_UNSUPPORTED')
     expect(r.error.detail).toMatch(/claude/)
+  })
+
+  it('非法 KEEL_MODEL_PROFILE 在 task 查询之前失败(不静默退回 default)', async () => {
+    process.env.KEEL_MODEL_PROFILE = 'enterprize'
+    const r = await runTask(randomUUID(), { ci: 'passed' })
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('CAPABILITY_UNSUPPORTED')
+    expect(r.error.detail).toContain('KEEL_MODEL_PROFILE=enterprize')
+    expect(r.error.detail).toContain('default | enterprise')
+  })
+
+  it('非法 KEEL_MODEL_ALLOWLIST（空项）在 task 查询之前失败', async () => {
+    process.env.KEEL_MODEL_ALLOWLIST = 'moonshotai/Kimi-K3,,zai-org/GLM-5.3'
+    const r = await runTask(randomUUID(), { ci: 'passed' })
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('CAPABILITY_UNSUPPORTED')
+    expect(r.error.detail).toContain('KEEL_MODEL_ALLOWLIST')
+  })
+
+  it('allowlist 未覆盖 profile 模型：task 查询 / 认领之前失败', async () => {
+    // 语法合法但缺省 profile 会 spawn deepseek-v4-flash —— 清单里没有它。
+    process.env.KEEL_MODEL_ALLOWLIST = 'moonshotai/Kimi-K3'
+    const r = await runTask(randomUUID(), { ci: 'passed' })
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('CAPABILITY_UNSUPPORTED')
+    expect(r.error.detail).toContain('deepseek-v4-flash')
+    expect(r.error.detail).toContain('KEEL_MODEL_ALLOWLIST')
   })
 
   it('harness=claude 未登录 → AUTH_FAILED 且不可重试', async () => {
@@ -360,6 +404,31 @@ describe('--wall-clock 旗标', () => {
       errSpy.mockRestore()
       if (prevMode === undefined) delete process.env.KEEL_LIVENESS_MODE
       else process.env.KEEL_LIVENESS_MODE = prevMode
+      process.exitCode = prevCode
+    }
+  })
+
+  it('非法 KEEL_MODEL_PROFILE：启动即失败，文案点名变量与可选值', async () => {
+    const prevProfile = process.env.KEEL_MODEL_PROFILE
+    const prevCode = process.exitCode
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    let entered = false
+    const stub: typeof runTask = async () => {
+      entered = true
+      return ok({ finalStatus: 'S-DONE', steps: [], stopReason: 'terminal', prUrl: null })
+    }
+    try {
+      process.env.KEEL_MODEL_PROFILE = 'enterprize'
+      await runTaskMain([randomUUID()], { runTask: stub })
+      expect(entered, '非法 profile 必须在进入编排之前失败').toBe(false)
+      expect(process.exitCode).toBe(1)
+      const text = errSpy.mock.calls.flat().join(' ')
+      expect(text).toContain('KEEL_MODEL_PROFILE=enterprize')
+      expect(text).toContain('default | enterprise')
+    } finally {
+      errSpy.mockRestore()
+      if (prevProfile === undefined) delete process.env.KEEL_MODEL_PROFILE
+      else process.env.KEEL_MODEL_PROFILE = prevProfile
       process.exitCode = prevCode
     }
   })

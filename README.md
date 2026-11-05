@@ -226,3 +226,6 @@ pending 归并、runner 无 omp),记录见任务 `prd.md`。
 运行真实验收:`KEEL_GITHUB_TOKEN="$(gh auth token)" KEEL_TEST_REMOTE_REPO=<url> pnpm run test:acceptance`
 (缺凭据时明确失败,不静默跳过)。未注入 provider 时系统如实记录 `SideEffectIntent`,不假装成功。
 换模型:`KEEL_MODEL=<id>` 或 `keel run-issue <url> --model <id>`(缺省仍 `deepseek-v4-flash`;空白拒绝)。
+按阶段路由到企业网关目录:`KEEL_MODEL_PROFILE=enterprise`(develop/qa/review → `moonshotai/Kimi-K3`,其余 → `zai-org/GLM-5.3`);
+`KEEL_MODEL_ALLOWLIST=<id,...>` 可限制允许的最终模型;启动时按 profile 全部阶段预检,清单外直接拒绝(不会先 ingest 再失败)。
+`run.requested_model` 记录每次 run 实际请求的模型,与 spawn 的 `--model` 同源。
