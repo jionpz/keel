@@ -8,6 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ok } from '../contracts/errors.js'
 import type { IssueList } from '../fact/github-provider.js'
+import type { ResidentLock } from '../fact/resident-lock.js'
 import {
   DEFAULT_INTERVAL_MS,
   type PollerSignalSource,
@@ -21,6 +22,17 @@ const REPO: RepoRow = {
   remote_url: 'https://github.com/acme/alpha.git',
   default_branch: 'main',
   issue_label: 'triage',
+}
+
+interface FakeLock {
+  readonly lock: ResidentLock
+  readonly release: ReturnType<typeof vi.fn>
+}
+
+/** 能拿到锁的假实现；需要断言释放次数时用它，其余用例只接 `.lock` */
+function fakeLock(): FakeLock {
+  const release = vi.fn(async () => undefined)
+  return { lock: { role: 'poller', release }, release }
 }
 
 interface FakeSignals {
@@ -97,7 +109,11 @@ describe('pollerMain · 参数与凭据前置', () => {
     const listRepos = vi.fn(async () => [REPO])
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
 
-    await pollerMain([], { listRepos, tokenResolver: async () => undefined })
+    await pollerMain([], {
+      listRepos,
+      tokenResolver: async () => undefined,
+      acquireLock: async () => fakeLock().lock,
+    })
 
     expect(process.exitCode).toBe(1)
     const text = errSpy.mock.calls.map((c) => String(c[0])).join('\n')
@@ -116,6 +132,7 @@ describe('pollerMain · 参数与凭据前置', () => {
     await pollerMain([], {
       listRepos: async () => [],
       tokenResolver: resolver,
+      acquireLock: async () => fakeLock().lock,
       log: (line) => logs.push(line),
       now: () => '2026-11-05T00:00:00.000Z',
       signals: signals.source,
@@ -144,6 +161,7 @@ describe('pollerMain · 参数与凭据前置', () => {
         hosts.push(host)
         return 'resolved-token'
       },
+      acquireLock: async () => fakeLock().lock,
       listIssues: async () => ok<IssueList>({ issues: [], truncated: false }),
       taskStatus: async () => undefined,
       runIssue: async (input) => {
@@ -245,7 +263,11 @@ describe('pollerMain · 参数与凭据前置', () => {
     const listRepos = vi.fn(async () => [REPO])
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
 
-    await pollerMain([], { listRepos, tokenResolver: async () => undefined })
+    await pollerMain([], {
+      listRepos,
+      tokenResolver: async () => undefined,
+      acquireLock: async () => fakeLock().lock,
+    })
 
     expect(process.exitCode).toBe(1)
     expect(errSpy.mock.calls.map((c) => String(c[0])).join('\n')).toMatch(/KEEL_GITHUB_TOKEN/)
@@ -284,6 +306,7 @@ describe('pollerMain · 依赖接线', () => {
         runCalls.push(input)
         return ok<PollIssueOutcome>({ created: true })
       },
+      acquireLock: async () => fakeLock().lock,
       log: (line) => logs.push(line),
       now: () => '2026-11-04T00:00:00.000Z',
       signals: signals.source,
@@ -325,6 +348,7 @@ describe('pollerMain · 依赖接线', () => {
       listIssues: async () => ok<IssueList>({ issues: [], truncated: false }),
       taskStatus: async () => undefined,
       runIssue: async () => ok<PollIssueOutcome>({ created: false }),
+      acquireLock: async () => fakeLock().lock,
       log: (line) => logs.push(line),
       now: () => '2026-11-04T00:00:00.000Z',
       signals: signals.source,
@@ -347,10 +371,80 @@ describe('pollerMain · 依赖接线', () => {
         listRepos: async () => {
           throw new Error('数据库挂了')
         },
+        acquireLock: async () => fakeLock().lock,
         closeDb,
       }),
     ).rejects.toThrow('数据库挂了')
 
     expect(closeDb).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('pollerMain · 单实例锁', () => {
+  it('已有实例（锁为 null）→ 退出码 1，不读 repo、不解析 token', async () => {
+    const listRepos = vi.fn(async () => [REPO])
+    const tokenResolver = vi.fn(async () => 't')
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    await pollerMain([], {
+      acquireLock: async () => null,
+      listRepos,
+      tokenResolver,
+    })
+
+    expect(process.exitCode).toBe(1)
+    expect(listRepos).not.toHaveBeenCalled()
+    expect(tokenResolver).not.toHaveBeenCalled()
+    expect(errSpy.mock.calls.map((c) => String(c[0])).join('\n')).toContain('已有实例在运行')
+  })
+
+  it('获取锁抛错 → 退出码 1，连接串脱敏后才输出', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    await pollerMain([], {
+      acquireLock: async () => {
+        throw new Error('connect ECONNREFUSED postgres://u:p@h:5432/db down')
+      },
+    })
+
+    expect(process.exitCode).toBe(1)
+    const text = errSpy.mock.calls.map((c) => String(c[0])).join('\n')
+    expect(text).toContain('postgres://***')
+    expect(text).not.toContain('u:p')
+  })
+
+  it('循环正常结束 → release 恰好一次', async () => {
+    const signals = fakeSignals()
+    const { lock, release } = fakeLock()
+
+    await pollerMain(['--interval', '1'], {
+      acquireLock: async () => lock,
+      listRepos: async () => [],
+      log: () => undefined,
+      signals: signals.source,
+      sleep: async () => {
+        signals.fire('SIGTERM')
+      },
+      closeDb: async () => undefined,
+    })
+
+    expect(process.exitCode).toBeUndefined()
+    expect(release).toHaveBeenCalledTimes(1)
+  })
+
+  it('listRepos 抛错 → 异常照常抛出，release 仍恰好一次', async () => {
+    const { lock, release } = fakeLock()
+
+    await expect(
+      pollerMain([], {
+        acquireLock: async () => lock,
+        listRepos: async () => {
+          throw new Error('数据库挂了')
+        },
+        closeDb: async () => undefined,
+      }),
+    ).rejects.toThrow('数据库挂了')
+
+    expect(release).toHaveBeenCalledTimes(1)
   })
 })

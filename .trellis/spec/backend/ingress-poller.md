@@ -160,7 +160,9 @@ token.request()                        // 只置位一次并清空订阅者
 - **硬取消未实现**：正在跑的 `run` 没有外部取消接口；SIGTERM 只保证不再认领新工作。
   这是 PRD 里明确记录的 AC 偏离，硬取消留给后续任务。
 - **与 timer-worker 分工**：poller 管扫描与驱动，timer 管到期收割；poller 不处理 wall-clock timer。
-- **单进程**：不引入队列 / 并发框架；多实例部署不在范围（未来用 advisory lock）。
+- **单进程**：不引入队列 / 并发框架；多实例调度 / 分池不在范围。
+  同一数据库上的 poller 单实例由 CLI 启动期的 PostgreSQL advisory lock 强制
+  （见 `cli-lifecycle.md` §常驻进程单实例），不会出现两个 poller 扫同一仓库。
 - **连接池与信号**：poller 自己 `finally { closeDb() }` 只是兜底；CLI 统一在
   `runCli` 的 `finally` 关池（所有碰库子命令共用）。`timer-worker` 的 SIGTERM
   退出同样已收口 —— 两者规则见 `cli-lifecycle.md`。

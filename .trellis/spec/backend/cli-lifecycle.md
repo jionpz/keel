@@ -136,8 +136,135 @@ while (!stopRequested) {
 
 ---
 
+## Scenario: 常驻进程单实例（PostgreSQL advisory lock）
+
+> 来源：`11-05-poller-single-instance`（issue #73 第 2 项）。
+> 代码：`src/fact/resident-lock.ts`、`src/cli/poller.ts`、`src/cli/timer-worker.ts`。
+
+### 1. Scope / Trigger
+
+- 触发：新增任何常驻角色（当前 `poller` / `timer-worker`），或调整其启动 / 退出顺序。
+- 影响面：同一数据库上的重复扫描、重复收割、`RunStalled` 重复投递。
+- 风险：用 pidfile / 机器级锁会在 `kill -9`、掉电、容器重建后留下僵尸锁；
+  用连接池持锁会随事务归还而失效。
+
+### 2. Signatures
+
+```ts
+// src/fact/resident-lock.ts
+export type ResidentRole = 'poller' | 'timer-worker'
+export const RESIDENT_LOCK_CLASS_ID = 0x4b45454c            // ASCII "KEEL"
+export const RESIDENT_LOCK_OBJ_IDS = { poller: 1, 'timer-worker': 2 } as const
+
+export interface ResidentLock {
+  readonly role: ResidentRole
+  release(): Promise<void>                                  // 幂等
+}
+
+export async function acquireResidentLock(role: ResidentRole): Promise<ResidentLock | null>
+export function lockErrorMessage(error: unknown): string     // 连接串脱敏
+
+// CLI 注入点（测试不碰真实锁）
+interface PollerMainDeps { acquireLock?: () => Promise<ResidentLock | null> }
+interface TimerWorkerMainDeps {
+  acquireLock?: () => Promise<ResidentLock | null>
+  drain?: (deps: WorkerDeps) => Promise<ReapStats>
+  run?: (deps: WorkerDeps, opts: { intervalMs: number }) => Promise<void>
+}
+```
+
+### 3. Contracts
+
+- **专用连接**：`new Client({ connectionString: connectionString() })`，**不经过连接池**。
+  池化连接会随事务归还 / 被回收，锁的存活期就不再受进程控制。
+- **加锁**：`SELECT pg_try_advisory_lock($1::int, $2::int)`。
+  `classid` 固定 `0x4b45454c`（int4 范围内），`objid` 按角色区分；
+  两个角色互不阻塞，同角色跨进程互斥。
+- **返回语义**：拿到 → `ResidentLock`；同库同角色已持有 → `null`（明确启动失败，不等待）；
+  连接 / 查询失败 → 抛错（不能把基础设施故障说成「已有实例」）。
+- **释放**：`pg_advisory_unlock` + `client.end()`，错误吞掉；`release()` 用局部标志保证幂等。
+  `client.end()` 本身也会释放会话锁，显式 unlock 只是让释放早于连接拆除。
+- **崩溃**：会话锁绑定后端连接，进程消失 → 连接断开 → 服务器自动释放，无需手工清理。
+- **作用域**：同一个数据库；同库不同机器同样互斥。跨库全局锁不在范围。
+- **获取时序**：
+  - `pollerMain`：全部参数 / 模式 / 模型 / allowlist / wall-clock 校验之后，
+    **任何 repo 读取之前**（`missingTokenHosts` 之前）。
+  - `timerWorkerMain`：help / liveness / TTL 校验之后，创建 `LivenessStore` 之前。
+  - `--help` 与非法参数不取锁。
+- **单次 timer-worker 也持锁**：它与常驻 worker 属于同一角色，并发会重复收割。
+- **释放顺序**：
+  - poller：`finally { await lock.release(); await closeDb() }`；release 抛错不跳过 closeDb。
+  - timer-worker：`finally { try { await store.close() } finally { await lock.release() } }`；
+    store 关闭失败不跳过 release。
+- **取锁后的全部代码必须在 `try/finally` 内**：专用锁连接会占着事件循环，
+  取锁与 `try` 之间再抛错会让进程既不退出也永远占着锁。
+
+### 4. Validation & Error Matrix
+
+| 条件 | 结果 |
+|---|---|
+| 同库已有同角色实例 | `acquireResidentLock` 返回 `null`；CLI 打印「已有实例在运行」，退出码 1 |
+| poller 与 timer-worker 同时启动 | 两者都拿到锁（objid 不同） |
+| 锁连接建立 / 查询失败 | 抛错；CLI 打印脱敏后的「无法获取单实例锁」，退出码 1 |
+| 正常退出 / SIGTERM | 循环结束后 `finally` 释放锁，随后关池 |
+| `kill -9` / 掉电 | 连接断开，PostgreSQL 自动释放；重启无需手工清理 |
+| `release()` 抛错 | 吞掉，不改变退出码；仍尝试 `client.end()` |
+| 锁已释放后再次 `release()` | 幂等 no-op |
+| 错误消息含 `postgres://` / `postgresql://` | 替换为 `postgres://***` 后再输出 |
+
+### 5. Good / Base / Bad Cases
+
+- **Good**：终端 A 跑 `keel poller`；终端 B 同命令 → 退出码 1，文案指向已有实例；
+  `kill -9` A 后 B 立即可启动。
+- **Base**：`keel poller` 与 `keel timer-worker` 同时运行，互不拒绝。
+- **Bad**：用 `<KEEL_HOME>/poller.pid` 判重 —— 崩溃后文件还在，必须人工删除；
+  或从连接池借一条连接加锁后 `release()` 回池 —— 下一位使用者可能继承 / 丢失锁语义。
+
+### 6. Tests Required
+
+`src/fact/resident-lock.test.ts`（真实 PostgreSQL）：
+
+- 同角色第二次获取返回 `null`；`poller` 与 `timer-worker` 可同时持有。
+- `release()` 后可再次获取；重复 `release()` 不抛。
+- **崩溃等价**：裸 `Client` 持锁期间先断言同角色第二次获取为 `null`，不 unlock 直接 `end()`，
+  随后获取成功 —— 证明「自动释放」不是「本来就没锁」。
+- `lockErrorMessage` 覆盖 `postgres://` / `postgresql://` 与普通消息。
+
+CLI（全部注入 `acquireLock`，不依赖真实锁状态）：
+
+- `null` → 退出码 1、`listRepos` 未被调用（poller）/ `drain` 未被调用（timer-worker）。
+- 抛错 → 退出码 1、输出脱敏、不泄露 userinfo。
+- 正常结束与抛错路径 `release()` 都恰好一次。
+- `--help` 不取锁；单次 timer-worker 也取锁并在结束后释放。
+
+### 7. Wrong vs Correct
+
+**Wrong**：从连接池借连接，事务结束就归还
+
+```ts
+const client = await getPool().connect()
+await client.query('SELECT pg_try_advisory_lock($1, $2)', [CLASS_ID, OBJ_ID])
+client.release()   // 连接回到池里，锁的归属不再受进程控制
+```
+
+**Correct**：专用连接，持到进程退出
+
+```ts
+const client = new Client({ connectionString: connectionString() })
+await client.connect()
+const { rows } = await client.query('SELECT pg_try_advisory_lock($1::int, $2::int) AS locked',
+  [RESIDENT_LOCK_CLASS_ID, RESIDENT_LOCK_OBJ_IDS[role]])
+if (!rows[0]?.locked) { await client.end(); return null }
+// ...进程生命周期内一直持有；退出时 unlock + end
+```
+
+---
+
 ## 已知边界
 
 - `console` 是 Web 服务，本身不返回；关池发生在它停止之后，属于同一规则。
 - `runCli` 不管 `process.exit`：退出码由各子命令 / 入口设置，关池只负责句柄。
 - 常驻循环不做硬取消（`runForever` 只保证不再开新轮），理由见 `ingress-poller.md`。
+- 单实例锁不处理网络分区导致的「连接静默断开」：进程不会感知锁已丢失；
+  需要更强保证时应在上层加租约心跳，而不是在锁模块里猜。
+- `lockErrorMessage` 只脱敏 URL 形式连接串；libpq keyword/value DSN 不在当前连接方式内。

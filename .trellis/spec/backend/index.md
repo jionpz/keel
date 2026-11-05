@@ -29,7 +29,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Git Workspace](./git-workspace.md) | Agent 提交用 `-c` 钉死身份与签名、夹具关 gpgsign、`GIT_CONFIG_GLOBAL` 的使用边界、https 传输认证注入（token 来源 `resolveGitHubToken`、按 host 缓存与脱敏） | ✅ 已填（`08-26-v01-closeout`；`11-03` 补传输认证；`11-05-github-token-source` 补 gh 回退） |
 | [GitHub Provider](./github-provider.md) | host 解析单一事实源、`KEEL_GITHUB_API_ROOT` 优先级、空白配置 fail-closed、GHES 测试点、token 三来源与启动期 fail fast | ✅ 已填（`11-03-ghes-host-support`；`11-05-github-token-source` 补 token 来源） |
 | [Ingress Poller](./ingress-poller.md) | 每仓库 `issue_label`、分页与 `truncated`、轮内去重、`StopToken` 订阅制、日志脱敏 | ✅ 已填（`08-29-ingress-poller`） |
-| [CLI Lifecycle](./cli-lifecycle.md) | 分发层统一关池（`finally`）、常驻循环 SIGTERM 必跳出、监听不叠加、关池失败不改退出码 | ✅ 已填（11-04 生命周期收口） |
+| [CLI Lifecycle](./cli-lifecycle.md) | 分发层统一关池（`finally`）、常驻循环 SIGTERM 必跳出、监听不叠加、关池失败不改退出码、常驻角色单实例 advisory lock | ✅ 已填（11-04 生命周期收口；`11-05-poller-single-instance` 补单实例锁） |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | ⏳ 暂缓 —— 尚无日志代码 |
 
 > **⏳ 暂缓的 logging 是刻意留空的**,不是遗漏。

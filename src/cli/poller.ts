@@ -13,6 +13,7 @@ import { preflightModelRouting } from '../execution/model-routing.js'
 import { asRole, closePool } from '../fact/db.js'
 import { resolveGitHubToken, type TokenResolver } from '../fact/github-auth.js'
 import { GitHubProvider, type IssueList, parseRemoteUrl } from '../fact/github-provider.js'
+import { acquireResidentLock, lockErrorMessage, type ResidentLock } from '../fact/resident-lock.js'
 import {
   DEFAULT_INTERVAL_MS,
   type PollerDeps,
@@ -109,6 +110,11 @@ export interface PollerMainDeps {
    * 启动期预检与 provider 都用它 —— 测试绝不依赖开发机的 gh 登录态。
    */
   readonly tokenResolver?: TokenResolver
+  /**
+   * 单实例锁；测试注入后不碰真实数据库锁。
+   * 返回 `null` 表示同库已有 poller 在运行（明确的启动失败，不等待）。
+   */
+  readonly acquireLock?: () => Promise<ResidentLock | null>
 }
 
 const HELP = `用法: keel poller [--interval <ms>] [--ci passed|failed|real] [--model <id>]
@@ -266,35 +272,57 @@ export async function pollerMain(
   }
   if (wallClock.value !== undefined) warnWallClockOverride('poller', wallClock.value, mode)
 
-  // 列出 issue 必须有凭据（provider 在无 token 时直接 AUTH_FAILED）。
-  // 预检放在第一轮扫描之前：常驻进程不能「每轮每个仓库一条 AUTH_FAILED」地空转。
-  // host 从已注册仓库的 remote 推导 —— GHES 部署要按自己的 host 取登录态。
-  const listRepos = deps.listRepos ?? loadGithubRepos
-  const provider = new GitHubProvider(
-    deps.tokenResolver === undefined ? {} : { tokenResolver: deps.tokenResolver },
-  )
-  const pollerDeps: PollerDeps = {
-    listRepos,
-    listIssues:
-      deps.listIssues ?? ((repo) => provider.listOpenIssues(repo.remote_url, repo.issue_label)),
-    taskStatus: deps.taskStatus ?? findTaskStatusByExternalRef,
-    runIssue:
-      deps.runIssue ??
-      ((input) =>
-        runIssue({
-          issueUrl: input.issueUrl,
-          label: input.label,
-          repoId: input.repoId,
-          ci: ci.value,
-          harness: harness.value,
-          ...(model.value === undefined ? {} : { model: model.value }),
-          ...(wallClock.value === undefined ? {} : { wallClockS: wallClock.value }),
-        })),
-    now: deps.now ?? (() => new Date().toISOString()),
-    log: deps.log ?? ((line) => console.log(JSON.stringify(line))),
+  // 单实例约束先于任何数据库读取：第二个 poller 不应该先把 repo 列一遍、
+  // 解析一次 token 再退出。拿不到锁是明确的启动失败，不是等待或静默跳过。
+  // 锁是会话级的：正常退出显式释放，kill -9 / 掉电由 PostgreSQL 自动释放。
+  let lock: ResidentLock | null
+  try {
+    lock = await (deps.acquireLock ?? (() => acquireResidentLock('poller')))()
+  } catch (e) {
+    console.error(`poller: 无法获取单实例锁：${lockErrorMessage(e)}`)
+    process.exitCode = 1
+    return
+  }
+  if (lock === null) {
+    console.error(
+      'poller: 已有实例在运行（同一数据库），拒绝启动第二个 poller。' +
+        'poller 与 timer-worker 各自独立；崩溃后锁会自动释放，无需手工清理。',
+    )
+    process.exitCode = 1
+    return
   }
 
+  // 取到锁之后的一切都必须在 try/finally 之内：专用锁连接会一直占着事件循环，
+  // 一旦这里抛错而没走到 release，进程既不退出也永远占着锁。
   try {
+    // 列出 issue 必须有凭据（provider 在无 token 时直接 AUTH_FAILED）。
+    // 预检放在第一轮扫描之前：常驻进程不能「每轮每个仓库一条 AUTH_FAILED」地空转。
+    // host 从已注册仓库的 remote 推导 —— GHES 部署要按自己的 host 取登录态。
+    const listRepos = deps.listRepos ?? loadGithubRepos
+    const provider = new GitHubProvider(
+      deps.tokenResolver === undefined ? {} : { tokenResolver: deps.tokenResolver },
+    )
+    const pollerDeps: PollerDeps = {
+      listRepos,
+      listIssues:
+        deps.listIssues ?? ((repo) => provider.listOpenIssues(repo.remote_url, repo.issue_label)),
+      taskStatus: deps.taskStatus ?? findTaskStatusByExternalRef,
+      runIssue:
+        deps.runIssue ??
+        ((input) =>
+          runIssue({
+            issueUrl: input.issueUrl,
+            label: input.label,
+            repoId: input.repoId,
+            ci: ci.value,
+            harness: harness.value,
+            ...(model.value === undefined ? {} : { model: model.value }),
+            ...(wallClock.value === undefined ? {} : { wallClockS: wallClock.value }),
+          })),
+      now: deps.now ?? (() => new Date().toISOString()),
+      log: deps.log ?? ((line) => console.log(JSON.stringify(line))),
+    }
+
     // 启动期预检先于第一轮扫描；repos 为空时不需要任何 token。
     // 预检读一次仓库列表，循环内仍走 live `listRepos` —— 新注册的仓库照常生效。
     const missing = await missingTokenHosts(listRepos, deps.tokenResolver)
@@ -310,6 +338,9 @@ export async function pollerMain(
       ...(deps.sleep === undefined ? {} : { sleep: deps.sleep }),
     })
   } finally {
+    // 释放顺序：先放锁，再关连接池。锁失败不改变退出结果；
+    // 用 catch 兜底也保证「锁释放抛错」不会跳过 closeDb。
+    await lock.release().catch(() => undefined)
     // 常驻循环结束后**必须**收掉连接池：`pg` 的 idle client 默认保持 socket，
     // 不关池的话 main() 返回后事件循环仍有句柄，进程不会退出 ——
     // 表现就是「SIGTERM 之后不再干活了，但进程还挂着」。

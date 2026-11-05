@@ -1,1 +1,6 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/cli-lifecycle.md", "reason": "常驻进程的关池与 SIGTERM 退出顺序；新增锁释放必须嵌进同一 finally 收口"}
+{"file": ".trellis/spec/backend/ingress-poller.md", "reason": "poller 接线、凭据预检时序与已知边界（原文已注明多实例未来用 advisory lock）"}
+{"file": ".trellis/spec/backend/run-liveness.md", "reason": "timer-worker 负责的到期收割与 patrol；单实例锁要覆盖两条常驻角色"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "数据库连接 / 角色约定；锁连接为何不能走连接池"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "错误出口与 ErrorKind 纪律；锁失败不新增 kind、CLI 文案脱敏"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试分层、注入纪律与防假绿；CLI 测试不得依赖真实锁状态"}

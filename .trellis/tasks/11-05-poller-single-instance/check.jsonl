@@ -1,1 +1,5 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/cli-lifecycle.md", "reason": "核对锁获取 / 释放是否与既有生命周期收口一致，失败时不改变退出码语义"}
+{"file": ".trellis/spec/backend/ingress-poller.md", "reason": "核对 poller 参数前置顺序：锁必须在任何 repo 读取之前，且 help / 非法参数不碰锁"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "核对专用 pg.Client、连接串来源与不经过连接池的约束"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "核对无新 ErrorKind、文案不泄露连接串凭据"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "核对测试是否注入充分、是否存在依赖真实锁状态的假绿"}

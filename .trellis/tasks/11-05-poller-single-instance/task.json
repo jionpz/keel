@@ -3,7 +3,7 @@
   "name": "poller-single-instance",
   "title": "常驻进程单实例约束",
   "description": "poller / timer-worker 启动时获取单实例锁，崩溃后不永久占锁",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,
