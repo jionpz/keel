@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 18
+- **Total Sessions**: 19
 - **Last Active**: 2026-11-05
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~735 | Active |
+| `journal-1.md` | ~771 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 19 | 2026-11-05 | 失败 run 落 harness 身份（#73-1） | `edee68d` | `main` |
 | 18 | 2026-11-05 | 收窄 Trellis 工作流的人工确认点 | `3a922c5` | `main` |
 | 17 | 2026-11-05 | S-HUMAN_REVIEW 超时自动收尾 | `37c8b0c` | `main` |
 | 16 | 2026-11-05 | 放宽 auto_develop 放行带 | `7524dbd`, `797129c`, `2e084de` | `main` |

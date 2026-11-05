@@ -733,3 +733,39 @@ P4 条件改为 risk=low && complexity!=high，中等复杂度低风险不再默
 ### Status
 
 [OK] **Completed**
+
+
+## Session 19: 失败 run 落 harness 身份（#73-1）
+
+**Date**: 2026-11-05
+**Task**: 失败 run 落 harness 身份（#73-1）
+**Branch**: `main`
+
+### Summary
+
+失败/超时/撤回结算与 harness_id 同事务；身份改为 claim 时即写，覆盖 timer/patrol 外部收割路径
+
+### Main Changes
+
+- claimRunForExecution 在同一条 UPDATE 写 harness_id/harness_tier（拒绝路径不写）
+- loop 在 claim 前 describe 一次并传入执行主体；失败结算保留 RUNNING 围栏并兜底写身份
+- 新增 limits/reap 用例，patrol 与 run-failure 补外部收割身份断言；spec run-liveness 记录契约
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `edee68d` | (see git log) |
+
+### Testing
+
+- [OK] pnpm run check：61 文件，874 passed / 5 skipped
+- [OK] 重点用例：limits 9、run-failure 8、patrol 10、reap 1
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 父任务剩余：github-token-source、poller-single-instance（需 design.md）
