@@ -6,7 +6,13 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { authEnvFor, gitAuthSecrets, readTokenFromEnv, redactSecrets } from './github-auth.js'
+import {
+  authEnvFor,
+  gitAuthSecrets,
+  readTokenFromEnv,
+  redactSecrets,
+  resolveGitHubToken,
+} from './github-auth.js'
 
 const TOKEN = 'ghp_transport_auth_test'
 const B64 = Buffer.from(`oauth2:${TOKEN}`).toString('base64')
@@ -137,5 +143,126 @@ describe('readTokenFromEnv', () => {
       if (savedGithub === undefined) delete process.env.GITHUB_TOKEN
       else process.env.GITHUB_TOKEN = savedGithub
     }
+  })
+})
+
+// 所有用例都注入 env / runGh —— 绝不触发开发机的真实 `gh`，也不依赖它的登录态。
+describe('resolveGitHubToken · 来源优先级', () => {
+  const GH_TOKEN = 'ghp_from_gh_login'
+
+  it('非空 KEEL_GITHUB_TOKEN > GITHUB_TOKEN，且不调用 gh', async () => {
+    const calls: string[] = []
+    const r = await resolveGitHubToken('github.example.com', {
+      env: { KEEL_GITHUB_TOKEN: 'keel-token', GITHUB_TOKEN: 'github-token' },
+      runGh: async (host) => {
+        calls.push(host)
+        return GH_TOKEN
+      },
+    })
+    expect(r).toBe('keel-token')
+    expect(calls).toEqual([])
+  })
+
+  it('空字符串的 KEEL_GITHUB_TOKEN 不遮蔽 GITHUB_TOKEN，也不提前触发 gh', async () => {
+    const calls: string[] = []
+    const r = await resolveGitHubToken('github.com', {
+      env: { KEEL_GITHUB_TOKEN: '', GITHUB_TOKEN: 'github-token' },
+      runGh: async (host) => {
+        calls.push(host)
+        return GH_TOKEN
+      },
+    })
+    expect(r).toBe('github-token')
+    expect(calls).toEqual([])
+  })
+
+  it('纯空白的 KEEL_GITHUB_TOKEN 同样回落到 GITHUB_TOKEN，不调用 gh', async () => {
+    const calls: string[] = []
+    const r = await resolveGitHubToken('github.com', {
+      env: { KEEL_GITHUB_TOKEN: '   ', GITHUB_TOKEN: 'github-token' },
+      runGh: async (host) => {
+        calls.push(host)
+        return GH_TOKEN
+      },
+    })
+    expect(r).toBe('github-token')
+    expect(calls).toEqual([])
+  })
+
+  it('env token 前后空白被裁剪（带空白的值不能进 header）', async () => {
+    const r = await resolveGitHubToken('github.com', {
+      env: { KEEL_GITHUB_TOKEN: '  keel-token\n' },
+      runGh: async () => GH_TOKEN,
+    })
+    expect(r).toBe('keel-token')
+  })
+
+  it('env 全空 → 调 gh，并把 host 原样透传', async () => {
+    const hosts: string[] = []
+    const r = await resolveGitHubToken('github.example.com', {
+      env: {},
+      runGh: async (host) => {
+        hosts.push(host)
+        return GH_TOKEN
+      },
+    })
+    expect(r).toBe(GH_TOKEN)
+    expect(hosts).toEqual(['github.example.com'])
+  })
+
+  it('省略 host → gh 收到 github.com', async () => {
+    const hosts: string[] = []
+    const r = await resolveGitHubToken(undefined, {
+      env: {},
+      runGh: async (host) => {
+        hosts.push(host)
+        return GH_TOKEN
+      },
+    })
+    expect(r).toBe(GH_TOKEN)
+    expect(hosts).toEqual(['github.com'])
+  })
+
+  it('env 全空白 → 仍调用 gh（空白值不遮蔽登录态）；gh 未登录 → undefined', async () => {
+    const calls: string[] = []
+    const r = await resolveGitHubToken('github.com', {
+      env: { KEEL_GITHUB_TOKEN: '', GITHUB_TOKEN: '  ' },
+      runGh: async (host) => {
+        calls.push(host)
+        return undefined
+      },
+    })
+    expect(r).toBeUndefined()
+    expect(calls).toEqual(['github.com'])
+  })
+
+  it('gh 输出空白 → undefined（空白 token 不能进 header）', async () => {
+    const r = await resolveGitHubToken('github.com', {
+      env: {},
+      runGh: async () => '  \n',
+    })
+    expect(r).toBeUndefined()
+  })
+
+  it('gh 不存在（ENOENT）→ undefined，不抛', async () => {
+    const r = await resolveGitHubToken('github.com', {
+      env: {},
+      runGh: async () => {
+        const e = new Error('spawn gh ENOENT') as Error & { code?: string }
+        e.code = 'ENOENT'
+        throw e
+      },
+    })
+    expect(r).toBeUndefined()
+  })
+
+  it('gh 抛出的错误内容（可能含凭据）不外带', async () => {
+    const r = await resolveGitHubToken('github.com', {
+      env: {},
+      runGh: async () => {
+        throw new Error(`auth failed: token=${GH_TOKEN}`)
+      },
+    })
+    expect(r).toBeUndefined()
   })
 })

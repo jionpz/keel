@@ -26,8 +26,8 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Orchestrator Loop](./orchestrator-loop.md) | 停止原因必填（`stopReason`）、阶段态无 run 的证据式判据、单进程前提、只报告不修复 | ✅ 已填（`10-26-orchestrator-stop-reasons`） |
 | [Policy Ruleset](./policy-ruleset.md) | `rfc_ready` 放行带（P4 = `risk=low && complexity!=high`）、默认 deny 与严格性偏序不许动、版本号纪律、`default_applied` 覆盖率信号 | ✅ 已填（`11-05-policy-auto-band`） |
 | [Run Liveness](./run-liveness.md) | 卡死按无进展判定、`run_liveness` 只授 `keel_control`、supervisor / patrol 分工、成功与失败路径围栏、认领即写 `harness_id`、`KEEL_LIVENESS_MODE` 降级 | ✅ 已填（`11-04-run-liveness-patrol`；`11-05-fail-run-harness-id` 补认领时写身份） |
-| [Git Workspace](./git-workspace.md) | Agent 提交用 `-c` 钉死身份与签名、夹具关 gpgsign、`GIT_CONFIG_GLOBAL` 的使用边界、https 传输认证注入 | ✅ 已填（`08-26-v01-closeout`；11-03 补传输认证） |
-| [GitHub Provider](./github-provider.md) | host 解析单一事实源、`KEEL_GITHUB_API_ROOT` 优先级、空白配置 fail-closed、GHES 测试点 | ✅ 已填（`11-03-ghes-host-support`） |
+| [Git Workspace](./git-workspace.md) | Agent 提交用 `-c` 钉死身份与签名、夹具关 gpgsign、`GIT_CONFIG_GLOBAL` 的使用边界、https 传输认证注入（token 来源 `resolveGitHubToken`、按 host 缓存与脱敏） | ✅ 已填（`08-26-v01-closeout`；`11-03` 补传输认证；`11-05-github-token-source` 补 gh 回退） |
+| [GitHub Provider](./github-provider.md) | host 解析单一事实源、`KEEL_GITHUB_API_ROOT` 优先级、空白配置 fail-closed、GHES 测试点、token 三来源与启动期 fail fast | ✅ 已填（`11-03-ghes-host-support`；`11-05-github-token-source` 补 token 来源） |
 | [Ingress Poller](./ingress-poller.md) | 每仓库 `issue_label`、分页与 `truncated`、轮内去重、`StopToken` 订阅制、日志脱敏 | ✅ 已填（`08-29-ingress-poller`） |
 | [CLI Lifecycle](./cli-lifecycle.md) | 分发层统一关池（`finally`）、常驻循环 SIGTERM 必跳出、监听不叠加、关池失败不改退出码 | ✅ 已填（11-04 生命周期收口） |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | ⏳ 暂缓 —— 尚无日志代码 |

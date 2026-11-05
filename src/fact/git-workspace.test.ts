@@ -730,7 +730,12 @@ describe('git 传输认证 · https 注入', () => {
       if (args.includes('rev-parse')) return { stdout: `${sha}\n`, stderr: '' }
       throw new Error(`unexpected git call: ${args.join(' ')}`)
     }
-    const g = new GitWorkspace({ root, exec: fake })
+    const g = new GitWorkspace({
+      root,
+      exec: fake,
+      // 显式注入「无 token」：缺省 resolver 会尝试本机 gh 登录态，测试不得依赖它
+      tokenResolver: async () => undefined,
+    })
 
     await withNoToken(async () => {
       const r = await g.prepareProject(managed, 'https://github.com/acme/widget.git', 'main')
@@ -741,6 +746,128 @@ describe('git 传输认证 · https 注入', () => {
     expect(fetch).toBeDefined()
     // 关键：不是「env 里没有 header」，而是**根本不传 env** —— 与改动前一字不差
     expect(fetch?.env).toBeUndefined()
+  })
+
+  it('无 env、token 来自 resolver（gh 登录态）时仍注入，且进入 secrets 脱敏集合', async () => {
+    const ghToken = 'ghp_from_gh_login'
+    const ghB64 = Buffer.from(`oauth2:${ghToken}`).toString('base64')
+    const calls: ExecCall[] = []
+    const fake: GitExec = async (_file, args, opts) => {
+      calls.push({ args: [...args], env: opts?.env })
+      throw new Error(
+        `fatal: could not read Username for 'https://github.com': ${ghToken} (${ghB64})`,
+      )
+    }
+    const hosts: string[] = []
+    const g = new GitWorkspace({
+      root,
+      exec: fake,
+      tokenResolver: async (host) => {
+        hosts.push(host)
+        return ghToken
+      },
+    })
+
+    await withNoToken(async () => {
+      const r = await g.ensureBareRepo(repoId, 'https://github.com/acme/widget.git')
+      expect(r.ok).toBe(false)
+      if (r.ok) return
+      // gh 来源的 token 不在 process.env 里 —— 不缓存进 secrets() 就脱敏不到
+      expect(r.error.detail).not.toContain(ghToken)
+      expect(r.error.detail).not.toContain(ghB64)
+      expect(r.error.detail).toContain('***')
+    })
+
+    expect(hosts).toEqual(['github.com'])
+    const clone = calls.find((c) => c.args.includes('clone'))
+    expect(clone?.env?.GIT_CONFIG_COUNT).toBe('1')
+    expect(clone?.env?.GIT_CONFIG_KEY_0).toBe('http.https://github.com/.extraheader')
+    expect(clone?.env?.GIT_CONFIG_VALUE_0).toBe(`AUTHORIZATION: basic ${ghB64}`)
+    const joined = (clone?.args ?? []).join(' ')
+    expect(joined).not.toContain(ghToken)
+    expect(joined).not.toContain(ghB64)
+  })
+
+  it('resolver 按 host 缓存：两次 https 同步只解析一次；ssh remote 不触发解析', async () => {
+    mkdirSync(join(root, 'repos'), { recursive: true })
+    const bare = join(root, 'repos', `${repoId}.git`)
+    execFileSync('git', ['clone', '-q', '--bare', `file://${origin}`, bare])
+
+    const hosts: string[] = []
+    const sha = 'e'.repeat(40)
+    const fake: GitExec = async (_file, args) => {
+      if (args.includes('--is-bare-repository')) return { stdout: 'true\n', stderr: '' }
+      if (args.includes('--verify')) return { stdout: '', stderr: '' }
+      if (args.includes('rev-parse')) return { stdout: `${sha}\n`, stderr: '' }
+      return { stdout: '', stderr: '' }
+    }
+    const g = new GitWorkspace({
+      root,
+      exec: fake,
+      tokenResolver: async (host) => {
+        hosts.push(host)
+        return 'cached-token'
+      },
+    })
+
+    await withNoToken(async () => {
+      // 两次 https fetch：没有缓存这里会解析两次
+      expect(
+        (await g.prepareProject(managed, 'https://github.com/acme/widget.git', 'main')).ok,
+      ).toBe(true)
+      expect(
+        (await g.prepareProject(managed, 'https://github.com/acme/widget.git', 'main')).ok,
+      ).toBe(true)
+      // ssh 部署：同一个实例、已缓存 token，也不应再解析
+      expect(
+        (await g.prepareProject(managed, 'ssh://git@github.com/acme/widget.git', 'main')).ok,
+      ).toBe(true)
+    })
+
+    expect(hosts).toEqual(['github.com'])
+  })
+
+  it('resolver 收到 hostname（不含端口），extraheader 的 authority 保留端口', async () => {
+    mkdirSync(join(root, 'repos'), { recursive: true })
+    execFileSync('git', [
+      'clone',
+      '-q',
+      '--bare',
+      `file://${origin}`,
+      join(root, 'repos', `${repoId}.git`),
+    ])
+
+    const hosts: string[] = []
+    const calls: ExecCall[] = []
+    const fake: GitExec = async (_file, args, opts) => {
+      calls.push({ args: [...args], env: opts?.env })
+      if (args.includes('--is-bare-repository')) return { stdout: 'true\n', stderr: '' }
+      if (args.includes('rev-parse')) return { stdout: `${'f'.repeat(40)}\n`, stderr: '' }
+      return { stdout: '', stderr: '' }
+    }
+    const g = new GitWorkspace({
+      root,
+      exec: fake,
+      tokenResolver: async (host) => {
+        hosts.push(host)
+        return 'ghes-token'
+      },
+    })
+
+    await withNoToken(async () => {
+      expect(
+        (await g.prepareProject(managed, 'https://github.example.com:8443/acme/widget.git', 'main'))
+          .ok,
+      ).toBe(true)
+    })
+
+    // gh 的 --hostname 只认 hostname；git 的 http.<url> 匹配需要保留端口
+    expect(hosts).toEqual(['github.example.com'])
+    const fetch = calls.find((c) => c.args.includes('fetch'))
+    expect(fetch?.env?.GIT_CONFIG_KEY_0).toBe('http.https://github.example.com:8443/.extraheader')
+    expect(fetch?.env?.GIT_CONFIG_VALUE_0).toBe(
+      `AUTHORIZATION: basic ${Buffer.from('oauth2:ghes-token').toString('base64')}`,
+    )
   })
 
   it('既有 GIT_CONFIG_* 真正随注入传给 git，不被覆盖', async () => {

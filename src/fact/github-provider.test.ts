@@ -11,7 +11,7 @@
  *   - CI 四态归并、无人上报静默期与硬超时
  */
 
-import { createServer, type Server } from 'node:http'
+import { createServer, type IncomingHttpHeaders, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -29,7 +29,7 @@ let baseUrl: string
 
 /** 每个用例自己注册路由;未命中路由返回 500 以暴露测试缺口 */
 type Handler = (
-  req: { method: string; url: string },
+  req: { method: string; url: string; headers: IncomingHttpHeaders },
   body: unknown,
 ) => {
   status: number
@@ -55,7 +55,14 @@ beforeEach(async () => {
           const [method, prefix] = key.split(' ', 2)
           return req.method === method && (req.url ?? '').startsWith(prefix ?? '\u0000')
         })?.[1] ?? null
-      const out = handler?.({ method: req.method ?? 'GET', url: req.url ?? '' }, body) ?? {
+      const out = handler?.(
+        {
+          method: req.method ?? 'GET',
+          url: req.url ?? '',
+          headers: req.headers,
+        },
+        body,
+      ) ?? {
         status: 500,
         json: { message: `no route for ${req.method} ${req.url}` },
       }
@@ -193,7 +200,106 @@ describe('错误映射(design.md §7)', () => {
     expect(r.ok).toBe(false)
     if (r.ok) return
     expect(r.error.kind).toBe('AUTH_FAILED')
+    // 文案给出三来源与修复命令，且不含任何 token 形态
+    expect(r.error.detail).toContain('KEEL_GITHUB_TOKEN')
+    expect(r.error.detail).toContain('GITHUB_TOKEN')
+    expect(r.error.detail).toContain('gh auth login')
     expect(r.error.detail).not.toContain('Bearer')
+  })
+})
+
+// ───────────────────── token 来源优先级（issue #73 第 3 项）─────────────────────
+
+describe('token 解析（按 host）', () => {
+  function issueJson(n: number): unknown {
+    return { number: n, title: `issue ${n}`, body: '', labels: [], state: 'open' }
+  }
+
+  it('未显式给 token → 按 host 调 resolver；同一 host 只解析一次（缓存）', async () => {
+    const hosts: string[] = []
+    const authHeaders: (string | undefined)[] = []
+    routes.set(routeKey('GET', '/repos/acme/widget/issues/5'), (req) => {
+      authHeaders.push(req.headers.authorization)
+      return { status: 200, json: issueJson(5) }
+    })
+    routes.set(routeKey('GET', '/repos/acme/widget/issues/6'), (req) => {
+      authHeaders.push(req.headers.authorization)
+      return { status: 200, json: issueJson(6) }
+    })
+
+    const p = new GitHubProvider({
+      apiRoot: baseUrl,
+      tokenResolver: async (host) => {
+        hosts.push(host)
+        return 'resolved-token'
+      },
+    })
+
+    expect((await p.getIssue(REMOTE, 5)).ok).toBe(true)
+    expect((await p.getIssue(REMOTE, 6)).ok).toBe(true)
+    expect(hosts).toEqual(['github.com'])
+    expect(authHeaders).toEqual(['Bearer resolved-token', 'Bearer resolved-token'])
+  })
+
+  it('不同 host 各自解析（GHES 不共用公网 token）', async () => {
+    const hosts: string[] = []
+    routes.set(routeKey('GET', '/repos/acme/widget/issues/1'), () => ({
+      status: 200,
+      json: issueJson(1),
+    }))
+
+    const p = new GitHubProvider({
+      apiRoot: baseUrl,
+      tokenResolver: async (host) => {
+        hosts.push(host)
+        return `token-for-${host}`
+      },
+    })
+
+    expect((await p.getIssue('https://github.com/acme/widget.git', 1)).ok).toBe(true)
+    expect((await p.getIssue('https://github.example.com/acme/widget.git', 1)).ok).toBe(true)
+    expect(hosts).toEqual(['github.com', 'github.example.com'])
+  })
+
+  it('显式 token 拥有最高优先级 —— 给了就绝不调用 resolver', async () => {
+    routes.set(routeKey('GET', '/repos/acme/widget/issues/7'), () => ({
+      status: 200,
+      json: issueJson(7),
+    }))
+    const resolver = vi.fn(async () => {
+      throw new Error('resolver 不该被调用')
+    })
+
+    const p = new GitHubProvider({
+      apiRoot: baseUrl,
+      token: 'explicit-token',
+      tokenResolver: resolver,
+    })
+    const r = await p.getIssue(REMOTE, 7)
+    expect(r.ok).toBe(true)
+    expect(resolver).not.toHaveBeenCalled()
+  })
+
+  it('resolver 抛错 → AUTH_FAILED，不炸也不泄漏错误内容', async () => {
+    const p = new GitHubProvider({
+      apiRoot: baseUrl,
+      tokenResolver: async () => {
+        throw new Error('gh exploded: token=sekret')
+      },
+    })
+    const r = await p.getIssue(REMOTE, 1)
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('AUTH_FAILED')
+    expect(r.error.detail).not.toContain('sekret')
+  })
+
+  it('resolver 返回空白 → 视为无凭据', async () => {
+    const p = new GitHubProvider({ apiRoot: baseUrl, tokenResolver: async () => '   ' })
+    const r = await p.getIssue(REMOTE, 1)
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('AUTH_FAILED')
   })
 })
 

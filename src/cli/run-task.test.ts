@@ -107,18 +107,21 @@ afterAll(async () => {
 })
 
 describe('resolveCiGateway · --ci real 的凭据闸门', () => {
-  it('缺 token → AUTH_FAILED 且不可重试', () => {
-    const r = resolveCiGateway('real')
+  it('解析器无值 → AUTH_FAILED 且不可重试，文案给出修复命令', async () => {
+    const r = await resolveCiGateway('real', 'github.example.com', async () => undefined)
     expect(r.ok).toBe(false)
     if (r.ok) return
     expect(r.error.kind).toBe('AUTH_FAILED')
     expect(r.error.retryable).toBe(false)
-    expect(r.error.detail).toMatch(/KEEL_GITHUB_TOKEN/)
+    // 三个来源与两种修复路径都要能照抄执行
+    expect(r.error.detail).toContain('KEEL_GITHUB_TOKEN')
+    expect(r.error.detail).toContain('GITHUB_TOKEN')
+    expect(r.error.detail).toContain('gh auth login')
+    expect(r.error.detail).toContain('github.example.com')
   })
 
-  it('有 token → 返回 provider(同时充当 PR 网关与 CI 网关)', () => {
-    setToken('t0ken')
-    const r = resolveCiGateway('real')
+  it('解析器有值 → 返回 provider(同时充当 PR 网关与 CI 网关)', async () => {
+    const r = await resolveCiGateway('real', 'github.com', async () => 't0ken')
     expect(r.ok).toBe(true)
     if (!r.ok) return
     expect(r.value).toBeDefined()
@@ -127,21 +130,51 @@ describe('resolveCiGateway · --ci real 的凭据闸门', () => {
     expect(typeof r.value?.waitForCi).toBe('function')
   })
 
-  it('模拟模式不构造 provider(缺省不打真实 API)', () => {
+  it('env token 仍是最前面的来源(不注入 resolver 时不需要 gh)', async () => {
+    setToken('t0ken')
+    const r = await resolveCiGateway('real', 'github.com')
+    expect(r.ok).toBe(true)
+  })
+
+  it('模拟模式不构造 provider、也不解析任何 token', async () => {
+    const resolver = vi.fn(async () => undefined)
     for (const mode of ['passed', 'failed'] as const) {
-      const r = resolveCiGateway(mode)
+      const r = await resolveCiGateway(mode, 'github.com', resolver)
       expect(r.ok && r.value).toBeUndefined()
     }
+    expect(resolver).not.toHaveBeenCalled()
   })
 })
 
 describe('runTask · --ci real 缺 token 时不进 loop', () => {
-  it('在 task 查询之前就失败(不存在的 taskId 也报 AUTH_FAILED 而非 NOT_FOUND)', async () => {
-    const r = await runTask(randomUUID(), { ci: 'real' })
+  it('无凭据时不存在的 taskId 也报 AUTH_FAILED 而非 NOT_FOUND', async () => {
+    const r = await runTask(randomUUID(), {
+      ci: 'real',
+      tokenResolver: async () => undefined,
+    })
     expect(r.ok).toBe(false)
     if (r.ok) return
-    // NOT_FOUND 说明凭据检查排在 DB 查询之后 —— 那就不是「启动即失败」
+    // NOT_FOUND 说明凭据检查排在「启动期闸门」之外 —— 那就不是「启动即失败」
     expect(r.error.kind).toBe('AUTH_FAILED')
+    expect(r.error.detail).toContain('gh auth login')
+  })
+
+  it('解析器有值 → 通过凭据闸门，不存在的 taskId 报 NOT_FOUND', async () => {
+    const r = await runTask(randomUUID(), {
+      ci: 'real',
+      tokenResolver: async () => 'resolved-token',
+    })
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('NOT_FOUND')
+  })
+
+  it('模拟模式不解析 token（resolver 不被调用）', async () => {
+    const resolver = vi.fn(async () => undefined)
+    const r = await runTask(randomUUID(), { ci: 'passed', tokenResolver: resolver })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error.kind).toBe('NOT_FOUND')
+    expect(resolver).not.toHaveBeenCalled()
   })
 
   it('模拟模式下同一个不存在的 taskId 报 NOT_FOUND(证明上一条不是巧合)', async () => {

@@ -153,3 +153,124 @@ if (!root.ok) return root
 - `ingest-issue` 的 `parseIssueUrl` 返回规范化 https remote，
   后续 `resolveRepo` 用同一个 `normalizeRemoteUrl` 比对。
 - 不得在 `register-repo` / `ingest-issue` 里新增第二套 host 正则。
+
+---
+
+## Scenario: GitHub token 来源与启动期校验（11-05-github-token-source）
+
+### 1. Scope / Trigger
+
+- 触发：token 不再只认 `KEEL_GITHUB_TOKEN`，而是复用本机 `gh` 登录态；
+  缺失时在入口启动期失败，而不是跑到 clone / push / API 调用才报
+  `could not read Username`。
+- 影响面：`src/fact/github-auth.ts`（唯一解析器）、`GitHubProvider`、
+  `GitWorkspace`，以及 `run-issue` / `run-task --ci real` / `poller` 三个入口。
+- 风险：token 进 argv / 日志 / 错误 detail / 事件；或缺失时前半段流程已产生写入。
+
+### 2. Signatures
+
+```ts
+export type TokenResolver = (host: string) => Promise<string | undefined>
+
+export interface TokenResolveDeps {
+  readonly env?: NodeJS.ProcessEnv
+  readonly runGh?: (host: string) => Promise<string | undefined>  // 测试注入
+}
+
+export async function resolveGitHubToken(
+  host?: string,          // hostname，不含端口；缺省 github.com
+  deps?: TokenResolveDeps,
+): Promise<string | undefined>
+
+// GitHubProviderOptions / GitWorkspaceOptions
+readonly tokenResolver?: TokenResolver   // 缺省 resolveGitHubToken
+
+// run-task
+export async function resolveCiGateway(
+  ci: CiMode,
+  host?: string,
+  tokenResolver?: TokenResolver,
+): Promise<Result<GitHubProvider | undefined>>
+export async function requireGitHubToken(
+  host: string | undefined,
+  tokenResolver?: TokenResolver,
+): Promise<Result<string>>
+
+// task-workspace
+export async function loadTaskRemoteUrl(taskId: string): Promise<Result<string | undefined>>
+```
+
+### 3. Contracts
+
+**来源优先级（唯一事实源）**
+
+```
+非空 KEEL_GITHUB_TOKEN > 非空 GITHUB_TOKEN > gh auth token --hostname <host>
+```
+
+- 空白值等同未设置：`KEEL_GITHUB_TOKEN=''` 不得遮蔽 `GITHUB_TOKEN` 或 `gh` 登录态。
+- `gh` 用 `execFile`（无 shell，5s 超时）；gh 不存在 / 未登录 / 超时 / 输出空白
+  一律返回 `undefined`，**不抛异常、不把 stderr 带出**（错误文本可能含凭据）。
+- 解析器无状态；缓存放在消费方实例（按 host），避免测试互相污染。
+- token 会被 `trim()`；带空白的值不进 header。
+
+**消费方**
+
+- `GitHubProvider`：显式 `opts.token`（含 `null`）拥有最高优先级且**绝不**触发
+  resolver；否则 `request(host)` 按需解析并缓存在 `Map<host, string>`。
+- `GitWorkspace`：只有 `execGit(..., { auth })` 且 remote 是 http(s) 时才解析；
+  ssh / file / 解析失败不调用 resolver，也不注入 env。解析结果按 host 缓存，
+  并进入 `secrets()` 的脱敏集合 —— gh 来源的 token 不在 `process.env` 里。
+- 脱敏集合 = 环境 token + 所有已缓存的 host token（明文 + base64 两种形态）。
+
+**启动期校验位置（全部在任何 ingest / run 创建之前）**
+
+| 入口 | host 来源 | 行为 |
+|---|---|---|
+| `run-issue` | `parseIssueUrl(issueUrl)` 的 hostname | 未注入 `opts.github` 时先 `requireGitHubToken`；`--ci real` 再走 `resolveCiGateway`，均在 ingest 之前 |
+| `run-task --ci real` | task 对应 repo 的 `remote_url`（`loadTaskRemoteUrl`，单条 SELECT） | gateway 创建先于 `loadTaskWorkspace`；`ci !== 'real'` 不解析任何 token |
+| `poller` | `listRepos()` 后按 `parseRemoteUrl` 收集唯一 host 集合 | 任一 host 缺 token → 退出码 1，文案列 host 与修复命令；**repos 为空不需要 token**；循环内仍 live 读 repo 列表 |
+| `register-repo` | — | 不做预检；clone / fetch 由传输层按需解析 |
+
+`AUTH_FAILED` / 缺凭据文案统一包含三个来源与可执行修复命令：
+`export KEEL_GITHUB_TOKEN="$(gh auth token --hostname <host>)"` 或
+`gh auth login --hostname <host>`，且不打印任何 token 片段。
+
+### 4. Validation & Error Matrix
+
+| 条件 | 结果 |
+|---|---|
+| env 有非空 token | 直接使用，不调用 `gh` |
+| env 全空 / 全空白 + `gh` 已登录 | 用 gh 输出（trim 后） |
+| `gh` 不存在 / 未登录 / 超时 / 空白输出 | `undefined`；入口映射 `AUTH_FAILED` |
+| 入口需要 GitHub 且无 token | `AUTH_FAILED`（非 0 退出），先于 ingest / 驱动 |
+| `ci !== 'real'` | 不解析 token，不调用 `gh` |
+| 注入 `opts.github`（run-issue ingest 侧） | 跳过 ingest 侧预检 |
+| 非 http(s) / 非 GitHub host / 解析失败 | git 传输不注入认证 env，不调用 resolver |
+| `gh` 输出或 git stderr 含 token | `redactSecrets` 替换为 `***` 后才进 detail / 日志 |
+
+### 5. Tests Required
+
+- `src/fact/github-auth.test.ts`：env 优先级、空白 env 回落 gh、host 透传、
+  gh 成功 / 空白 / ENOENT / 抛错。**全部注入 `runGh`，不得调用真实 gh。**
+- `src/fact/github-provider.test.ts`：按 host 解析与缓存、显式 token 不触发 resolver、
+  无 token 的 `AUTH_FAILED` 文案。
+- `src/fact/git-workspace.test.ts`：无 env + 注入 resolver 时仍生成 `GIT_CONFIG_*`；
+  gh 来源 token 被 `secrets()` 覆盖（错误 detail 不含明文 / base64）。
+- CLI：`run-issue` / `poller` / `run-task` 各覆盖「resolver 无值 → 零写入失败」与
+  「resolver 有值 → 进入」。**任何测试不得依赖开发机 `~/.config/gh` 的登录态。**
+
+### 6. Wrong vs Correct
+
+**Wrong**：每个入口自己读 env / 自己拼 `gh` 调用
+
+```ts
+if (process.env.KEEL_GITHUB_TOKEN === undefined) return err('AUTH_FAILED')
+```
+
+**Correct**：统一走 `resolveGitHubToken`，入口只决定 host
+
+```ts
+const token = await requireGitHubToken(host, tokenResolver)
+if (!token.ok) return token
+```

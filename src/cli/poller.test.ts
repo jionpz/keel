@@ -44,6 +44,7 @@ function fakeSignals(): FakeSignals {
 }
 
 const savedToken = process.env.KEEL_GITHUB_TOKEN
+const savedGithubToken = process.env.GITHUB_TOKEN
 
 beforeEach(() => {
   process.exitCode = undefined
@@ -54,6 +55,8 @@ afterEach(() => {
   process.exitCode = undefined
   if (savedToken === undefined) delete process.env.KEEL_GITHUB_TOKEN
   else process.env.KEEL_GITHUB_TOKEN = savedToken
+  if (savedGithubToken === undefined) delete process.env.GITHUB_TOKEN
+  else process.env.GITHUB_TOKEN = savedGithubToken
 })
 
 describe('parseIntervalMs', () => {
@@ -88,17 +91,77 @@ describe('pollerMain · 参数与凭据前置', () => {
     expect(listRepos).not.toHaveBeenCalled()
   })
 
-  it('缺 GitHub 凭据 → 进入循环前失败，不空转', async () => {
+  it('缺 GitHub 凭据 → 第一轮扫描前失败，文案列出 host 与修复命令', async () => {
     delete process.env.KEEL_GITHUB_TOKEN
     delete process.env.GITHUB_TOKEN
-    const listRepos = vi.fn()
+    const listRepos = vi.fn(async () => [REPO])
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
 
-    await pollerMain([], { listRepos })
+    await pollerMain([], { listRepos, tokenResolver: async () => undefined })
 
     expect(process.exitCode).toBe(1)
-    expect(listRepos).not.toHaveBeenCalled()
-    expect(errSpy.mock.calls.map((c) => String(c[0])).join('\n')).toMatch(/KEEL_GITHUB_TOKEN/)
+    const text = errSpy.mock.calls.map((c) => String(c[0])).join('\n')
+    expect(text).toContain('github.com')
+    expect(text).toContain('KEEL_GITHUB_TOKEN')
+    expect(text).toContain('gh auth login')
+  })
+
+  it('repos 为空时不需要凭据（进入循环，不空转为凭据错误）', async () => {
+    delete process.env.KEEL_GITHUB_TOKEN
+    delete process.env.GITHUB_TOKEN
+    const signals = fakeSignals()
+    const logs: Record<string, unknown>[] = []
+    const resolver = vi.fn(async () => undefined)
+
+    await pollerMain([], {
+      listRepos: async () => [],
+      tokenResolver: resolver,
+      log: (line) => logs.push(line),
+      now: () => '2026-11-05T00:00:00.000Z',
+      signals: signals.source,
+      sleep: async () => {
+        signals.fire('SIGTERM')
+      },
+      closeDb: async () => undefined,
+    })
+
+    expect(process.exitCode).toBeUndefined()
+    // 没有仓库 → 没有 host → 根本不解析 token
+    expect(resolver).not.toHaveBeenCalled()
+    expect(logs.at(-1)).toMatchObject({ event: 'poller', state: 'stopped' })
+  })
+
+  it('resolver 有值 → 通过启动期预检并进入轮询', async () => {
+    delete process.env.KEEL_GITHUB_TOKEN
+    delete process.env.GITHUB_TOKEN
+    const signals = fakeSignals()
+    const hosts: string[] = []
+    const runCalls: unknown[] = []
+
+    await pollerMain(['--interval', '1'], {
+      listRepos: async () => [REPO],
+      tokenResolver: async (host) => {
+        hosts.push(host)
+        return 'resolved-token'
+      },
+      listIssues: async () => ok<IssueList>({ issues: [], truncated: false }),
+      taskStatus: async () => undefined,
+      runIssue: async (input) => {
+        runCalls.push(input)
+        return ok<PollIssueOutcome>({ created: false })
+      },
+      log: () => undefined,
+      now: () => '2026-11-05T00:00:00.000Z',
+      signals: signals.source,
+      sleep: async () => {
+        signals.fire('SIGTERM')
+      },
+      closeDb: async () => undefined,
+    })
+
+    expect(process.exitCode).toBeUndefined()
+    expect(hosts).toContain('github.com')
+    expect(runCalls).toEqual([])
   })
 
   it('非法 --ci / --harness / --wall-clock → 拒绝', async () => {
@@ -178,13 +241,13 @@ describe('pollerMain · 参数与凭据前置', () => {
 
   it('空白 token 视为缺凭据（否则常驻进程每轮撞 401）', async () => {
     process.env.KEEL_GITHUB_TOKEN = '   '
-    const listRepos = vi.fn()
+    delete process.env.GITHUB_TOKEN
+    const listRepos = vi.fn(async () => [REPO])
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
 
-    await pollerMain([], { listRepos })
+    await pollerMain([], { listRepos, tokenResolver: async () => undefined })
 
     expect(process.exitCode).toBe(1)
-    expect(listRepos).not.toHaveBeenCalled()
     expect(errSpy.mock.calls.map((c) => String(c[0])).join('\n')).toMatch(/KEEL_GITHUB_TOKEN/)
   })
 

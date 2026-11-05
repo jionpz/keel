@@ -141,7 +141,7 @@ label 按**仓库**配置，不是全局开关（A/B/C 多个项目可以用不�
 # 注册时指定扫描 label；不传则默认 keel
 keel register-repo https://github.com/you/project --issue-label keel
 
-# 常驻：缺省每 60s 一轮，缺省 --ci real（需要 KEEL_GITHUB_TOKEN）
+# 常驻：缺省每 60s 一轮，缺省 --ci real（需要 GitHub 凭据：KEEL_GITHUB_TOKEN / GITHUB_TOKEN / gh auth login）
 KEEL_GITHUB_TOKEN="$(gh auth token)" keel poller --interval 60000 --ci real
 ```
 

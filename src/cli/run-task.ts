@@ -34,12 +34,14 @@ import {
 } from '../execution/model-routing.js'
 import { HarnessSessionManager } from '../execution/session/manager.js'
 import { asRole } from '../fact/db.js'
-import { GitHubProvider, readTokenFromEnv } from '../fact/github-provider.js'
+import { resolveGitHubToken, type TokenResolver } from '../fact/github-auth.js'
+import { GitHubProvider } from '../fact/github-provider.js'
+import { parseRemoteUrl } from '../fact/github-remote.js'
 import type { TaskStatus } from '../shared/ids.js'
 import { parseArgs } from './argv.js'
 import { resolveHumanReviewTtlMs } from './human-review-ttl.js'
 import { statusMain } from './status.js'
-import { loadTaskWorkspace } from './task-workspace.js'
+import { loadTaskRemoteUrl, loadTaskWorkspace } from './task-workspace.js'
 
 export const CI_MODES = ['passed', 'failed', 'real'] as const
 export type CiMode = (typeof CI_MODES)[number]
@@ -196,24 +198,87 @@ function parseModelToken(
 }
 
 /**
- * `--ci real` 的凭据前置检查。
- *
- * 缺 token 时在**进 loop 之前**失败:否则要跑完 brainstorm→develop 几分钟、
- * 花掉真实 token,才在 CreatePullRequest 撞上 AUTH_FAILED。
- *
- * 返回 undefined 表示模拟模式(passed/failed),此时 CreatePullRequest 仍记意图。
+ * 各入口共用的凭据提示 —— 三类来源一次说清，不打印 token 本身。
  */
-export function resolveCiGateway(ci: CiMode): Result<GitHubProvider | undefined> {
-  if (ci !== 'real') return ok(undefined)
-  if (readTokenFromEnv() === undefined) {
+export const GITHUB_AUTH_HINT =
+  '需要 GitHub 凭据（KEEL_GITHUB_TOKEN / GITHUB_TOKEN / gh auth login）'
+
+/**
+ * 启动期 token 解析 —— 需要 GitHub 访问的入口在进入驱动前调用。
+ *
+ * 解析器缺省走 `resolveGitHubToken`（env → `gh auth token --hostname <host>`）。
+ * 解析失败 / 空白 / resolver 抛错统一映射 `AUTH_FAILED`，文案给出可执行修复命令。
+ */
+export async function requireGitHubToken(
+  host: string | undefined,
+  tokenResolver?: TokenResolver,
+): Promise<Result<string>> {
+  const resolve = tokenResolver ?? resolveGitHubToken
+  const targetHost = host ?? 'github.com'
+  let token: string | undefined
+  try {
+    token = await resolve(targetHost)
+  } catch {
+    token = undefined
+  }
+  const trimmed = token?.trim() ?? ''
+  if (trimmed === '') {
     return err(
       makeError(
         'AUTH_FAILED',
-        '--ci real 需要 GitHub 凭据。设置方式:`export KEEL_GITHUB_TOKEN="$(gh auth token)"`',
+        `${GITHUB_AUTH_HINT}（host: ${targetHost}）。` +
+          `修复方式:\`export KEEL_GITHUB_TOKEN="$(gh auth token --hostname ${targetHost})"\` ` +
+          `或 \`gh auth login --hostname ${targetHost}\``,
       ),
     )
   }
-  return ok(new GitHubProvider())
+  return ok(trimmed)
+}
+
+/**
+ * `--ci real` 的凭据前置检查。
+ *
+ * host 由入口决定（run-issue 用 Issue host、runTask 用 task 的 repo host）；
+ * 未给时按 github.com 解析。缺 token 时在**进 loop 之前**失败：否则要跑完
+ * brainstorm→develop 几分钟、花掉真实 token，才在 CreatePullRequest 撞 AUTH_FAILED。
+ *
+ * 返回 undefined 表示模拟模式（passed/failed），此时 CreatePullRequest 仍记意图。
+ */
+export async function resolveCiGateway(
+  ci: CiMode,
+  host?: string,
+  tokenResolver?: TokenResolver,
+): Promise<Result<GitHubProvider | undefined>> {
+  if (ci !== 'real') return ok(undefined)
+  const token = await requireGitHubToken(host, tokenResolver)
+  if (!token.ok) return token
+  return ok(new GitHubProvider(tokenResolver === undefined ? {} : { tokenResolver }))
+}
+
+/**
+ * runTask 的 `--ci real` 网关：host 来自 task 对应 repo 的 remote_url。
+ *
+ * 只读一条 SELECT，不触发 clone / fetch —— 凭据闸门必须在 `loadTaskWorkspace`
+ * 之前成立。task 不存在时不猜 host，按缺省 github.com 解析，让
+ * `loadTaskWorkspace` 统一报 NOT_FOUND。
+ */
+async function resolveTaskCiGateway(
+  ci: CiMode,
+  taskId: string,
+  tokenResolver: TokenResolver | undefined,
+): Promise<Result<GitHubProvider | undefined>> {
+  if (ci !== 'real') return ok(undefined)
+
+  const remote = await loadTaskRemoteUrl(taskId)
+  if (!remote.ok) return remote
+
+  let host: string | undefined
+  if (remote.value !== undefined) {
+    const parsed = parseRemoteUrl(remote.value)
+    if (!parsed.ok) return parsed
+    host = parsed.value.host
+  }
+  return resolveCiGateway('real', host, tokenResolver)
 }
 
 /**
@@ -322,6 +387,11 @@ export interface RunTaskOptions {
    * `null` = 关闭调度。注入点让测试不必改全局 env。
    */
   readonly humanReviewTtlMs?: number | null
+  /**
+   * 测试注入：GitHub token 解析器。省略则 env → `gh auth token`。
+   * 只用于 `--ci real` 的启动期预检；模拟模式不解析任何 token。
+   */
+  readonly tokenResolver?: TokenResolver
 }
 
 export interface RunTaskResult {
@@ -354,7 +424,7 @@ export async function runTask(
       : ok<number | null>(opts.humanReviewTtlMs)
   if (!humanReviewTtl.ok) return humanReviewTtl
 
-  const gateway = resolveCiGateway(ci)
+  const gateway = await resolveTaskCiGateway(ci, taskId, opts.tokenResolver)
   if (!gateway.ok) return gateway
 
   const harness = resolveHarness(opts.harness, process.env.KEEL_HARNESS)
@@ -517,7 +587,7 @@ export async function runTaskMain(
     console.log(`用法: keel run-task <taskId> [--max-steps N] [--ci passed|failed|real] [--model <id>] [--harness omp|claude] [--wall-clock <秒>]
 
 驱动单 task 到终态(真实 harness + worktree)。--ci 缺省 passed(模拟 CI 结果);
---ci real 接真实 GitHub PR / CI,需要 KEEL_GITHUB_TOKEN。
+--ci real 接真实 GitHub PR / CI,需要 GitHub 凭据（KEEL_GITHUB_TOKEN / GITHUB_TOKEN / gh auth login）。
 --harness 缺省 omp，也可设 KEEL_HARNESS；非法值拒绝（不静默回退）。
 --model 对 omp 缺省 ${DEFAULT_OMP_MODEL}，也可设 KEEL_MODEL；空白值拒绝（不静默回退）。
 claude 未指定 --model / KEEL_MODEL 时不传 --model（不把 omp 缺省塞给 claude）。

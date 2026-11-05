@@ -1,1 +1,5 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/tasks/11-05-github-token-source/prd.md", "reason": "逐条核对 R1-R5 与 AC"}
+{"file": ".trellis/tasks/11-05-github-token-source/design.md", "reason": "检查实现是否遵循唯一解析器与入口边界"}
+{"file": ".trellis/spec/backend/github-provider.md", "reason": "host 解析与错误映射是否被破坏"}
+{"file": ".trellis/spec/backend/git-workspace.md", "reason": "认证注入是否仍在单次子进程范围内、argv 无 token"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试是否依赖开发机状态、是否假绿"}

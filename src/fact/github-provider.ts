@@ -4,7 +4,7 @@
  * 设计来源:design.md §4.2(v0.1 推荐 REST,因为 CI 环境不一定有 gh CLI)。
  *
  * 凭据纪律(docs/08-cross-cutting.md §1.3):
- *   - token 只从进程环境 `KEEL_GITHUB_TOKEN` / `GITHUB_TOKEN` 读;
+ *   - token 来源优先级:`KEEL_GITHUB_TOKEN` / `GITHUB_TOKEN` / `gh auth login` 的登录态;
  *   - 不进 URL、不进 argv、不进事件 payload、不进错误信息;
  *   - Authorization header 只存在于本进程内存。
  *
@@ -21,7 +21,7 @@ import type {
   PullRequestInfo,
   PullRequestInput,
 } from '../contracts/git-provider.js'
-import { readTokenFromEnv } from './github-auth.js'
+import { readTokenFromEnv, resolveGitHubToken, type TokenResolver } from './github-auth.js'
 import { isGitHubHost, type ParsedRemote, parseRemoteUrl } from './github-remote.js'
 
 /**
@@ -60,8 +60,13 @@ const EMPTY_SETTLE_MS = 90_000
 export interface GitHubProviderOptions {
   /** 覆盖 API 根地址 —— 测试用 stub server 注入 */
   readonly apiRoot?: string
-  /** 显式 token。未传时读环境变量;传 `null` 强制无 token(测试缺凭据路径) */
+  /** 显式 token。未传时按 host 解析(env → gh);传 `null` 强制无 token(测试缺凭据路径) */
   readonly token?: string | null
+  /**
+   * token 解析器注入点。缺省 `resolveGitHubToken`(env → `gh auth token`)。
+   * 显式 `token` 拥有最高优先级:给了(token 或 null)就**绝不**调用 resolver。
+   */
+  readonly tokenResolver?: TokenResolver
   /** 覆盖轮询间隔/上限 —— 测试用毫秒级 */
   readonly pollIntervalMs?: number
   readonly pollTimeoutMs?: number
@@ -160,13 +165,23 @@ export function parseIssueUrl(url: string): Result<ParsedIssueUrl> {
 export class GitHubProvider implements PullRequestGateway, CiGateway {
   private readonly apiRootOverride: string | undefined
   private readonly apiRootEnv: string | undefined
-  private readonly token: string | undefined
+  /**
+   * 显式 token 的「给了」标记与值。
+   *
+   * 用包装对象而不是 `string | null | undefined`：`null`(强制无凭据)与
+   * 「未传」(走 resolver)必须可区分 —— 测试靠 `token: null` 断言零请求。
+   */
+  private readonly explicitToken: { readonly value: string | undefined } | undefined
+  private readonly tokenResolver: TokenResolver
+  /** 按 host 缓存解析结果 —— 一次进程生命周期内不重复调 `gh` */
+  private readonly tokenCache = new Map<string, string>()
 
   constructor(opts: GitHubProviderOptions = {}) {
     this.apiRootOverride = opts.apiRoot
     // 环境变量在构造时读一次，与 token 一致：进程生命周期内不变
     this.apiRootEnv = process.env.KEEL_GITHUB_API_ROOT
-    this.token = opts.token === undefined ? readTokenFromEnv() : (opts.token ?? undefined)
+    this.explicitToken = opts.token === undefined ? undefined : { value: opts.token ?? undefined }
+    this.tokenResolver = opts.tokenResolver ?? resolveGitHubToken
     this.pollIntervalMs = opts.pollIntervalMs ?? POLL_INTERVAL_MS
     this.pollTimeoutMs = opts.pollTimeoutMs ?? POLL_TIMEOUT_MS
     this.emptySettleMs = opts.emptySettleMs ?? EMPTY_SETTLE_MS
@@ -203,10 +218,36 @@ export class GitHubProvider implements PullRequestGateway, CiGateway {
   private readonly pollTimeoutMs: number
   private readonly emptySettleMs: number
 
+  /**
+   * 取某 host 的 token。
+   *
+   * 显式 `opts.token`(含 `null`)优先级最高且不走 resolver —— 测试用它强制
+   * 「无凭据」路径。否则按 host 解析并缓存；resolver 抛错按无 token 处理，
+   * 不把异常内容(可能含凭据)带出去。
+   */
+  private async tokenFor(host: string): Promise<string | undefined> {
+    if (this.explicitToken !== undefined) return this.explicitToken.value
+
+    const cached = this.tokenCache.get(host)
+    if (cached !== undefined) return cached
+
+    let resolved: string | undefined
+    try {
+      resolved = await this.tokenResolver(host)
+    } catch {
+      resolved = undefined
+    }
+    if (resolved === undefined) return undefined
+    const token = resolved.trim()
+    if (token === '') return undefined
+    this.tokenCache.set(host, token)
+    return token
+  }
+
   /** GitHub API 公共头。Authorization 只在此处出现,不进 URL/argv/日志 */
-  private headers(): Record<string, string> {
+  private headers(token: string): Record<string, string> {
     return {
-      Authorization: `Bearer ${this.token}`,
+      Authorization: `Bearer ${token}`,
       Accept: 'application/vnd.github+json',
       'X-GitHub-Api-Version': '2022-11-28',
     }
@@ -223,8 +264,15 @@ export class GitHubProvider implements PullRequestGateway, CiGateway {
     path: string,
     init: { method?: string; body?: unknown } = {},
   ): Promise<Result<{ status: number; json: unknown }>> {
-    if (this.token === undefined) {
-      return err(makeError('AUTH_FAILED', '缺少 GitHub token(KEEL_GITHUB_TOKEN / GITHUB_TOKEN)'))
+    const token = await this.tokenFor(host)
+    if (token === undefined) {
+      return err(
+        makeError(
+          'AUTH_FAILED',
+          `缺少 GitHub 凭据（${host}）：设置 KEEL_GITHUB_TOKEN / GITHUB_TOKEN，` +
+            `或先执行 \`gh auth login --hostname ${host}\``,
+        ),
+      )
     }
     const root = this.rootFor(host)
     if (!root.ok) return root
@@ -235,11 +283,11 @@ export class GitHubProvider implements PullRequestGateway, CiGateway {
         init.body === undefined
           ? {
               method: init.method ?? 'GET',
-              headers: this.headers(),
+              headers: this.headers(token),
             }
           : {
               method: init.method ?? 'GET',
-              headers: { ...this.headers(), 'Content-Type': 'application/json' },
+              headers: { ...this.headers(token), 'Content-Type': 'application/json' },
               body: JSON.stringify(init.body),
             },
       )

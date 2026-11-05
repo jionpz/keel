@@ -33,7 +33,15 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { err, makeError, ok, type Result } from '../contracts/errors.js'
 import { withFileLock } from './file-lock.js'
-import { authEnvFor, gitAuthSecrets, readTokenFromEnv, redactSecrets } from './github-auth.js'
+import {
+  authEnvFor,
+  gitAuthSecrets,
+  readTokenFromEnv,
+  redactSecrets,
+  resolveGitHubToken,
+  type TokenResolver,
+} from './github-auth.js'
+import { parseRemoteUrl } from './github-remote.js'
 import { resolveKeelHome, validateAttachedDir } from './project-root.js'
 import { workspaceError } from './workspace-error.js'
 
@@ -67,6 +75,11 @@ export interface GitWorkspaceOptions {
   readonly root?: string
   /** 测试注入的 git 执行器；缺省用 `promisify(execFile)` */
   readonly exec?: GitExec
+  /**
+   * token 解析器注入点。缺省 `resolveGitHubToken`（env → `gh auth token`）。
+   * 只对 http(s) remote 起作用；ssh / file 不解析、不注入。
+   */
+  readonly tokenResolver?: TokenResolver
 }
 
 export interface WorktreeInfo {
@@ -112,10 +125,17 @@ export function branchFor(taskId: string): string {
 export class GitWorkspace {
   private readonly root: string
   private readonly exec: GitExec
+  private readonly tokenResolver: TokenResolver
+  /**
+   * 按 host 缓存的 token —— 供 `authEnvFor` 注入，同时进入 `secrets()`
+   * 的脱敏集合。gh 来源的 token 不在环境里，不缓存就脱敏不到。
+   */
+  private readonly tokenCache = new Map<string, string>()
 
   constructor(opts: GitWorkspaceOptions = {}) {
     this.root = opts.root ?? resolveKeelHome()
     this.exec = opts.exec ?? defaultExec
+    this.tokenResolver = opts.tokenResolver ?? resolveGitHubToken
   }
 
   private bareRepoPath(repoId: string): string {
@@ -508,8 +528,8 @@ export class GitWorkspace {
   /**
    * 统一 git 调用入口。
    *
-   * `auth` 存在时注入 GitHub https 认证（只对本次子进程生效）；
-   * 本地操作、无 token、或 ssh/file remote 一律不传 env ——
+   * `auth` 存在时先按 remote host 解析 token，再注入 GitHub https 认证（只对本次
+   * 子进程生效）；本地操作、无 token、或 ssh/file remote 一律不传 env ——
    * 没有认证可加时保持与改动前完全一致的调用形态。
    */
   private async execGit(
@@ -517,14 +537,50 @@ export class GitWorkspace {
     opts: { readonly auth?: string } = {},
   ): Promise<ExecResult> {
     if (opts.auth === undefined) return this.exec('git', args)
-    const auth = authEnvFor(opts.auth, readTokenFromEnv())
+    const token = await this.tokenForRemoteHost(opts.auth)
+    const auth = authEnvFor(opts.auth, token)
     if (Object.keys(auth).length === 0) return this.exec('git', args)
     return this.exec('git', args, { env: { ...process.env, ...auth } })
   }
 
-  /** 可能出现在 git 输出里的凭据形态（明文 token + 它的 base64） */
+  /**
+   * 按 remote 解析 token。非 http(s) / 解析失败不调 resolver ——
+   * ssh 走部署方 key，file 是本地路径，都不该触发 `gh`。
+   */
+  private async tokenForRemoteHost(remoteUrl: string): Promise<string | undefined> {
+    const trimmed = remoteUrl.trim()
+    if (!/^https?:\/\//i.test(trimmed)) return undefined
+
+    const parsed = parseRemoteUrl(trimmed)
+    if (!parsed.ok) return undefined
+
+    const host = parsed.value.host
+    const cached = this.tokenCache.get(host)
+    if (cached !== undefined) return cached
+
+    let resolved: string | undefined
+    try {
+      resolved = await this.tokenResolver(host)
+    } catch {
+      // 解析失败按无 token 处理；异常内容可能含凭据，不向上带
+      resolved = undefined
+    }
+    if (resolved === undefined) return undefined
+    const token = resolved.trim()
+    if (token === '') return undefined
+    this.tokenCache.set(host, token)
+    return token
+  }
+
+  /**
+   * 可能出现在 git 输出里的凭据形态（明文 token + 它的 base64）。
+   *
+   * 既包括环境 token，也包括运行期解析出来的（gh 登录态）token ——
+   * 后者不在 `process.env` 里，漏掉它就等于 git 错误 detail 未脱敏。
+   */
   private secrets(): readonly string[] {
-    return gitAuthSecrets(readTokenFromEnv())
+    const tokens = [readTokenFromEnv(), ...this.tokenCache.values()]
+    return [...new Set(tokens.flatMap((token) => gitAuthSecrets(token)))]
   }
 
   /** git 错误统一脱敏：所有 `msg(e)` 出口都必须过这里，避免未来新增调用点漏掉 */

@@ -3,7 +3,7 @@
   "name": "github-token-source",
   "title": "GitHub token 来源与启动期校验",
   "description": "KEEL_GITHUB_TOKEN 与 gh auth token 的优先级，或启动即 fail fast",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

@@ -126,13 +126,86 @@ describe('run-issue 组合命令', () => {
   it('--ci real 缺 token → AUTH_FAILED 且零写入(凭据闸门先于 ingest)', async () => {
     await registerRepoMain([REMOTE])
 
-    const r = await runIssue({ issueUrl: ISSUE_URL, ci: 'real', github: github(), now: NOW })
+    const r = await runIssue({
+      issueUrl: ISSUE_URL,
+      ci: 'real',
+      github: github(),
+      tokenResolver: async () => undefined,
+      now: NOW,
+    })
     expect(r.ok).toBe(false)
     if (r.ok) return
     expect(r.error.kind).toBe('AUTH_FAILED')
+    expect(r.error.detail).toContain('gh auth login')
     // 已 ingest 再失败 = 库里留一个驱动不了的 task,重跑时状态含糊
     expect(await countRows('feedback')).toBe(0)
     expect(await countRows('task')).toBe(0)
+  })
+
+  it('未注入 provider 且 resolver 无值 → AUTH_FAILED 且零写入(先于 ingest)', async () => {
+    await registerRepoMain([REMOTE])
+
+    const r = await runIssue({
+      issueUrl: ISSUE_URL,
+      ci: 'passed',
+      tokenResolver: async () => undefined,
+      now: NOW,
+    })
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('AUTH_FAILED')
+    // 三来源 + 修复命令都要能照抄执行；host 来自 Issue URL
+    expect(r.error.detail).toContain('KEEL_GITHUB_TOKEN')
+    expect(r.error.detail).toContain('GITHUB_TOKEN')
+    expect(r.error.detail).toContain('gh auth login')
+    expect(r.error.detail).toContain('github.com')
+    expect(await countRows('feedback')).toBe(0)
+    expect(await countRows('task')).toBe(0)
+  })
+
+  it('注入 provider 时跳过 ingest 侧预检（模拟模式不解析 token）', async () => {
+    const resolver = vi.fn(async () => undefined)
+
+    const r = await runIssue({
+      issueUrl: ISSUE_URL,
+      ci: 'passed',
+      github: github(),
+      tokenResolver: resolver,
+      now: NOW,
+    })
+    // repo 未注册 → NOT_FOUND：说明已经进到 ingest，而不是被凭据闸门拦住
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('NOT_FOUND')
+    expect(resolver).not.toHaveBeenCalled()
+  })
+
+  it('resolver 有值 → 通过 --ci real 闸门并进入 ingest（驱动失败仍带 taskId）', async () => {
+    const repoId = randomUUID()
+    await asOwner((c) =>
+      c.query(
+        `INSERT INTO repo (id, provider, remote_url, default_branch)
+         VALUES ($1, 'github', $2, 'main')`,
+        [repoId, `file:///nonexistent/keel-${repoId}.git`],
+      ),
+    )
+
+    const r = await runIssue({
+      issueUrl: ISSUE_URL,
+      ci: 'real',
+      repoId,
+      github: github(),
+      tokenResolver: async () => 'resolved-token',
+      now: NOW,
+    })
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    // 闸门已过：错误来自驱动（file:// remote 不是 GitHub），且带上已 ingest 的 taskId
+    expect(r.error.kind).toBe('WORKSPACE_ERROR')
+    const taskRow = await asOwner((c) => c.query<{ id: string }>('SELECT id FROM task'))
+    const taskId = taskRow.rows[0]?.id
+    expect(taskId, 'ingest 应已建好 task').toBeDefined()
+    expect(r.error.detail).toContain(taskId ?? '/无 task/')
   })
 
   it('ingest 侧失败(repo 未注册)原样冒泡,不被组合成功', async () => {

@@ -193,7 +193,11 @@ code 全集：`local_path_missing` / `not_a_git_worktree` / `origin_mismatch` /
 ### 2. Signatures
 
 ```ts
-export function readTokenFromEnv(): string | undefined   // KEEL_GITHUB_TOKEN 优先
+export function readTokenFromEnv(): string | undefined   // KEEL_GITHUB_TOKEN 优先（纯 env 读取）
+export async function resolveGitHubToken(
+  host?: string,                 // 缺省 github.com
+  deps?: { env?: NodeJS.ProcessEnv; runGh?: (host: string) => Promise<string | undefined> },
+): Promise<string | undefined>  // env → gh auth token --hostname <host>
 export function authEnvFor(
   remoteUrl: string,
   token: string | undefined,
@@ -208,8 +212,20 @@ export type GitExec = (
   opts?: { env?: NodeJS.ProcessEnv },
 ) => Promise<{ stdout: string; stderr: string }>
 
-class GitWorkspace { constructor(opts?: { root?: string; exec?: GitExec }) }
+class GitWorkspace {
+  constructor(opts?: {
+    root?: string
+    exec?: GitExec
+    tokenResolver?: (host: string) => Promise<string | undefined>  // 缺省 resolveGitHubToken
+  })
+}
 ```
+
+`resolveGitHubToken` 是 token 来源的唯一事实源（优先级：非空 `KEEL_GITHUB_TOKEN` →
+非空 `GITHUB_TOKEN` → `gh auth token --hostname <host>`）。传输层在 `execGit(..., { auth })`
+里按 **remote host** 解析一次并缓存在实例上；`ssh` / SCP-like / `file://` 不解析、不调 `gh`。
+gh 来源的 token 不在 `process.env`，必须同时进入 `secrets()` 的脱敏集合，否则 git 错误
+detail 会漏掉它。
 
 ### 3. Contracts
 
@@ -235,7 +251,7 @@ class GitWorkspace { constructor(opts?: { root?: string; exec?: GitExec }) }
 
 | 条件 | 结果 |
 |---|---|
-| 无 token / token 空白 | `{}`，调用形态与未接入认证前完全一致 |
+| 无 token / token 空白（三种来源都没有） | `{}`，调用形态与未接入认证前完全一致 |
 | `ssh://`、SCP-like(`git@host:o/r`) | `{}` —— 走部署方 ssh key，代码不碰凭据 |
 | `file://`、解析失败 | `{}` —— 让 git 自己报错，认证层不吞解析错误 |
 | host 不在 `github.com` / `github.*` | `{}` —— token 不发往非 GitHub 服务 |

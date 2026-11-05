@@ -15,6 +15,24 @@ import type { WorkspaceBinding } from '../control/driver/effects.js'
 import { asRole } from '../fact/db.js'
 import { GitWorkspace, type ProjectBinding } from '../fact/git-workspace.js'
 
+/**
+ * 只读 task 对应 repo 的 `remote_url` —— 凭据预检用。
+ *
+ * 与 `loadTaskWorkspace` 分开的原因：预检只需要 host，不应触发 clone / fetch。
+ * 返回 `ok(undefined)` 表示 task 不存在，由 `loadTaskWorkspace` 统一报 NOT_FOUND，
+ * 预检不越权改变「task 找不到了」这一事实的报错来源。
+ */
+export async function loadTaskRemoteUrl(taskId: string): Promise<Result<string | undefined>> {
+  const info = await asRole('keel_control', (c) =>
+    c.query<{ remote_url: string }>(
+      `SELECT r.remote_url
+       FROM task t JOIN repo r ON r.id = t.repo_id WHERE t.id = $1`,
+      [taskId],
+    ),
+  )
+  return ok(info.rows[0]?.remote_url)
+}
+
 export async function loadTaskWorkspace(taskId: string): Promise<Result<WorkspaceBinding>> {
   const info = await asRole('keel_control', (c) =>
     c.query<{

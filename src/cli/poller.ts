@@ -11,7 +11,8 @@
 import { err, makeError, ok, type Result } from '../contracts/errors.js'
 import { preflightModelRouting } from '../execution/model-routing.js'
 import { asRole, closePool } from '../fact/db.js'
-import { GitHubProvider, type IssueList, readTokenFromEnv } from '../fact/github-provider.js'
+import { resolveGitHubToken, type TokenResolver } from '../fact/github-auth.js'
+import { GitHubProvider, type IssueList, parseRemoteUrl } from '../fact/github-provider.js'
 import {
   DEFAULT_INTERVAL_MS,
   type PollerDeps,
@@ -103,6 +104,11 @@ export interface PollerMainDeps {
   readonly sleep?: (ms: number, stop: StopToken) => Promise<void>
   /** 退出前关闭数据库连接池；测试用它断言「进程真的会退出」 */
   readonly closeDb?: () => Promise<void>
+  /**
+   * 测试注入：GitHub token 解析器。省略则 env → `gh auth token --hostname <host>`。
+   * 启动期预检与 provider 都用它 —— 测试绝不依赖开发机的 gh 登录态。
+   */
+  readonly tokenResolver?: TokenResolver
 }
 
 const HELP = `用法: keel poller [--interval <ms>] [--ci passed|failed|real] [--model <id>]
@@ -114,7 +120,7 @@ const HELP = `用法: keel poller [--interval <ms>] [--ci passed|failed|real] [-
 选项:
   --interval <ms>      两轮之间的等待毫秒数(默认 ${DEFAULT_INTERVAL_MS});只接受正整数
   --ci passed|failed|real
-                       缺省 real;real 需要 KEEL_GITHUB_TOKEN
+                       缺省 real;real 需要 GitHub 凭据(KEEL_GITHUB_TOKEN / GITHUB_TOKEN / gh auth login)
   --model <id>         对 omp 缺省 ${DEFAULT_OMP_MODEL},也可设 KEEL_MODEL;空白值拒绝
   --harness omp|claude 缺省 omp,也可设 KEEL_HARNESS;非法值拒绝
   --wall-clock <秒>    显式覆盖 stage 墙钟硬上限;缺省按 stage 策略(develop 12h);只接受正整数
@@ -139,6 +145,52 @@ function resolveCiFlag(raw: string | number | boolean | undefined): Result<CiMod
     )
   }
   return parseCiMode(raw)
+}
+
+/**
+ * 启动期预检：从已注册仓库的 remote 收集唯一 host，逐个确认有可用 token。
+ *
+ * - repos 为空 → 返回空集：没有可扫描的仓库，就不该因为缺凭据拒绝启动；
+ * - remote 解析失败 → 跳过：它会在每轮扫描时被记为 `repo_error`，
+ *   凭据预检不冒充 Git 语法校验；
+ * - 空白 token 视为缺（`KEEL_GITHUB_TOKEN=''` 不得遮蔽 gh 登录态）。
+ */
+async function missingTokenHosts(
+  listRepos: () => Promise<readonly RepoRow[]>,
+  tokenResolver: TokenResolver | undefined,
+): Promise<readonly string[]> {
+  const resolve = tokenResolver ?? resolveGitHubToken
+
+  const hosts = new Set<string>()
+  for (const repo of await listRepos()) {
+    const parsed = parseRemoteUrl(repo.remote_url)
+    if (parsed.ok) hosts.add(parsed.value.host)
+  }
+
+  const missing: string[] = []
+  for (const host of hosts) {
+    let token: string | undefined
+    try {
+      token = await resolve(host)
+    } catch {
+      token = undefined
+    }
+    if ((token ?? '').trim() === '') missing.push(host)
+  }
+  return missing
+}
+
+/** 缺凭据文案：列出 host，并给出两条可执行修复命令（不打印任何 token 片段） */
+function authHelpFor(hosts: readonly string[]): string {
+  const lines = [
+    `poller: 扫描 issue 需要 GitHub 凭据,以下 host 没有可用 token:${hosts.join(', ')}`,
+    '修复方式(任选其一):',
+  ]
+  for (const host of hosts) {
+    lines.push(`  export KEEL_GITHUB_TOKEN="$(gh auth token --hostname ${host})"`)
+    lines.push(`  gh auth login --hostname ${host}`)
+  }
+  return lines.join('\n')
 }
 
 export async function pollerMain(
@@ -215,20 +267,14 @@ export async function pollerMain(
   if (wallClock.value !== undefined) warnWallClockOverride('poller', wallClock.value, mode)
 
   // 列出 issue 必须有凭据（provider 在无 token 时直接 AUTH_FAILED）。
-  // 前置检查避免「每轮每个仓库一条 AUTH_FAILED，进程还在常驻」的空转。
-  // 空白值也算缺：`KEEL_GITHUB_TOKEN=''` 会覆盖 GITHUB_TOKEN 又不产生有效 header，
-  // 让 poller 在常驻状态里每轮撞 401。
-  if ((readTokenFromEnv() ?? '').trim() === '') {
-    console.error(
-      'poller: 扫描 issue 需要 GitHub 凭据。设置方式:`export KEEL_GITHUB_TOKEN="$(gh auth token)"`',
-    )
-    process.exitCode = 1
-    return
-  }
-
-  const provider = new GitHubProvider()
+  // 预检放在第一轮扫描之前：常驻进程不能「每轮每个仓库一条 AUTH_FAILED」地空转。
+  // host 从已注册仓库的 remote 推导 —— GHES 部署要按自己的 host 取登录态。
+  const listRepos = deps.listRepos ?? loadGithubRepos
+  const provider = new GitHubProvider(
+    deps.tokenResolver === undefined ? {} : { tokenResolver: deps.tokenResolver },
+  )
   const pollerDeps: PollerDeps = {
-    listRepos: deps.listRepos ?? loadGithubRepos,
+    listRepos,
     listIssues:
       deps.listIssues ?? ((repo) => provider.listOpenIssues(repo.remote_url, repo.issue_label)),
     taskStatus: deps.taskStatus ?? findTaskStatusByExternalRef,
@@ -249,6 +295,15 @@ export async function pollerMain(
   }
 
   try {
+    // 启动期预检先于第一轮扫描；repos 为空时不需要任何 token。
+    // 预检读一次仓库列表，循环内仍走 live `listRepos` —— 新注册的仓库照常生效。
+    const missing = await missingTokenHosts(listRepos, deps.tokenResolver)
+    if (missing.length > 0) {
+      console.error(authHelpFor(missing))
+      process.exitCode = 1
+      return
+    }
+
     await runPollerForever(pollerDeps, {
       intervalMs: interval.value,
       ...(deps.signals === undefined ? {} : { signals: deps.signals }),

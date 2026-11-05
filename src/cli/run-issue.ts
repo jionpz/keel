@@ -14,7 +14,8 @@ import type { Result } from '../contracts/errors.js'
 import { err, makeError, ok } from '../contracts/errors.js'
 import { type ClaudeAuthProbe, requireClaudeReady } from '../execution/adapters/claude-code.js'
 import { parseAllowlist, parseProfile, preflightModelRouting } from '../execution/model-routing.js'
-import type { GitHubProvider } from '../fact/github-provider.js'
+import type { TokenResolver } from '../fact/github-auth.js'
+import { type GitHubProvider, parseIssueUrl } from '../fact/github-provider.js'
 import { parseArgs } from './argv.js'
 import { resolveHumanReviewTtlMs } from './human-review-ttl.js'
 import { ingestIssue } from './ingest-issue.js'
@@ -28,6 +29,7 @@ import {
   type RunTaskResult,
   readLivenessMode,
   readModelRoutingEnv,
+  requireGitHubToken,
   resolveCiGateway,
   resolveHarness,
   resolveOptionalModel,
@@ -53,6 +55,11 @@ export interface RunIssueOptions {
   readonly claudeAuthProbe?: ClaudeAuthProbe
   /** 人工裁决 TTL（毫秒）；省略则读 `KEEL_HUMAN_REVIEW_TTL_H`。`null` = 关闭 */
   readonly humanReviewTtlMs?: number | null
+  /**
+   * 测试注入：GitHub token 解析器。省略则 env → `gh auth token --hostname <host>`。
+   * 同时用于 ingest 侧预检（未注入 `github` 时）与 `--ci real` 的网关检查。
+   */
+  readonly tokenResolver?: TokenResolver
   readonly now?: string
 }
 
@@ -73,8 +80,19 @@ export async function runIssue(opts: RunIssueOptions): Promise<Result<RunIssueRe
   if (!humanReviewTtl.ok) return humanReviewTtl
 
   // 凭据前置于 ingest:缺 token 时不留下一个「已 ingest 但驱动不了」的 task。
+  // host 取自 Issue URL —— GHES 部署要按自己的 host 解析 token。
+  // 注入 `opts.github` 时跳过：ingest 侧的认证由那个 provider 自己负责。
+  const target = parseIssueUrl(opts.issueUrl)
+  if (!target.ok) return target
+  const issueHost = new URL(target.value.remoteUrl).hostname
+
+  if (opts.github === undefined) {
+    const token = await requireGitHubToken(issueHost, opts.tokenResolver)
+    if (!token.ok) return token
+  }
+
   // 同一个检查函数,不是第二份 token 逻辑。
-  const gateway = resolveCiGateway(ci)
+  const gateway = await resolveCiGateway(ci, issueHost, opts.tokenResolver)
   if (!gateway.ok) return gateway
 
   const harness = resolveHarness(opts.harness, process.env.KEEL_HARNESS)
@@ -124,6 +142,7 @@ export async function runIssue(opts: RunIssueOptions): Promise<Result<RunIssueRe
     harness: harness.value,
     ...(model.value === undefined ? {} : { model: model.value }),
     humanReviewTtlMs: humanReviewTtl.value,
+    ...(opts.tokenResolver === undefined ? {} : { tokenResolver: opts.tokenResolver }),
     ci,
   })
   // 编排出错(克隆失败 / 超步数)时 ingest 已经落库了 —— 错误里必须带上 taskId,
@@ -163,7 +182,8 @@ export async function runIssueMain(
                           [--wall-clock <秒>]
 
 ingest 一个 GitHub Issue 并把产生的 task 驱动到终态。
---ci 缺省 passed(模拟 CI);--ci real 接真实 GitHub PR / CI,需要 KEEL_GITHUB_TOKEN。
+需要 GitHub 凭据（KEEL_GITHUB_TOKEN / GITHUB_TOKEN / gh auth login）。
+--ci 缺省 passed(模拟 CI);--ci real 接真实 GitHub PR / CI,凭据来源同上。
 --harness 缺省 omp，也可设 KEEL_HARNESS；非法值拒绝（不静默回退）。
 --model 对 omp 缺省 ${DEFAULT_OMP_MODEL}，也可设 KEEL_MODEL；空白值拒绝（不静默回退）。
 claude 未指定 --model / KEEL_MODEL 时不传 --model。

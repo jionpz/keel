@@ -2,7 +2,7 @@
  * GitHub 凭据的纯逻辑 —— token 读取、git http 传输认证注入、错误脱敏。
  *
  * 凭据纪律（docs/08-cross-cutting.md §1.3、任务 design.md §1）：
- *   - token 只从进程环境 `KEEL_GITHUB_TOKEN` / `GITHUB_TOKEN` 读；
+ *   - token 来源优先级：`KEEL_GITHUB_TOKEN` → `GITHUB_TOKEN` → `gh auth token`；
  *   - 注入只对**单次** git 子进程生效，不写全局/仓库级 git config；
  *   - token 不进 remote URL、不进 argv、不进错误 detail / 事件 payload / 日志。
  *
@@ -12,6 +12,7 @@
  * 但 token 不经过 argv。
  */
 
+import { execFile } from 'node:child_process'
 import { parseRemoteUrl } from './github-remote.js'
 
 /**
@@ -22,6 +23,84 @@ import { parseRemoteUrl } from './github-remote.js'
  */
 export function readTokenFromEnv(): string | undefined {
   return process.env.KEEL_GITHUB_TOKEN ?? process.env.GITHUB_TOKEN
+}
+
+/** 解析器注入点：按 hostname 返回可用 token；无凭据时返回 `undefined`（不抛） */
+export type TokenResolver = (host: string) => Promise<string | undefined>
+
+export interface TokenResolveDeps {
+  readonly env?: NodeJS.ProcessEnv
+  /** 测试注入；缺省真的调用 `gh` */
+  readonly runGh?: (host: string) => Promise<string | undefined>
+}
+
+const DEFAULT_GITHUB_HOST = 'github.com'
+const GH_TIMEOUT_MS = 5_000
+/** token 只有几十字节；上限给小值，避免意外的大输出常驻内存 */
+const GH_MAX_BUFFER = 64 * 1024
+
+function firstUsableEnvToken(env: NodeJS.ProcessEnv): string | undefined {
+  for (const raw of [env.KEEL_GITHUB_TOKEN, env.GITHUB_TOKEN]) {
+    if (raw === undefined) continue
+    const trimmed = raw.trim()
+    if (trimmed !== '') return trimmed
+  }
+  return undefined
+}
+
+/**
+ * 调 `gh auth token --hostname <host>` 复用本机登录态。
+ *
+ * 任何失败都归为 `undefined`：gh 不存在（ENOENT）、未登录、超时、输出空白
+ * 对调用方是同一件事。**错误对象与 stderr 不外带** —— 错误文本里可能含凭据，
+ * 解析器不把它带进我们的错误链路。
+ */
+function runGhAuthToken(host: string): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    execFile(
+      'gh',
+      ['auth', 'token', '--hostname', host],
+      { timeout: GH_TIMEOUT_MS, maxBuffer: GH_MAX_BUFFER, windowsHide: true },
+      (error, stdout) => {
+        if (error !== null) {
+          resolve(undefined)
+          return
+        }
+        const token = stdout.trim()
+        resolve(token === '' ? undefined : token)
+      },
+    )
+  })
+}
+
+/**
+ * 解析 GitHub token —— 来源优先级固定：
+ *
+ * ```
+ * 非空 KEEL_GITHUB_TOKEN > 非空 GITHUB_TOKEN > gh auth token --hostname <host>
+ * ```
+ *
+ * 空白值等同未设置（`KEEL_GITHUB_TOKEN=''` 不得遮蔽 `gh` 的登录态）。
+ * 纯读函数，**不做进程级缓存**：缓存放在调用方实例上，避免测试互相污染，
+ * 也避免「token 轮换后进程仍拿旧值」的歧义。
+ */
+export async function resolveGitHubToken(
+  host: string = DEFAULT_GITHUB_HOST,
+  deps: TokenResolveDeps = {},
+): Promise<string | undefined> {
+  const fromEnv = firstUsableEnvToken(deps.env ?? process.env)
+  if (fromEnv !== undefined) return fromEnv
+
+  const runGh = deps.runGh ?? runGhAuthToken
+  try {
+    const fromGh = await runGh(host)
+    if (fromGh === undefined) return undefined
+    const trimmed = fromGh.trim()
+    return trimmed === '' ? undefined : trimmed
+  } catch {
+    // gh 缺失 / 超时 / 任何异常一律按「未登录」处理；异常内容可能含凭据，吞掉
+    return undefined
+  }
 }
 
 /** GitHub 接受 `oauth2:<token>` 作为 basic 认证的用户名。 */
