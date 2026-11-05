@@ -232,6 +232,33 @@ export async function runTaskToCompletion(
       return ok({ finalStatus: state.status, steps, stopReason: 'awaiting-clarification' })
     }
 
+    // ── S-HUMAN_REVIEW：等人工裁决或人工裁决 TTL 到期(11-05-human-review-ttl)──
+    //
+    // 与澄清分支同构:claim 本 task 的到期 human_review_ttl → advance(TimerFired)
+    // → T-028 → S-ABANDONED(T-028 的 ConsumeTimer 在同一事务里置 fired)。
+    // 未到期 → 停(awaiting-human);人的裁决由 `keel decide` / 控制台注入事件。
+    //
+    // claim 的 SQL 带 `JOIN task ... status='S-HUMAN_REVIEW'`,状态不匹配的
+    // 残留行永远不会被 claim —— 失效模式只是「一行不动的数据」。
+    if (state.status === 'S-HUMAN_REVIEW') {
+      const due = await claimDueTimers(deps.now(), {
+        taskId,
+        kind: 'human_review_ttl',
+        limit: 1,
+      })
+      if (due.length > 0) {
+        const adv = await deps.driver.advance(
+          taskId,
+          { type: 'TimerFired', timer: 'human_review_ttl' },
+          deps.now(),
+        )
+        if (!adv.ok) return err(adv.error)
+        steps.push(record(state.status, adv, null, '人工裁决 TTL 到期 → 弃单'))
+        continue
+      }
+      return ok({ finalStatus: state.status, steps, stopReason: 'awaiting-human' })
+    }
+
     // ── S-PR_OPEN：等外部 CI ──
     if (state.status === 'S-PR_OPEN') {
       if (opts.ci !== undefined) {
@@ -288,13 +315,9 @@ export async function runTaskToCompletion(
         }
         return err(stalledError(state.status, latest))
       }
-      // 非阶段态走到这里只可能是 S-HUMAN_REVIEW 等人审批：
-      // 其它关口与终态各有分支，且都在这之前 return。新增关口态时，
-      // 应在这里显式表态 —— 静默沿用「成功收工」正是本任务要消灭的东西。
-      if (state.status !== 'S-HUMAN_REVIEW') {
-        throw new Error(`不可达：${state.status} 应在更早的分支处理`)
-      }
-      return ok({ finalStatus: state.status, steps, stopReason: 'awaiting-human' })
+      // 非阶段态走到这里说明有状态缺少自己的分支（闸口态与终态都应更早 return）。
+      // 新增关口态时必须在这里显式表态 —— 静默沿用「成功收工」正是本任务要消灭的东西。
+      throw new Error(`不可达：${state.status} 应在更早的分支处理`)
     }
 
     const executed = await executeRun(taskId, pending, deps, ctxBuilder)

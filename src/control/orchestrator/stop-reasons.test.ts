@@ -115,6 +115,16 @@ async function seedRun(
   )
 }
 
+async function seedTimer(taskId: string, kind: string, dueAt: string): Promise<void> {
+  await asOwner((c) =>
+    c.query(
+      `INSERT INTO timer (id, task_id, run_id, kind, due_at, state)
+       VALUES ($1,$2,NULL,$3,$4,'pending')`,
+      [randomUUID(), taskId, kind, dueAt],
+    ),
+  )
+}
+
 describe('阶段态 · 没有待执行 run', () => {
   it('最近 run 已 SUCCEEDED 却没有新 run → 报错（派发丢失），detail 可直接定位', async () => {
     const taskId = await seedTask('S-QA')
@@ -180,6 +190,27 @@ describe('设计内等待 · 全部仍是成功且各自带停止原因', () => 
 
   it('S-HUMAN_REVIEW 无 run → awaiting-human', async () => {
     const taskId = await seedTask('S-HUMAN_REVIEW')
+    const r = await runTaskToCompletion(taskId, deps(), { maxSteps: 2 })
+    expect(r.ok && r.value.stopReason).toBe('awaiting-human')
+    expect(r.ok && r.value.finalStatus).toBe('S-HUMAN_REVIEW')
+  })
+
+  it('S-HUMAN_REVIEW + 到期 human_review_ttl → T-028 → S-ABANDONED（terminal）', async () => {
+    const taskId = await seedTask('S-HUMAN_REVIEW')
+    await seedTimer(taskId, 'human_review_ttl', NOW)
+
+    const r = await runTaskToCompletion(taskId, deps(), { maxSteps: 2 })
+    expect(r.ok, r.ok ? '' : r.error.detail).toBe(true)
+    if (!r.ok) return
+    expect(r.value.finalStatus).toBe('S-ABANDONED')
+    expect(r.value.stopReason).toBe('terminal')
+    expect(r.value.steps.map((s) => s.transition)).toContain('T-028')
+  })
+
+  it('S-HUMAN_REVIEW + 未到期 human_review_ttl → 仍 awaiting-human', async () => {
+    const taskId = await seedTask('S-HUMAN_REVIEW')
+    await seedTimer(taskId, 'human_review_ttl', '2026-10-27T12:00:00Z')
+
     const r = await runTaskToCompletion(taskId, deps(), { maxSteps: 2 })
     expect(r.ok && r.value.stopReason).toBe('awaiting-human')
     expect(r.ok && r.value.finalStatus).toBe('S-HUMAN_REVIEW')

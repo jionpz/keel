@@ -237,7 +237,12 @@ describe('端到端：docs/07-flows.md 流程一（Excel 日期筛选）', () =>
 
     const failed = transition('S-DEVELOPING', 'auto', { type: 'UnrecoverableError' }, facts())
     expect(failed.matched && failed.id).toBe('T-041')
-    expect(failed.matched && failed.effects).toEqual([{ kind: 'PreserveWorkspace' }])
+    // 终态不留 pending timer：两类 TTL 都取消，再保留现场
+    expect(failed.matched && failed.effects).toEqual([
+      { kind: 'CancelTimer', timer: 'clarification_ttl' },
+      { kind: 'CancelTimer', timer: 'human_review_ttl' },
+      { kind: 'PreserveWorkspace' },
+    ])
   })
 
   it('复杂需求走 T-013 转人工，而不是自动开发', () => {
@@ -359,5 +364,75 @@ describe('CreateRun 的 attempt 选择', () => {
       stage: 'qa',
       attempt: 'next',
     })
+  })
+})
+
+// ────────────────────── 人工裁决 TTL（11-05-human-review-ttl）──────────────────────
+
+describe('人工裁决 TTL 的转移表声明', () => {
+  const ruleOf = (id: string) => {
+    const rule = TASK_TRANSITIONS.find((r) => r.id === id)
+    expect(rule, `${id} 不存在`).toBeDefined()
+    return rule
+  }
+
+  it('5 条进入 S-HUMAN_REVIEW 的转移都 StartTimer(human_review_ttl)', () => {
+    for (const id of ['T-013', 'T-020', 'T-023', 'T-026', 'T-031']) {
+      const rule = ruleOf(id)
+      expect(rule?.to, `${id} 必须落在 S-HUMAN_REVIEW`).toBe('S-HUMAN_REVIEW')
+      expect(rule?.effects, `${id} 必须武装 human_review_ttl`).toContainEqual({
+        kind: 'StartTimer',
+        timer: 'human_review_ttl',
+      })
+    }
+  })
+
+  it('3 条正常离开 S-HUMAN_REVIEW 的转移都 CancelTimer(human_review_ttl)', () => {
+    for (const id of ['T-014', 'T-015', 'T-016']) {
+      expect(ruleOf(id)?.effects, `${id} 必须取消 human_review_ttl`).toContainEqual({
+        kind: 'CancelTimer',
+        timer: 'human_review_ttl',
+      })
+    }
+  })
+
+  it('T-040 / T-041 取消两类 Task 级 timer（终态不留 pending 行）', () => {
+    for (const id of ['T-040', 'T-041']) {
+      const effects = ruleOf(id)?.effects ?? []
+      expect(effects, `${id} 缺 clarification_ttl 取消`).toContainEqual({
+        kind: 'CancelTimer',
+        timer: 'clarification_ttl',
+      })
+      expect(effects, `${id} 缺 human_review_ttl 取消`).toContainEqual({
+        kind: 'CancelTimer',
+        timer: 'human_review_ttl',
+      })
+    }
+  })
+
+  it('T-028：TimerFired(human_review_ttl) → S-ABANDONED，并经 ConsumeTimer 收割', () => {
+    const rule = ruleOf('T-028')
+    expect(rule?.from).toBe('S-HUMAN_REVIEW')
+    expect(rule?.to).toBe('S-ABANDONED')
+    expect(rule?.guardText).toBe('timer=human_review_ttl')
+    expect(rule?.effects).toEqual([{ kind: 'ConsumeTimer', timer: 'human_review_ttl' }])
+  })
+
+  it('两类 TTL 的 TimerFired 不会互相误接', () => {
+    const t008 = transition(
+      'S-NEED_CLARIFICATION',
+      'auto',
+      { type: 'TimerFired', timer: 'human_review_ttl' },
+      facts(),
+    )
+    expect(t008.matched).toBe(false)
+
+    const t028 = transition(
+      'S-HUMAN_REVIEW',
+      'auto',
+      { type: 'TimerFired', timer: 'clarification_ttl' },
+      facts(),
+    )
+    expect(t028.matched).toBe(false)
   })
 })

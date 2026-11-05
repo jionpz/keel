@@ -90,11 +90,15 @@ export class WorkflowDriver {
    * @param workspace 可选。不传时 CreateBranch / CleanWorkspace 退回记录意图 ——
    *   单元测试不必准备 git 仓库，但真实编排必须传。
    * @param github 可选。不传时 CreatePullRequest 退回记录意图。
+   * @param humanReviewTtlMs 可选。人工裁决 TTL（毫秒）：`null` = 关闭调度，
+   *   省略 = 默认 24h。由 CLI 从 `KEEL_HUMAN_REVIEW_TTL_H` 解析后传入 ——
+   *   driver 自己不读 env，转移函数仍然只返回描述。
    */
   constructor(
     private readonly policy: PolicyEngine,
     private readonly workspace?: WorkspaceBinding,
     private readonly github?: PullRequestGateway,
+    private readonly humanReviewTtlMs?: number | null,
   ) {}
 
   /** 编排器校验 Proposal 时用同一个 Policy 实例 —— 裁决必须一致 */
@@ -329,6 +333,9 @@ export class WorkflowDriver {
           policy: this.policy,
           ...(this.workspace === undefined ? {} : { workspace: this.workspace }),
           ...(this.github === undefined ? {} : { github: this.github }),
+          ...(this.humanReviewTtlMs === undefined
+            ? {}
+            : { humanReviewTtlMs: this.humanReviewTtlMs }),
         },
         result.effects,
       )

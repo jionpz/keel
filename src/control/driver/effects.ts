@@ -54,6 +54,15 @@ export interface EffectContext {
    * 真实编排要关闭 v0.1 最后空缺时必须传。
    */
   readonly github?: PullRequestGateway
+  /**
+   * 人工裁决 TTL 的毫秒数。**可选**：
+   * - 未传 → 用 `TIMER_DURATIONS.human_review_ttl`（24h）
+   * - `null` → 关闭调度，`StartTimer(human_review_ttl)` 记 skipped、不插行
+   *
+   * 由 `WorkflowDriver` 从 CLI 解析后透传。转移函数仍然只返回描述，不读 env ——
+   * env 只影响这里落库的 `due_at`，而 `due_at` 是数据，不是转移结果。
+   */
+  readonly humanReviewTtlMs?: number | null
 }
 
 export interface AppliedEffect {
@@ -63,17 +72,28 @@ export interface AppliedEffect {
 }
 
 /**
- * StartTimer(issue #24,方案 A):clarification TTL 持久化。
+ * StartTimer(issue #24,方案 A):Task 级 TTL 持久化。
  *
- * due_at = 注入 now + TIMER_DURATIONS.kind。幂等:同 (task_id, kind)
- * 至多一个 pending(部分唯一索引),重复启动 DO NOTHING → skipped。
+ * due_at = 注入 now + 期限。幂等:同 (task_id, kind) 至多一个 pending
+ * (部分唯一索引),重复启动 DO NOTHING → skipped。
+ *
+ * `human_review_ttl` 的期限可由 `ctx.humanReviewTtlMs` 覆盖;`null` 表示关闭调度,
+ * 如实记 skipped 而不是插一条「不会到期」的假 timer。
  */
 async function startTimer(
   c: PoolClient,
   ctx: EffectContext,
   effect: SideEffect & { kind: 'StartTimer' },
 ): Promise<AppliedEffect> {
-  const durationMs = TIMER_DURATIONS[effect.timer]
+  const durationMs =
+    effect.timer === 'human_review_ttl'
+      ? ctx.humanReviewTtlMs === undefined
+        ? TIMER_DURATIONS.human_review_ttl
+        : ctx.humanReviewTtlMs
+      : TIMER_DURATIONS[effect.timer]
+  if (durationMs === null) {
+    return { kind: 'StartTimer', outcome: 'skipped', detail: 'human_review_ttl 已关闭' }
+  }
   const due = new Date(new Date(ctx.now).getTime() + durationMs).toISOString()
   const ins = await c.query(
     `INSERT INTO timer (id, task_id, run_id, kind, due_at, state)
@@ -88,8 +108,8 @@ async function startTimer(
 }
 
 /**
- * CancelTimer(T-007):回答澄清时取消 pending 澄清 timer。
- * 0 行更新(已 fired/无)→ skipped —— 已 fire 的由 T-008 吃掉,重放安全。
+ * CancelTimer:离开等 TTL 的状态时取消 pending timer。
+ * 0 行更新(已 fired/无)→ skipped —— 已 fire 的由对应 ConsumeTimer 吃掉,重放安全。
  */
 async function cancelTimer(
   c: PoolClient,
@@ -102,16 +122,16 @@ async function cancelTimer(
     [ctx.taskId, effect.timer, ctx.now],
   )
   if (r.rowCount === 0) {
-    return { kind: 'CancelTimer', outcome: 'skipped', detail: '无 pending 澄清 timer' }
+    return { kind: 'CancelTimer', outcome: 'skipped', detail: `无 pending ${effect.timer}` }
   }
-  return { kind: 'CancelTimer', outcome: 'applied', detail: '已取消澄清 timer' }
+  return { kind: 'CancelTimer', outcome: 'applied', detail: `已取消 ${effect.timer}` }
 }
 
 /**
- * ConsumeTimer(T-008):收割到期澄清 timer,置 fired。
+ * ConsumeTimer(T-008 / T-028):收割到期 timer,置 fired。
  *
  * **必须在 advance 同一事务内执行**(方案 A:claim 只锁不标;fired 属于
- * T-008 的原子性) —— 失败回滚则仍 pending,崩溃可重投。
+ * 转移的原子性) —— 失败回滚则仍 pending,崩溃可重投。
  * 0 行(未到期/已 fired)→ skipped:重放或误投不重复收割。
  */
 async function consumeTimer(
@@ -125,9 +145,13 @@ async function consumeTimer(
     [ctx.taskId, effect.timer, ctx.now],
   )
   if (r.rowCount === 0) {
-    return { kind: 'ConsumeTimer', outcome: 'skipped', detail: '无到期 pending 澄清 timer' }
+    return {
+      kind: 'ConsumeTimer',
+      outcome: 'skipped',
+      detail: `无到期 pending ${effect.timer}`,
+    }
   }
-  return { kind: 'ConsumeTimer', outcome: 'applied', detail: '澄清 timer 已 fire' }
+  return { kind: 'ConsumeTimer', outcome: 'applied', detail: `${effect.timer} 已 fire` }
 }
 
 /**

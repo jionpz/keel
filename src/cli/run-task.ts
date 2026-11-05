@@ -37,6 +37,7 @@ import { asRole } from '../fact/db.js'
 import { GitHubProvider, readTokenFromEnv } from '../fact/github-provider.js'
 import type { TaskStatus } from '../shared/ids.js'
 import { parseArgs } from './argv.js'
+import { resolveHumanReviewTtlMs } from './human-review-ttl.js'
 import { statusMain } from './status.js'
 import { loadTaskWorkspace } from './task-workspace.js'
 
@@ -316,6 +317,11 @@ export interface RunTaskOptions {
    * 不注入会让断言依赖「本机是否装了 claude、是否登录」。
    */
   readonly claudeAuthProbe?: ClaudeAuthProbe
+  /**
+   * 人工裁决 TTL（毫秒）。省略则读 `KEEL_HUMAN_REVIEW_TTL_H`；
+   * `null` = 关闭调度。注入点让测试不必改全局 env。
+   */
+  readonly humanReviewTtlMs?: number | null
 }
 
 export interface RunTaskResult {
@@ -339,6 +345,14 @@ export async function runTask(
 
   // 非法模式在任何数据库动作前失败；巡检语义不能被一次拼写错误悄悄关掉。
   const mode = livenessMode()
+
+  // 人工裁决 TTL 与 --ci / --harness 同一条纪律：拼错的值启动即报错，
+  // 不静默回退默认 24h（那会让人以为「超时已关掉」或「已调长」）。
+  const humanReviewTtl =
+    opts.humanReviewTtlMs === undefined
+      ? resolveHumanReviewTtlMs(process.env.KEEL_HUMAN_REVIEW_TTL_H)
+      : ok<number | null>(opts.humanReviewTtlMs)
+  if (!humanReviewTtl.ok) return humanReviewTtl
 
   const gateway = resolveCiGateway(ci)
   if (!gateway.ok) return gateway
@@ -393,6 +407,7 @@ export async function runTask(
           new RuleBasedPolicyEngine(DEFAULT_RULESET),
           binding,
           gateway.value,
+          humanReviewTtl.value,
         ),
         sessions: new HarnessSessionManager(),
         adapter: createHarnessAdapter(harness.value, override.value),
@@ -509,7 +524,8 @@ claude 未指定 --model / KEEL_MODEL 时不传 --model（不把 omp 缺省塞�
 KEEL_MODEL_PROFILE 可选 default|enterprise（缺省 default）：enterprise 按阶段使用企业网关目录；
 非法值启动即报错。KEEL_MODEL_ALLOWLIST 可选逗号分隔的允许模型；必须覆盖 profile 下所有阶段
 可能 spawn 的模型，否则启动即拒绝（不会等 run 认领后才失败）。
---wall-clock 显式覆盖 stage 墙钟硬上限（秒）；缺省按 stage 策略（develop 12h）；只接受正整数，非法值拒绝。`)
+--wall-clock 显式覆盖 stage 墙钟硬上限（秒）；缺省按 stage 策略（develop 12h）；只接受正整数，非法值拒绝。
+KEEL_HUMAN_REVIEW_TTL_H 控制 S-HUMAN_REVIEW 的超时自动弃单（小时，缺省 24；0 = 关闭；非法值启动即报错）。`)
     return
   }
   const mode = readLivenessMode('run-task')

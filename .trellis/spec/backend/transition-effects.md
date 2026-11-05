@@ -136,6 +136,44 @@ nextRun(stage)  → [{ kind: 'CreateRun', stage, attempt: 'next' }]    // attemp
 **不加**中止逻辑：状态早在本轮 `advance` 里写过了（见
 [database-guidelines](./database-guidelines.md) 的 `asRole` 一节）。
 
+## Task 级 timer 三件套与 TTL 配置（11-05-human-review-ttl）
+
+`timer` 表是**可变状态机**（`pending → fired | cancelled`），不是 append-only。
+Task 级 TTL 只有两条：`clarification_ttl`（T-005 起，T-007 取消，T-008 收割）与
+`human_review_ttl`（5 条进入 `S-HUMAN_REVIEW` 的转移起，T-014/15/16 取消，T-028 收割）。
+`wall_clock` 属于 Run 级（R-009），**不经过**三件套。
+
+| 副作用 | SQL 语义 | 重放安全 |
+|---|---|---|
+| `StartTimer(kind)` | `INSERT ... ON CONFLICT (task_id, kind) WHERE state='pending' DO NOTHING` | 已有 pending → `SideEffectSkipped` |
+| `CancelTimer(kind)` | `UPDATE ... WHERE state='pending'` | 0 行 → `skipped` |
+| `ConsumeTimer(kind)` | `UPDATE ... SET state='fired', fired_at=now WHERE state='pending' AND due_at <= now` | 0 行 → `skipped` |
+
+四条纪律：
+
+1. **进入等 TTL 的状态必须武装、离开必须取消。** 漏 `CancelTimer` 的失效不是报错，
+   而是下一次进入时新的 `StartTimer` 被部分唯一索引挡成 `skipped` —— 任务静默失去 TTL。
+   `T-016`（回炉）尤其容易漏：回炉后会经 `T-010 → T-011 → T-013` 再次进入。
+2. **终态转移（`T-040` / `T-041`）取消两类 Task 级 timer**，终态不留 pending 行。
+3. **`claimDueTimers` 的 `JOIN task ... status=$state` 是第二道防线**：
+   澄清只 claim `S-NEED_CLARIFICATION`、人工裁决只 claim `S-HUMAN_REVIEW`。
+   即使取消逻辑出 bug，失效模式也只是「一行不动的数据」，不会每轮被唤醒。
+   默认 `kind='clarification_ttl'`，既有调用无需改动；`FOR UPDATE OF t` 只锁 timer 行，
+   不锁 task 行（后者属于 advance 的事务）。
+4. **纯度不破**：`transition()` 只返回 `StartTimer` / `CancelTimer` / `ConsumeTimer`
+   描述，不读 env、不读时钟。`KEEL_HUMAN_REVIEW_TTL_H` 只在 CLI 解析、在
+   `effects.ts` 计算落库的 `due_at` 时使用。`EffectContext.humanReviewTtlMs`
+   可选字段让测试注入 `null`（关闭）/ 短 TTL，不必改全局常量。
+
+配置解析（`src/shared/timers.ts` 的 `parseHumanReviewTtlHours`）：
+
+| 值 | 行为 |
+|---|---|
+| 未设置 | 默认 24h |
+| 正整数 | 该小时数 |
+| `0` | 关闭调度：`StartTimer` 返回 `skipped`，不插行 |
+| 负数 / 非整数 / 空串 | 抛错（fail-closed），CLI 在任何数据库动作前转成 `Result` 错误 |
+
 ## 常见错误
 
 | 错误 | 后果 |
@@ -144,3 +182,5 @@ nextRun(stage)  → [{ kind: 'CreateRun', stage, attempt: 'next' }]    // attemp
 | 在执行器里给撞键加 +1 兜底 | 重放会造重复 run；`SideEffectSkipped` 失去含义 |
 | 白名单只断言「都在允许集里」 | 少一条白名单（有人改成 `nextRun`）不会被发现 |
 | 新增副作用时忘了「必须幂等」 | 重放重复开 PR / 重复发通知（`docs/04-state-machine.md` §5.2） |
+| 进入等 TTL 的状态忘了 `StartTimer`，或离开忘了 `CancelTimer` | 任务静默失去 TTL / 残留 pending 行；两者都不报错 |
+| 在转移表里读 `KEEL_*` 环境变量 | 破坏可重放性；`check:purity` 会红 |

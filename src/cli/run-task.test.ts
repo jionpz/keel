@@ -36,6 +36,7 @@ const savedModelProfile = process.env.KEEL_MODEL_PROFILE
 const savedModelAllowlist = process.env.KEEL_MODEL_ALLOWLIST
 const savedAnthropic = process.env.ANTHROPIC_API_KEY
 const savedAuthToken = process.env.ANTHROPIC_AUTH_TOKEN
+const savedHumanReviewTtl = process.env.KEEL_HUMAN_REVIEW_TTL_H
 
 function setToken(value: string | undefined): void {
   for (const k of ENV_KEYS) {
@@ -56,6 +57,7 @@ beforeEach(() => {
   delete process.env.ANTHROPIC_API_KEY
   // 网关凭据同样是合法认证路径 —— 断言必须与「本机是否配了网关」解耦
   delete process.env.ANTHROPIC_AUTH_TOKEN
+  delete process.env.KEEL_HUMAN_REVIEW_TTL_H
 })
 
 afterAll(async () => {
@@ -95,6 +97,11 @@ afterAll(async () => {
     delete process.env.ANTHROPIC_AUTH_TOKEN
   } else {
     process.env.ANTHROPIC_AUTH_TOKEN = savedAuthToken
+  }
+  if (savedHumanReviewTtl === undefined) {
+    delete process.env.KEEL_HUMAN_REVIEW_TTL_H
+  } else {
+    process.env.KEEL_HUMAN_REVIEW_TTL_H = savedHumanReviewTtl
   }
   await closePool()
 })
@@ -177,6 +184,17 @@ describe('runTask · --ci real 缺 token 时不进 loop', () => {
     if (r.ok) return
     expect(r.error.kind).toBe('CAPABILITY_UNSUPPORTED')
     expect(r.error.detail).toContain('KEEL_MODEL_ALLOWLIST')
+  })
+
+  it('非法 KEEL_HUMAN_REVIEW_TTL_H 在 task 查询之前失败（不静默回退 24h）', async () => {
+    for (const raw of ['abc', '-1']) {
+      process.env.KEEL_HUMAN_REVIEW_TTL_H = raw
+      const r = await runTask(randomUUID(), { ci: 'passed' })
+      expect(r.ok, `raw=${raw}`).toBe(false)
+      if (r.ok) continue
+      expect(r.error.kind).toBe('CAPABILITY_UNSUPPORTED')
+      expect(r.error.detail).toContain(`KEEL_HUMAN_REVIEW_TTL_H=${raw}`)
+    }
   })
 
   it('allowlist 未覆盖 profile 模型：task 查询 / 认领之前失败', async () => {

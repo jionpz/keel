@@ -4,6 +4,7 @@
  * 方案 A/B 的收割是 loop 进程内(澄清 branch / watchdog setTimeout);
  * 进程崩溃后无人收割。本模块提供**独立进程**定期 drain:
  *   - 澄清 TTL → advance(TimerFired) → T-008(ConsumeTimer 置 fired)
+ *   - 人工裁决 TTL → advance(TimerFired) → T-028(ConsumeTimer 置 fired)
  *   - run 墙钟 → reapTimeoutRun(RUNNING guard → TIMEOUT → T-030/T-031)
  *
  * 并发安全:claimDueTimers 用 SKIP LOCKED(只锁不标),ConsumeTimer /
@@ -16,6 +17,7 @@ import type { WorkflowDriver } from '../control/driver/driver.js'
 import { livenessMode } from '../control/liveness/policy.js'
 import type { LivenessStore } from '../control/liveness/store.js'
 import { asRole } from '../fact/db.js'
+import type { TransitionTimerKind } from '../shared/timers.js'
 import { claimDueTimers } from './drain.js'
 import {
   EMPTY_PATROL_STATS,
@@ -27,6 +29,7 @@ import { reapTimeoutRun } from './reap.js'
 
 export interface ReapStats {
   clarificationFired: number
+  humanReviewFired: number
   runTimeout: number
   skipped: number
   /** 本轮巡检（progress 模式下才有） */
@@ -71,30 +74,36 @@ async function dueWallClocks(now: string, limit = 50): Promise<DueWallClock[]> {
 }
 
 /**
- * 收割所有到期 timer(澄清 + run 墙钟)。
+ * 收割所有到期 timer(澄清 + 人工裁决 + run 墙钟)。
  * 幂等:重复调用不双投(claim SKIP LOCKED;标状态 only RUNNING)。
  */
 export async function drainAllDueTimers(deps: WorkerDeps): Promise<ReapStats> {
   const stats: ReapStats = {
     clarificationFired: 0,
+    humanReviewFired: 0,
     runTimeout: 0,
     skipped: 0,
     patrol: { ...EMPTY_PATROL_STATS },
   }
 
-  // 1) 澄清 TTL → T-008(ConsumeTimer 在 advance 事务内置 fired)
-  const clar = await claimDueTimers(deps.now(), { limit: 50 })
-  for (const t of clar) {
-    const adv = await deps.driver.advance(
-      t.taskId,
-      { type: 'TimerFired', timer: 'clarification_ttl' },
-      deps.now(),
-    )
-    if (adv.ok) {
-      if (adv.value.advanced) stats.clarificationFired++
-      else stats.skipped++ // 已离开澄清态,不 Consume —— 由 T-007 CancelTimer 清
-    } else {
-      stats.skipped++
+  // 1) 两类 Task 级 TTL：到期 → 对应转移(ConsumeTimer 在 advance 事务内置 fired)
+  const ttls: readonly TransitionTimerKind[] = ['clarification_ttl', 'human_review_ttl']
+  for (const kind of ttls) {
+    const due = await claimDueTimers(deps.now(), { kind, limit: 50 })
+    for (const t of due) {
+      const adv = await deps.driver.advance(
+        t.taskId,
+        { type: 'TimerFired', timer: kind },
+        deps.now(),
+      )
+      if (adv.ok) {
+        if (!adv.value.advanced)
+          stats.skipped++ // 状态与 claim 过滤不一致的残留行
+        else if (kind === 'clarification_ttl') stats.clarificationFired++
+        else stats.humanReviewFired++
+      } else {
+        stats.skipped++
+      }
     }
   }
 

@@ -248,7 +248,7 @@ Event log 一表四用：
 | `id` | `uuid` | PK |
 | `task_id` | `uuid` | FK → `task` |
 | `run_id` | `uuid` | FK → `run`，可空（run 级 timer 预留；v0.1 恒 NULL） |
-| `kind` | `text` | `clarification_ttl` \| `wall_clock`（本轮只插前者） |
+| `kind` | `text` | `clarification_ttl` \| `human_review_ttl` \| `wall_clock`（Task 级插前两者，`wall_clock` 属 Run 级） |
 | `due_at` | `timestamptz` | 到期时间 = 注入 now + 期限 |
 | `state` | `text` | `pending` → `fired` \| `cancelled` |
 | `fired_at` | `timestamptz` | `state='fired'` 时必有（I9） |
@@ -256,7 +256,9 @@ Event log 一表四用：
 
 - **可变状态机**：pending → fired / cancelled。与 `event` / `artifact` 的只增不改**不同**。
 - 幂等：部分唯一索引 `(task_id, kind) WHERE state='pending'`。
-- 收割语义（方案 A）：claim 只锁不标；`ConsumeTimer` 在 T-008 的 `advance` 事务内置 fired —— 崩溃仍 pending，可重投。
+- 收割语义（方案 A）：claim 只锁不标；`ConsumeTimer` 在 `advance` 事务内置 fired —— 崩溃仍 pending，可重投。
+  Task 级两条 TTL 各自同构：`clarification_ttl` 由 `T-008` 收割、`human_review_ttl` 由 `T-028` 收割；
+  claim 时 `JOIN task` 限定状态，状态不匹配的残留行永远不会被唤醒。
 
 ---
 

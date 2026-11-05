@@ -95,20 +95,21 @@
 | `T-009b` | `S-BRAINSTORM` | `RunSucceeded` | `stage=critic` | `S-BRAINSTORM` ⟲ | 评审回灌：创建 `run(brainstorm, n+1)`（`A-CriticReview` 经 Context 带入） |
 | `T-011` | `S-RFC_DRAFT` | `ArtifactCommitted(rfc)` | — | `S-RFC_READY` | **冻结 RFC**（不变量 `I7`）；触发 Policy 求值 |
 | `T-012` | `S-RFC_READY` | `PolicyEvaluated` | `decision=auto_develop` | `S-DEVELOPING` | 建工作分支（幂等）；创建 `run(develop, n+1)` |
-| `T-013` | `S-RFC_READY` | `PolicyEvaluated` | `decision != auto_develop` | `S-HUMAN_REVIEW` | 通知人工（`security_review` 同样走这里） |
-| `T-014` | `S-HUMAN_REVIEW` | `HumanApproved` | — | `S-DEVELOPING` | 建工作分支（幂等）；创建 `run(develop, n+1)` |
-| `T-015` | `S-HUMAN_REVIEW` | `HumanRejected` | — | `S-REJECTED` ★ | 清理工作区（分支保留） |
-| `T-016` | `S-HUMAN_REVIEW` | `HumanRequestedRework` | — | `S-BRAINSTORM` | 创建 `run(brainstorm, n+1)` |
+| `T-013` | `S-RFC_READY` | `PolicyEvaluated` | `decision != auto_develop` | `S-HUMAN_REVIEW` | 通知人工（`security_review` 同样走这里）；启动 `human_review_ttl` 定时器 |
+| `T-014` | `S-HUMAN_REVIEW` | `HumanApproved` | — | `S-DEVELOPING` | **取消 `human_review_ttl`**；建工作分支（幂等）；创建 `run(develop, n+1)` |
+| `T-015` | `S-HUMAN_REVIEW` | `HumanRejected` | — | `S-REJECTED` ★ | **取消 `human_review_ttl`**；清理工作区（分支保留） |
+| `T-016` | `S-HUMAN_REVIEW` | `HumanRequestedRework` | — | `S-BRAINSTORM` | **取消 `human_review_ttl`**；创建 `run(brainstorm, n+1)` |
+| `T-028` | `S-HUMAN_REVIEW` | `TimerFired(human_review_ttl)` | `timer=human_review_ttl` | `S-ABANDONED` ★ | **收割 timer（置 fired，T-028 事务内）** |
 | `T-017` | `S-DEVELOPING` | `RunSucceeded` | — | `S-QA` | 创建 `run(qa, n+1)`（`T-019` QA 返工后会二次进入） |
 | `T-018` | `S-QA` | `RunSucceeded` | `qa_verdict=pass` | `S-REVIEW` | 创建 `run(review, n+1)`（`T-022` 评审返工后会二次进入） |
 | `T-019` | `S-QA` | `RunSucceeded` | `qa_verdict=fail ∧ dev_attempts < max` | `S-DEVELOPING` | 创建 `run(develop, n+1)`，附 QA 报告 |
-| `T-020` | `S-QA` | `RunSucceeded` | `qa_verdict=fail ∧ dev_attempts ≥ max` | `S-HUMAN_REVIEW` | 通知人工 |
+| `T-020` | `S-QA` | `RunSucceeded` | `qa_verdict=fail ∧ dev_attempts ≥ max` | `S-HUMAN_REVIEW` | 通知人工；启动 `human_review_ttl` 定时器 |
 | `T-021` | `S-REVIEW` | `RunSucceeded` | `review_verdict=pass` | `S-PR_OPEN` | **创建 PR（幂等）** |
 | `T-022` | `S-REVIEW` | `RunSucceeded` | `review_verdict=fail ∧ dev_attempts < max` | `S-DEVELOPING` | 创建 `run(develop, n+1)`，附评审意见 |
-| `T-023` | `S-REVIEW` | `RunSucceeded` | `review_verdict=fail ∧ dev_attempts ≥ max` | `S-HUMAN_REVIEW` | 通知人工 |
+| `T-023` | `S-REVIEW` | `RunSucceeded` | `review_verdict=fail ∧ dev_attempts ≥ max` | `S-HUMAN_REVIEW` | 通知人工；启动 `human_review_ttl` 定时器 |
 | `T-024` | `S-PR_OPEN` | `CIPassed` | — | `S-DONE` ★ | 按配置可自动 merge；清理工作区（分支保留） |
 | `T-025` | `S-PR_OPEN` | `CIFailed` | `dev_attempts < max` | `S-DEVELOPING` | 创建 `run(develop, n+1)`，附 CI 日志 |
-| `T-026` | `S-PR_OPEN` | `CIFailed` | `dev_attempts ≥ max` | `S-HUMAN_REVIEW` | 通知人工 |
+| `T-026` | `S-PR_OPEN` | `CIFailed` | `dev_attempts ≥ max` | `S-HUMAN_REVIEW` | 通知人工；启动 `human_review_ttl` 定时器 |
 | `T-027` | `S-PR_OPEN` | `PRClosed` | — | `S-ABANDONED` ★ | 清理工作区 |
 
 ### 2.1 通用规则（适用于全部**阶段态**）
@@ -119,7 +120,7 @@
 | ID | from | event | guard | to | side-effect |
 |---|---|---|---|---|---|
 | `T-030` | 任一阶段态 | `RunFailed` \| `RunTimeout` \| `RunStalled` | `attempt < max_attempts(stage)` | 同状态 ⟲ | 创建 `run(stage, n+1)`，附失败原因 |
-| `T-031` | 任一阶段态 | `RunFailed` \| `RunTimeout` \| `RunStalled` | `attempt ≥ max_attempts(stage)` | `S-HUMAN_REVIEW` | 通知人工，附全部失败记录 |
+| `T-031` | 任一阶段态 | `RunFailed` \| `RunTimeout` \| `RunStalled` | `attempt ≥ max_attempts(stage)` | `S-HUMAN_REVIEW` | 通知人工，附全部失败记录；启动 `human_review_ttl` 定时器 |
 
 > `RunTimeout` 与 `RunCancelled` 是 **Run 级**的区分。在 Task 级，
 > 超时与失败走同一条路 —— Task 只关心"这次没成"，原因留在 `run.error_kind`。
@@ -133,8 +134,8 @@
 
 | ID | from | event | guard | to | side-effect |
 |---|---|---|---|---|---|
-| `T-040` | 任一非终态 | `Cancelled` | — | `S-ABANDONED` ★ | 取消在跑的 Run；销毁 Session；清理工作区 |
-| `T-041` | 任一非终态 | `UnrecoverableError` | — | `S-FAILED` ★ | 保留现场供诊断；**不清理工作区** |
+| `T-040` | 任一非终态 | `Cancelled` | — | `S-ABANDONED` ★ | 取消在跑的 Run；销毁 Session；清理工作区；**取消两类 Task 级 timer** |
+| `T-041` | 任一非终态 | `UnrecoverableError` | — | `S-FAILED` ★ | 保留现场供诊断；**不清理工作区**；**取消两类 Task 级 timer** |
 
 `UnrecoverableError` 的判定标准是**窄**的，仅限：schema 迁移不兼容、
 凭据永久失效、目标仓库不存在。**其余一切都应走重试或人工**，
@@ -172,7 +173,7 @@
 | `S-PR_OPEN` | `T-021` |
 | `S-DONE` | `T-024` |
 | `S-REJECTED` | `T-006` `T-015` |
-| `S-ABANDONED` | `T-008` `T-027` `T-040` |
+| `S-ABANDONED` | `T-008` `T-027` `T-028` `T-040` |
 | `S-FAILED` | `T-041` |
 
 ✅ 无不可达状态。
@@ -187,7 +188,7 @@
 | `S-BRAINSTORM` | `T-009` `T-010` `T-030` `T-031` `T-040` `T-041` |
 | `S-RFC_DRAFT` | `T-011` `T-030` `T-031` `T-040` `T-041` |
 | `S-RFC_READY` | `T-012` `T-013` `T-040` `T-041` |
-| `S-HUMAN_REVIEW` | `T-014` `T-015` `T-016` `T-040` `T-041` |
+| `S-HUMAN_REVIEW` | `T-014` `T-015` `T-016` `T-028` `T-040` `T-041` |
 | `S-DEVELOPING` | `T-017` `T-030` `T-031` `T-040` `T-041` |
 | `S-QA` | `T-018`–`T-020` `T-030` `T-031` `T-040` `T-041` |
 | `S-REVIEW` | `T-021`–`T-023` `T-030` `T-031` `T-040` `T-041` |
@@ -352,15 +353,19 @@ idempotency_key = hash(task_id, stage, attempt)
 |---|---|---|---|
 | `wall_clock(run)` | Run | `RunTimeout` → `R-009` | progress 模式按 stage 硬上限（§6.1）；wallclock 模式为全局 180s；显式 `--wall-clock` 覆盖并打 warning |
 | `clarification_ttl` | Task | `TimerFired` → `T-008` | **24h**(issue #24,`src/shared/timers.ts`) |
-| `human_review_ttl` | Task | 仅通知升级，**不自动转移** | 待定 |
+| `human_review_ttl` | Task | `TimerFired` → `T-028` | **24h**（11-05-human-review-ttl，`src/shared/timers.ts`；`KEEL_HUMAN_REVIEW_TTL_H` 可覆盖，`0` = 关闭调度） |
 
-> `human_review_ttl` 刻意**不触发状态转移**。等人这件事没有超时兜底 ——
-> 自动放弃一个等人审的 Task，比让它一直等着更糟。
+> `human_review_ttl` 到期只做「放弃并留证」：走 `T-028` 到 `S-ABANDONED`，
+> **不自动 approve / reject / rework** —— 超时不该替人做决定，也不删任何证据。
+> 与 `clarification_ttl` 同一套机制：`StartTimer` 武装、离开状态时 `CancelTimer`、
+> `T-028` 的 `ConsumeTimer` 与状态变更同事务置 `fired`。
+> 五条进入 `S-HUMAN_REVIEW` 的转移（`T-013` / `T-020` / `T-023` / `T-026` / `T-031`）
+> 都会武装它；终态转移（`T-040` / `T-041`）取消两类 Task 级 timer。
 
 > **独立 timer worker(issue #26)**：方案 A/B 的收割由编排进程内执行
 > （澄清 branch / watchdog setTimeout）；进程崩溃后到期无人收割。
 > `src/timer/worker.ts` 的 `drainAllDueTimers` 由独立进程定期跑 ——
-> 澄清 TTL → `T-008`；run 墙钟 → `reapTimeoutRun`（仅 `RUNNING` 标
+> 澄清 TTL → `T-008`；人工裁决 TTL → `T-028`；run 墙钟 → `reapTimeoutRun`（仅 `RUNNING` 标
 > `TIMEOUT`，带 `RUNNING` guard）→ `T-030`/`T-031`。并发安全：
 > `SKIP LOCKED` + `WHERE status='RUNNING'`，双 worker 不双投。
 > 启动示例：`scripts/timer-worker.ts`。

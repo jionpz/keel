@@ -16,6 +16,7 @@ import { type ClaudeAuthProbe, requireClaudeReady } from '../execution/adapters/
 import { parseAllowlist, parseProfile, preflightModelRouting } from '../execution/model-routing.js'
 import type { GitHubProvider } from '../fact/github-provider.js'
 import { parseArgs } from './argv.js'
+import { resolveHumanReviewTtlMs } from './human-review-ttl.js'
 import { ingestIssue } from './ingest-issue.js'
 import {
   type CiMode,
@@ -50,6 +51,8 @@ export interface RunIssueOptions {
   readonly github?: GitHubProvider
   /** 测试注入：claude 认证探测(默认读本机 `claude auth status`) */
   readonly claudeAuthProbe?: ClaudeAuthProbe
+  /** 人工裁决 TTL（毫秒）；省略则读 `KEEL_HUMAN_REVIEW_TTL_H`。`null` = 关闭 */
+  readonly humanReviewTtlMs?: number | null
   readonly now?: string
 }
 
@@ -61,6 +64,13 @@ export interface RunIssueResult extends RunTaskResult {
 
 export async function runIssue(opts: RunIssueOptions): Promise<Result<RunIssueResult>> {
   const ci = opts.ci ?? 'passed'
+
+  // TTL 配置先于 ingest 校验：不能让库里多一个「已 ingest 但驱动不了」的 task。
+  const humanReviewTtl =
+    opts.humanReviewTtlMs === undefined
+      ? resolveHumanReviewTtlMs(process.env.KEEL_HUMAN_REVIEW_TTL_H)
+      : ok<number | null>(opts.humanReviewTtlMs)
+  if (!humanReviewTtl.ok) return humanReviewTtl
 
   // 凭据前置于 ingest:缺 token 时不留下一个「已 ingest 但驱动不了」的 task。
   // 同一个检查函数,不是第二份 token 逻辑。
@@ -113,6 +123,7 @@ export async function runIssue(opts: RunIssueOptions): Promise<Result<RunIssueRe
     ...(opts.claudeAuthProbe === undefined ? {} : { claudeAuthProbe: opts.claudeAuthProbe }),
     harness: harness.value,
     ...(model.value === undefined ? {} : { model: model.value }),
+    humanReviewTtlMs: humanReviewTtl.value,
     ci,
   })
   // 编排出错(克隆失败 / 超步数)时 ingest 已经落库了 —— 错误里必须带上 taskId,
@@ -159,7 +170,8 @@ claude 未指定 --model / KEEL_MODEL 时不传 --model。
 KEEL_MODEL_PROFILE 可选 default|enterprise（缺省 default）：enterprise 按阶段使用企业网关目录；
 非法值启动即报错。KEEL_MODEL_ALLOWLIST 可选逗号分隔的允许模型；必须覆盖 profile 下所有阶段
 可能 spawn 的模型，否则在 ingest 之前就拒绝。
---wall-clock 显式覆盖 stage 墙钟硬上限（秒）；缺省按 stage 策略（develop 12h）；只接受正整数，非法值拒绝。`)
+--wall-clock 显式覆盖 stage 墙钟硬上限（秒）；缺省按 stage 策略（develop 12h）；只接受正整数，非法值拒绝。
+KEEL_HUMAN_REVIEW_TTL_H 控制 S-HUMAN_REVIEW 的超时自动弃单（小时，缺省 24；0 = 关闭；非法值启动即报错）。`)
     return
   }
   const mode = readLivenessMode('run-issue')

@@ -1,7 +1,7 @@
 /**
  * C4：代码转移表 ⟷ 文档转移表 一致性检查。
  *
- * 问题：docs/04-state-machine.md 有 31 条 Task 级转移写在 markdown 表里，
+ * 问题：docs/04-state-machine.md 的 Task 级转移写在 markdown 表里，
  *       代码必须再写一遍。**两份东西不会自己保持同步。**
  *
  * 本任务的解法是**双向比对，而不是从文档生成代码**。

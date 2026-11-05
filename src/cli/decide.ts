@@ -32,6 +32,7 @@ import { asRole } from '../fact/db.js'
 import { GitWorkspace } from '../fact/git-workspace.js'
 import type { ControlMode, TaskStatus } from '../shared/ids.js'
 import { parseArgs } from './argv.js'
+import { resolveHumanReviewTtlMs } from './human-review-ttl.js'
 import { loadTaskWorkspace } from './task-workspace.js'
 
 export const DECISIONS = ['approve', 'reject', 'rework'] as const
@@ -102,8 +103,13 @@ async function readTask(taskId: string): Promise<TaskSnapshot | undefined> {
   return r.rows[0]
 }
 
-function plainDriver(): WorkflowDriver {
-  return new WorkflowDriver(new RuleBasedPolicyEngine(DEFAULT_RULESET))
+function plainDriver(humanReviewTtlMs: number | null): WorkflowDriver {
+  return new WorkflowDriver(
+    new RuleBasedPolicyEngine(DEFAULT_RULESET),
+    undefined,
+    undefined,
+    humanReviewTtlMs,
+  )
 }
 
 /**
@@ -147,11 +153,21 @@ function precondition(
 }
 
 /** approve 需要真实工作区，否则 T-014 的 CreateBranch 只会记一条意图、分支并不存在 */
-async function workspaceDriver(taskId: string): Promise<Result<WorkflowDriver>> {
+async function workspaceDriver(
+  taskId: string,
+  humanReviewTtlMs: number | null,
+): Promise<Result<WorkflowDriver>> {
   const loaded = await loadTaskWorkspace(taskId)
   if (!loaded.ok) return loaded
   const binding: WorkspaceBinding = loaded.value
-  return ok(new WorkflowDriver(new RuleBasedPolicyEngine(DEFAULT_RULESET), binding))
+  return ok(
+    new WorkflowDriver(
+      new RuleBasedPolicyEngine(DEFAULT_RULESET),
+      binding,
+      undefined,
+      humanReviewTtlMs,
+    ),
+  )
 }
 
 /**
@@ -164,9 +180,12 @@ async function workspaceDriver(taskId: string): Promise<Result<WorkflowDriver>> 
  * 此时退回无绑定的 driver，`CleanWorkspace` 会如实记一条 `SideEffectIntent`
  * 而不是假装清理完成 —— 工作树留给人事后手工移除。
  */
-async function cleanupDriverIfNeeded(taskId: string): Promise<WorkflowDriver | undefined> {
+async function cleanupDriverIfNeeded(
+  taskId: string,
+  humanReviewTtlMs: number | null,
+): Promise<WorkflowDriver | undefined> {
   if (!existsSync(new GitWorkspace().preservePath(taskId))) return undefined
-  const built = await workspaceDriver(taskId)
+  const built = await workspaceDriver(taskId, humanReviewTtlMs)
   return built.ok ? built.value : undefined
 }
 
@@ -176,6 +195,9 @@ export async function decideTask(
   deps: DecideDeps = {},
 ): Promise<Result<DecideOutcome>> {
   const now = deps.now ?? new Date().toISOString()
+  // 非法 TTL 在任何读写之前失败 —— 与 run-task / timer-worker 同一条纪律
+  const humanReviewTtl = resolveHumanReviewTtlMs(process.env.KEEL_HUMAN_REVIEW_TTL_H)
+  if (!humanReviewTtl.ok) return humanReviewTtl
   const snapshot = await readTask(taskId)
   if (snapshot === undefined) return err(makeError('NOT_FOUND', `找不到 task ${taskId}`))
 
@@ -186,13 +208,15 @@ export async function decideTask(
   if (deps.driver !== undefined) {
     driver = deps.driver
   } else if (decision === 'approve') {
-    const built = await workspaceDriver(taskId)
+    const built = await workspaceDriver(taskId, humanReviewTtl.value)
     if (!built.ok) return built
     driver = built.value
   } else if (decision === 'reject') {
-    driver = (await cleanupDriverIfNeeded(taskId)) ?? plainDriver()
+    driver =
+      (await cleanupDriverIfNeeded(taskId, humanReviewTtl.value)) ??
+      plainDriver(humanReviewTtl.value)
   } else {
-    driver = plainDriver()
+    driver = plainDriver(humanReviewTtl.value)
   }
 
   const advanced = await driver.advance(
@@ -251,6 +275,11 @@ export async function answerTask(
     return err(makeError('CAPABILITY_UNSUPPORTED', '澄清答复不能为空白'))
   }
 
+  // 虽然 answer 不触碰 human_review_ttl，但同一条命令族共用一份配置：
+  // 非法值一律在写入 feedback 之前拒绝，避免半截操作。
+  const humanReviewTtl = resolveHumanReviewTtlMs(process.env.KEEL_HUMAN_REVIEW_TTL_H)
+  if (!humanReviewTtl.ok) return humanReviewTtl
+
   const now = deps.now ?? new Date().toISOString()
   const snapshot = await readTask(taskId)
   if (snapshot === undefined) return err(makeError('NOT_FOUND', `找不到 task ${taskId}`))
@@ -259,7 +288,7 @@ export async function answerTask(
   if (!checked.ok) return checked
 
   const feedbackId = await writeManualFeedback(taskId, body)
-  const driver = deps.driver ?? plainDriver()
+  const driver = deps.driver ?? plainDriver(humanReviewTtl.value)
   const advanced = await driver.advance(taskId, { type: 'ClarificationReceived', feedbackId }, now)
   if (!advanced.ok || !advanced.value.advanced) {
     // 不静默：feedback 已经落库，它就是这条 append-only 记录的 id

@@ -44,7 +44,11 @@ async function seedWith(
   taskStatus: string,
   opts: {
     run?: { stage: string; status: string }
-    timer?: { kind: 'clarification_ttl' | 'wall_clock'; runId?: string; due: string }
+    timer?: {
+      kind: 'clarification_ttl' | 'human_review_ttl' | 'wall_clock'
+      runId?: string
+      due: string
+    }
   } = {},
 ): Promise<{ taskId: string; repoId: string }> {
   const taskId = randomUUID()
@@ -165,6 +169,39 @@ describe('独立 timer worker(issue #26)', () => {
       c.query<{ state: string }>(`SELECT state FROM timer WHERE task_id=$1`, [taskId]),
     )
     expect(t.rows[0]?.state).toBe('cancelled') // 仅 cancel
+  })
+
+  it('W6.崩溃后 S-HUMAN_REVIEW + 到期人工裁决 TTL → drain → T-028 → S-ABANDONED + fired', async () => {
+    const { taskId } = await seedWith('S-HUMAN_REVIEW', {
+      run: { stage: 'pm', status: 'PENDING' },
+      timer: { kind: 'human_review_ttl', due: '2026-08-26T11:00:00Z' },
+    })
+
+    const stats = await drainAllDueTimers({ driver: driver(), now })
+    expect(stats.humanReviewFired).toBe(1)
+    expect(stats.clarificationFired).toBe(0)
+    expect(await statusOf(taskId)).toBe('S-ABANDONED')
+
+    const t = await asOwner((c) =>
+      c.query<{ state: string; fired_at: string | null }>(
+        `SELECT state, fired_at FROM timer WHERE task_id=$1`,
+        [taskId],
+      ),
+    )
+    expect(t.rows[0]?.state).toBe('fired')
+    expect(t.rows[0]?.fired_at).not.toBeNull()
+  })
+
+  it('W7.到期行存在但 task 已不在 S-HUMAN_REVIEW → 不 claim、不推进', async () => {
+    // 模拟「终态取消漏了」的残留：状态不匹配时 claim 的 JOIN 保证它永不醒来
+    const { taskId } = await seedWith('S-PM_ANALYZING', {
+      run: { stage: 'pm', status: 'PENDING' },
+      timer: { kind: 'human_review_ttl', due: '2026-08-26T11:00:00Z' },
+    })
+
+    const stats = await drainAllDueTimers({ driver: driver(), now })
+    expect(stats.humanReviewFired).toBe(0)
+    expect(await statusOf(taskId)).toBe('S-PM_ANALYZING')
   })
 
   it('W5: progress 模式挂巡检；wallclock 模式整体退回旧路径', async () => {

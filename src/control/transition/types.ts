@@ -9,6 +9,7 @@
  */
 
 import type { ControlMode, Stage, TaskStatus, TransitionId } from '../../shared/ids.js'
+import type { TransitionTimerKind } from '../../shared/timers.js'
 
 // ─────────────────────────────── 事件 ───────────────────────────────
 
@@ -28,7 +29,7 @@ export type TransitionEvent =
    * 事件仍可重放，不因为多了一个字段就改变旧语义。
    */
   | { readonly type: 'ClarificationReceived'; readonly feedbackId?: string }
-  | { readonly type: 'TimerFired'; readonly timer: 'clarification_ttl' }
+  | { readonly type: 'TimerFired'; readonly timer: TransitionTimerKind }
   | { readonly type: 'CapabilityRequested'; readonly capability: string }
   | { readonly type: 'ArtifactCommitted'; readonly kind: string }
   | { readonly type: 'PolicyEvaluated'; readonly decision: string }
@@ -96,14 +97,14 @@ export type SideEffect =
   | { readonly kind: 'CreatePullRequest' }
   | { readonly kind: 'NotifyHuman'; readonly reason: string }
   | { readonly kind: 'AskUser' }
-  | { readonly kind: 'StartTimer'; readonly timer: 'clarification_ttl' }
-  | { readonly kind: 'CancelTimer'; readonly timer: 'clarification_ttl' }
+  | { readonly kind: 'StartTimer'; readonly timer: TransitionTimerKind }
+  | { readonly kind: 'CancelTimer'; readonly timer: TransitionTimerKind }
   /**
-   * T-008 的收割副作用:把该 task 到期 pending 的澄清 timer 置 fired。
-   * 必须在 advance 同一事务内执行(claim 只锁不标;fired 属于 T-008 原子性)——
+   * 收割副作用:把该 task 到期 pending 的 timer 置 fired(T-008 / T-028)。
+   * 必须在 advance 同一事务内执行(claim 只锁不标;fired 属于转移原子性)——
    * 见 docs/04-state-machine.md §5.2 / issue #24 方案 A。
    */
-  | { readonly kind: 'ConsumeTimer'; readonly timer: 'clarification_ttl' }
+  | { readonly kind: 'ConsumeTimer'; readonly timer: TransitionTimerKind }
   | { readonly kind: 'CancelRun' }
   | { readonly kind: 'CleanWorkspace' }
   /** S-FAILED 刻意保留现场供诊断 */

@@ -382,9 +382,9 @@ describe('schema 与代码的一致性', () => {
     )
   })
 
-  it('timer.kind 的 CHECK 取值与 TimerKind 一致(issue #24)', async () => {
+  it('timer.kind 的 CHECK 取值与 TimerKind 一致(issue #24 / human_review_ttl)', async () => {
     const dbValues = await checkValues('timer', 'kind')
-    expect(dbValues).toEqual(['clarification_ttl', 'wall_clock'].sort())
+    expect(dbValues).toEqual(['clarification_ttl', 'wall_clock', 'human_review_ttl'].sort())
   })
 
   it('timer.state 的 CHECK 取值包含三态(issue #24)', async () => {

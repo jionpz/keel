@@ -198,7 +198,12 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
     guard: (_f, e) => e.type === 'PolicyEvaluated' && e.decision !== 'auto_develop',
     guardText: 'decision != auto_develop',
     to: 'S-HUMAN_REVIEW',
-    effects: [{ kind: 'NotifyHuman', reason: 'policy_requires_review' }],
+    // 进入人工闸门即武装 TTL：人不在 decide 上出现，到期由 T-028 收成 S-ABANDONED。
+    // 不自动 approve / rework —— 超时只放弃并留证，不替人做决定。
+    effects: [
+      { kind: 'NotifyHuman', reason: 'policy_requires_review' },
+      { kind: 'StartTimer', timer: 'human_review_ttl' },
+    ],
     ignoresControlMode: false,
   },
 
@@ -210,7 +215,12 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
     guard: null,
     guardText: '—',
     to: 'S-DEVELOPING',
-    effects: [{ kind: 'CreateBranch' }, nextRun('develop')],
+    // 离开人工闸门必须取消 TTL，否则 pending 行会在下一次进入时挡住新的 StartTimer
+    effects: [
+      { kind: 'CancelTimer', timer: 'human_review_ttl' },
+      { kind: 'CreateBranch' },
+      nextRun('develop'),
+    ],
     ignoresControlMode: false,
   },
   {
@@ -221,7 +231,7 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
     guardText: '—',
     to: 'S-REJECTED',
     // 驳回即终态：不保留工作树。分支留在 git 目录里，历史不丢。
-    effects: [{ kind: 'CleanWorkspace' }],
+    effects: [{ kind: 'CancelTimer', timer: 'human_review_ttl' }, { kind: 'CleanWorkspace' }],
     ignoresControlMode: false,
   },
   {
@@ -231,7 +241,22 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
     guard: null,
     guardText: '—',
     to: 'S-BRAINSTORM',
-    effects: [nextRun('brainstorm')],
+    // 回炉后可能经 T-011 → T-013 再次进入人工闸门；旧 pending 行不清掉，
+    // 新的 StartTimer 会被部分唯一索引挡成 skipped —— 任务静默失去 TTL。
+    effects: [{ kind: 'CancelTimer', timer: 'human_review_ttl' }, nextRun('brainstorm')],
+    ignoresControlMode: false,
+  },
+  {
+    // 与 T-008 同构：人工裁决 TTL 到期 → 放弃并留证。不走 CleanWorkspace ——
+    // S-ABANDONED 是终态，事件流、分支、提交历史都要完整保留。
+    id: 'T-028',
+    from: 'S-HUMAN_REVIEW',
+    on: ['TimerFired'],
+    guard: (_f, e) => e.type === 'TimerFired' && e.timer === 'human_review_ttl',
+    guardText: 'timer=human_review_ttl',
+    to: 'S-ABANDONED',
+    // 收割：置 fired 在 T-028 事务内（claim 只锁不标，崩溃可重投）
+    effects: [{ kind: 'ConsumeTimer', timer: 'human_review_ttl' }],
     ignoresControlMode: false,
   },
 
@@ -276,7 +301,10 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
     guard: (f) => f.verdict === 'fail' && devAtLimit(f),
     guardText: 'qa_verdict=fail ∧ dev_attempts ≥ max',
     to: 'S-HUMAN_REVIEW',
-    effects: [{ kind: 'NotifyHuman', reason: 'qa_retries_exhausted' }],
+    effects: [
+      { kind: 'NotifyHuman', reason: 'qa_retries_exhausted' },
+      { kind: 'StartTimer', timer: 'human_review_ttl' },
+    ],
     ignoresControlMode: false,
   },
   {
@@ -306,7 +334,10 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
     guard: (f) => f.verdict === 'fail' && devAtLimit(f),
     guardText: 'review_verdict=fail ∧ dev_attempts ≥ max',
     to: 'S-HUMAN_REVIEW',
-    effects: [{ kind: 'NotifyHuman', reason: 'review_retries_exhausted' }],
+    effects: [
+      { kind: 'NotifyHuman', reason: 'review_retries_exhausted' },
+      { kind: 'StartTimer', timer: 'human_review_ttl' },
+    ],
     ignoresControlMode: false,
   },
 
@@ -340,7 +371,10 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
     guard: devAtLimit,
     guardText: 'dev_attempts ≥ max',
     to: 'S-HUMAN_REVIEW',
-    effects: [{ kind: 'NotifyHuman', reason: 'ci_retries_exhausted' }],
+    effects: [
+      { kind: 'NotifyHuman', reason: 'ci_retries_exhausted' },
+      { kind: 'StartTimer', timer: 'human_review_ttl' },
+    ],
     ignoresControlMode: false,
   },
   {
@@ -373,7 +407,10 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
     guard: (f) => f.stage_attempts >= f.max_stage_attempts,
     guardText: 'attempt ≥ max_attempts(stage)',
     to: 'S-HUMAN_REVIEW',
-    effects: [{ kind: 'NotifyHuman', reason: 'stage_retries_exhausted' }],
+    effects: [
+      { kind: 'NotifyHuman', reason: 'stage_retries_exhausted' },
+      { kind: 'StartTimer', timer: 'human_review_ttl' },
+    ],
     ignoresControlMode: false,
   },
 
@@ -385,7 +422,14 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
     guard: null,
     guardText: '—',
     to: 'S-ABANDONED',
-    effects: [{ kind: 'CancelRun' }, { kind: 'CleanWorkspace' }],
+    // 终态不留 pending timer：两类 TTL 都取消（clarification_ttl 此前会泄漏，
+    // 残留行会让 timer_due_idx 每轮扫到、advance 又因状态不匹配无法 Consume）。
+    effects: [
+      { kind: 'CancelRun' },
+      { kind: 'CancelTimer', timer: 'clarification_ttl' },
+      { kind: 'CancelTimer', timer: 'human_review_ttl' },
+      { kind: 'CleanWorkspace' },
+    ],
     ignoresControlMode: true,
   },
   {
@@ -395,7 +439,12 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
     guard: null,
     guardText: '—',
     to: 'S-FAILED',
-    effects: [{ kind: 'PreserveWorkspace' }],
+    // 终态不留 pending timer（理由同 T-040）；现场仍然保留供诊断。
+    effects: [
+      { kind: 'CancelTimer', timer: 'clarification_ttl' },
+      { kind: 'CancelTimer', timer: 'human_review_ttl' },
+      { kind: 'PreserveWorkspace' },
+    ],
     ignoresControlMode: true,
   },
 ]
