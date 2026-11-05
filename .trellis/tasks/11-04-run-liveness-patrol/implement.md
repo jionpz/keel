@@ -280,8 +280,10 @@
   - 真实 `keel timer-worker` 冒烟：`reaped=1`，run → `TIMEOUT/RUN_STALLED`，
     事件 `RunStalled source=patrol silence_ms=5400375`（90m），随后 T-030 建重试 run。
   - 该值高于 `develop` 的 20m 阈值，说明阈值有充足余量；后续可按 `last_kind` 分布继续校准。
-- [ ] 更新 `task.json` 状态与分支信息；提交前 review diff
-  - diff 已 review；`task.json` 状态与提交留给 finish-work。
+- [x] 更新 `task.json` 状态与分支信息；提交前 review diff
+  - 实现提交：`9fd5b87 feat(liveness): 卡死判定从总耗时改为进展信号，补两层巡检`；
+    ADR 转 Accepted：`4c7a26a`。
+  - 契约沉淀：`.trellis/spec/backend/run-liveness.md`（本任务收尾时补）。
 
 **完成判据**：`pnpm run check` 全绿；上述冒烟场景都有记录；没有为了「跑绿」跳过 e2e。
 

@@ -23,6 +23,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Workspace Diff](./workspace-diff.md) | `collectChanges` 接入编排：采集时机、HEAD 基线、未跟踪文件、事件载体与 fail-closed | ✅ 已填（`10-25-collect-changes-wiring`） |
 | [Transition Effects](./transition-effects.md) | `firstRun`/`nextRun` 的可用站点与白名单双向断言、撞键可归因（`existing_status`）、不改键算法的理由 | ✅ 已填（`10-26-run-reentry-wallclock`） |
 | [Orchestrator Loop](./orchestrator-loop.md) | 停止原因必填（`stopReason`）、阶段态无 run 的证据式判据、单进程前提、只报告不修复 | ✅ 已填（`10-26-orchestrator-stop-reasons`） |
+| [Run Liveness](./run-liveness.md) | 卡死按无进展判定、`run_liveness` 只授 `keel_control`、supervisor / patrol 分工、成功与失败路径围栏、`KEEL_LIVENESS_MODE` 降级 | ✅ 已填（`11-04-run-liveness-patrol`） |
 | [Git Workspace](./git-workspace.md) | Agent 提交用 `-c` 钉死身份与签名、夹具关 gpgsign、`GIT_CONFIG_GLOBAL` 的使用边界、https 传输认证注入 | ✅ 已填（`08-26-v01-closeout`；11-03 补传输认证） |
 | [GitHub Provider](./github-provider.md) | host 解析单一事实源、`KEEL_GITHUB_API_ROOT` 优先级、空白配置 fail-closed、GHES 测试点 | ✅ 已填（`11-03-ghes-host-support`） |
 | [Ingress Poller](./ingress-poller.md) | 每仓库 `issue_label`、分页与 `truncated`、轮内去重、`StopToken` 订阅制、日志脱敏 | ✅ 已填（`08-29-ingress-poller`） |
