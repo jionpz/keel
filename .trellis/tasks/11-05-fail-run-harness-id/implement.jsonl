@@ -1,1 +1,4 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/run-liveness.md", "reason": "外部收割（timer/patrol）与终态围栏的既有契约，claim 时写身份要与之相容"}
+{"file": ".trellis/spec/backend/orchestrator-loop.md", "reason": "编排循环的单进程前提、停止原因与失败路径结算规则"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "角色身份写入、事务边界与 unique_violation 映射"}
+{"file": ".trellis/tasks/11-05-fail-run-harness-id/prd.md", "reason": "本任务验收标准，含 R5 claim 时写身份与外部收割用例"}

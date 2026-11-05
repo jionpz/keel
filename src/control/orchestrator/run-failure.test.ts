@@ -13,7 +13,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { makeError, type Result } from '../../contracts/errors.js'
+import { err, makeError, type Result } from '../../contracts/errors.js'
 import type {
   DisposeReport,
   HarnessAdapter,
@@ -49,6 +49,14 @@ class FailAdapter implements HarnessAdapter {
   /** 挂起到被 interrupt 才返回 TIMEOUT(用例 F) */
   hangUntilInterrupted = false
   interrupted = false
+  /** 前 N 次 startRun 直接报错(用例 G:adapter 报错 → FAILED) */
+  failStartTimes = 0
+  /**
+   * startRun 时先模拟巡检把 run 收走(TIMEOUT/RUN_STALLED;巡检不碰身份列,
+   * claim 时已写的 harness_id / harness_tier 保留),再报错
+   * (用例 H:zombie 失败不得覆盖终态)。
+   */
+  reapBeforeStart = false
 
   appendBody(body: Record<string, unknown>): void {
     this.pending.push(body)
@@ -63,8 +71,23 @@ class FailAdapter implements HarnessAdapter {
       limits: { max_input_bytes: null, max_wall_clock_s: null },
     }
   }
-  async startRun(spec: RunSpec): Promise<{ ok: true; value: RunHandle }> {
+  async startRun(spec: RunSpec): Promise<Result<RunHandle>> {
     this.calls.push(spec.run.stage)
+    if (this.reapBeforeStart) {
+      // 模拟 patrol:标终态。巡检进程拿不到 adapter,但它不需要 ——
+      // 身份在 claim(PENDING→RUNNING)时已写进 run 行(R5)。
+      await asOwner((c) =>
+        c.query(
+          `UPDATE run SET status='TIMEOUT', ended_at=$2, error_kind='RUN_STALLED'
+           WHERE id=$1 AND status='RUNNING'`,
+          [spec.run.run_id, '2026-08-25T12:00:00Z'],
+        ),
+      )
+    }
+    if (this.reapBeforeStart || this.failStartTimes > 0) {
+      this.failStartTimes = Math.max(0, this.failStartTimes - 1)
+      return err(makeError('HARNESS_UNAVAILABLE', '桩：harness 进程启动失败'))
+    }
     const body = this.pending.shift()
     if (body === undefined) throw new Error(`没有为 ${spec.run.stage} 准备产物`)
     this.bodyByRun.set(spec.run.run_id, body)
@@ -245,8 +268,15 @@ describe('R1(issue #23)· run 失败面', () => {
 
     // 两次 pm run:第一次失败,第二次成功
     const runs = await asOwner((c) =>
-      c.query<{ attempt: number; status: string; idempotency_key: string }>(
-        `SELECT attempt, status, idempotency_key FROM run WHERE task_id=$1 AND stage='pm' ORDER BY attempt`,
+      c.query<{
+        attempt: number
+        status: string
+        idempotency_key: string
+        harness_id: string | null
+        harness_tier: string | null
+      }>(
+        `SELECT attempt, status, idempotency_key, harness_id, harness_tier
+           FROM run WHERE task_id=$1 AND stage='pm' ORDER BY attempt`,
         [taskId],
       ),
     )
@@ -255,6 +285,9 @@ describe('R1(issue #23)· run 失败面', () => {
     expect(runs.rows[1]?.status).toBe('SUCCEEDED')
     expect(runs.rows[0]?.idempotency_key).toContain('/pm/1')
     expect(runs.rows[1]?.idempotency_key).toContain('/pm/2') // T-030 重试 key 递增
+    // 失败 run 与成功 run 一样要知道是谁跑的(issue #73 第 1 项)
+    expect(runs.rows[0]?.harness_id).toBe(adapter.describe().harness_id)
+    expect(runs.rows[0]?.harness_tier).toBe(adapter.describe().tier)
 
     // 事件流:T-030 重试转移(TaskStatusChanged 的 transition=T-030)+ RunCreated(pm/2)
     const evs = await asOwner((c) =>
@@ -291,12 +324,25 @@ describe('R1(issue #23)· run 失败面', () => {
     )
 
     const runs = await asOwner((c) =>
-      c.query<{ attempt: number; status: string; error_kind: string | null }>(
-        `SELECT attempt, status, error_kind FROM run WHERE task_id=$1 AND stage='pm' ORDER BY attempt`,
+      c.query<{
+        attempt: number
+        status: string
+        error_kind: string | null
+        harness_id: string | null
+        harness_tier: string | null
+      }>(
+        `SELECT attempt, status, error_kind, harness_id, harness_tier
+           FROM run WHERE task_id=$1 AND stage='pm' ORDER BY attempt`,
         [taskId],
       ),
     )
-    expect(runs.rows[0]).toMatchObject({ status: 'TIMEOUT', error_kind: 'RUN_STALLED' })
+    expect(runs.rows[0]).toMatchObject({
+      status: 'TIMEOUT',
+      error_kind: 'RUN_STALLED',
+      // 超时 run 同样要知道是哪个 harness —— 失败面最需要事后追查
+      harness_id: adapter.describe().harness_id,
+      harness_tier: adapter.describe().tier,
+    })
 
     const evs = await asOwner((c) =>
       c.query<{ type: string; payload: Record<string, unknown> }>(
@@ -363,12 +409,16 @@ describe('R1(issue #23)· run 失败面', () => {
     expect(result.value.stopReason).toBe('cancelled')
 
     const runs = await asOwner((c) =>
-      c.query<{ status: string }>(`SELECT status FROM run WHERE task_id=$1 AND stage='pm'`, [
-        taskId,
-      ]),
+      c.query<{ status: string; harness_id: string | null; harness_tier: string | null }>(
+        `SELECT status, harness_id, harness_tier FROM run WHERE task_id=$1 AND stage='pm'`,
+        [taskId],
+      ),
     )
     expect(runs.rows).toHaveLength(1)
     expect(runs.rows[0]?.status).toBe('CANCELLED') // 不卡 PENDING、不重试
+    // 撤回同样是失败面的结算:harness 身份一并落库
+    expect(runs.rows[0]?.harness_id).toBe(adapter.describe().harness_id)
+    expect(runs.rows[0]?.harness_tier).toBe(adapter.describe().tier)
 
     // 无第二个 pm run(不重试)
     const runs2 = await asOwner((c) =>
@@ -377,6 +427,82 @@ describe('R1(issue #23)· run 失败面', () => {
       ]),
     )
     expect(runs2.rows.every((r) => r.attempt === 1)).toBe(true)
+  })
+
+  it('G.adapter 报错 → run FAILED,harness_id / harness_tier 与终态同事务落库', async () => {
+    const taskId = await seedTask()
+    adapter.failStartTimes = 1 // run1:startRun 直接 HARNESS_UNAVAILABLE
+    adapter.appendBody(goodPmOutcome()) // run2(T-030 重试)正常成功
+
+    await runTaskToCompletion(taskId, depsFor(), { maxSteps: 3 })
+
+    const runs = await asOwner((c) =>
+      c.query<{
+        attempt: number
+        status: string
+        error_kind: string | null
+        harness_id: string | null
+        harness_tier: string | null
+      }>(
+        `SELECT attempt, status, error_kind, harness_id, harness_tier
+           FROM run WHERE task_id=$1 AND stage='pm' ORDER BY attempt`,
+        [taskId],
+      ),
+    )
+    expect(runs.rows).toHaveLength(2)
+    expect(runs.rows[0]).toMatchObject({
+      status: 'FAILED',
+      error_kind: 'HARNESS_UNAVAILABLE',
+      harness_id: adapter.describe().harness_id,
+      harness_tier: adapter.describe().tier,
+    })
+    // 重试成功后 run2 走成功路径,同样带 harness 身份
+    expect(runs.rows[1]).toMatchObject({
+      status: 'SUCCEEDED',
+      harness_id: adapter.describe().harness_id,
+    })
+  })
+
+  it('H.巡检收割后 zombie 再失败:不覆盖终态、不 emit RunFailed、不重试', async () => {
+    const taskId = await seedTask()
+    adapter.reapBeforeStart = true
+
+    const result = await runTaskToCompletion(taskId, depsFor(), { maxSteps: 3 })
+    // 阶段态且无 PENDING run(最近一次是 TIMEOUT)→ 如实报卡住,而不是「跑完了」
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error.kind).toBe('NOT_FOUND')
+
+    const runs = await asOwner((c) =>
+      c.query<{
+        attempt: number
+        status: string
+        error_kind: string | null
+        harness_id: string | null
+        harness_tier: string | null
+      }>(
+        `SELECT attempt, status, error_kind, harness_id, harness_tier
+           FROM run WHERE task_id=$1 AND stage='pm' ORDER BY attempt`,
+        [taskId],
+      ),
+    )
+    // 围栏:UPDATE ... WHERE status='RUNNING' 影响 0 行 → 不重写、不重试
+    expect(runs.rows).toHaveLength(1)
+    expect(runs.rows[0]).toMatchObject({
+      status: 'TIMEOUT',
+      error_kind: 'RUN_STALLED',
+      // claim 时已写身份(R5);巡检收割不依赖 adapter,也不清空/覆盖它
+      harness_id: 'fail-stub',
+      harness_tier: 'L0',
+    })
+
+    const failedEvents = await asOwner((c) =>
+      c.query<{ n: string }>(
+        `SELECT count(*) AS n FROM event WHERE task_id=$1 AND type='RunFailed'`,
+        [taskId],
+      ),
+    )
+    expect(Number(failedEvents.rows[0]?.n)).toBe(0)
   })
 
   // ── D/E：develop 的「真改了吗」闸门（collectChanges 接进编排）──

@@ -222,14 +222,24 @@ describe('durable timer 方案 B · in-flight 收割(issue #26)', () => {
 
     // run1 超时 → RunTimeout → T-030 重试(run2 attempt=2)
     const runs = await asOwner((c) =>
-      c.query<{ attempt: number; status: string; error_kind: string | null }>(
-        `SELECT attempt, status, error_kind FROM run WHERE task_id=$1 AND stage='pm' ORDER BY attempt`,
+      c.query<{
+        attempt: number
+        status: string
+        error_kind: string | null
+        harness_id: string | null
+        harness_tier: string | null
+      }>(
+        `SELECT attempt, status, error_kind, harness_id, harness_tier
+           FROM run WHERE task_id=$1 AND stage='pm' ORDER BY attempt`,
         [taskId],
       ),
     )
     expect(runs.rows).toHaveLength(2)
     expect(runs.rows[0]?.status).toBe('TIMEOUT')
     expect(runs.rows[0]?.error_kind).toBe('RUN_TIMEOUT')
+    // 墙钟超时的结算同样落 harness 身份(issue #73 第 1 项)
+    expect(runs.rows[0]?.harness_id).toBe(adapter.describe().harness_id)
+    expect(runs.rows[0]?.harness_tier).toBe(adapter.describe().tier)
     expect(runs.rows[1]?.status).toBe('SUCCEEDED')
 
     // 每个 run 一个墙钟 timer;pm1(挂起失败)+ pm2 + rfc_draft 都取消(防残留)

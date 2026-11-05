@@ -30,6 +30,9 @@ async function seedRun(opts: {
   pid?: number | null
   pgid?: number | null
   harnessStartedAt?: string | null
+  /** claim 时写入的 harness 身份（R5）；缺省 NULL = 旧 run */
+  harnessId?: string
+  harnessTier?: string
 }): Promise<{ taskId: string; runId: string }> {
   const repoId = randomUUID()
   const taskId = randomUUID()
@@ -46,9 +49,19 @@ async function seedRun(opts: {
       [taskId, repoId],
     )
     await c.query(
-      `INSERT INTO run (id, task_id, stage, role, attempt, status, idempotency_key, started_at)
-       VALUES ($1,$2,'develop','DEV',1,$3,$4,$5)`,
-      [runId, taskId, opts.status ?? 'RUNNING', `${taskId}/develop/1`, opts.startedAt ?? OLD],
+      `INSERT INTO run (
+         id, task_id, stage, role, attempt, status, idempotency_key, started_at,
+         harness_id, harness_tier
+       ) VALUES ($1,$2,'develop','DEV',1,$3,$4,$5,$6,$7)`,
+      [
+        runId,
+        taskId,
+        opts.status ?? 'RUNNING',
+        `${taskId}/develop/1`,
+        opts.startedAt ?? OLD,
+        opts.harnessId ?? null,
+        opts.harnessTier ?? null,
+      ],
     )
   })
   if (opts.status !== undefined && opts.status !== 'RUNNING') {
@@ -78,6 +91,18 @@ async function runStatus(runId: string): Promise<{ status: string; error_kind: s
     ),
   )
   return r.rows[0] as { status: string; error_kind: string | null }
+}
+
+async function runIdentity(
+  runId: string,
+): Promise<{ harness_id: string | null; harness_tier: string | null }> {
+  const r = await asOwner((c) =>
+    c.query<{ harness_id: string | null; harness_tier: string | null }>(
+      `SELECT harness_id, harness_tier FROM run WHERE id=$1`,
+      [runId],
+    ),
+  )
+  return r.rows[0] as { harness_id: string | null; harness_tier: string | null }
 }
 
 async function stalledEvents(runId: string) {
@@ -143,6 +168,24 @@ describe('patrolStalledRuns', () => {
       c.query<{ n: string }>(`SELECT count(*) AS n FROM run WHERE task_id=$1`, [taskId]),
     )
     expect(Number(runs.rows[0]?.n)).toBe(2)
+  })
+
+  it('带身份的 run 被收割后身份保留（巡检不依赖 adapter、也不清空身份）', async () => {
+    // 编排进程已死：这是一条 claim 时写过身份的 RUNNING run。
+    // 巡检只从库里读，不可能再问 adapter —— 身份必须原样留在行上（R5）。
+    const { runId } = await seedRun({
+      silenceMs: 60_000,
+      lastProgressAt: '2026-11-05T10:30:00Z',
+      ownerHeartbeatAt: OLD,
+      harnessId: 'omp',
+      harnessTier: 'L1',
+    })
+
+    const stats = await patrolStalledRuns(deps())
+    expect(stats.reaped).toBeGreaterThanOrEqual(1)
+
+    expect(await runStatus(runId)).toEqual({ status: 'TIMEOUT', error_kind: 'RUN_STALLED' })
+    expect(await runIdentity(runId)).toEqual({ harness_id: 'omp', harness_tier: 'L1' })
   })
 
   it('双 worker 并发巡检只产生一条 RunStalled', async () => {

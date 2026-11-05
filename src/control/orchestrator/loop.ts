@@ -19,7 +19,11 @@
 import { randomUUID } from 'node:crypto'
 import type { CiGateway } from '../../contracts/ci-gateway.js'
 import { err, type KeelError, makeError, ok, type Result } from '../../contracts/errors.js'
-import type { HarnessAdapter, WorkspaceDiff } from '../../contracts/harness-adapter.js'
+import type {
+  HarnessAdapter,
+  HarnessDescriptor,
+  WorkspaceDiff,
+} from '../../contracts/harness-adapter.js'
 import type { Usage } from '../../contracts/types.js'
 import { type ModelProfile, resolveStageModel } from '../../execution/model-routing.js'
 import type { HarnessSessionManager } from '../../execution/session/manager.js'
@@ -31,7 +35,7 @@ import type { ControlMode, RoleId, Stage, TaskStatus } from '../../shared/ids.js
 import { isStageStatus } from '../../shared/ids.js'
 import { claimDueTimers } from '../../timer/drain.js'
 import { checkBudgetFuse } from '../budget/fuse.js'
-import { claimRunForExecution } from '../concurrency/limits.js'
+import { claimRunForExecution, DEFAULT_MAX_RUNNING_RUNS } from '../concurrency/limits.js'
 import { FactPlaneContextBuilder } from '../context/builder.js'
 import type { WorkflowDriver } from '../driver/driver.js'
 import { livenessMode, policyFor, runWallClockS } from '../liveness/policy.js'
@@ -436,12 +440,23 @@ async function executeRun(
   // PENDING→RUNNING 乐观锁与全局 RUNNING 上限检查在**同一事务**内
   // （claimRunForExecution）。认领失败返回可重试 CONFLICT 并向上传播 ——
   // 编排器因此停下而不是静默吞掉（docs/08-cross-cutting.md §4.4 N4）。
-  const claimed = await asRole('keel_control', (c) => claimRunForExecution(c, pending.id))
+  //
+  // 身份也在认领时落库（R5）：进程死掉后由 timer worker / patrol 收割的 run
+  // 拿不到 adapter，若等到结算才写，最需要追查的场景反而会是 NULL。
+  // 认领 → 执行 → 成功元数据这条链路只在这里 describe 一次，后面复用同一个值；
+  // 失败结算在 failRunAndAdvance 里再取一次同一 adapter 的值（同进程同源，结果相同）。
+  const descriptor = deps.adapter.describe()
+  const claimed = await asRole('keel_control', (c) =>
+    claimRunForExecution(c, pending.id, DEFAULT_MAX_RUNNING_RUNS, {
+      harnessId: descriptor.harness_id,
+      harnessTier: descriptor.tier,
+    }),
+  )
   if (!claimed.ok) return { ok: false, error: claimed.error, usage: ZERO_USAGE }
 
   // 失败时由调用方 failRunAndAdvance 离开 RUNNING(一次写 + R1 流转)。
   // 不再先 markRunFailed 再覆写 —— 双写之间崩溃会留下「FAILED 却无失败事件」。
-  return executeClaimedRun(taskId, pending, deps, ctxBuilder)
+  return executeClaimedRun(taskId, pending, deps, ctxBuilder, descriptor)
 }
 
 /** 认领之后的执行主体。失败返回 err 后由 failRunAndAdvance 落终态并流转 */
@@ -450,6 +465,7 @@ async function executeClaimedRun(
   pending: { id: string; stage: Stage; role: RoleId; attempt: number },
   deps: OrchestratorDeps,
   ctxBuilder: FactPlaneContextBuilder,
+  descriptor: HarnessDescriptor,
 ): Promise<ExecOutcome> {
   const ctx = await asRole('keel_control', (c) =>
     ctxBuilder.build(c, {
@@ -474,7 +490,8 @@ async function executeClaimedRun(
   const place = await resolveWorkspace(taskId, deps.workspace)
   if (!place.ok) return { ok: false, error: place.error, usage: ZERO_USAGE }
 
-  const descriptor = deps.adapter.describe()
+  // descriptor 在认领前取一次并写入 run 行（claim 的身份列）——
+  // 这里复用同一个值，不在执行主体里重新 describe。
 
   // ── 模型解析：认领之后、spawn 之前 ──
   //
@@ -969,10 +986,19 @@ async function failRunAndAdvance(
   // unavailable),熔断检查在**同一事务**内 —— 与成功路径同一纪律。
   // 否则最烧钱的场景(R-007 回灌 × T-030 重试,每轮都失败)对 C-002 完全失明:
   // 每次重试都白烧一整个 run 的预算,熔断永远看不到。
+  //
+  // 谁执行了这个 run 与终态**同事务同语句**落库:最需要事后追查的恰恰是
+  // 失败 run,而那时进程日志已经不在了。与成功路径(SUCCEEDED 围栏那条
+  // UPDATE)同源,都取 deps.adapter.describe() —— 不在别处另算。
+  // 身份其实已在 claim 时写进 run 行(limits.ts,R5),这里重复写同一个值是
+  // 无害兜底:覆盖 claim 之前的旧数据 / 异常路径,保证结算行自带身份。
+  // 围栏不变:仍以 status='RUNNING' 为条件,0 行时整条语句什么都不写。
+  const descriptor = deps.adapter.describe()
   const settled = await asRole('keel_control', async (c) => {
     const updated = await c.query(
       `UPDATE run SET status=$2, ended_at=$3, error_kind=$4, error_detail=$5,
-              tokens_in=$6, tokens_out=$7, cost_usd=$8, cost_basis=$9
+              harness_id=$6, harness_tier=$7,
+              tokens_in=$8, tokens_out=$9, cost_usd=$10, cost_basis=$11
        WHERE id=$1 AND status='RUNNING'`,
       [
         pending.id,
@@ -980,6 +1006,8 @@ async function failRunAndAdvance(
         deps.now(),
         runErr.kind,
         runErr.detail,
+        descriptor.harness_id,
+        descriptor.tier,
         usage.tokens_in,
         usage.tokens_out,
         usage.cost_usd,

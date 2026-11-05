@@ -3,7 +3,7 @@
   "name": "fail-run-harness-id",
   "title": "失败 run 落 harness_id",
   "description": "超时/失败结算与 harness_id 同事务落库，事后可追查",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

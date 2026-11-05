@@ -91,6 +91,21 @@ owner 心跳过期（≠ 进展过期）
 成功路径的 `SUCCEEDED` 由 pipeline 在**提交 artifact 的同一事务**里置位；
 loop 只写元数据。不要把这两步拆成两个事务。
 
+## 身份（`harness_id`）在认领时落库
+
+`harness_id` / `harness_tier` 必须在 claim（`PENDING→RUNNING`）的**同一条 UPDATE**
+写入，不能等结算：
+
+- timer worker / patrol 收割时**没有 adapter 实例**。只在结算写，
+  最需要追查的「编排进程已死」场景反而永远是 `NULL`。
+- 写进认领语句也避免 claim 返回后再发第二条查询：
+  `claimRunForExecution` 的 unique_violation 会中止事务，之后不得再发 SQL。
+- N4 上限拒绝、N3 乐观锁 0 行两条路径都不写身份（run 保持 `PENDING`）。
+
+失败结算与成功路径仍写同样的值，属无害兜底（覆盖旧数据与异常路径）。
+测试点：`limits` 的认领写入与拒绝不写、`run-failure` 用例 H 的外部收割、
+`patrol.test.ts` 与 `reap.test.ts` 各自的真实收割路径。
+
 ## 事件、转移与错误
 
 - `TransitionEvent: RunStalled { stage }`，进 `T-030` / `T-031` 的 `on`，

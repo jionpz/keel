@@ -9,6 +9,7 @@
  * 2. N3（应用层）：认领是 PENDING→RUNNING 乐观锁，重复认领得 CONFLICT（可重试）
  * 3. N3（映射）：索引兜底触发时被映射为 CONFLICT，事务回滚不留半个 RUNNING
  * 4. N4：全局 RUNNING 达上限时认领被拒且不静默；释放后恢复可认领
+ * 5. R5：认领同语句写入 harness 身份；被拒的认领不写身份
  */
 
 import { randomUUID } from 'node:crypto'
@@ -57,14 +58,22 @@ async function seedRun(taskId: string, status: string, attempt = 1): Promise<str
   return id
 }
 
-async function runRow(
-  runId: string,
-): Promise<{ status: string; started_at: Date | null } | undefined> {
+async function runRow(runId: string): Promise<
+  | {
+      status: string
+      started_at: Date | null
+      harness_id: string | null
+      harness_tier: string | null
+    }
+  | undefined
+> {
   const r = await asOwner((c) =>
-    c.query<{ status: string; started_at: Date | null }>(
-      'SELECT status, started_at FROM run WHERE id=$1',
-      [runId],
-    ),
+    c.query<{
+      status: string
+      started_at: Date | null
+      harness_id: string | null
+      harness_tier: string | null
+    }>('SELECT status, started_at, harness_id, harness_tier FROM run WHERE id=$1', [runId]),
   )
   return r.rows[0]
 }
@@ -123,15 +132,23 @@ describe('N3 · 认领是 PENDING→RUNNING 乐观锁', () => {
     await seedRun(taskId, 'RUNNING', 1)
     const pendingId = await seedRun(taskId, 'PENDING', 2)
 
-    const r = await asRole('keel_control', (c) => claimRunForExecution(c, pendingId))
+    // 带身份认领：23505 中止事务，身份必须与状态一起回滚（不能留下半个身份）
+    const r = await asRole('keel_control', (c) =>
+      claimRunForExecution(c, pendingId, DEFAULT_MAX_RUNNING_RUNS, {
+        harnessId: 'omp',
+        harnessTier: 'L1',
+      }),
+    )
     expect(r.ok).toBe(false)
     if (r.ok) return
     expect(r.error.kind).toBe('CONFLICT')
     expect(r.error.detail).toContain('run_one_running_per_task')
 
-    // 事务已回滚：没有留下半个 RUNNING
+    // 事务已回滚：没有留下半个 RUNNING，也没有写进身份
     const row = await runRow(pendingId)
     expect(row?.status).toBe('PENDING')
+    expect(row?.harness_id).toBeNull()
+    expect(row?.harness_tier).toBeNull()
   })
 })
 
@@ -167,5 +184,51 @@ describe('N4 · 全局 RUNNING 上限', () => {
     const accepted = await asRole('keel_control', (c) => claimRunForExecution(c, pendingId))
     expect(accepted.ok, accepted.ok ? '' : accepted.error.detail).toBe(true)
     expect((await runRow(pendingId))?.status).toBe('RUNNING')
+  })
+})
+
+describe('R5 · 认领时落 harness 身份（外部收割路径不依赖 adapter）', () => {
+  it('带身份认领：status→RUNNING 且 harness_id / harness_tier 同语句落库', async () => {
+    const taskId = await seedTask()
+    const runId = await seedRun(taskId, 'PENDING')
+
+    const r = await asRole('keel_control', (c) =>
+      claimRunForExecution(c, runId, DEFAULT_MAX_RUNNING_RUNS, {
+        harnessId: 'omp',
+        harnessTier: 'L1',
+      }),
+    )
+    expect(r.ok, r.ok ? '' : r.error.detail).toBe(true)
+
+    // 编排进程若此刻死掉，timer worker / patrol 只能读 run 行 ——
+    // 身份必须已经在这里，而不是等结算补写
+    expect(await runRow(runId)).toMatchObject({
+      status: 'RUNNING',
+      harness_id: 'omp',
+      harness_tier: 'L1',
+    })
+  })
+
+  it('N4 拒绝时不写身份：run 仍是 PENDING，harness_id 为 NULL', async () => {
+    for (let i = 0; i < DEFAULT_MAX_RUNNING_RUNS; i++) {
+      await seedRun(await seedTask(), 'RUNNING')
+    }
+    const taskId = await seedTask()
+    const pendingId = await seedRun(taskId, 'PENDING')
+
+    const rejected = await asRole('keel_control', (c) =>
+      claimRunForExecution(c, pendingId, DEFAULT_MAX_RUNNING_RUNS, {
+        harnessId: 'omp',
+        harnessTier: 'L1',
+      }),
+    )
+    expect(rejected.ok).toBe(false)
+
+    // 没有认领就没有「谁在跑」—— 不能留下半截身份
+    expect(await runRow(pendingId)).toMatchObject({
+      status: 'PENDING',
+      harness_id: null,
+      harness_tier: null,
+    })
   })
 })

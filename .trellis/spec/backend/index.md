@@ -25,7 +25,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Transition Effects](./transition-effects.md) | `firstRun`/`nextRun` 的可用站点与白名单双向断言、撞键可归因（`existing_status`）、不改键算法的理由、Task 级 timer 三件套的武装/取消对称与 `claimDueTimers` 的 `JOIN task` 防线 | ✅ 已填（`10-26-run-reentry-wallclock`；`11-05-human-review-ttl` 补 timer 章节） |
 | [Orchestrator Loop](./orchestrator-loop.md) | 停止原因必填（`stopReason`）、阶段态无 run 的证据式判据、单进程前提、只报告不修复 | ✅ 已填（`10-26-orchestrator-stop-reasons`） |
 | [Policy Ruleset](./policy-ruleset.md) | `rfc_ready` 放行带（P4 = `risk=low && complexity!=high`）、默认 deny 与严格性偏序不许动、版本号纪律、`default_applied` 覆盖率信号 | ✅ 已填（`11-05-policy-auto-band`） |
-| [Run Liveness](./run-liveness.md) | 卡死按无进展判定、`run_liveness` 只授 `keel_control`、supervisor / patrol 分工、成功与失败路径围栏、`KEEL_LIVENESS_MODE` 降级 | ✅ 已填（`11-04-run-liveness-patrol`） |
+| [Run Liveness](./run-liveness.md) | 卡死按无进展判定、`run_liveness` 只授 `keel_control`、supervisor / patrol 分工、成功与失败路径围栏、认领即写 `harness_id`、`KEEL_LIVENESS_MODE` 降级 | ✅ 已填（`11-04-run-liveness-patrol`；`11-05-fail-run-harness-id` 补认领时写身份） |
 | [Git Workspace](./git-workspace.md) | Agent 提交用 `-c` 钉死身份与签名、夹具关 gpgsign、`GIT_CONFIG_GLOBAL` 的使用边界、https 传输认证注入 | ✅ 已填（`08-26-v01-closeout`；11-03 补传输认证） |
 | [GitHub Provider](./github-provider.md) | host 解析单一事实源、`KEEL_GITHUB_API_ROOT` 优先级、空白配置 fail-closed、GHES 测试点 | ✅ 已填（`11-03-ghes-host-support`） |
 | [Ingress Poller](./ingress-poller.md) | 每仓库 `issue_label`、分页与 `truncated`、轮内去重、`StopToken` 订阅制、日志脱敏 | ✅ 已填（`08-29-ingress-poller`） |
