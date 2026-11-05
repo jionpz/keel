@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "后端规范索引：确认 control/policy 层的边界与生成物纪律"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试分层与禁用模式，新增策略用例需遵守"}

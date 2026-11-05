@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量门槛与 review 清单，用于核对策略改动的测试覆盖"}
+{"file": ".trellis/spec/backend/index.md", "reason": "层边界与生成物纪律，防止改到生成物"}
