@@ -75,7 +75,7 @@ Each question must include:
 - your recommended answer
 - the trade-off if the user chooses differently
 
-Do not ask process questions such as whether to search, inspect files, or continue brainstorming. Do the evidence work directly. Ask the user only when the remaining issue is a product decision, preference, scope boundary, or risk tolerance choice.
+Do not ask process questions such as whether to search, inspect files, or continue brainstorming. Do the evidence work directly. Ask the user only when the remaining issue is a product decision, preference, scope boundary, or risk tolerance choice **and** it meets the blocking test in the Planning Contract — a preference whose options share the same acceptance criteria is recorded in `prd.md`, not asked.
 
 Recommendations are not default selections. Never choose a **blocking** product decision on the user's behalf merely because the user asked for implementation. A decision that does not meet the blocking test is recorded as a stated decision in `prd.md` and surfaced in the first post-start line — recorded, not smuggled.
 
@@ -197,6 +197,6 @@ Before declaring planning ready:
 - Complex tasks have `design.md` and `implement.md`.
 - Sub-agent-dispatch tasks have real curated entries in both `implement.jsonl` and `check.jsonl`; seed-only manifests are not ready.
 - The latest final planning summary has been presented to the user.
-- The self-check found none of the three blocking cases; the first post-start reply states the understood goal, scope, and exclusions.
+- The self-check found none of the three blocking cases; the first post-start reply states the understood goal, scope, exclusions, and any decision recorded without asking.
 
 Do not start while one of the three blocking cases is unresolved.

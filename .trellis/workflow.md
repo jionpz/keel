@@ -171,6 +171,10 @@ Default is to keep moving. Stop and ask only in these three cases:
 
 Technical details are not decisions: implementation path, naming, and test shape are yours.
 
+A user-owned product / UX / scope decision whose options share the same acceptance criteria is
+not blocking either: decide it, record it under Key Decisions in `prd.md`, and name it in the
+first post-start line. What is forbidden is deciding it **silently** — not deciding it.
+
 ### Planning Artifacts
 
 - `prd.md` — requirements, constraints, and acceptance criteria. Do not put technical design or execution checklists here.
