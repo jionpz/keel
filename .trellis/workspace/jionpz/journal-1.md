@@ -769,3 +769,40 @@ P4 条件改为 risk=low && complexity!=high，中等复杂度低风险不再默
 ### Next Steps
 
 - 父任务剩余：github-token-source、poller-single-instance（需 design.md）
+
+
+## Session 20: GitHub token 来源与启动期校验（#73-3）
+
+**Date**: 2026-11-05
+**Task**: GitHub token 来源与启动期校验（#73-3）
+**Branch**: `main`
+
+### Summary
+
+token 优先级 KEEL > GITHUB > gh(按 host)；三个入口在写入前 fail fast；provider/传输层按 host 解析并脱敏
+
+### Main Changes
+
+- 新增 resolveGitHubToken 单一解析器，空白 env 不遮蔽 gh，gh 失败不抛/不带 stderr
+- GitHubProvider 与 GitWorkspace 按 host 缓存 token；gh 来源 token 进入 secrets 脱敏集合
+- run-issue / poller / run-task --ci real 启动期预检；新增 loadTaskRemoteUrl 只读助手
+- spec github-provider/git-workspace 记录契约；测试全部注入 runGh/tokenResolver
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9889e38` | (see git log) |
+
+### Testing
+
+- [OK] pnpm run check：61 文件，900 passed / 5 skipped
+- [OK] 假 gh + 清空 env 跑全量：gh 零调用，证明测试不依赖开发机登录态
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 父任务仅剩 poller-single-instance（需先补 design.md）

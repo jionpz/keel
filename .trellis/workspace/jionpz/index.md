@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 19
+- **Total Sessions**: 20
 - **Last Active**: 2026-11-05
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~771 | Active |
+| `journal-1.md` | ~808 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 20 | 2026-11-05 | GitHub token 来源与启动期校验（#73-3） | `9889e38` | `main` |
 | 19 | 2026-11-05 | 失败 run 落 harness 身份（#73-1） | `edee68d` | `main` |
 | 18 | 2026-11-05 | 收窄 Trellis 工作流的人工确认点 | `3a922c5` | `main` |
 | 17 | 2026-11-05 | S-HUMAN_REVIEW 超时自动收尾 | `37c8b0c` | `main` |
