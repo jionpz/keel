@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 17
+- **Total Sessions**: 18
 - **Last Active**: 2026-11-05
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~714 | Active |
+| `journal-1.md` | ~735 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 18 | 2026-11-05 | 收窄 Trellis 工作流的人工确认点 | `3a922c5` | `main` |
 | 17 | 2026-11-05 | S-HUMAN_REVIEW 超时自动收尾 | `37c8b0c` | `main` |
 | 16 | 2026-11-05 | 放宽 auto_develop 放行带 | `7524dbd`, `797129c`, `2e084de` | `main` |
 | 15 | 2026-11-05 | 执行面模型路由：按阶段对接企业网关 | `edff9e8`, `1b4f3e6`, `b99de02` | `main` |

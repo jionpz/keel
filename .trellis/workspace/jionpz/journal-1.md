@@ -712,3 +712,24 @@ P4 条件改为 risk=low && complexity!=high，中等复杂度低风险不再默
 ### Status
 
 [OK] **Completed**
+
+
+## Session 18: 收窄 Trellis 工作流的人工确认点
+
+**Date**: 2026-11-05
+**Task**: 收窄 Trellis 工作流的人工确认点
+**Branch**: `main`
+
+### Summary
+
+去掉「建任务前问一次、task.py start 前再问一次」两次人工批准，改为默认继续、只在三类必停情况下询问（未决取舍且导出不同验收标准 / 超出单任务 / 破坏性或不可逆操作）。保留证据先行、Requirement Convergence Gate、PRD Convergence Pass；用「开工第一句话说明 Goal·In Scope·Exclusions」替代原开工前批准，把纠偏点后移到第一个可见步骤。新增 .trellis/spec/guides/workflow-overrides.md 记录覆盖项、判据锚点与 trellis update 后的三条自检命令。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3a922c5` | (see git log) |
+
+### Status
+
+[OK] **Completed**
