@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/guides/workflow-overrides.md", "reason": "被校验的规则本体与三条自检的权威说明；脚本的失败信息要指回这一页"}
+{"file": ".trellis/spec/guides/architecture-doc-conventions.md", "reason": "文档可被脚本检查的既有约定：可寻址 ID、失败要指得出位置，本脚本沿用同一套做法"}

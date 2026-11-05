@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/guides/workflow-overrides.md", "reason": "验收时逐条核对三条自检的真实语义，确认脚本断言与文档口径一致"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "check 要核对失败信息可操作性、防假绿、退出码等既有质量约定"}
