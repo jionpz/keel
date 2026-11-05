@@ -7,11 +7,11 @@ description: "Guides collaborative requirements discovery before implementation.
 
 ## Non-Negotiable Planning Contract
 
-A request to build, implement, fix, refactor, or "go ahead" is not approval to leave planning. Task-creation consent is also not implementation approval.
+Planning is what happens before code, not a permission slip. A request to build, implement, fix, or refactor goes straight into planning; what it does not do is skip it.
 
-For every non-trivial task, the user must respond at least once after the initial request before implementation begins. If no clarification is needed, that response must approve the final planning summary described below.
+The user does not have to approve the plan before implementation begins. What the plan must satisfy is the self-check described below, and the first post-start reply states what you understood so the user can correct course at the first visible step.
 
-While any user-owned product, scope, UX, compatibility, risk, or acceptance decision remains unresolved, end the turn with exactly one highest-value question. Do not edit product code, dispatch implementation, or run `task.py start`.
+While one of the three blocking cases remains unresolved — an unresolved product / scope / risk trade-off whose options lead to different acceptance criteria; a request that exceeds one task; or a destructive or irreversible action — end the turn with exactly one highest-value question and do not run `task.py start`. Technical details are not decisions: implementation path, naming, and test shape are yours to choose.
 
 ## Non-Negotiable Evidence Rule
 
@@ -29,7 +29,7 @@ Use this skill during Phase 1 planning to turn the user's request into clear req
 
 ## Preconditions
 
-Use this skill only after task-creation consent has been given and the user is ready to enter Trellis planning.
+Use this skill once the request is classified as task-scoped (see Request Triage in `.trellis/workflow.md`). No separate consent step is needed.
 
 If no task exists yet, create one:
 
@@ -53,12 +53,12 @@ Use a concise title from the user's request. Use a slug without a date prefix. `
    - product intent still needed from the user
    - scope or risk decisions still needed from the user
    - likely out-of-scope items
-4. If a user-owned decision remains, ask the single highest-value question, include your recommendation and trade-off, then stop. Do not perform implementation work in the same turn.
+4. If one of the three blocking cases applies, ask the single highest-value question, include your recommendation and trade-off, then stop. Do not perform implementation work in the same turn.
 5. After each user answer, update `prd.md`, recompute the decision inventory, and repeat from step 2.
-6. When no user-owned decision remains, create or update `design.md` and `implement.md` for complex tasks.
+6. When no blocking case remains, create or update `design.md` and `implement.md` for complex tasks.
 7. Run the requirement convergence gate, then the PRD convergence pass.
-8. Present the final planning summary and stop. Do not run `task.py start` or edit product code in the same turn.
-9. Only a subsequent user message that explicitly approves the latest planning summary authorizes `task.py start` and implementation. If the artifacts change materially after approval, repeat the final review.
+8. Present the final planning summary. Then run the self-check in step 9.
+9. If no blocking case applies, run `task.py start` in the same turn and open the next reply with one line stating the goal, scope, and exclusions you understood — that line is the user's early-correction point. If the artifacts change materially later, redo the self-check and say so.
 
 Do not invent a project-specific product/spec hierarchy. If the repository already has product, domain, or spec docs, use them. If it does not, proceed with the evidence that exists.
 
@@ -77,9 +77,9 @@ Do not ask process questions such as whether to search, inspect files, or contin
 
 Recommendations are not default selections. Never choose a recommended product decision on the user's behalf merely because the user asked for implementation.
 
-Do not manufacture clarification questions when the request and repository evidence already resolve every decision. In that case, proceed directly to the final planning summary, which still requires a subsequent explicit approval.
+Do not manufacture clarification questions when the request and repository evidence already resolve every decision. In that case, proceed directly to the final planning summary and the self-check.
 
-The final review is a required phase-transition gate, not a prohibited process question. Task-creation consent, the initial implementation request, and approval given before the latest final summary do not satisfy this gate.
+The final planning summary is still required output — it is how the user sees what you understood. What it is not is a blocking gate: the self-check decides whether to start.
 
 ## Thinking Framework: First Principles Analysis
 
@@ -126,7 +126,7 @@ For each component of the current plan:
 
 ## Requirement Convergence Gate
 
-Before final review, verify all of the following:
+Before the self-check, verify all of the following:
 
 - the user outcome and product value are explicit
 - in-scope and out-of-scope behavior are explicit
@@ -135,7 +135,7 @@ Before final review, verify all of the following:
 - blocking open questions are empty
 - technical unknowns are researched or explicitly deferred without changing MVP behavior
 
-Lightweight tasks may omit `design.md` and `implement.md`; they may not skip evidence inspection, requirement convergence, final review, or fresh implementation approval.
+Lightweight tasks may omit `design.md` and `implement.md`; they may not skip evidence inspection, requirement convergence, the final planning summary, or the self-check.
 
 The final planning summary must show Goal, In Scope, Out of Scope, Acceptance Criteria, Key Decisions, relevant Risks or Deferred Items, and artifact status.
 
@@ -180,7 +180,7 @@ The pass must be lossless:
 - Remove resolved open questions instead of leaving empty or already-answered sections.
 - Merge parallel bug and requirement lists when they describe the same work; keep each defect's severity, evidence, and file:line anchors on the owning requirement.
 - Preserve every file:line anchor, decision, constraint, requirement ID, and acceptance-criteria mapping.
-- Do not proceed to final review while any blocking open question remains.
+- Do not proceed to the self-check while any blocking open question remains.
 
 After the pass, read `prd.md` top to bottom and verify that no fact is repeated across sections unless the repetition adds new information.
 
@@ -195,6 +195,6 @@ Before declaring planning ready:
 - Complex tasks have `design.md` and `implement.md`.
 - Sub-agent-dispatch tasks have real curated entries in both `implement.jsonl` and `check.jsonl`; seed-only manifests are not ready.
 - The latest final planning summary has been presented to the user.
-- In a subsequent message, the user explicitly approved that summary for implementation.
+- The self-check found none of the three blocking cases; the first post-start reply states the understood goal, scope, and exclusions.
 
-Do not start implementation merely because the user originally asked for implementation.
+Do not start while one of the three blocking cases is unresolved.

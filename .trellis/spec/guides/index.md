@@ -24,6 +24,7 @@ These guides help you **ask the right questions before coding**.
 | [Code Reuse Thinking Guide](./code-reuse-thinking-guide.md) | Identify patterns and reduce duplication | When you notice repeated patterns |
 | [Cross-Layer Thinking Guide](./cross-layer-thinking-guide.md) | Think through data flow across layers | Features spanning multiple layers |
 | [架构文档约定](./architecture-doc-conventions.md) | 让架构文档可被脚本检查：可寻址 ID、`未验证` 标记、方法优先级、流程走查作为证伪测试 | 修改 `docs/` 下任何架构文档时 |
+| [Workflow Overrides](./workflow-overrides.md) | 本项目对 Trellis 工作流的本地覆盖（人工确认点收窄）、判据锚点、自检命令 | 修改 `.trellis/workflow.md`，或跑过 `trellis update` 之后 |
 
 ---
 
