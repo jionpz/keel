@@ -1,0 +1,30 @@
+{
+  "id": "run-reliability-remaining",
+  "name": "run-reliability-remaining",
+  "title": "运行可靠性剩余项",
+  "description": "对应 issue #73：失败 run 落 harness_id、常驻进程单实例、GitHub token 来源",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "jionpz",
+  "assignee": "jionpz",
+  "createdAt": "2026-11-05",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "11-05-fail-run-harness-id",
+    "11-05-github-token-source",
+    "11-05-poller-single-instance"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
