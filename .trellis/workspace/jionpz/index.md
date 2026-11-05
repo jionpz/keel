@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 21
+- **Total Sessions**: 22
 - **Last Active**: 2026-11-05
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~846 | Active |
+| `journal-1.md` | ~867 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 22 | 2026-11-05 | 把 workflow-overrides 自检接进 pnpm run check | `965ca50` | `main` |
 | 21 | 2026-11-05 | 常驻进程单实例锁（#73 第 2 项） | `1ab1a60`, `213815e` | `main` |
 | 20 | 2026-11-05 | GitHub token 来源与启动期校验（#73-3） | `9889e38` | `main` |
 | 19 | 2026-11-05 | 失败 run 落 harness 身份（#73-1） | `edee68d` | `main` |

@@ -844,3 +844,24 @@ poller 与 timer-worker 用 PostgreSQL 会话级 advisory lock 强制同库单�
 ### Next Steps
 
 - 待确认：推送 main 并关闭 GitHub issue #73。
+
+
+## Session 22: 把 workflow-overrides 自检接进 pnpm run check
+
+**Date**: 2026-11-05
+**Task**: 把 workflow-overrides 自检接进 pnpm run check
+**Branch**: `main`
+
+### Summary
+
+新增 scripts/check-workflow-overrides.ts 并接入 check 链：校验判据锚点存在、11 个驱动文件无旧 gate 措辞、brainstorm 与 change-workflow 各三份镜像逐字节一致。防假绿与文件缺失均计为失败。四条红例与两条边界均已实测先红后绿，pnpm run check 全绿（915 passed）。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `965ca50` | (see git log) |
+
+### Status
+
+[OK] **Completed**
