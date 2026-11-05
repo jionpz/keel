@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/guides/architecture-doc-conventions.md", "reason": "核对判据段是否落在可被 grep 检出的锚点上，避免规则只靠人读"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量门槛与反例验证要求；本次虽不动代码，仍需按同一标准自查改动的失效模式"}

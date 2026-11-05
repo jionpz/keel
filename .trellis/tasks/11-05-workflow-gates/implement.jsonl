@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/guides/architecture-doc-conventions.md", "reason": "本次改的是规则文档，需要可寻址锚点与脚本可检的判据；该 spec 给出「可 grep 的 ID / 未验证标记 / 流程走查作为证伪测试」的既有约定"}
+{"file": ".trellis/spec/guides/index.md", "reason": "新增的 workflow-overrides 指南要登记进 guides 索引，需遵守既有表格结构"}
