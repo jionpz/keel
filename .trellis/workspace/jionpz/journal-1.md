@@ -905,3 +905,44 @@ poller 与 timer-worker 用 PostgreSQL 会话级 advisory lock 强制同库单�
 ### Next Steps
 
 - 推送 main 并回复 issue #74（第 1 条已修，第 2 条在独立会话）
+
+
+## Session 24: poller 扫描与驱动解耦（#74 第 2 条）
+
+**Date**: 2026-11-06
+**Task**: poller 扫描与驱动解耦（#74 第 2 条）
+**Branch**: `main`
+
+### Summary
+
+常驻 poller 不再对每个 issue 同步驱动到停：每轮只扫描 + 调度，有界并发（缺省 3）驱动，跨轮按 external_ref 去重；SIGTERM 后停止调度并 drain 在途驱动，首个 fatal 收尾后照常抛出。pollOnce 保留一次性同步语义。
+
+### Main Changes
+
+- 抽出 scanOnce（只扫描，返回 DriveRequest）；pollOnce = scanOnce + 顺序驱动，聚合日志口径不变
+- 新增 createDriveScheduler：scheduled / in_flight / at_capacity / stopped 四态，无内存队列；排不下记 deferred，下一轮重扫
+- runPollerForever 每轮只扫描与调度，--interval 不再由最慢 run 决定；finally 中 drain 在途驱动
+- CLI 新增 --concurrency（缺省 DEFAULT_MAX_RUNNING_RUNS=3；非法值 / 超上限启动期拒绝）
+- 日志：poll 行新增 scheduled / deferred / inFlight；驱动成功新增 issue_driven（ref / created）
+- README、ingress-poller spec、docs/08-cross-cutting 同步更新
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8d3cbfa` | (see git log) |
+
+### Testing
+
+- [OK] pnpm run check 全绿：63 文件，947 passed / 5 skipped
+- [OK] 新增 ingress 22 例、CLI 7 例；覆盖慢驱动不阻塞后续轮、跨轮不双跑、并发上限、drain、fatal（含 undefined 抛出）
+- [OK] 反例验证：分别破坏并发上限、in-flight 去重、fatal 重抛、finally drain，对应测试先红后绿
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 推送 main 并回复 issue #74（第 2 条已修，第 3 条待处理）
+- issue #74 第 3 条：阶段级墙钟与重试次数，另行立项
