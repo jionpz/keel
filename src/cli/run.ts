@@ -44,7 +44,7 @@ export const HELP = `keel — AI Engineering Runtime CLI
   register-repo <remoteUrl> [--default-branch <name>] [--local-path <dir>] [--issue-label <name>]   注册 repo；可绑定本地项目目录、配置扫描 label
   ingest-issue <issueUrl> [--label <name>] [--repo <uuid>]   GitHub Issue → task
   run-issue <issueUrl> [--label <name>] [--max-steps N] [--ci passed|failed|real] [--model <id>] [--harness omp|claude] [--wall-clock <秒>]   Issue → task → 驱动到终态
-  poller [--interval <ms>] [--ci passed|failed|real] [--model <id>] [--harness omp|claude] [--wall-clock <秒>]   常驻扫描各仓库 label 下的 open issue 并驱动
+  poller [--interval <ms>] [--concurrency <n>] [--ci passed|failed|real] [--model <id>] [--harness omp|claude] [--wall-clock <秒>]   常驻扫描各仓库 label 下的 open issue 并驱动
   unlock <repoId> [--force]        清理 SIGKILL 留下的 per-repo 锁（无 --force 只报告持有者）
 
 选项:

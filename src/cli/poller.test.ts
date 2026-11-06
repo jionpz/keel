@@ -7,15 +7,17 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ok } from '../contracts/errors.js'
-import type { IssueList } from '../fact/github-provider.js'
+import { DEFAULT_MAX_RUNNING_RUNS } from '../control/concurrency/limits.js'
+import type { IssueList, ListedIssue } from '../fact/github-provider.js'
 import type { ResidentLock } from '../fact/resident-lock.js'
 import {
+  DEFAULT_DRIVE_CONCURRENCY,
   DEFAULT_INTERVAL_MS,
   type PollerSignalSource,
   type PollIssueOutcome,
   type RepoRow,
 } from '../ingress/poller.js'
-import { parseIntervalMs, pollerMain } from './poller.js'
+import { parseConcurrency, parseIntervalMs, pollerMain } from './poller.js'
 
 const REPO: RepoRow = {
   id: 'repo-a',
@@ -325,14 +327,20 @@ describe('pollerMain · 依赖接线', () => {
       label: 'triage',
       scanned: 1,
     })
+    // 常驻路径的 poll 行承诺「本轮调度了什么」，不再承诺完成数
     expect(logs.find((l) => l.event === 'poll')).toMatchObject({
       repos: 1,
       scanned: 1,
-      ingested: 1,
-      driven: 1,
       skipped: 0,
       errors: 0,
       truncated: false,
+      scheduled: 1,
+      deferred: 0,
+      inFlight: 1,
+    })
+    expect(logs.find((l) => l.event === 'issue_driven')).toMatchObject({
+      ref: 'acme/alpha#7',
+      created: true,
     })
     expect(logs.at(-1)).toMatchObject({ event: 'poller', state: 'stopped' })
   })
@@ -446,5 +454,147 @@ describe('pollerMain · 单实例锁', () => {
     ).rejects.toThrow('数据库挂了')
 
     expect(release).toHaveBeenCalledTimes(1)
+  })
+})
+
+function listedIssue(number: number): ListedIssue {
+  return { number, title: `issue ${number}`, state: 'open', isPullRequest: false, labels: [] }
+}
+
+describe('parseConcurrency', () => {
+  it('接入层缺省值与全局 RUNNING 上限不漂移', () => {
+    // src/ingress 不 import src/control，所以数值在两处声明；
+    // 这条断言是防漂移的机械保证（CLI 用全局常量校验，ingress 用自己那份）。
+    expect(DEFAULT_DRIVE_CONCURRENCY).toBe(DEFAULT_MAX_RUNNING_RUNS)
+  })
+
+  it('省略 → 全局 RUNNING 上限', () => {
+    const r = parseConcurrency(undefined)
+    expect(r.ok && r.value).toBe(DEFAULT_MAX_RUNNING_RUNS)
+  })
+
+  it('1..上限的整数原样返回', () => {
+    for (const n of [1, 2, DEFAULT_MAX_RUNNING_RUNS]) {
+      const r = parseConcurrency(n)
+      expect(r.ok && r.value).toBe(n)
+    }
+  })
+
+  it('0 / 负数 / 小数 / 非数字 / 只写标志 → 拒绝，不静默回退', () => {
+    for (const raw of [0, -1, 1.5, 'abc', true] as const) {
+      const r = parseConcurrency(raw)
+      expect(r.ok).toBe(false)
+      if (r.ok) return
+      expect(r.error.kind).toBe('CAPABILITY_UNSUPPORTED')
+      expect(r.error.retryable).toBe(false)
+      expect(r.error.detail).toContain('--concurrency')
+    }
+  })
+
+  it('超过全局上限 → 拒绝，文案点名上限', () => {
+    const r = parseConcurrency(DEFAULT_MAX_RUNNING_RUNS + 1)
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('CAPABILITY_UNSUPPORTED')
+    expect(r.error.detail).toContain(String(DEFAULT_MAX_RUNNING_RUNS))
+  })
+})
+
+describe('pollerMain · --concurrency', () => {
+  it('非法值 → 退出码 1，不读 repo、不取锁、不解析 token', async () => {
+    process.env.KEEL_GITHUB_TOKEN = 't'
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const listRepos = vi.fn(async () => [REPO])
+    const acquireLock = vi.fn(async () => fakeLock().lock)
+    const tokenResolver = vi.fn(async () => 't')
+
+    for (const raw of ['0', '-1', '1.5', 'abc', String(DEFAULT_MAX_RUNNING_RUNS + 1)]) {
+      process.exitCode = undefined
+      await pollerMain(['--concurrency', raw], { listRepos, acquireLock, tokenResolver })
+      expect(process.exitCode, `--concurrency ${raw}`).toBe(1)
+    }
+
+    // 只写标志（解析成 true）同样拒绝
+    process.exitCode = undefined
+    await pollerMain(['--concurrency'], { listRepos, acquireLock, tokenResolver })
+    expect(process.exitCode).toBe(1)
+
+    expect(listRepos).not.toHaveBeenCalled()
+    expect(acquireLock).not.toHaveBeenCalled()
+    expect(tokenResolver).not.toHaveBeenCalled()
+    expect(errSpy).toHaveBeenCalled()
+  })
+
+  it('--concurrency 2 透传：4 个 issue 时最多 2 个在途', async () => {
+    process.env.KEEL_GITHUB_TOKEN = 'ghp_test_token'
+    const signals = fakeSignals()
+    const started: number[] = []
+    const releasers: Array<() => void> = []
+
+    const main = pollerMain(['--interval', '1', '--concurrency', '2'], {
+      listRepos: async () => [REPO],
+      listIssues: async () =>
+        ok<IssueList>({ issues: [1, 2, 3, 4].map(listedIssue), truncated: false }),
+      taskStatus: async () => undefined,
+      runIssue: (input) =>
+        new Promise((resolve) => {
+          started.push(Number(input.issueUrl.split('/').at(-1)))
+          releasers.push(() => resolve(ok<PollIssueOutcome>({ created: false })))
+        }),
+      acquireLock: async () => fakeLock().lock,
+      log: () => undefined,
+      now: () => '2026-11-04T00:00:00.000Z',
+      signals: signals.source,
+      sleep: async () => {
+        signals.fire('SIGTERM')
+      },
+      closeDb: async () => undefined,
+    })
+
+    await vi.waitFor(() => expect(started).toHaveLength(2))
+    expect(started).toEqual([1, 2])
+
+    for (const release of releasers) release()
+    await main
+    expect(process.exitCode).toBeUndefined()
+  })
+
+  it('缺省取全局上限：4 个 issue 时启动 3 个，第 4 个 deferred', async () => {
+    process.env.KEEL_GITHUB_TOKEN = 'ghp_test_token'
+    const signals = fakeSignals()
+    const started: number[] = []
+    const releasers: Array<() => void> = []
+    const logs: Record<string, unknown>[] = []
+
+    const main = pollerMain(['--interval', '1'], {
+      listRepos: async () => [REPO],
+      listIssues: async () =>
+        ok<IssueList>({ issues: [1, 2, 3, 4].map(listedIssue), truncated: false }),
+      taskStatus: async () => undefined,
+      runIssue: (input) =>
+        new Promise((resolve) => {
+          started.push(Number(input.issueUrl.split('/').at(-1)))
+          releasers.push(() => resolve(ok<PollIssueOutcome>({ created: false })))
+        }),
+      acquireLock: async () => fakeLock().lock,
+      log: (line) => logs.push(line),
+      now: () => '2026-11-04T00:00:00.000Z',
+      signals: signals.source,
+      sleep: async () => {
+        signals.fire('SIGTERM')
+      },
+      closeDb: async () => undefined,
+    })
+
+    await vi.waitFor(() => expect(started).toHaveLength(DEFAULT_MAX_RUNNING_RUNS))
+    expect(logs.find((l) => l.event === 'poll')).toMatchObject({
+      scheduled: DEFAULT_MAX_RUNNING_RUNS,
+      deferred: 1,
+      inFlight: DEFAULT_MAX_RUNNING_RUNS,
+    })
+
+    for (const release of releasers) release()
+    await main
+    expect(process.exitCode).toBeUndefined()
   })
 })

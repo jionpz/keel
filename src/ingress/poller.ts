@@ -1,10 +1,13 @@
 /**
- * 常驻 poller 的轮询核心（任务 08-29-ingress-poller，issue #70 §2）。
+ * 常驻 poller 的轮询核心（任务 08-29-ingress-poller，issue #70 §2；
+ * 扫描 / 驱动解耦见任务 11-06-poller-nonblocking）。
  *
- * 边界：本模块只做「扫描 + 组合」，是接入层，不参与状态机决策。
+ * 边界：本模块只做「扫描 + 调度」，是接入层，不参与状态机决策。
  *   - ingest / 驱动全部走注入的 `runIssue`（它内部完成 ingest + runTask），
  *     这里不复制任何一段；
- *   - 不引入队列 / 并发框架：Agent 驱动是重操作，顺序处理更容易诊断；
+ *   - 不引入队列 / 并发框架：排不下的 issue 记为 `deferred`，下一轮重新扫描时再试 ——
+ *     幂等来源始终是「每轮重扫 + feedback 唯一键」，内存队列会变成第二份待办状态；
+ *   - 并发只做进程内节流；真正的并发事实仍由 claim 的 N3/N4 数据库守卫保证；
  *   - 不处理 wall-clock timer —— 那是 timer-worker 的职责（PRD R10）。
  *
  * 全部依赖可注入，所以轮询逻辑可以脱离数据库与 GitHub 单测。
@@ -16,6 +19,15 @@ import { type IssueList, issueUrlFor, parseRemoteUrl } from '../fact/github-prov
 import { isTerminal, type TaskStatus } from '../shared/ids.js'
 
 export const DEFAULT_INTERVAL_MS = 60_000
+
+/**
+ * 常驻驱动的并发上限缺省值 —— 与 N4 的全局 RUNNING 上限一致
+ * （`src/control/concurrency/limits.ts` 的 `DEFAULT_MAX_RUNNING_RUNS`）。
+ * 接入层不 import control 平面，所以这里是同一个数值的第二处声明；
+ * CLI 接线时必须用全局常量校验 `--concurrency`，两处不得漂移
+ * （`src/cli/poller.test.ts` 有一条数值相等的防漂移断言）。
+ */
+export const DEFAULT_DRIVE_CONCURRENCY = 3
 
 /** 扫描所需的仓库元数据；`issue_label` 是每仓库自己的 label，不是全局配置 */
 export interface RepoRow {
@@ -42,7 +54,7 @@ export interface PollerDeps {
   readonly listIssues: (repo: RepoRow) => Promise<Result<IssueList>>
   /**
    * 按 external_ref（`owner/repo#n`）查 task 状态。
-   * 返回 undefined = 还没有 task；终态判定由 pollOnce 用 TERMINAL_STATUSES 做。
+   * 返回 undefined = 还没有 task；终态判定由扫描用 TERMINAL_STATUSES 做。
    */
   readonly taskStatus: (externalRef: string) => Promise<TaskStatus | undefined>
   readonly runIssue: (input: PollIssueInput) => Promise<Result<PollIssueOutcome>>
@@ -51,21 +63,24 @@ export interface PollerDeps {
   readonly log: (line: Record<string, unknown>) => void
 }
 
-export interface PollStats {
+export interface ScanStats {
   /** 本轮查询的 repo 数 */
   readonly repos: number
   /** 本轮看到的 open issue 数（已排除 PR） */
   readonly scanned: number
+  /** 已终态、直接跳过的数 */
+  readonly skipped: number
+  /** repo 级可预期失败数 */
+  readonly errors: number
+  /** 任一仓库触到分页上限 */
+  readonly truncated: boolean
+}
+
+export interface PollStats extends ScanStats {
   /** 新建 task 数 */
   readonly ingested: number
   /** 驱动成功数（含新建 —— 新 issue 也会被驱动到当前可停处） */
   readonly driven: number
-  /** 已终态、直接跳过的数 */
-  readonly skipped: number
-  /** repo 级 + issue 级可预期失败数 */
-  readonly errors: number
-  /** 任一仓库触到分页上限 */
-  readonly truncated: boolean
 }
 
 export interface PollRoundResult {
@@ -74,37 +89,45 @@ export interface PollRoundResult {
   readonly stopped: boolean
 }
 
+/** 一次待驱动：`externalRef` 是调度器的去重键 */
+export interface DriveRequest {
+  readonly externalRef: string
+  readonly input: PollIssueInput
+}
+
+export interface ScanRoundResult {
+  readonly stats: ScanStats
+  readonly drives: readonly DriveRequest[]
+  /** 收到停止信号，扫描没有走完 */
+  readonly stopped: boolean
+}
+
 export interface PollOnceOptions {
-  /** SIGTERM/SIGINT 后返回 true：不再认领新 issue，当前 run 结束后退出 */
+  /** SIGTERM/SIGINT 后返回 true：不再收集 / 启动新 issue；已开始的驱动自然收尾 */
   readonly shouldStop?: () => boolean
 }
 
 /**
- * 跑一轮：逐仓库扫描 → 逐 issue 判断 → 驱动的交给 `runIssue`。
+ * 扫描一轮：逐仓库列出 open issue，筛掉终态与轮内重复，**不驱动**。
  *
- * 单个 repo / issue 的可预期失败只记 errors 并继续（PRD R11）；
+ * 单个 repo 的可预期失败只记 errors 并继续（PRD R11）；
  * 不可预期异常（编程错误 / 基础设施故障）照常抛出，不在这里吞掉。
  */
-export async function pollOnce(
+export async function scanOnce(
   deps: PollerDeps,
   opts: PollOnceOptions = {},
-): Promise<PollRoundResult> {
+): Promise<ScanRoundResult> {
   const shouldStop = opts.shouldStop ?? (() => false)
-  const secrets = gitAuthSecrets(readTokenFromEnv())
-  // detail / remote 里可能有凭据：环境 token 走 redactSecrets，
-  // remote URL 里内嵌的 userinfo（`https://user:token@host/...`）单独剥掉 ——
-  // redactSecrets 只认「本进程已知的 token」，认不出别人写进 remote 的密码。
-  const safeDetail = (detail: string): string => redactSecrets(stripUserinfo(detail), secrets)
+  const safeDetail = createSafeDetail()
 
   const stats = {
     repos: 0,
     scanned: 0,
-    ingested: 0,
-    driven: 0,
     skipped: 0,
     errors: 0,
     truncated: false,
   }
+  const drives: DriveRequest[] = []
   let stopped = false
 
   const repos = await deps.listRepos()
@@ -115,7 +138,6 @@ export async function pollOnce(
    *
    * 仓库注册表的 `remote_url` 没有唯一索引（见 database-guidelines.md 的已知限制），
    * 两条 repo 行指向同一个 remote 时，同一个 issue 会在一轮里被看到两次。
-   * 单进程顺序执行不会并发双跑，但会把同一个 task 连驱动两次 ——
    * R6 要求「不双跑」，所以按 external_ref 在本轮内去重。
    */
   const claimed = new Set<string>()
@@ -179,39 +201,195 @@ export async function pollOnce(
       if (claimed.has(externalRef)) continue
       claimed.add(externalRef)
 
-      // 终态 task 跳过；没有 task 或非终态都继续驱动（PRD R5）。
+      // 终态 task 跳过；没有 task 或非终态都要驱动（PRD R5）。
       const status = await deps.taskStatus(externalRef)
       if (status !== undefined && isTerminal(status)) {
         stats.skipped += 1
         continue
       }
 
-      const driven = await deps.runIssue({
-        issueUrl: issueUrlFor(parsed.value, issue.number),
-        repoId: repo.id,
-        label: repo.issue_label,
+      drives.push({
+        externalRef,
+        input: {
+          issueUrl: issueUrlFor(parsed.value, issue.number),
+          repoId: repo.id,
+          label: repo.issue_label,
+        },
       })
-      if (!driven.ok) {
-        stats.errors += 1
-        deps.log({
-          ts: deps.now(),
-          event: 'issue_error',
-          ref: externalRef,
-          kind: driven.error.kind,
-          detail: safeDetail(driven.error.detail),
-        })
-        continue
-      }
-
-      stats.driven += 1
-      if (driven.value.created) stats.ingested += 1
     }
 
     if (stopped) break
   }
 
+  return { stats, drives, stopped }
+}
+
+/**
+ * 跑一轮：扫描后**顺序**驱动到各自可停处，返回聚合结果。
+ *
+ * 一次性语义保留给测试 / 脚本 / 诊断；常驻路径走 `scanOnce` + `createDriveScheduler`，
+ * 不让最慢的 run 决定轮询节奏。
+ */
+export async function pollOnce(
+  deps: PollerDeps,
+  opts: PollOnceOptions = {},
+): Promise<PollRoundResult> {
+  const shouldStop = opts.shouldStop ?? (() => false)
+  const safeDetail = createSafeDetail()
+
+  const scan = await scanOnce(deps, opts)
+  const stats = {
+    ...scan.stats,
+    ingested: 0,
+    driven: 0,
+  }
+  let stopped = scan.stopped
+
+  for (const req of scan.drives) {
+    if (shouldStop()) {
+      stopped = true
+      break
+    }
+
+    const driven = await deps.runIssue(req.input)
+    if (!driven.ok) {
+      stats.errors += 1
+      deps.log({
+        ts: deps.now(),
+        event: 'issue_error',
+        ref: req.externalRef,
+        kind: driven.error.kind,
+        detail: safeDetail(driven.error.detail),
+      })
+      continue
+    }
+
+    stats.driven += 1
+    if (driven.value.created) stats.ingested += 1
+  }
+
   deps.log({ ts: deps.now(), event: 'poll', ...stats, stopped })
   return { stats, stopped }
+}
+
+export type ScheduleOutcome = 'scheduled' | 'in_flight' | 'at_capacity' | 'stopped'
+
+export interface DriveScheduler {
+  /** 尝试启动一次驱动；不排队，排不下就告诉调用方 */
+  schedule(req: DriveRequest): ScheduleOutcome
+  /** 当前在途驱动数 */
+  readonly inFlight: number
+  /** 等在途驱动全部收尾；集合为空时立即 resolve */
+  drain(): Promise<void>
+  /**
+   * 取出并清空首个不可预期异常（没有则 undefined）。
+   *
+   * 用包装对象而不是直接返回 `unknown`：`throw undefined` / `Promise.reject()`
+   * 也是合法（虽然糟糕）的抛出值，直接返回会让「没有 fatal」与「fatal 是 undefined」
+   * 无法区分，从而被静默吞掉 —— R6 要求不可预期异常不被吞。
+   */
+  takeFatal(): DriveFatal | undefined
+}
+
+export interface DriveFatal {
+  readonly value: unknown
+}
+
+export interface DriveSchedulerOptions {
+  readonly concurrency: number
+  /** SIGTERM / fatal 后返回 true：不再启动新驱动 */
+  readonly shouldStop?: () => boolean
+  /** 记录到首个不可预期异常时回调一次 —— 常驻循环用它立刻唤醒 sleep */
+  readonly onFatal?: () => void
+}
+
+/**
+ * 有界并发调度器：只做**进程内**节流，不读数据库。
+ *
+ * 真正的并发事实仍是 claim 时的 N3 乐观锁 + N4 全局上限 + 唯一索引；
+ * 这里的作用是别把超过 N4 的驱动同时推上去 —— 那些只会在 claim 阶段
+ * 变成可重试 CONFLICT 噪音。
+ *
+ * 不排队：本轮排不下的请求由调用方记为 `deferred`，下一轮重新扫描时再试。
+ */
+export function createDriveScheduler(
+  deps: PollerDeps,
+  opts: DriveSchedulerOptions,
+): DriveScheduler {
+  const shouldStop = opts.shouldStop ?? (() => false)
+  const safeDetail = createSafeDetail()
+
+  const inFlightRefs = new Set<string>()
+  const running = new Set<Promise<void>>()
+  let fatal: unknown
+  let hasFatal = false
+
+  const start = (req: DriveRequest): void => {
+    inFlightRefs.add(req.externalRef)
+    const run = async (): Promise<void> => {
+      try {
+        const driven = await deps.runIssue(req.input)
+        if (!driven.ok) {
+          // 可预期失败：只影响这一个 issue，不停止调度
+          deps.log({
+            ts: deps.now(),
+            event: 'issue_error',
+            ref: req.externalRef,
+            kind: driven.error.kind,
+            detail: safeDetail(driven.error.detail),
+          })
+          return
+        }
+        deps.log({
+          ts: deps.now(),
+          event: 'issue_driven',
+          ref: req.externalRef,
+          created: driven.value.created,
+        })
+      } catch (e) {
+        // 编程错误 / 基础设施故障：只保留第一个，并请求停止调度
+        if (!hasFatal) {
+          hasFatal = true
+          fatal = e
+          opts.onFatal?.()
+        }
+      }
+    }
+
+    const task = run()
+    running.add(task)
+    // 完成后从在途集合摘掉：`externalRef` 决定下一次能否再次调度
+    void task.finally(() => {
+      inFlightRefs.delete(req.externalRef)
+      running.delete(task)
+    })
+  }
+
+  return {
+    schedule(req) {
+      if (shouldStop()) return 'stopped'
+      if (inFlightRefs.has(req.externalRef)) return 'in_flight'
+      if (inFlightRefs.size >= opts.concurrency) return 'at_capacity'
+      start(req)
+      return 'scheduled'
+    },
+    get inFlight() {
+      return inFlightRefs.size
+    },
+    async drain() {
+      // 正常情况下调用 drain 时已不再 schedule；循环兜住「drain 期间又加入」的边界。
+      while (running.size > 0) {
+        await Promise.all([...running])
+      }
+    },
+    takeFatal() {
+      if (!hasFatal) return undefined
+      const value = fatal
+      fatal = undefined
+      hasFatal = false
+      return { value }
+    },
+  }
 }
 
 /** 信号源抽象 —— 测试注入假实现，生产默认 process */
@@ -276,6 +454,8 @@ export interface RunPollerForeverOptions {
   readonly sleep?: (ms: number, stop: StopToken) => Promise<void>
   /** 注入停止令牌（测试观测订阅数）；省略则每轮循环自建一个 */
   readonly stopToken?: StopToken
+  /** 同时在途的驱动上限；缺省见 DEFAULT_DRIVE_CONCURRENCY */
+  readonly concurrency?: number
 }
 
 const processSignals: PollerSignalSource = {
@@ -288,9 +468,11 @@ const processSignals: PollerSignalSource = {
 }
 
 /**
- * 常驻循环。SIGTERM / SIGINT 只保证：
- *   1. 不再认领新 issue（每轮开始、每个 repo、每个 issue 之间检查）；
- *   2. 当前 `runIssue` 结束后退出。
+ * 常驻循环：每轮只扫描 + 调度，不等驱动完成 —— 轮询节奏与 run 时长解耦。
+ *
+ * SIGTERM / SIGINT 只保证：
+ *   1. 不再调度新 issue；
+ *   2. 所有在途驱动结束后退出（`drain()`）。
  *
  * **已知限制**（PRD Constraints 的 AC 调整）：正在执行的 run 没有外部取消接口，
  * 因此这里不 kill 它 —— 强杀会在库里留下 RUNNING run。硬取消留给后续任务。
@@ -308,18 +490,60 @@ export async function runPollerForever(
     stop.request()
   }
 
+  const scheduler = createDriveScheduler(deps, {
+    concurrency: opts.concurrency ?? DEFAULT_DRIVE_CONCURRENCY,
+    shouldStop: () => stop.requested,
+    onFatal: onSignal,
+  })
+
   signals.on('SIGTERM', onSignal)
   signals.on('SIGINT', onSignal)
   try {
     while (!stop.requested) {
-      await pollOnce(deps, { shouldStop: () => stop.requested })
+      const scan = await scanOnce(deps, { shouldStop: () => stop.requested })
+
+      let scheduled = 0
+      let deferred = 0
+      let skipped = scan.stats.skipped
+      for (const req of scan.drives) {
+        if (stop.requested) break
+        switch (scheduler.schedule(req)) {
+          case 'scheduled':
+            scheduled += 1
+            break
+          case 'at_capacity':
+            deferred += 1
+            break
+          default:
+            // in_flight（跨轮去重）/ stopped：本轮没有产生新驱动
+            skipped += 1
+        }
+      }
+
+      deps.log({
+        ts: deps.now(),
+        event: 'poll',
+        ...scan.stats,
+        skipped,
+        scheduled,
+        deferred,
+        inFlight: scheduler.inFlight,
+        stopped: scan.stopped || stop.requested,
+      })
+
       if (stop.requested) break
       await sleep(intervalMs, stop)
     }
   } finally {
     signals.off('SIGTERM', onSignal)
     signals.off('SIGINT', onSignal)
+    // 即使扫描 / 日志抛错，也不能留下未收尾的驱动 promise
+    await scheduler.drain()
   }
+
+  // fatal 要等在途驱动收尾后再抛出，且正常退出才打 stopped 行
+  const fatal = scheduler.takeFatal()
+  if (fatal !== undefined) throw fatal.value
 
   deps.log({ ts: deps.now(), event: 'poller', state: 'stopped' })
 }
@@ -349,6 +573,16 @@ export function interruptibleSleep(ms: number, stop: StopToken): Promise<void> {
     timer = setTimeout(settle, ms)
     unsubscribe = stop.subscribe(settle)
   })
+}
+
+/**
+ * 日志脱敏工厂：环境 token 走 `redactSecrets`，
+ * remote URL 里内嵌的 userinfo（`https://user:token@host/...`）单独剥掉 ——
+ * redactSecrets 只认「本进程已知的 token」，认不出别人写进 remote 的密码。
+ */
+function createSafeDetail(): (detail: string) => string {
+  const secrets = gitAuthSecrets(readTokenFromEnv())
+  return (detail) => redactSecrets(stripUserinfo(detail), secrets)
 }
 
 /**

@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/ingress-poller.md", "reason": "核对扫描/驱动、幂等、信号与日志契约是否同步更新"}
+{"file": ".trellis/spec/backend/cli-lifecycle.md", "reason": "核对 SIGTERM 后在途驱动收尾与退出顺序"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "核对反例验证与全量 check 要求"}

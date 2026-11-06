@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/ingress-poller.md", "reason": "poller 的既有契约：label、幂等、信号退出、日志脱敏与测试要求"}
+{"file": ".trellis/spec/backend/cli-lifecycle.md", "reason": "常驻进程的信号、单实例锁与连接池收尾顺序"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "提交前的质量门与反例验证要求"}

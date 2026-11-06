@@ -9,6 +9,7 @@
  */
 
 import { err, makeError, ok, type Result } from '../contracts/errors.js'
+import { DEFAULT_MAX_RUNNING_RUNS } from '../control/concurrency/limits.js'
 import { preflightModelRouting } from '../execution/model-routing.js'
 import { asRole, closePool } from '../fact/db.js'
 import { resolveGitHubToken, type TokenResolver } from '../fact/github-auth.js'
@@ -52,8 +53,36 @@ export function parseIntervalMs(raw: unknown): Result<number> {
   )
 }
 
+/**
+ * `--concurrency <n>`：缺省取全局 RUNNING 上限。
+ *
+ * 超过上限不会让吞吐变好：claim 的 N4 检查会直接拒绝，只制造可重试 CONFLICT 噪音。
+ * 所以这里在启动期就拒绝，而不是让常驻进程每轮刷错误。
+ */
+export function parseConcurrency(raw: unknown): Result<number> {
+  if (raw === undefined) return ok(DEFAULT_MAX_RUNNING_RUNS)
+  if (typeof raw === 'number' && Number.isInteger(raw) && raw > 0) {
+    if (raw <= DEFAULT_MAX_RUNNING_RUNS) return ok(raw)
+    return err(
+      makeError(
+        'CAPABILITY_UNSUPPORTED',
+        `--concurrency 不能超过全局 RUNNING 上限 ${DEFAULT_MAX_RUNNING_RUNS}，收到:${describeArg(raw)}。` +
+          `要同时跑更多任务，请先调整 N4 全局上限（${DEFAULT_MAX_RUNNING_RUNS}），` +
+          '否则超出部分的 claim 只会得到可重试 CONFLICT。',
+      ),
+    )
+  }
+  return err(
+    makeError(
+      'CAPABILITY_UNSUPPORTED',
+      `--concurrency 只接受 1-${DEFAULT_MAX_RUNNING_RUNS} 的整数，收到:${describeArg(raw)}。` +
+        '非法值不会静默回退到全局上限 —— 那会让人以为并发已经改过。',
+    ),
+  )
+}
+
 function describeArg(raw: unknown): string {
-  if (raw === true) return '（缺少毫秒数）'
+  if (raw === true) return '（缺少数值）'
   return `「${String(raw)}」`
 }
 
@@ -117,14 +146,17 @@ export interface PollerMainDeps {
   readonly acquireLock?: () => Promise<ResidentLock | null>
 }
 
-const HELP = `用法: keel poller [--interval <ms>] [--ci passed|failed|real] [--model <id>]
-                   [--harness omp|claude] [--wall-clock <秒>]
+const HELP = `用法: keel poller [--interval <ms>] [--concurrency <n>] [--ci passed|failed|real]
+                   [--model <id>] [--harness omp|claude] [--wall-clock <秒>]
 
 常驻扫描所有已注册 github repo 中带各自 issue_label 的 open issue，
 自动 ingest 并驱动到当前可停处(SIGTERM / SIGINT 后不再认领新 issue)。
+扫描节奏与单任务时长无关:一轮只负责扫描与调度,有界并发驱动。
 
 选项:
   --interval <ms>      两轮之间的等待毫秒数(默认 ${DEFAULT_INTERVAL_MS});只接受正整数
+  --concurrency <n>    同时在途的驱动数(默认 ${DEFAULT_MAX_RUNNING_RUNS},即全局 RUNNING 上限);
+                       排不下的 issue 记为 deferred,下一轮重扫;只接受 1-${DEFAULT_MAX_RUNNING_RUNS} 的整数
   --ci passed|failed|real
                        缺省 real;real 需要 GitHub 凭据(KEEL_GITHUB_TOKEN / GITHUB_TOKEN / gh auth login)
   --model <id>         对 omp 缺省 ${DEFAULT_OMP_MODEL},也可设 KEEL_MODEL;空白值拒绝
@@ -223,6 +255,12 @@ export async function pollerMain(
   const interval = parseIntervalMs(flags.interval)
   if (!interval.ok) {
     console.error(`poller: ${interval.error.detail}`)
+    process.exitCode = 1
+    return
+  }
+  const concurrency = parseConcurrency(flags.concurrency)
+  if (!concurrency.ok) {
+    console.error(`poller: ${concurrency.error.detail}`)
     process.exitCode = 1
     return
   }
@@ -334,6 +372,7 @@ export async function pollerMain(
 
     await runPollerForever(pollerDeps, {
       intervalMs: interval.value,
+      concurrency: concurrency.value,
       ...(deps.signals === undefined ? {} : { signals: deps.signals }),
       ...(deps.sleep === undefined ? {} : { sleep: deps.sleep }),
     })

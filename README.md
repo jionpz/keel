@@ -141,8 +141,9 @@ label 按**仓库**配置，不是全局开关（A/B/C 多个项目可以用不�
 # 注册时指定扫描 label；不传则默认 keel
 keel register-repo https://github.com/you/project --issue-label keel
 
-# 常驻：缺省每 60s 一轮，缺省 --ci real（需要 GitHub 凭据：KEEL_GITHUB_TOKEN / GITHUB_TOKEN / gh auth login）
-KEEL_GITHUB_TOKEN="$(gh auth token)" keel poller --interval 60000 --ci real
+# 常驻：缺省每 60s 一轮、同时最多 3 个驱动，
+# 缺省 --ci real（需要 GitHub 凭据：KEEL_GITHUB_TOKEN / GITHUB_TOKEN / gh auth login）
+KEEL_GITHUB_TOKEN="$(gh auth token)" keel poller --interval 60000 --concurrency 3 --ci real
 ```
 
 行为约定：
@@ -153,13 +154,20 @@ KEEL_GITHUB_TOKEN="$(gh auth token)" keel poller --interval 60000 --ci real
   `"truncated":true`，不静默截断。
 - 新 issue → `runIssue`（ingest + 驱动）；已有 task 且非终态 → 继续驱动；
   终态 task → 跳过。去重复用 `feedback(source, external_ref)` 唯一键。
-- 单个 issue / 仓库失败只记一行错误，下一轮重试，不终止整轮。
-- 每轮输出一行结构化 JSON（`event:"poll"`，字段 `repos / scanned / ingested /
-  driven / skipped / errors / truncated`），错误 detail 经 `redactSecrets` 脱敏，
-  不打印 issue body。
-- `SIGTERM` / `SIGINT` 后不再认领新 issue，当前 run 结束后退出。
+- **扫描节奏与单任务时长解耦**：一轮只扫描并调度，不再等每个 issue 驱动到停点；
+  `--interval` 决定的是扫描间隔，不是「最慢 run 的时长」。
+- **有界并发**：`--concurrency <n>`（缺省 3，等于全局 `RUNNING` 上限）限制同时在途的驱动数。
+  本轮排不下的 issue 记为 `deferred`，不排队、不丢弃，下一轮重新扫描时再试。
+  同一 `external_ref` 在驱动未结束时（含跨轮）不会被再次驱动。
+- 单个 issue / 仓库失败只记一行错误（`issue_error` / `repo_error`），下一轮重试，
+  不影响其它在途驱动与后续轮次；不可预期异常先停止调度、等在途收尾，再抛出。
+- 每轮输出一行结构化 JSON（`event:"poll"`，字段 `repos / scanned / skipped / errors /
+  truncated / scheduled / deferred / inFlight / stopped`，`scheduled` 是**本轮启动**的
+  驱动数，不承诺完成数）。驱动成功另有一行 `issue_driven`（`ref / created`）。
+  错误 detail 经 `redactSecrets` 脱敏，不打印 issue body。
+- `SIGTERM` / `SIGINT` 后不再调度新 issue，**所有在途驱动结束后**才退出。
   正在执行的 run 没有外部取消接口，因此不会强杀（强杀会留下 `RUNNING` run）。
-- poller 只负责扫描与驱动；到期收割仍归 `keel timer-worker`，两者不互相替代。
+- poller 只负责扫描与调度；到期收割仍归 `keel timer-worker`，两者不互相替代。
 
 ## 开发
 
