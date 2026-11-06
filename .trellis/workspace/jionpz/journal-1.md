@@ -865,3 +865,43 @@ poller 与 timer-worker 用 PostgreSQL 会话级 advisory lock 强制同库单�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 23: 失败与超时 run 入账 token 消耗（#74 第 1 条）
+
+**Date**: 2026-11-06
+**Task**: 失败与超时 run 入账 token 消耗（#74 第 1 条）
+**Branch**: `main`
+
+### Summary
+
+失败/超时/撤回的 run 不再丢 usage：Adapter abort 取已见到的值，advance 失败分支带 usage，pipeline 累加出错轮。新增 ResultWithUsage 契约；诚实口径不变（未上报仍 null + unavailable）。
+
+### Main Changes
+
+- 契约新增 ResultWithUsage<T>；advance 失败分支带 usage；ZERO_USAGE 上移到 contracts/types
+- omp abort 取 parser.end().usage；claude 从 assistant 事件按 message.id 去重累加，result 聚合值优先、全空时回退
+- claude usage: null 视为无上报，畸形 CLI 输出不再抛异常
+- pipeline 的 stalled 与通用失败两条路径都累加出错轮 usage
+- vitest 排除 .claude/worktrees/**（独立提交 67aae84，避免 check 跑到别的分支）
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e1ff4b5` | (see git log) |
+| `67aae84` | (see git log) |
+
+### Testing
+
+- [OK] pnpm run check：63 文件，924 passed / 5 skipped
+- [OK] 反例验证：回退 manager / omp / claude / pipeline 两分支修复，对应测试分别先红后绿
+- [OK] 独立审查（trellis-check）无 P2 遗留：通用失败分支锚点与 usage:null 防护已补
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 推送 main 并回复 issue #74（第 1 条已修，第 2 条在独立会话）
