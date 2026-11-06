@@ -234,6 +234,16 @@ RunResult {
 `usage` 全部字段可为 `null` —— 这是 `CAP-COST` 缺失时的诚实表达，
 **不允许用 0 或估算值冒充**。`0` 与"不知道"在预算核算里是完全不同的事实。
 
+`usage` 同理适用于**非 `SUCCEEDED`** 的终态：`TIMEOUT` / `CANCELLED` / `FAILED`
+之前 Harness 已经可能上报过用量（omp 的 `turn_end`、claude 的 `assistant` 事件）。
+Adapter 必须把**流里已经出现过**的用量带出，而不是硬编码 `null` ——
+中断前花的钱与成功的一样真实，预算是靠它入账的（issue #74）。
+从未上报时保持 `null` + `unavailable`。
+
+> 注意：`awaitResult` 返回 **`Error`** 的路径（如非零退出码的
+> `HARNESS_UNAVAILABLE`）目前仍没有位置放 usage —— 那是 `Result` 失败分支的
+> 结构限制，留给单独任务，不在 #74 范围内。
+
 `text` 在 `post_validate` 模式下**必须非空**：无 `CAP-STRUCTURED_OUTPUT` 的 Harness
 只能靠调用方从自由文本中提取提案，Adapter 不带出文本，这条降级路径就断了。
 

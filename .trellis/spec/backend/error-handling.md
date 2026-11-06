@@ -14,6 +14,11 @@ export type Result<T> =
 
 契约方法一律返回 `Result<T>`。
 
+例外：失败前**可能已经真实调用过外部进程**、从而已经花掉钱的方法，用
+`ResultWithUsage<T>`（失败分支多一个必填 `usage`）—— 目前只有
+`SessionManager.advance`。`ok` / `err` 的成功与失败语义不变，
+只是失败分支不能丢掉成本（C1 / C-002）。见 issue #74。
+
 理由：可预期的失败（凭据失效、超时、schema 不合格）是**业务流程的一部分** ——
 它们要进 `run.error_kind`、要作为状态机 guard 的输入。
 用异常表达会让这些信息在调用栈里丢失类型。

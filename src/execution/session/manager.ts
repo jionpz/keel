@@ -11,7 +11,14 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { type ErrorKind, err, makeError, ok, type Result } from '../../contracts/errors.js'
+import {
+  type ErrorKind,
+  err,
+  makeError,
+  ok,
+  type Result,
+  type ResultWithUsage,
+} from '../../contracts/errors.js'
 import type {
   HarnessAdapter,
   InterruptReason,
@@ -20,7 +27,13 @@ import type {
   RunSpec,
   WorkspaceDiff,
 } from '../../contracts/harness-adapter.js'
-import type { ContextSection, Proposal, ProposalKind, Usage } from '../../contracts/types.js'
+import {
+  type ContextSection,
+  type Proposal,
+  type ProposalKind,
+  type Usage,
+  ZERO_USAGE,
+} from '../../contracts/types.js'
 import { extractJson } from './extract.js'
 
 export interface SessionHandle {
@@ -112,10 +125,15 @@ export class HarnessSessionManager {
    * v0.1 的每一轮都是一次完整的 Adapter 调用 —— OMP 的 `-p` 本身就是一次性的。
    * 多轮对话靠 `--resume`（`CAP-RESUME`），属 `restore()` 的范围。
    */
-  async advance(handle: SessionHandle, input: TurnInput): Promise<Result<TurnOutcome>> {
+  async advance(handle: SessionHandle, input: TurnInput): Promise<ResultWithUsage<TurnOutcome>> {
     const spec = this.sessions.get(handle.session_id)
     if (spec === undefined) {
-      return err(makeError('NOT_FOUND', `未知 session ${handle.session_id}`))
+      // 还没调用过 Adapter —— 没有可信 usage 来源，如实报 unavailable
+      return {
+        ok: false,
+        error: makeError('NOT_FOUND', `未知 session ${handle.session_id}`),
+        usage: ZERO_USAGE,
+      }
     }
 
     // Run 级幂等键标识「这个 Task 的这个阶段的第几次尝试」，
@@ -132,16 +150,24 @@ export class HarnessSessionManager {
       runSpec,
       spec.onProgress === undefined ? undefined : { onProgress: spec.onProgress },
     )
-    if (!started.ok) return err(started.error)
+    if (!started.ok) return { ok: false, error: started.error, usage: ZERO_USAGE }
 
     const res = await spec.adapter.awaitResult(started.value)
-    if (!res.ok) return err(res.error)
+    if (!res.ok) return { ok: false, error: res.error, usage: ZERO_USAGE }
 
     // 非 SUCCEEDED 按 Run 状态映射 ErrorKind —— 不能一律 PROTOCOL_ERROR：
     // CANCELLED 是人工撤回(retryable=false,T-030 不应重试),
     // TIMEOUT 是超时(retryable=true,可再试)。
+    //
+    // usage 必须原样带出：这一轮真的调用过 Adapter，失败/超时前花的钱
+    // 与成功的一样真实（C1 / C-002）。Adapter 已上报多少就带多少，
+    // 没上报就是 null + unavailable —— 不在这里补 0。
     if (res.value.status !== 'SUCCEEDED') {
-      return err(makeError(RUN_STATUS_ERROR[res.value.status], `Run 状态 ${res.value.status}`))
+      return {
+        ok: false,
+        error: makeError(RUN_STATUS_ERROR[res.value.status], `Run 状态 ${res.value.status}`),
+        usage: res.value.usage,
+      }
     }
 
     // 采集工作区改动 —— **必须在这里做**：
@@ -158,15 +184,18 @@ export class HarnessSessionManager {
     const extracted = extractJson(raw)
 
     if (!extracted.ok) {
-      return ok({
-        proposals: [],
-        usage: res.value.usage,
-        session_ref: res.value.session_ref,
-        raw,
-        extract_error: extracted.reason,
-        diff,
-        diff_error: diffError,
-      })
+      return {
+        ok: true,
+        value: {
+          proposals: [],
+          usage: res.value.usage,
+          session_ref: res.value.session_ref,
+          raw,
+          extract_error: extracted.reason,
+          diff,
+          diff_error: diffError,
+        },
+      }
     }
 
     const proposal: Proposal = {
@@ -179,15 +208,18 @@ export class HarnessSessionManager {
       produced_by_run: spec.runSpec.run.run_id,
     }
 
-    return ok({
-      proposals: [proposal],
-      usage: res.value.usage,
-      session_ref: res.value.session_ref,
-      raw,
-      extract_error: null,
-      diff,
-      diff_error: diffError,
-    })
+    return {
+      ok: true,
+      value: {
+        proposals: [proposal],
+        usage: res.value.usage,
+        session_ref: res.value.session_ref,
+        raw,
+        extract_error: null,
+        diff,
+        diff_error: diffError,
+      },
+    }
   }
 
   /**

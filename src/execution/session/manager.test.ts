@@ -19,10 +19,11 @@ import type {
   RunSpec,
   WorkspaceDiff,
 } from '../../contracts/harness-adapter.js'
+import { type Usage, ZERO_USAGE } from '../../contracts/types.js'
 import { HarnessSessionManager } from './manager.js'
 
-/** fake adapter:awaitResult 恒返指定 status */
-function adapterWithStatus(status: RunResult['status']): HarnessAdapter {
+/** fake adapter:awaitResult 恒返指定 status；可带这一轮已上报的 usage */
+function adapterWithStatus(status: RunResult['status'], usage: Usage = ZERO_USAGE): HarnessAdapter {
   return {
     describe: () => ({
       harness_id: 'fake',
@@ -42,7 +43,7 @@ function adapterWithStatus(status: RunResult['status']): HarnessAdapter {
         status,
         text: null,
         proposals: [],
-        usage: { tokens_in: null, tokens_out: null, cost_usd: null, cost_basis: 'unavailable' },
+        usage,
         session_ref: null,
       },
     }),
@@ -83,9 +84,9 @@ const spec: {
   expect: { kind: 'stage_outcome', key: 'pm' },
 }
 
-async function advanceWith(status: RunResult['status']) {
+async function advanceWith(status: RunResult['status'], usage?: Usage) {
   const sessions = new HarnessSessionManager()
-  const handle = await sessions.open({ ...spec, adapter: adapterWithStatus(status) })
+  const handle = await sessions.open({ ...spec, adapter: adapterWithStatus(status, usage) })
   if (!handle.ok) throw new Error('open 失败')
   return sessions.advance(handle.value, { text: 'x' })
 }
@@ -112,6 +113,28 @@ describe('advance · 非 SUCCEEDED 的 ErrorKind 映射', () => {
     expect(r.ok).toBe(false)
     if (r.ok) return
     expect(r.error.kind).toBe('PROTOCOL_ERROR')
+  })
+})
+
+describe('advance · 失败分支带 usage（#74）', () => {
+  it('TIMEOUT 时把 Adapter 已上报的 usage 原样带出', async () => {
+    const usage: Usage = {
+      tokens_in: 120,
+      tokens_out: 30,
+      cost_usd: 0.02,
+      cost_basis: 'estimated',
+    }
+    const r = await advanceWith('TIMEOUT', usage)
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.usage).toEqual(usage)
+  })
+
+  it('Adapter 未上报 → 失败分支保持 null + unavailable（不补 0）', async () => {
+    const r = await advanceWith('TIMEOUT')
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.usage).toEqual(ZERO_USAGE)
   })
 })
 

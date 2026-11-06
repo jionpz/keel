@@ -23,6 +23,7 @@ import type {
   RunSpec,
   WorkspaceDiff,
 } from '../../contracts/harness-adapter.js'
+import { type Usage, ZERO_USAGE } from '../../contracts/types.js'
 import { HarnessSessionManager } from '../../execution/session/manager.js'
 import { asOwner, closePool } from '../../fact/db.js'
 import type { CapabilityId } from '../../shared/ids.js'
@@ -49,6 +50,8 @@ class FailAdapter implements HarnessAdapter {
   /** 挂起到被 interrupt 才返回 TIMEOUT(用例 F) */
   hangUntilInterrupted = false
   interrupted = false
+  /** 被中断 / 撤回那一轮已上报的 usage(用例 C/F：失败前花的钱也要入账) */
+  failedUsage: Usage = ZERO_USAGE
   /** 前 N 次 startRun 直接报错(用例 G:adapter 报错 → FAILED) */
   failStartTimes = 0
   /**
@@ -104,12 +107,7 @@ class FailAdapter implements HarnessAdapter {
             status: 'TIMEOUT',
             text: null,
             proposals: [],
-            usage: {
-              tokens_in: null,
-              tokens_out: null,
-              cost_usd: null,
-              cost_basis: 'unavailable',
-            },
+            usage: this.failedUsage,
             session_ref: null,
           },
         }
@@ -122,12 +120,7 @@ class FailAdapter implements HarnessAdapter {
           status: 'CANCELLED',
           text: null,
           proposals: [],
-          usage: {
-            tokens_in: null,
-            tokens_out: null,
-            cost_usd: null,
-            cost_basis: 'unavailable',
-          },
+          usage: this.failedUsage,
           session_ref: null,
         },
       }
@@ -308,6 +301,13 @@ describe('R1(issue #23)· run 失败面', () => {
     const taskId = await seedTask()
     adapter.capabilities = ['CAP-STREAM']
     adapter.hangUntilInterrupted = true
+    // 中断前已经花掉的钱（#74）：超时不是「没花钱」，必须落到 run 行
+    adapter.failedUsage = {
+      tokens_in: 111,
+      tokens_out: 22,
+      cost_usd: 0.5,
+      cost_basis: 'estimated',
+    }
     adapter.appendBody(goodPmOutcome())
     adapter.appendBody(goodPmOutcome())
 
@@ -330,8 +330,13 @@ describe('R1(issue #23)· run 失败面', () => {
         error_kind: string | null
         harness_id: string | null
         harness_tier: string | null
+        tokens_in: string | null
+        tokens_out: string | null
+        cost_usd: string | null
+        cost_basis: string | null
       }>(
-        `SELECT attempt, status, error_kind, harness_id, harness_tier
+        `SELECT attempt, status, error_kind, harness_id, harness_tier,
+                tokens_in, tokens_out, cost_usd, cost_basis
            FROM run WHERE task_id=$1 AND stage='pm' ORDER BY attempt`,
         [taskId],
       ),
@@ -343,6 +348,11 @@ describe('R1(issue #23)· run 失败面', () => {
       harness_id: adapter.describe().harness_id,
       harness_tier: adapter.describe().tier,
     })
+    // #74：中断前 Adapter 已上报的用量必须写回 run 行（C1 / C-002 靠它入账）
+    expect(Number(runs.rows[0]?.tokens_in)).toBe(111)
+    expect(Number(runs.rows[0]?.tokens_out)).toBe(22)
+    expect(Number(runs.rows[0]?.cost_usd)).toBe(0.5)
+    expect(runs.rows[0]?.cost_basis).toBe('estimated')
 
     const evs = await asOwner((c) =>
       c.query<{ type: string; payload: Record<string, unknown> }>(
@@ -399,6 +409,13 @@ describe('R1(issue #23)· run 失败面', () => {
     const taskId = await seedTask()
     adapter.appendBody(badPmOutcome())
     adapter.alwaysCancelled = true
+    // #74：撤回前 Adapter 已上报的用量也要入账（走 pipeline 的通用失败分支）
+    adapter.failedUsage = {
+      tokens_in: 77,
+      tokens_out: 11,
+      cost_usd: 0.25,
+      cost_basis: 'estimated',
+    }
 
     const result = await runTaskToCompletion(taskId, depsFor(), { maxSteps: 4 })
     // CANCELLED 不 emit 失败事件 → 无转移 → 等外部,loop 自然停在当前状态
@@ -409,13 +426,23 @@ describe('R1(issue #23)· run 失败面', () => {
     expect(result.value.stopReason).toBe('cancelled')
 
     const runs = await asOwner((c) =>
-      c.query<{ status: string; harness_id: string | null; harness_tier: string | null }>(
-        `SELECT status, harness_id, harness_tier FROM run WHERE task_id=$1 AND stage='pm'`,
+      c.query<{
+        status: string
+        harness_id: string | null
+        harness_tier: string | null
+        tokens_in: string | null
+        tokens_out: string | null
+      }>(
+        `SELECT status, harness_id, harness_tier, tokens_in, tokens_out
+           FROM run WHERE task_id=$1 AND stage='pm'`,
         [taskId],
       ),
     )
     expect(runs.rows).toHaveLength(1)
     expect(runs.rows[0]?.status).toBe('CANCELLED') // 不卡 PENDING、不重试
+    // #74：通用失败分支（非 stalled）同样要把 usage 送到 run 行
+    expect(Number(runs.rows[0]?.tokens_in)).toBe(77)
+    expect(Number(runs.rows[0]?.tokens_out)).toBe(11)
     // 撤回同样是失败面的结算:harness 身份一并落库
     expect(runs.rows[0]?.harness_id).toBe(adapter.describe().harness_id)
     expect(runs.rows[0]?.harness_tier).toBe(adapter.describe().tier)

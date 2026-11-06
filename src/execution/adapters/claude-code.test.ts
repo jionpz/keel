@@ -133,6 +133,38 @@ describe('parseClaudeStream —— 文档形状 fixture（非 live capture）', 
     expect(parsed.isError).toBe(true)
     expect(parsed.text).toBe('nope')
   })
+
+  it('assistant 事件按 message.id 去重累加 → partialUsage（#74）', () => {
+    const stdout = [
+      '{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":10,"output_tokens":2}}}',
+      // 同一消息的后续更新：取最后一次，不重复计数
+      '{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":10,"output_tokens":5}}}',
+      '{"type":"assistant","message":{"id":"m2","usage":{"input_tokens":7,"output_tokens":3}}}',
+    ].join('\n')
+    const parsed = parseClaudeStream(stdout)
+    expect(parsed.sawResult).toBe(false)
+    expect(parsed.partialUsage.tokens_in).toBe(17)
+    expect(parsed.partialUsage.tokens_out).toBe(8)
+    // assistant 事件不带费用 —— 成本未知就如实报 unavailable
+    expect(parsed.partialUsage.cost_usd).toBeNull()
+    expect(parsed.partialUsage.cost_basis).toBe('unavailable')
+  })
+
+  it('assistant.usage 为 null 不抛异常（CLI 输出不可信）', () => {
+    const parsed = parseClaudeStream('{"type":"assistant","message":{"id":"m1","usage":null}}\n')
+    expect(parsed.partialUsage.tokens_in).toBeNull()
+    expect(parsed.partialUsage.cost_basis).toBe('unavailable')
+  })
+
+  it('没有任何 assistant usage → partialUsage 全 null（不补 0）', () => {
+    const parsed = parseClaudeStream('{"type":"assistant","message":{"id":"m1"}}\n')
+    expect(parsed.partialUsage).toEqual({
+      tokens_in: null,
+      tokens_out: null,
+      cost_usd: null,
+      cost_basis: 'unavailable',
+    })
+  })
 })
 
 describe('Claude capability / tier', () => {
@@ -521,6 +553,102 @@ describe('interrupt 杀子进程(注入 spawn fixture)', () => {
     }
     expect(await runWith('timeout')).toBe('TIMEOUT')
     expect(await runWith('cancelled')).toBe('CANCELLED')
+  })
+})
+
+// ────────────── #74-1 · 中断前已上报的 usage 必须入账 ──────────────
+
+describe('中断前的 usage 入账（#74）', () => {
+  interface Proc {
+    pid: number
+    stdout: { on: (ev: 'data', cb: (chunk: Buffer) => void) => void }
+    stderr: { on: () => void }
+    on: (ev: 'error' | 'close', cb: (code?: number | null) => void) => void
+    kill: (signal: string | number) => boolean
+    emitData: (line: string) => void
+    emitClose: (code: number) => void
+  }
+
+  function spawnWithStdout(): { spawnFn: typeof spawn; procs: Proc[] } {
+    const procs: Proc[] = []
+    const spawnFn = ((_cmd: string, _args: readonly string[]): unknown => {
+      const dataHandlers: Array<(chunk: Buffer) => void> = []
+      const closeHandlers: Array<(code?: number | null) => void> = []
+      const pid = 43000 + procs.length
+      const proc: Proc = {
+        pid,
+        stdout: { on: (_ev, cb) => dataHandlers.push(cb) },
+        stderr: { on: () => {} },
+        on: (ev, cb) => {
+          if (ev === 'close') closeHandlers.push(cb)
+        },
+        kill: () => true,
+        emitData: (line) => {
+          for (const cb of dataHandlers) cb(Buffer.from(line))
+        },
+        emitClose: (code) => {
+          for (const cb of closeHandlers) cb(code)
+        },
+      }
+      procs.push(proc)
+      return proc
+    }) as unknown as typeof spawn
+    return { spawnFn, procs }
+  }
+
+  const ASSISTANT =
+    '{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":10,"output_tokens":2}}}\n'
+
+  it('无 result 但 assistant 已上报 → TIMEOUT 带出累加值', async () => {
+    const { spawnFn, procs } = spawnWithStdout()
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true)
+    try {
+      const adapter = new ClaudeCodeAdapter({ spawnFn, interruptKillTimeoutMs: 1 })
+      const started = await adapter.startRun(spec())
+      expect(started.ok).toBe(true)
+      if (!started.ok) return
+
+      procs[0]?.emitData(ASSISTANT)
+      await adapter.interrupt(started.value, 'timeout')
+      procs[0]?.emitClose(143)
+
+      const res = await adapter.awaitResult(started.value)
+      expect(res.ok).toBe(true)
+      if (!res.ok) return
+      expect(res.value.status).toBe('TIMEOUT')
+      expect(res.value.usage.tokens_in).toBe(10)
+      expect(res.value.usage.tokens_out).toBe(2)
+      expect(res.value.usage.cost_basis).toBe('unavailable')
+    } finally {
+      killSpy.mockRestore()
+    }
+  })
+
+  it('已有 result → 用 result 聚合值，不与 assistant 求和重复计数', async () => {
+    const { spawnFn, procs } = spawnWithStdout()
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true)
+    try {
+      const adapter = new ClaudeCodeAdapter({ spawnFn, interruptKillTimeoutMs: 1 })
+      const started = await adapter.startRun(spec())
+      expect(started.ok).toBe(true)
+      if (!started.ok) return
+
+      procs[0]?.emitData(ASSISTANT)
+      procs[0]?.emitData(
+        '{"type":"result","result":"done","total_cost_usd":0.01,"usage":{"input_tokens":100,"output_tokens":20}}\n',
+      )
+      await adapter.interrupt(started.value, 'cancelled')
+      procs[0]?.emitClose(143)
+
+      const res = await adapter.awaitResult(started.value)
+      expect(res.ok).toBe(true)
+      if (!res.ok) return
+      expect(res.value.usage.tokens_in).toBe(100)
+      expect(res.value.usage.tokens_out).toBe(20)
+      expect(res.value.usage.cost_basis).toBe('estimated')
+    } finally {
+      killSpy.mockRestore()
+    }
   })
 })
 

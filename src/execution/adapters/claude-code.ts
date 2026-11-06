@@ -227,11 +227,20 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
     state.proc = null
 
     if (state.aborted) {
+      // 中断前的已花用量（issue #74）：stdout 由 run() 完整收集，中断后仍可解析。
+      // 有 result 且带聚合值 → 以它为准（避免与 assistant 求和重复计数）；
+      // result 存在但用量全空（畸形 / 被裁剪）→ 回退已见到的 assistant 累加值。
+      // 两者都没有 → null + unavailable，不补 0（docs/08-cross-cutting.md §3.1）。
+      const parsed = parseClaudeStream(proc.stdout)
+      const hasAggregate =
+        parsed.usage.tokens_in !== null ||
+        parsed.usage.tokens_out !== null ||
+        parsed.usage.cost_usd !== null
       return ok({
         status: state.timeout ? 'TIMEOUT' : 'CANCELLED',
         text: null,
         proposals: [],
-        usage: { tokens_in: null, tokens_out: null, cost_usd: null, cost_basis: 'unavailable' },
+        usage: hasAggregate ? parsed.usage : parsed.partialUsage,
         session_ref: null,
       })
     }

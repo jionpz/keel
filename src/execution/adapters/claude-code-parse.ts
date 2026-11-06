@@ -19,6 +19,14 @@ export interface ParsedClaudeRun {
   /** `type=result` 的 `result` 文本；缺或非字符串为 null */
   readonly text: string | null
   readonly usage: Usage
+  /**
+   * 非 result 来源的用量：`assistant` 事件 `message.usage` 按消息 id 去重后累加。
+   *
+   * 只在 run 被中断（流里没有 `type=result`）时使用 —— 中断前已经花掉的钱。
+   * 流里有 result 时必须用 `usage`（result 是聚合值，再累加会重复计数）。
+   * 从未上报 → null + `unavailable`，不补 0。
+   */
+  readonly partialUsage: Usage
   readonly nonJsonLines: readonly string[]
   /** 是否见到过 `type=result` 行 */
   readonly sawResult: boolean
@@ -31,6 +39,11 @@ interface ClaudeUsage {
   output_tokens?: number
 }
 
+interface ClaudeAssistantMessage {
+  id?: unknown
+  usage?: ClaudeUsage
+}
+
 interface ClaudeResultEvent {
   type?: string
   result?: unknown
@@ -38,6 +51,25 @@ interface ClaudeResultEvent {
   total_cost_usd?: unknown
   usage?: ClaudeUsage
   is_error?: unknown
+  /** `type=assistant` 行才有 */
+  message?: ClaudeAssistantMessage
+}
+
+/** 累加 assistant 消息的用量；没有任何数字时返回 null（不补 0） */
+function sumAssistantUsage(byMessage: ReadonlyMap<string, ClaudeUsage>): Usage {
+  let tokensIn: number | null = null
+  let tokensOut: number | null = null
+  for (const u of byMessage.values()) {
+    if (typeof u.input_tokens === 'number') tokensIn = (tokensIn ?? 0) + u.input_tokens
+    if (typeof u.output_tokens === 'number') tokensOut = (tokensOut ?? 0) + u.output_tokens
+  }
+  return {
+    tokens_in: tokensIn,
+    tokens_out: tokensOut,
+    // assistant 事件不带费用 —— 成本未知就如实报 unavailable
+    cost_usd: null,
+    cost_basis: 'unavailable',
+  }
 }
 
 /**
@@ -57,6 +89,12 @@ export function parseClaudeStream(stdout: string): ParsedClaudeRun {
   let tokensIn: number | null = null
   let tokensOut: number | null = null
 
+  // assistant 消息的用量按消息 id 去重：同一 id 出现多次（流式更新）取最后一次，
+  // 避免把同一次 API 调用重复计数。无 id 时用出现序号作键 —— 无法去重，
+  // 按出现次数累加（宁可这样，也不要丢掉已经发生过的调用）。
+  const assistantUsage = new Map<string, ClaudeUsage>()
+  let assistantSeq = 0
+
   for (const raw of stdout.split('\n')) {
     const line = raw.trim()
     if (line === '') continue
@@ -70,6 +108,14 @@ export function parseClaudeStream(stdout: string): ParsedClaudeRun {
       e = JSON.parse(line) as ClaudeResultEvent
     } catch {
       nonJsonLines.push(line)
+      continue
+    }
+
+    if (e.type === 'assistant') {
+      const id = typeof e.message?.id === 'string' ? e.message.id : `#${assistantSeq++}`
+      // 输入是不可信的 CLI 输出：`usage: null` 不是「有 usage」，不能进 Map
+      const usage = e.message?.usage
+      if (typeof usage === 'object' && usage !== null) assistantUsage.set(id, usage)
       continue
     }
 
@@ -112,6 +158,7 @@ export function parseClaudeStream(stdout: string): ParsedClaudeRun {
       // 没有数字时诚实报 unavailable，不用 0 冒充。
       cost_basis: costUsd === null ? 'unavailable' : 'estimated',
     },
+    partialUsage: sumAssistantUsage(assistantUsage),
     nonJsonLines,
     sawResult,
     isError,

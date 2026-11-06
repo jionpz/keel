@@ -115,7 +115,7 @@ SessionSpec {
 ### 2.3 `advance()` `[v0.1 必须]`
 
 ```
-advance(handle: SessionHandle, input: TurnInput) -> TurnOutcome | Error
+advance(handle: SessionHandle, input: TurnInput) -> ResultWithUsage<TurnOutcome>
 
 TurnOutcome {
   proposals:  Proposal[]
@@ -123,7 +123,16 @@ TurnOutcome {
   finished:   boolean          // Session 认为本阶段工作已完成
   needs:      CapabilityId[]   // 由 A-CapabilityRequest 提案派生
 }
+
+ResultWithUsage<T> {            // 代码：src/contracts/errors.ts
+  ok:     true,  value: T
+  ok:     false, error: KeelError, usage: Usage   // 这一轮**已经花掉**的用量
+}
 ```
+
+失败分支**也带 `usage`**：这一轮可能已经真实调用过 Harness，钱已经花了。
+丢掉它会让失败/超时重试成为成本核算与预算熔断的唯一盲区（issue #74）。
+Adapter 从未上报时是 `null` + `unavailable`，SessionManager 不得补 0。
 
 ### 2.4 `checkpoint()` `[可延后]`
 

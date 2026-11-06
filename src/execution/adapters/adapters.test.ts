@@ -859,3 +859,104 @@ describe('interrupt 杀子进程(注入 spawn fixture)', () => {
     expect(await runWith('cancelled')).toBe('CANCELLED')
   })
 })
+
+// ────────────── #74-1 · 中断前已上报的 usage 必须入账 ──────────────
+
+/**
+ * 旧实现：abort 分支硬编码全 null 的 usage —— 中断前流里的
+ * turn_end / message_end 已经带着真实花费，被直接丢掉。
+ * 后果：六次 TIMEOUT 的 tokens 全空，C-002 对最烧钱的重试失明。
+ */
+describe('中断前的 usage 入账（#74）', () => {
+  interface Proc {
+    pid: number
+    stdout: { on: (ev: 'data', cb: (chunk: Buffer) => void) => void }
+    stderr: { on: () => void }
+    on: (ev: 'error' | 'close', cb: (code?: number | null) => void) => void
+    kill: (signal: string | number) => boolean
+    emitData: (line: string) => void
+    emitClose: (code: number) => void
+  }
+
+  function spawnWithStdout(): { spawnFn: typeof spawn; procs: Proc[] } {
+    const procs: Proc[] = []
+    const spawnFn = ((_cmd: string, _args: readonly string[]): unknown => {
+      const dataHandlers: Array<(chunk: Buffer) => void> = []
+      const closeHandlers: Array<(code?: number | null) => void> = []
+      const pid = 42000 + procs.length
+      const proc: Proc = {
+        pid,
+        stdout: { on: (_ev, cb) => dataHandlers.push(cb) },
+        stderr: { on: () => {} },
+        on: (ev, cb) => {
+          if (ev === 'close') closeHandlers.push(cb)
+        },
+        kill: () => true,
+        emitData: (line) => {
+          for (const cb of dataHandlers) cb(Buffer.from(line))
+        },
+        emitClose: (code) => {
+          for (const cb of closeHandlers) cb(code)
+        },
+      }
+      procs.push(proc)
+      return proc
+    }) as unknown as typeof spawn
+    return { spawnFn, procs }
+  }
+
+  const TURN_END =
+    '{"type":"turn_end","message":{"usage":{"input":208,"output":27,"cost":{"total":0.0001485008}}}}\n'
+
+  it('中断前流里出现过 usage → TIMEOUT 也把它带出来', async () => {
+    const { spawnFn, procs } = spawnWithStdout()
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true)
+    try {
+      const adapter = new OmpAdapter({ spawnFn, interruptKillTimeoutMs: 1 })
+      const started = await adapter.startRun(spec())
+      expect(started.ok).toBe(true)
+      if (!started.ok) return
+
+      procs[0]?.emitData(TURN_END)
+      await adapter.interrupt(started.value, 'timeout')
+      procs[0]?.emitClose(143)
+
+      const res = await adapter.awaitResult(started.value)
+      expect(res.ok).toBe(true)
+      if (!res.ok) return
+      expect(res.value.status).toBe('TIMEOUT')
+      expect(res.value.usage.tokens_in).toBe(208)
+      expect(res.value.usage.tokens_out).toBe(27)
+      expect(res.value.usage.cost_usd).toBeCloseTo(0.0001485008)
+      expect(res.value.usage.cost_basis).toBe('estimated')
+    } finally {
+      killSpy.mockRestore()
+    }
+  })
+
+  it('从未上报 usage → 保持 null + unavailable（不补 0）', async () => {
+    const { spawnFn, procs } = spawnWithStdout()
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true)
+    try {
+      const adapter = new OmpAdapter({ spawnFn, interruptKillTimeoutMs: 1 })
+      const started = await adapter.startRun(spec())
+      expect(started.ok).toBe(true)
+      if (!started.ok) return
+
+      await adapter.interrupt(started.value, 'cancelled')
+      procs[0]?.emitClose(143)
+
+      const res = await adapter.awaitResult(started.value)
+      expect(res.ok).toBe(true)
+      if (!res.ok) return
+      expect(res.value.usage).toEqual({
+        tokens_in: null,
+        tokens_out: null,
+        cost_usd: null,
+        cost_basis: 'unavailable',
+      })
+    } finally {
+      killSpy.mockRestore()
+    }
+  })
+})

@@ -266,11 +266,17 @@ export class OmpAdapter implements HarnessAdapter {
 
     if (state.aborted) {
       // 方案 B:timeout(R-009,墙钟超时→TIMEOUT→可重试)vs 人工取消(R-010→CANCELLED)
+      //
+      // usage 取增量解析器**已经见到**的值：中断前流里的 turn_end / message_end
+      // 已带真实花费，丢掉会让 C-002 对最烧钱的中断场景失明（issue #74）。
+      // 与 SUCCEEDED 路径同一口径（最后一次见到的值）；从未上报 → null + unavailable，
+      // 不补 0（docs/08-cross-cutting.md §3.1）。end() 会冲刷残留半行，此处不再复用解析器。
+      const parsed = parser.end()
       return ok({
         status: state.timeout ? 'TIMEOUT' : 'CANCELLED',
         text: null,
         proposals: [],
-        usage: { tokens_in: null, tokens_out: null, cost_usd: null, cost_basis: 'unavailable' },
+        usage: parsed.usage,
         session_ref: null,
       })
     }

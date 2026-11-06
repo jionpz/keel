@@ -16,7 +16,7 @@ import type { PersistedArtifactKind } from '../../contracts/artifact-store.js'
 import { type KeelError, makeError } from '../../contracts/errors.js'
 import type { WorkspaceDiff } from '../../contracts/harness-adapter.js'
 import type { PolicyEngine } from '../../contracts/policy-engine.js'
-import type { Stage, Usage } from '../../contracts/types.js'
+import { type Stage, type Usage, ZERO_USAGE } from '../../contracts/types.js'
 import type {
   HarnessSessionManager,
   SessionHandle,
@@ -126,13 +126,9 @@ export type PipelineResult =
   | { readonly ok: true; readonly value: PipelineOutcome }
   | { readonly ok: false; readonly error: KeelError; readonly usage: Usage }
 
-/** 初始累计值：什么都还没上报。null 而非 0 —— 两者在核算里是不同的事实 */
-export const ZERO_USAGE: Usage = {
-  tokens_in: null,
-  tokens_out: null,
-  cost_usd: null,
-  cost_basis: 'unavailable',
-}
+// 唯一定义在契约层（Execution 的 SessionManager 也要用，不能反向依赖本模块）；
+// 这里 re-export 保持既有调用方（loop.ts 等）的 import 不变
+export { ZERO_USAGE }
 
 function addNullable(a: number | null, b: number | null): number | null {
   if (a === null && b === null) return null
@@ -232,9 +228,11 @@ export async function runSessionUntilValid(
         text: prompt,
         ...(feedback.length > 0 ? { rejected_violations: feedback } : {}),
       })
-      // 超时/取消/失败的轮次也要把**之前各轮**的累计带出去 ——
-      // 出错的这一轮 Adapter 是否上报 usage 由它自己决定(OMP 中断时报 unavailable)
+      // 超时/取消/失败的轮次也要把**已花掉的钱**带出去 ——
+      // 之前各轮的累计 + 出错这一轮 Adapter 已上报的部分。
+      // 出错轮没上报时是 null + unavailable，不补 0（docs/08-cross-cutting.md §3.1）
       if (!turn.ok) {
+        const spent = addUsage(usage, turn.usage)
         // 控制面负责把「supervisor 判定 stalled」映射为 RUN_STALLED ——
         // adapter 只返回 TIMEOUT，不感知 liveness 语义。
         if (supervisor?.interruptedByStalled === true && turn.error.kind === 'RUN_TIMEOUT') {
@@ -245,10 +243,10 @@ export async function runSessionUntilValid(
               `无进展超过阈值，已被 supervisor 中断：${turn.error.detail}`,
               turn.error,
             ),
-            usage,
+            usage: spent,
           }
         }
-        return { ok: false, error: turn.error, usage }
+        return { ok: false, error: turn.error, usage: spent }
       }
       usage = addUsage(usage, turn.value.usage)
       diff = turn.value.diff

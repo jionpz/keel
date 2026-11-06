@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/harness-adapter.md", "reason": "Adapter 的输出解析、子进程与环境隔离纪律；本任务要改 abort 分支的 usage 上报"}
+{"file": ".trellis/spec/backend/orchestrator-loop.md", "reason": "失败结算与 failRunAndAdvance 的既有契约，确认上游只需把 usage 送到"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "RUN_TIMEOUT / RUN_CANCELLED / PROTOCOL_ERROR 的 retryable 语义不得改变"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "run 行的成本列写入与事务边界（failRunAndAdvance 的 RUNNING 守卫）"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试分层、fake adapter 纪律、反例验证要求"}
+{"file": "docs/05-contracts/session-manager.md", "reason": "advance() 的契约签名，本次要同步失败分支带 usage"}
+{"file": "docs/05-contracts/harness-adapter.md", "reason": "awaitResult() 的 RunResult / usage 语义"}
+{"file": "docs/08-cross-cutting.md", "reason": "§3.1 成本口径三态：billed / estimated / unavailable，禁止用 0 冒充"}

@@ -15,7 +15,7 @@
 
 import type { ACheckpoint } from '../generated/artifacts.js'
 import type { CapabilityId, RoleId } from '../shared/ids.js'
-import type { Result } from './errors.js'
+import type { Result, ResultWithUsage } from './errors.js'
 import type { HarnessAdapter } from './harness-adapter.js'
 import type { Context, Limits, Proposal, RunRef, Usage, WorkspaceSpec } from './types.js'
 
@@ -82,8 +82,13 @@ export interface SessionManager {
   /** [v0.1 必须] 开会话 */
   open(spec: SessionSpec): Promise<Result<SessionHandle>>
 
-  /** [v0.1 必须] 推进一轮 */
-  advance(handle: SessionHandle, input: TurnInput): Promise<Result<TurnOutcome>>
+  /**
+   * [v0.1 必须] 推进一轮。
+   *
+   * 失败分支**也带 usage**：这一轮可能已经真实调用过 Harness，
+   * 钱已经花了 —— 与 `PipelineResult` 同理，见 docs 契约 §2.3。
+   */
+  advance(handle: SessionHandle, input: TurnInput): Promise<ResultWithUsage<TurnOutcome>>
 
   /** [v0.1 必须] 产出可恢复摘要。它同样以 Proposal 形式提交，走同一条校验流水线 */
   checkpoint(handle: SessionHandle): Promise<Result<ACheckpoint>>

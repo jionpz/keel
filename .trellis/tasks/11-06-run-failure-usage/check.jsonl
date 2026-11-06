@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/harness-adapter.md", "reason": "检查 adapter abort 分支是否只改 usage、未改 session_ref / 状态语义"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "核对 ErrorKind 映射与 retryable 完全未变"}
+{"file": ".trellis/spec/backend/orchestrator-loop.md", "reason": "确认 loop 无需改动，失败结算路径仍只报告不修复"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试是否覆盖反例；fake 是否仍不连真实 LLM"}
+{"file": "docs/08-cross-cutting.md", "reason": "确认没有用 0 冒充 unavailable，cost_basis 三态正确"}

@@ -85,6 +85,22 @@ claude 2.1.300 相对 2.1.222（本任务 research 记录的版本）的漂移�
 
 改 Adapter 时先去 `claude --help` / `omp --help` 核一遍，不要照抄 research 里的旧版本。
 
+## 契约 4：中断 / 失败也要上报**已见到**的 usage
+
+`awaitResult` 的非 `SUCCEEDED` 分支（`TIMEOUT` / `CANCELLED`）**不是**「没花钱」：
+
+| Adapter | 已经能拿到的用量 | 取法 |
+|---|---|---|
+| omp | 增量解析器里的 `turn_end` / `message_end` | `parser.end().usage`（与 SUCCEEDED 同口径） |
+| claude | `assistant` 事件的 `message.usage` | 按 `message.id` 去重累加；有 `result` 时用 result 聚合值 |
+| human | 无 token 概念 | 保持 `null` + `unavailable` |
+
+硬编码全 `null` 的 abort 分支会让六次 `TIMEOUT` 的 tokens 全空，
+C-002 对最烧钱的重试失明（issue #74）。从未上报时才允许 `null`；
+**任何时候都不补 0**（`docs/08-cross-cutting.md` §3.1）。
+
+<!-- 反例：把 omp abort 的 usage 改回硬编码 null → adapters.test.ts「中断前的 usage 入账」变红 -->
+
 ---
 
 ## 失败模式与测试锚点

@@ -8,6 +8,8 @@
  * 把不可重试的错误标成可重试，系统会白白重跑到 max_attempts 才升人工。
  */
 
+import type { Usage } from './types.js'
+
 export const ERROR_KINDS = [
   'HARNESS_UNAVAILABLE',
   'AUTH_FAILED',
@@ -81,6 +83,18 @@ export function makeError(kind: ErrorKind, detail: string, cause?: KeelError): K
 export type Result<T> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly error: KeelError }
+
+/**
+ * 失败也带 usage 的结果。
+ *
+ * 与 `Result<T>` 的唯一差别：失败分支有位置放**已经花掉的钱**。
+ * 用于「失败前可能已经真实调用过 Harness」的方法（如 `advance`）——
+ * 失败时丢弃 usage 会让最烧钱的场景（超时重试 × T-030 重跑）
+ * 对成本核算（C1）与预算熔断（C-002）完全失明。
+ */
+export type ResultWithUsage<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly error: KeelError; readonly usage: Usage }
 
 export function ok<T>(value: T): Result<T> {
   return { ok: true, value }

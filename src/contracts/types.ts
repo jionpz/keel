@@ -31,6 +31,19 @@ export interface Usage {
   readonly cost_basis: CostBasis
 }
 
+/**
+ * 初始累计值：什么都还没上报。null 而非 0 —— 两者在核算里是不同的事实。
+ *
+ * 定义在契约层而不是某个调用方：Control（pipeline 累计）与
+ * Execution（SessionManager 的失败分支）都要用它，Execution 不得反向依赖 Control。
+ */
+export const ZERO_USAGE: Usage = {
+  tokens_in: null,
+  tokens_out: null,
+  cost_usd: null,
+  cost_basis: 'unavailable',
+}
+
 // ─────────────────────────────── 工作区 ───────────────────────────────
 
 export interface WorkspaceSpec {
