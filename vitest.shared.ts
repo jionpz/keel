@@ -29,7 +29,12 @@ export const SHARED_TEST_CONFIG = {
 } as const
 
 /** 两套配置都要排除的东西（node_modules、dist 等），不含测试分层规则 */
-export const BASE_EXCLUDE = [...configDefaults.exclude]
+export const BASE_EXCLUDE = [
+  ...configDefaults.exclude,
+  // 会话 worktree 落在仓库内（.claude/worktrees/<session>，由 .git/info/exclude 忽略）。
+  // 不排除的话 `pnpm run check` 会把另一个分支的测试也跑一遍 —— 结果不可信。
+  '**/.claude/worktrees/**',
+]
 
 /** 验收测试的文件名约定。分层规则只有这一条，两处引用同一个常量 */
 export const ACCEPTANCE_GLOB = '**/*.acceptance.test.ts'
