@@ -17,7 +17,8 @@ import type { WorkflowDriver } from '../control/driver/driver.js'
 import { livenessMode } from '../control/liveness/policy.js'
 import type { LivenessStore } from '../control/liveness/store.js'
 import { asRole } from '../fact/db.js'
-import type { TransitionTimerKind } from '../shared/timers.js'
+import { TIMER_DURATIONS, type TransitionTimerKind } from '../shared/timers.js'
+import { armMissingHumanReviewTimers } from './arm.js'
 import { claimDueTimers } from './drain.js'
 import {
   EMPTY_PATROL_STATS,
@@ -30,6 +31,8 @@ import { reapTimeoutRun } from './reap.js'
 export interface ReapStats {
   clarificationFired: number
   humanReviewFired: number
+  /** 本轮为存量 S-HUMAN_REVIEW 任务补齐的 pending 行数（issue #75） */
+  humanReviewArmed: number
   runTimeout: number
   skipped: number
   /** 本轮巡检（progress 模式下才有） */
@@ -46,6 +49,12 @@ export interface WorkerDeps {
   readonly store?: LivenessStore
   /** 测试注入；缺省 `patrolStalledRuns` */
   readonly patrol?: (deps: PatrolDeps) => Promise<PatrolStats>
+  /**
+   * 人工裁决 TTL 的生效毫秒数（与 `WorkflowDriver` 同源）。
+   * - 缺省 → `TIMER_DURATIONS.human_review_ttl`（24h），既有调用行为不变
+   * - `null` → 关闭调度，不补齐存量任务
+   */
+  readonly humanReviewTtlMs?: number | null
 }
 
 /** 到期 run 墙钟 + 关联 RUNNING run(批量,供 reapTimeoutRun) */
@@ -81,10 +90,18 @@ export async function drainAllDueTimers(deps: WorkerDeps): Promise<ReapStats> {
   const stats: ReapStats = {
     clarificationFired: 0,
     humanReviewFired: 0,
+    humanReviewArmed: 0,
     runTimeout: 0,
     skipped: 0,
     patrol: { ...EMPTY_PATROL_STATS },
   }
+
+  // 0) 对账补齐：`human_review_ttl` 上线前就停在 S-HUMAN_REVIEW 的任务
+  //    没有进门转移可走（issue #75）。必须在 claim 之前：补齐行
+  //    `due_at = now + TTL`，本轮不会被收割，不会出现「刚补就到期」。
+  const humanReviewTtlMs =
+    deps.humanReviewTtlMs === undefined ? TIMER_DURATIONS.human_review_ttl : deps.humanReviewTtlMs
+  stats.humanReviewArmed = await armMissingHumanReviewTimers(deps.now(), humanReviewTtlMs)
 
   // 1) 两类 Task 级 TTL：到期 → 对应转移(ConsumeTimer 在 advance 事务内置 fired)
   const ttls: readonly TransitionTimerKind[] = ['clarification_ttl', 'human_review_ttl']

@@ -18,6 +18,7 @@ import { type ReapStats, runForever, type TimerSignalSource, type WorkerDeps } f
 const ZERO: ReapStats = {
   clarificationFired: 0,
   humanReviewFired: 0,
+  humanReviewArmed: 0,
   runTimeout: 0,
   skipped: 0,
   patrol: { ...EMPTY_PATROL_STATS },

@@ -15,6 +15,7 @@ import { timerWorkerMain } from './timer-worker.js'
 const STATS: ReapStats = {
   clarificationFired: 0,
   humanReviewFired: 0,
+  humanReviewArmed: 0,
   runTimeout: 0,
   skipped: 0,
   patrol: { ...EMPTY_PATROL_STATS },
@@ -64,16 +65,36 @@ describe('timerWorkerMain · 单实例锁', () => {
     expect(text).toContain('单次收割也持锁')
   })
 
-  it('单次模式 → drain 调用一次，release 恰好一次', async () => {
+  it('单次模式 → drain 调用一次，release 恰好一次，日志带 humanReviewArmed', async () => {
     const { lock, release } = fakeLock()
     const drain = vi.fn(async (_deps: WorkerDeps) => STATS)
-    vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined)
 
     await timerWorkerMain([], { acquireLock: async () => lock, drain })
 
     expect(process.exitCode).toBeUndefined()
     expect(drain).toHaveBeenCalledTimes(1)
     expect(release).toHaveBeenCalledTimes(1)
+    const text = logSpy.mock.calls.map((c) => String(c[0])).join('\n')
+    expect(text).toContain('humanReviewFired=0')
+    expect(text).toContain('humanReviewArmed=0')
+  })
+
+  it('解析后的 humanReviewTtlMs 传给 WorkerDeps（与 driver 同源，不二次解析）', async () => {
+    const previous = process.env.KEEL_HUMAN_REVIEW_TTL_H
+    process.env.KEEL_HUMAN_REVIEW_TTL_H = '2'
+    try {
+      const { lock } = fakeLock()
+      const drain = vi.fn(async (_deps: WorkerDeps) => STATS)
+      vi.spyOn(console, 'log').mockImplementation(() => undefined)
+
+      await timerWorkerMain([], { acquireLock: async () => lock, drain })
+
+      expect(drain.mock.calls[0]?.[0].humanReviewTtlMs).toBe(2 * 3600 * 1000)
+    } finally {
+      if (previous === undefined) delete process.env.KEEL_HUMAN_REVIEW_TTL_H
+      else process.env.KEEL_HUMAN_REVIEW_TTL_H = previous
+    }
   })
 
   it('--interval 5 → 常驻循环收到 intervalMs，release 恰好一次', async () => {

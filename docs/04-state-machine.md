@@ -361,6 +361,10 @@ idempotency_key = hash(task_id, stage, attempt)
 > `T-028` 的 `ConsumeTimer` 与状态变更同事务置 `fired`。
 > 五条进入 `S-HUMAN_REVIEW` 的转移（`T-013` / `T-020` / `T-023` / `T-026` / `T-031`）
 > 都会武装它；终态转移（`T-040` / `T-041`）取消两类 Task 级 timer。
+> **存量兜底（issue #75）**：功能上线前就已停在 `S-HUMAN_REVIEW` 的任务没有进门转移
+> 可走，由 `timer-worker` 每轮 drain 在收割前对账补齐缺失的 pending timer ——
+> 只补 `control_mode='auto'`、`due_at = now + 生效 TTL`，`0 = 关闭`时不补，
+> 已有 pending 行不改期限。
 
 > **独立 timer worker(issue #26)**：方案 A/B 的收割由编排进程内执行
 > （澄清 branch / watchdog setTimeout）；进程崩溃后到期无人收割。

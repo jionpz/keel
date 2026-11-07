@@ -83,6 +83,8 @@ KEEL_HUMAN_REVIEW_TTL_H 控制 S-HUMAN_REVIEW 的超时自动弃单（小时，�
       ),
       now,
       store,
+      // 与 driver 同源：只解析一次 env，两处用同一个值
+      humanReviewTtlMs: humanReviewTtl.value,
     }
 
     const interval =
@@ -96,7 +98,8 @@ KEEL_HUMAN_REVIEW_TTL_H 控制 S-HUMAN_REVIEW 的超时自动弃单（小时，�
       const stats = await (deps.drain ?? drainAllDueTimers)(workerDeps)
       console.log(
         `timer-worker: clarificationFired=${stats.clarificationFired} ` +
-          `humanReviewFired=${stats.humanReviewFired} runTimeout=${stats.runTimeout} ` +
+          `humanReviewFired=${stats.humanReviewFired} ` +
+          `humanReviewArmed=${stats.humanReviewArmed} runTimeout=${stats.runTimeout} ` +
           `skipped=${stats.skipped} patrol(reaped=${stats.patrol.reaped}, killed=${stats.patrol.orphansKilled}, ` +
           `errors=${stats.patrol.errors}) liveness=${mode}`,
       )

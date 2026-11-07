@@ -204,6 +204,59 @@ describe('独立 timer worker(issue #26)', () => {
     expect(await statusOf(taskId)).toBe('S-PM_ANALYZING')
   })
 
+  it('W8.存量 S-HUMAN_REVIEW 无 timer → drain 补齐 → 到期 T-028 → S-ABANDONED + fired（#75）', async () => {
+    const DAY_MS = 24 * 3600 * 1000
+    // 升级前就停在 S-HUMAN_REVIEW：没有进门转移，永远不会有 human_review_ttl
+    const { taskId } = await seedWith('S-HUMAN_REVIEW')
+
+    const first = await drainAllDueTimers({ driver: driver(), now, humanReviewTtlMs: DAY_MS })
+    expect(first.humanReviewArmed).toBe(1)
+
+    const armed = await timerRows(taskId)
+    expect(armed).toHaveLength(1)
+    expect(armed[0]?.state).toBe('pending')
+    expect(armed[0]?.due_at.getTime()).toBe(Date.parse(NOW) + DAY_MS)
+
+    // 幂等：第二次 drain 不新增、不改期限
+    const second = await drainAllDueTimers({ driver: driver(), now, humanReviewTtlMs: DAY_MS })
+    expect(second.humanReviewArmed).toBe(0)
+    const unchanged = await timerRows(taskId)
+    expect(unchanged).toHaveLength(1)
+    expect(unchanged[0]?.id).toBe(armed[0]?.id)
+    expect(unchanged[0]?.due_at.getTime()).toBe(Date.parse(NOW) + DAY_MS)
+
+    // 模拟升级后 TTL 到期：把期限推到过去，让 T-028 能收割
+    await asOwner((c) =>
+      c.query(
+        `UPDATE timer SET due_at='2026-08-26T11:00:00Z'
+         WHERE task_id=$1 AND kind='human_review_ttl'`,
+        [taskId],
+      ),
+    )
+
+    const third = await drainAllDueTimers({ driver: driver(), now, humanReviewTtlMs: DAY_MS })
+    expect(third.humanReviewFired).toBe(1)
+    expect(await statusOf(taskId)).toBe('S-ABANDONED')
+
+    const fired = await timerRows(taskId)
+    expect(fired).toHaveLength(1)
+    expect(fired[0]?.state).toBe('fired')
+    expect(fired[0]?.fired_at).not.toBeNull()
+  })
+
+  it('W9.不传 humanReviewTtlMs → 默认 24h（与 StartTimer 同源）', async () => {
+    const DAY_MS = 24 * 3600 * 1000
+    const { taskId } = await seedWith('S-HUMAN_REVIEW')
+
+    // 不传 humanReviewTtlMs：WorkerDeps 的缺省必须与 TIMER_DURATIONS 一致
+    const stats = await drainAllDueTimers({ driver: driver(), now })
+    expect(stats.humanReviewArmed).toBe(1)
+
+    const rows = await timerRows(taskId)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.due_at.getTime()).toBe(Date.parse(NOW) + DAY_MS)
+  })
+
   it('W5: progress 模式挂巡检；wallclock 模式整体退回旧路径', async () => {
     let patrolCalls = 0
     const deps = {
@@ -238,4 +291,23 @@ async function runCount(taskId: string): Promise<number> {
     c.query<{ n: string }>(`SELECT count(*) AS n FROM run WHERE task_id=$1`, [taskId]),
   )
   return Number(r.rows[0]?.n)
+}
+
+interface TimerRow {
+  id: string
+  state: string
+  due_at: Date
+  fired_at: Date | null
+}
+
+async function timerRows(taskId: string): Promise<TimerRow[]> {
+  const r = await asOwner((c) =>
+    c.query<TimerRow>(
+      `SELECT id, state, due_at, fired_at FROM timer
+       WHERE task_id=$1 AND kind='human_review_ttl'
+       ORDER BY created_at`,
+      [taskId],
+    ),
+  )
+  return r.rows
 }

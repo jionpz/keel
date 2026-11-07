@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/transition-effects.md", "reason": "Task 级 timer 三件套、TTL 配置与 claim 防线的既有纪律"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "asRole 权限、事务边界与迁移未跑全的排查方式"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试分层、反例验证与质量门槛"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "timer 表 → worker → CLI 的跨层数据流检查"}

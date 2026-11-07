@@ -149,7 +149,7 @@ Task 级 TTL 只有两条：`clarification_ttl`（T-005 起，T-007 取消，T-0
 | `CancelTimer(kind)` | `UPDATE ... WHERE state='pending'` | 0 行 → `skipped` |
 | `ConsumeTimer(kind)` | `UPDATE ... SET state='fired', fired_at=now WHERE state='pending' AND due_at <= now` | 0 行 → `skipped` |
 
-四条纪律：
+五条纪律：
 
 1. **进入等 TTL 的状态必须武装、离开必须取消。** 漏 `CancelTimer` 的失效不是报错，
    而是下一次进入时新的 `StartTimer` 被部分唯一索引挡成 `skipped` —— 任务静默失去 TTL。
@@ -164,6 +164,19 @@ Task 级 TTL 只有两条：`clarification_ttl`（T-005 起，T-007 取消，T-0
    描述，不读 env、不读时钟。`KEEL_HUMAN_REVIEW_TTL_H` 只在 CLI 解析、在
    `effects.ts` 计算落库的 `due_at` 时使用。`EffectContext.humanReviewTtlMs`
    可选字段让测试注入 `null`（关闭）/ 短 TTL，不必改全局常量。
+5. **timer-worker 每轮 drain 对账补齐缺失的 `human_review_ttl`（issue #75）。**
+   `human_review_ttl` 上线前就停在 `S-HUMAN_REVIEW` 的任务没有进门转移可走，
+   永远不会被武装。`drainAllDueTimers` 在 claim 之前调用
+   `armMissingHumanReviewTimers(now, ttlMs)`（`src/timer/arm.ts`）：
+   - 只补 `status='S-HUMAN_REVIEW'`、`control_mode='auto'` 且无 pending
+     `human_review_ttl` 的任务；`paused` / `human` 下 T-028 不会转移，补了也没用；
+   - `due_at = now + 生效 TTL`（与 `StartTimer` 同源：缺省 24h，自定义按配置，
+     `null` 即 `KEEL_HUMAN_REVIEW_TTL_H=0` 时不补）；
+   - 幂等：已有 pending 行不改 `due_at`，重复 drain 不重复插入
+     （`NOT EXISTS` + `ON CONFLICT ... WHERE state='pending' DO NOTHING`）；
+   - `SELECT ... FOR UPDATE OF k`（`task` 行）与改变 `task.status` 的转移串行 ——
+     否则批准/驳回/回炉提交后可能留下一条 pending 行，挡住下一次进门 `StartTimer`。
+   这是**兜底**，不替代进门转移的 `StartTimer`，也不改 `ConsumeTimer` / T-028 语义。
 
 配置解析（`src/shared/timers.ts` 的 `parseHumanReviewTtlHours`）：
 
