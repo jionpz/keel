@@ -1,6 +1,6 @@
 -- 仓库级 Issue label：repo.issue_label。
 --
--- 事实来源：.trellis/tasks/08-29-ingress-poller/design.md §2。
+-- 事实来源：docs/archive/tasks/2026-11/08-29-ingress-poller/design.md §2。
 --
 -- `keel poller` 需要按各仓库自己的 label 扫描 open issue。全局 --label 无法表达
 -- A/B/C 多项目用不同 label 的场景，所以 label 属于仓库身份，放在 repo 上。

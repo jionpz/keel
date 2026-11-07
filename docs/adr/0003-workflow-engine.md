@@ -2,7 +2,7 @@
 
 **Status**: **Accepted**（2026-08-26 查证通过）
 **Date**: 2026-08-22（查证 2026-08-26）
-**依据**: `.trellis/tasks/08-22-keel-architecture-framework/research/workflow-engine.md` + `.trellis/tasks/08-26-adr0003-verification/report.md`（查证报告）
+**依据**: `docs/archive/tasks/2026-08/08-22-keel-architecture-framework/research/workflow-engine.md` + `docs/archive/tasks/2026-08/08-26-adr0003-verification/report.md`（查证报告）
 
 ## Context
 

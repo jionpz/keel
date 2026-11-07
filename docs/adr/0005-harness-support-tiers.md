@@ -3,7 +3,7 @@
 **Status**: **Accepted**（2026-08-23 修订）
 **Supersedes**: 本 ADR 的初版把 OMP 移出首批，理由是接口无法查证。该理由已被本机实测推翻。
 **Date**: 2026-08-22
-**依据**: `.trellis/tasks/08-22-keel-architecture-framework/research/harness-interfaces.md`
+**依据**: `docs/archive/tasks/2026-08/08-22-keel-architecture-framework/research/harness-interfaces.md`
 
 ## Context
 

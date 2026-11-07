@@ -7,7 +7,7 @@
  *   - 并发：多个 Task 改同一仓库时互不可见（N1）
  *   - 安全：Agent 污染工作区后，销毁 worktree 即完全清理（S1）
  *
- * 两种项目绑定（.trellis/tasks/10-27-local-project-binding/design.md §4）：
+ * 两种项目绑定（docs/archive/tasks/2026-10/10-27-local-project-binding/design.md §4）：
  *
  * ```
  * managed   <root>/repos/<repo_id>.git        Keel 维护的裸仓库

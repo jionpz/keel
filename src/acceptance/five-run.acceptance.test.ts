@@ -34,7 +34,7 @@ const remote = process.env.KEEL_TEST_REMOTE_REPO
 
 const JSONL_PATH = join(
   process.cwd(),
-  '.trellis/tasks/08-29-five-run-campaign/research/five-run-results.jsonl',
+  'docs/archive/tasks/2026-08/08-29-five-run-campaign/research/five-run-results.jsonl',
 )
 
 /** 与 research/issue-templates.md 五变体对齐 */

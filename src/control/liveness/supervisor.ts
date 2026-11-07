@@ -4,7 +4,7 @@
  * 只回答一个问题：**这个 Run 多久没有新进展了？** 不负责总时长，
  * 也不负责孤立 run（那是 out-of-process Patrol 的职责）。
  *
- * 设计：`.trellis/tasks/11-04-run-liveness-patrol/design.md` §4.4。
+ * 设计：`docs/archive/tasks/2026-11/11-04-run-liveness-patrol/design.md` §4.4。
  */
 
 import type { ProgressEvent } from '../../contracts/harness-adapter.js'

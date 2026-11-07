@@ -1,7 +1,7 @@
 /**
  * ClaudeCodeAdapter —— Claude Code 官方 CLI 的 HarnessAdapter 实现（L2）。
  *
- * 事实来源：`.trellis/tasks/08-29-second-harness/research/claude-code-interface.md`
+ * 事实来源：`docs/archive/tasks/2026-08/08-29-second-harness/research/claude-code-interface.md`
  * （本机 claude 2.1.222 `--help`）。argv 以 help 为准；事件字段本会话未抓到
  * live stdout，parser 缺字段则 null。
  *

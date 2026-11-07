@@ -9,7 +9,7 @@
  *
  * 本文件的每个测试都是一次**主动违规尝试**，期望被数据库拒绝。
  *
- * 沿用骨架任务的教训（.trellis/spec/backend/error-handling.md）：
+ * 沿用骨架任务的教训（docs/spec/backend/error-handling.md）：
  *   **未经反例验证的约束，等同于没有约束。**
  *   一条写错的 GRANT 和一条正确的 GRANT，日常表现完全一样。
  *

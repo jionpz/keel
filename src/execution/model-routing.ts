@@ -1,7 +1,7 @@
 /**
  * 执行面模型路由 —— profile / 阶段表 / 解析。
  *
- * 事实来源：`.trellis/tasks/11-03-execution-model-routing/design.md` §1。
+ * 事实来源：`docs/archive/tasks/2026-11/11-03-execution-model-routing/design.md` §1。
  *
  * 这里是 profile 与阶段表的**唯一**一处定义（R4）：adapter / CLI / 编排器
  * 都从这里取，不允许在别处复制一份 —— 两份定义会在某次改动后悄悄漂移，

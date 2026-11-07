@@ -1,7 +1,7 @@
 /**
  * keel 控制台页面 —— 单文件 HTML（内联 CSS / JS，无构建、无外部资源）。
  *
- * 约束（.trellis/spec/frontend/console-guidelines.md）：
+ * 约束（docs/spec/frontend/console-guidelines.md）：
  *  - 只读：页面只发 GET，不发写请求；
  *  - 无依赖：不引 CDN、不引框架（docs/09-roadmap.md 把 UI 定义为消费者，
  *    本页也刻意保持「删掉不影响任何事实」的形态）；

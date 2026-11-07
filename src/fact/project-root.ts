@@ -9,7 +9,7 @@
  *    符号链接在字符串层面互不相等，但它们是同一个目录。绑定唯一性必须建立在
  *    同一字符串上，否则同一工作树会被两个 repo 认领。
  *
- * 事实来源：.trellis/tasks/10-27-local-project-binding/design.md §3。
+ * 事实来源：docs/archive/tasks/2026-10/10-27-local-project-binding/design.md §3。
  */
 
 import { execFile } from 'node:child_process'

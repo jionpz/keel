@@ -90,7 +90,7 @@ export function declaredFactsDirective(declared: DeclaredPolicyFacts): string | 
  *
  * 只比较**声明过**的字段;返回的 violation 直接进 R-007 回灌,
  * 所以消息里必须给出「反馈写了什么 / RFC 写了什么 / 怎么改」
- * (见 .trellis/spec/backend/error-handling.md §检查脚本的失败输出)。
+ * (见 docs/spec/backend/error-handling.md §检查脚本的失败输出)。
  */
 export function policyFactsConflicts(
   declared: DeclaredPolicyFacts,

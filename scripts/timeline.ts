@@ -8,7 +8,7 @@
  * 用法：
  *   pnpm run timeline -- <task_id>
  *
- * 失败纪律（.trellis/spec/backend/error-handling.md）：
+ * 失败纪律（docs/spec/backend/error-handling.md）：
  *   - 缺参数 / 非 UUID → exit 1 + 用法说明；
  *   - task 不存在 → exit 1（「0 条事件」与「查错了 task」必须可区分，防假绿）；
  *   - 数据库连不上 → exit 1 + 怎么修，不静默输出空时间线。
