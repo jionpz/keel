@@ -946,3 +946,24 @@ poller 与 timer-worker 用 PostgreSQL 会话级 advisory lock 强制同库单�
 
 - 推送 main 并回复 issue #74（第 2 条已修，第 3 条待处理）
 - issue #74 第 3 条：阶段级墙钟与重试次数，另行立项
+
+
+## Session 25: 补齐存量 S-HUMAN_REVIEW 的人工裁决 TTL
+
+**Date**: 2026-11-07
+**Task**: 补齐存量 S-HUMAN_REVIEW 的人工裁决 TTL
+**Branch**: `main`
+
+### Summary
+
+timer-worker 每轮 drain 在收割前对账补齐 S-HUMAN_REVIEW 缺失的 pending human_review_ttl（#75）：只补 control_mode=auto，due_at=now+生效 TTL，TTL null 不补；NOT EXISTS + ON CONFLICT 幂等，FOR UPDATE OF task 与进出转移串行。新增 arm 单测与 W8/W9 e2e，ReapStats.humanReviewArmed + 单次日志，spec/docs 补存量兜底纪律。选择运行期对账而非迁移 backfill：0009 已应用不会重跑，纯 SQL 读不到 KEEL_HUMAN_REVIEW_TTL_H。pnpm run check 64 files / 959 passed。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1dedc67` | (see git log) |
+
+### Status
+
+[OK] **Completed**

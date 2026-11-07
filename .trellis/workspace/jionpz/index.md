@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 24
-- **Last Active**: 2026-11-06
+- **Total Sessions**: 25
+- **Last Active**: 2026-11-07
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~948 | Active |
+| `journal-1.md` | ~969 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 25 | 2026-11-07 | 补齐存量 S-HUMAN_REVIEW 的人工裁决 TTL | `1dedc67` | `main` |
 | 24 | 2026-11-06 | poller 扫描与驱动解耦（#74 第 2 条） | `8d3cbfa` | `main` |
 | 23 | 2026-11-06 | 失败与超时 run 入账 token 消耗（#74 第 1 条） | `e1ff4b5`, `67aae84` | `main` |
 | 22 | 2026-11-05 | 把 workflow-overrides 自检接进 pnpm run check | `965ca50` | `main` |
