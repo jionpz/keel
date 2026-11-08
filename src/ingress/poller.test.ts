@@ -23,6 +23,7 @@ import {
   runPollerForever,
   scanOnce,
 } from './poller.js'
+import type { CancelOutcome, IngestedTask, IssueState } from './reconcile.js'
 
 const REPO_A: RepoRow = {
   id: 'repo-a',
@@ -55,6 +56,8 @@ interface Harness {
 function harness(overrides: Partial<PollerDeps> = {}): Harness {
   const logs: Record<string, unknown>[] = []
   const runCalls: PollIssueInput[] = []
+  const now = () => '2026-11-04T00:00:00.000Z'
+  const log = (line: Record<string, unknown>) => logs.push(line)
   const deps: PollerDeps = {
     listRepos: async () => [REPO_A, REPO_B],
     listIssues: async () => issueList([]),
@@ -63,8 +66,17 @@ function harness(overrides: Partial<PollerDeps> = {}): Harness {
       runCalls.push(input)
       return ok<PollIssueOutcome>({ created: true })
     },
-    now: () => '2026-11-04T00:00:00.000Z',
-    log: (line) => logs.push(line),
+    reconcile: {
+      // 缺省没有存量任务：对账是零动作，不影响原有断言
+      listIngestedTasks: async () => [],
+      issueState: async () => ok<IssueState>({ state: 'open', closedAt: null }),
+      cancelTask: async () => ok({ advanced: true, transitionId: 'T-040', reason: null }),
+      redactDetail: (detail) => detail,
+      now,
+      log,
+    },
+    now,
+    log,
     ...overrides,
   }
   return { deps, logs, runCalls }
@@ -306,6 +318,96 @@ describe('pollOnce · 仓库级 label 与驱动判定', () => {
     expect(h.logs.some((l) => l.event === 'repo_error')).toBe(true)
     expect(text).not.toContain('ghp_in_remote')
     expect(text).toContain('***@gitlab.com')
+  })
+})
+
+describe('对账 · 已关闭 issue 的任务（issue #82）', () => {
+  function closedTask(externalRef = 'acme/alpha#7'): IngestedTask {
+    return {
+      taskId: 'task-7',
+      status: 'S-HUMAN_REVIEW',
+      externalRef,
+      remoteUrl: 'https://github.com/acme/alpha.git',
+    }
+  }
+
+  it('scanOnce 返回本轮见到的 open refs —— 对账据此区分「关闭」与「摘 label」', async () => {
+    const h = harness({
+      listRepos: async () => [REPO_A, REPO_B],
+      listIssues: async () => issueList([listed(1)]),
+    })
+
+    const scan = await scanOnce(h.deps)
+
+    expect(scan.openRefs).toEqual(new Set(['acme/alpha#1', 'acme/beta#1']))
+  })
+
+  it('pollOnce：issue 已关闭的非终态任务被取消，聚合行带 reconcile 统计', async () => {
+    const cancelled: { task: IngestedTask; issue: IssueState }[] = []
+    const h = harness({
+      listRepos: async () => [REPO_A],
+      listIssues: async () => issueList([]),
+      reconcile: {
+        listIngestedTasks: async () => [closedTask()],
+        issueState: async () =>
+          ok<IssueState>({ state: 'closed', closedAt: '2026-11-07T00:00:00Z' }),
+        cancelTask: async (task, issue) => {
+          cancelled.push({ task, issue })
+          return ok<CancelOutcome>({ advanced: true, transitionId: 'T-040', reason: null })
+        },
+        redactDetail: (detail) => detail,
+        now: () => '2026-11-08T00:00:00.000Z',
+        log: (line) => h.logs.push(line),
+      },
+    })
+
+    const round = await pollOnce(h.deps)
+
+    expect(cancelled).toEqual([
+      {
+        task: closedTask(),
+        issue: { state: 'closed', closedAt: '2026-11-07T00:00:00Z' },
+      },
+    ])
+    expect(round.stats.reconcile).toEqual({ checked: 1, cancelled: 1, skipped: 0, errors: 0 })
+    expect(h.logs.find((l) => l.event === 'poll')).toMatchObject({
+      reconcile: { checked: 1, cancelled: 1, skipped: 0, errors: 0 },
+    })
+  })
+
+  it('runPollerForever：常态一轮零额外请求（open 列表里见过就不回查）', async () => {
+    const signals = fakeSignals()
+    const stateCalls: string[] = []
+    const h = harness({
+      listRepos: async () => [REPO_A],
+      listIssues: async () => issueList([listed(7)]),
+      reconcile: {
+        listIngestedTasks: async () => [closedTask()],
+        issueState: async (remoteUrl) => {
+          stateCalls.push(remoteUrl)
+          return ok<IssueState>({ state: 'open', closedAt: null })
+        },
+        cancelTask: async () => {
+          throw new Error('open 列表里见过的任务不该被取消')
+        },
+        redactDetail: (detail) => detail,
+        now: () => '2026-11-08T00:00:00.000Z',
+        log: (line) => h.logs.push(line),
+      },
+    })
+
+    await runPollerForever(h.deps, {
+      intervalMs: 1,
+      signals: signals.source,
+      sleep: async () => {
+        signals.fire('SIGTERM')
+      },
+    })
+
+    expect(stateCalls).toEqual([])
+    expect(h.logs.find((l) => l.event === 'poll')).toMatchObject({
+      reconcile: { checked: 0, cancelled: 0, skipped: 0, errors: 0 },
+    })
   })
 })
 

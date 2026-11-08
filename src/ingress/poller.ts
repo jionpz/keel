@@ -17,6 +17,7 @@ import type { Result } from '../contracts/errors.js'
 import { gitAuthSecrets, readTokenFromEnv, redactSecrets } from '../fact/github-auth.js'
 import { type IssueList, issueUrlFor, parseRemoteUrl } from '../fact/github-provider.js'
 import { isTerminal, type TaskStatus } from '../shared/ids.js'
+import { type ReconcileDeps, type ReconcileStats, reconcileClosedIssues } from './reconcile.js'
 
 export const DEFAULT_INTERVAL_MS = 60_000
 
@@ -58,6 +59,11 @@ export interface PollerDeps {
    */
   readonly taskStatus: (externalRef: string) => Promise<TaskStatus | undefined>
   readonly runIssue: (input: PollIssueInput) => Promise<Result<PollIssueOutcome>>
+  /**
+   * issue 关闭对账（issue #82）：每轮把已 ingest、非终态的任务与 issue 现状对齐。
+   * issue 已被关闭时发 `Cancelled`（T-040），不让任务停在原状态等 TTL。
+   */
+  readonly reconcile: ReconcileDeps
   readonly now: () => string
   /** 单行结构化日志出口；实现方负责 JSON.stringify */
   readonly log: (line: Record<string, unknown>) => void
@@ -81,6 +87,8 @@ export interface PollStats extends ScanStats {
   readonly ingested: number
   /** 驱动成功数（含新建 —— 新 issue 也会被驱动到当前可停处） */
   readonly driven: number
+  /** 本轮 issue 关闭对账结果 */
+  readonly reconcile: ReconcileStats
 }
 
 export interface PollRoundResult {
@@ -98,6 +106,13 @@ export interface DriveRequest {
 export interface ScanRoundResult {
   readonly stats: ScanStats
   readonly drives: readonly DriveRequest[]
+  /**
+   * 本轮见过的 open issue（`owner/repo#n`）。
+   *
+   * 对账用它区分「issue 已关闭」与「只是被摘了 label」：没出现在这里的任务
+   * 才需要回查 issue 现状，正常一轮零额外请求。
+   */
+  readonly openRefs: ReadonlySet<string>
   /** 收到停止信号，扫描没有走完 */
   readonly stopped: boolean
 }
@@ -221,7 +236,7 @@ export async function scanOnce(
     if (stopped) break
   }
 
-  return { stats, drives, stopped }
+  return { stats, drives, openRefs: claimed, stopped }
 }
 
 /**
@@ -238,10 +253,15 @@ export async function pollOnce(
   const safeDetail = createSafeDetail()
 
   const scan = await scanOnce(deps, opts)
+  // 扫描被停止信号打断时不再发起对账请求：正在退出，不该继续打 GitHub
+  const reconcile: ReconcileStats = scan.stopped
+    ? { checked: 0, cancelled: 0, skipped: 0, errors: 0 }
+    : await reconcileClosedIssues(deps.reconcile, scan.openRefs, { shouldStop })
   const stats = {
     ...scan.stats,
     ingested: 0,
     driven: 0,
+    reconcile,
   }
   let stopped = scan.stopped
 
@@ -501,6 +521,12 @@ export async function runPollerForever(
   try {
     while (!stop.requested) {
       const scan = await scanOnce(deps, { shouldStop: () => stop.requested })
+      // 对账先于调度：已关闭 issue 的任务不该在本轮再被当作在办工作
+      const reconcile: ReconcileStats = stop.requested
+        ? { checked: 0, cancelled: 0, skipped: 0, errors: 0 }
+        : await reconcileClosedIssues(deps.reconcile, scan.openRefs, {
+            shouldStop: () => stop.requested,
+          })
 
       let scheduled = 0
       let deferred = 0
@@ -528,6 +554,7 @@ export async function runPollerForever(
         scheduled,
         deferred,
         inFlight: scheduler.inFlight,
+        reconcile,
         stopped: scan.stopped || stop.requested,
       })
 
@@ -579,8 +606,11 @@ export function interruptibleSleep(ms: number, stop: StopToken): Promise<void> {
  * 日志脱敏工厂：环境 token 走 `redactSecrets`，
  * remote URL 里内嵌的 userinfo（`https://user:token@host/...`）单独剥掉 ——
  * redactSecrets 只认「本进程已知的 token」，认不出别人写进 remote 的密码。
+ *
+ * 导出给 CLI 接线复用：issue 关闭对账的错误 detail 走同一个脱敏入口，
+ * 不写第二份。
  */
-function createSafeDetail(): (detail: string) => string {
+export function createSafeDetail(): (detail: string) => string {
   const secrets = gitAuthSecrets(readTokenFromEnv())
   return (detail) => redactSecrets(stripUserinfo(detail), secrets)
 }

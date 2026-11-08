@@ -365,6 +365,12 @@ idempotency_key = hash(task_id, stage, attempt)
 > 可走，由 `timer-worker` 每轮 drain 在收割前对账补齐缺失的 pending timer ——
 > 只补 `control_mode='auto'`、`due_at = now + 生效 TTL`，`0 = 关闭`时不补，
 > 已有 pending 行不改期限。
+>
+> **issue 关闭对账（issue #82）**：poller 每轮把已 ingest、非终态的任务与 issue 现状
+> 对齐。issue 已被关闭 → 发 `Cancelled` 走 `T-040`，弃单原因记 `reason='issue_closed'`
+> 与 GitHub 返回的 `closed_at`（写进 `TaskStatusChanged` 的 payload），
+> 让事件流能区分「人没来决策」与「工作对象已不存在」。
+> `S-PR_OPEN` 是显式例外：PR 已经开出去，交付物在 PR 上继续收口，issue 关闭不撤单。
 
 > **独立 timer worker(issue #26)**：方案 A/B 的收割由编排进程内执行
 > （澄清 branch / watchdog setTimeout）；进程崩溃后到期无人收割。

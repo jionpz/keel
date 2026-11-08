@@ -17,7 +17,8 @@ import {
   type PollIssueOutcome,
   type RepoRow,
 } from '../ingress/poller.js'
-import { parseConcurrency, parseIntervalMs, pollerMain } from './poller.js'
+import type { CancelOutcome, IngestedTask, IssueState } from '../ingress/reconcile.js'
+import { type PollerMainDeps, parseConcurrency, parseIntervalMs, pollerMain } from './poller.js'
 
 const REPO: RepoRow = {
   id: 'repo-a',
@@ -60,6 +61,22 @@ function fakeSignals(): FakeSignals {
 const savedToken = process.env.KEEL_GITHUB_TOKEN
 const savedGithubToken = process.env.GITHUB_TOKEN
 
+/**
+ * 测试包装：对账依赖缺省为「没有存量任务」。
+ *
+ * `pollerMain` 的生产缺省会连数据库；这里只关心接线，统一短路。
+ * 需要断言对账的用例显式覆盖这三项。
+ */
+function runPollerMain(argv: readonly string[], deps: PollerMainDeps = {}): Promise<void> {
+  return pollerMain(argv, {
+    listIngestedTasks: async () => [],
+    issueState: async () => ok<IssueState>({ state: 'open', closedAt: null }),
+    cancelTask: async () =>
+      ok<CancelOutcome>({ advanced: true, transitionId: 'T-040', reason: null }),
+    ...deps,
+  })
+}
+
 beforeEach(() => {
   process.exitCode = undefined
 })
@@ -100,7 +117,7 @@ describe('parseIntervalMs', () => {
 describe('pollerMain · 参数与凭据前置', () => {
   it('非法 --interval → 退出码 1，不起任何依赖', async () => {
     const listRepos = vi.fn()
-    await pollerMain(['--interval', '0'], { listRepos })
+    await runPollerMain(['--interval', '0'], { listRepos })
     expect(process.exitCode).toBe(1)
     expect(listRepos).not.toHaveBeenCalled()
   })
@@ -111,7 +128,7 @@ describe('pollerMain · 参数与凭据前置', () => {
     const listRepos = vi.fn(async () => [REPO])
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
 
-    await pollerMain([], {
+    await runPollerMain([], {
       listRepos,
       tokenResolver: async () => undefined,
       acquireLock: async () => fakeLock().lock,
@@ -131,7 +148,7 @@ describe('pollerMain · 参数与凭据前置', () => {
     const logs: Record<string, unknown>[] = []
     const resolver = vi.fn(async () => undefined)
 
-    await pollerMain([], {
+    await runPollerMain([], {
       listRepos: async () => [],
       tokenResolver: resolver,
       acquireLock: async () => fakeLock().lock,
@@ -157,7 +174,7 @@ describe('pollerMain · 参数与凭据前置', () => {
     const hosts: string[] = []
     const runCalls: unknown[] = []
 
-    await pollerMain(['--interval', '1'], {
+    await runPollerMain(['--interval', '1'], {
       listRepos: async () => [REPO],
       tokenResolver: async (host) => {
         hosts.push(host)
@@ -188,20 +205,20 @@ describe('pollerMain · 参数与凭据前置', () => {
     process.env.KEEL_GITHUB_TOKEN = 't'
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
 
-    await pollerMain(['--ci', 'rael'])
+    await runPollerMain(['--ci', 'rael'])
     expect(process.exitCode).toBe(1)
 
     // 只写 --ci 不静默回退缺省 real（那会悄悄打真实 GitHub）
     process.exitCode = undefined
-    await pollerMain(['--ci'])
+    await runPollerMain(['--ci'])
     expect(process.exitCode).toBe(1)
 
     process.exitCode = undefined
-    await pollerMain(['--harness', 'codex'])
+    await runPollerMain(['--harness', 'codex'])
     expect(process.exitCode).toBe(1)
 
     process.exitCode = undefined
-    await pollerMain(['--wall-clock', '0'])
+    await runPollerMain(['--wall-clock', '0'])
     expect(process.exitCode).toBe(1)
 
     expect(errSpy).toHaveBeenCalled()
@@ -212,7 +229,7 @@ describe('pollerMain · 参数与凭据前置', () => {
     const listRepos = vi.fn()
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
 
-    await pollerMain(['--label', 'triage'], { listRepos })
+    await runPollerMain(['--label', 'triage'], { listRepos })
 
     expect(process.exitCode).toBe(1)
     expect(listRepos).not.toHaveBeenCalled()
@@ -228,7 +245,7 @@ describe('pollerMain · 参数与凭据前置', () => {
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     try {
       process.env.KEEL_MODEL_PROFILE = 'enterprize'
-      await pollerMain([], { listRepos })
+      await runPollerMain([], { listRepos })
 
       expect(process.exitCode).toBe(1)
       expect(listRepos).not.toHaveBeenCalled()
@@ -246,7 +263,7 @@ describe('pollerMain · 参数与凭据前置', () => {
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     try {
       process.env.KEEL_MODEL_ALLOWLIST = 'moonshotai/Kimi-K3'
-      await pollerMain([], { listRepos })
+      await runPollerMain([], { listRepos })
 
       expect(process.exitCode).toBe(1)
       expect(listRepos).not.toHaveBeenCalled()
@@ -265,7 +282,7 @@ describe('pollerMain · 参数与凭据前置', () => {
     const listRepos = vi.fn(async () => [REPO])
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
 
-    await pollerMain([], {
+    await runPollerMain([], {
       listRepos,
       tokenResolver: async () => undefined,
       acquireLock: async () => fakeLock().lock,
@@ -280,7 +297,7 @@ describe('pollerMain · 参数与凭据前置', () => {
     delete process.env.GITHUB_TOKEN
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined)
 
-    await pollerMain(['--help'])
+    await runPollerMain(['--help'])
 
     expect(process.exitCode).toBeUndefined()
     expect(logSpy.mock.calls.map((c) => String(c[0])).join('\n')).toContain('keel poller')
@@ -294,7 +311,7 @@ describe('pollerMain · 依赖接线', () => {
     const logs: Record<string, unknown>[] = []
     const runCalls: unknown[] = []
 
-    await pollerMain(['--interval', '1'], {
+    await runPollerMain(['--interval', '1'], {
       listRepos: async () => [REPO],
       listIssues: async (repo) => {
         expect(repo.issue_label).toBe('triage')
@@ -351,7 +368,7 @@ describe('pollerMain · 依赖接线', () => {
     const logs: Record<string, unknown>[] = []
     const closeDb = vi.fn(async () => undefined)
 
-    await pollerMain(['--interval', '1'], {
+    await runPollerMain(['--interval', '1'], {
       listRepos: async () => [],
       listIssues: async () => ok<IssueList>({ issues: [], truncated: false }),
       taskStatus: async () => undefined,
@@ -368,6 +385,46 @@ describe('pollerMain · 依赖接线', () => {
 
     expect(logs.at(-1)).toMatchObject({ event: 'poller', state: 'stopped' })
     expect(closeDb).toHaveBeenCalledTimes(1)
+  })
+
+  it('issue 已关闭的存量任务在轮询里被取消，poll 行带 reconcile 统计', async () => {
+    process.env.KEEL_GITHUB_TOKEN = 'ghp_test_token'
+    const signals = fakeSignals()
+    const logs: Record<string, unknown>[] = []
+    const cancelled: IngestedTask[] = []
+    const stored: IngestedTask = {
+      taskId: 'task-7',
+      status: 'S-HUMAN_REVIEW',
+      externalRef: 'acme/alpha#7',
+      remoteUrl: 'https://github.com/acme/alpha.git',
+    }
+
+    await runPollerMain(['--interval', '1'], {
+      listRepos: async () => [REPO],
+      // issue 已关闭：不再出现在 open 列表里
+      listIssues: async () => ok<IssueList>({ issues: [], truncated: false }),
+      taskStatus: async () => 'S-HUMAN_REVIEW',
+      runIssue: async () => ok<PollIssueOutcome>({ created: false }),
+      listIngestedTasks: async () => [stored],
+      issueState: async () => ok<IssueState>({ state: 'closed', closedAt: '2026-11-07T00:00:00Z' }),
+      cancelTask: async (task) => {
+        cancelled.push(task)
+        return ok<CancelOutcome>({ advanced: true, transitionId: 'T-040', reason: null })
+      },
+      acquireLock: async () => fakeLock().lock,
+      log: (line) => logs.push(line),
+      now: () => '2026-11-08T00:00:00.000Z',
+      signals: signals.source,
+      sleep: async () => {
+        signals.fire('SIGTERM')
+      },
+      closeDb: async () => undefined,
+    })
+
+    expect(cancelled).toEqual([stored])
+    expect(logs.find((l) => l.event === 'poll')).toMatchObject({
+      reconcile: { checked: 1, cancelled: 1, skipped: 0, errors: 0 },
+    })
   })
 
   it('循环异常退出时也关闭连接池（不是只在优雅路径收尾）', async () => {
@@ -394,7 +451,7 @@ describe('pollerMain · 单实例锁', () => {
     const tokenResolver = vi.fn(async () => 't')
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
 
-    await pollerMain([], {
+    await runPollerMain([], {
       acquireLock: async () => null,
       listRepos,
       tokenResolver,
@@ -409,7 +466,7 @@ describe('pollerMain · 单实例锁', () => {
   it('获取锁抛错 → 退出码 1，连接串脱敏后才输出', async () => {
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
 
-    await pollerMain([], {
+    await runPollerMain([], {
       acquireLock: async () => {
         throw new Error('connect ECONNREFUSED postgres://u:p@h:5432/db down')
       },
@@ -425,7 +482,7 @@ describe('pollerMain · 单实例锁', () => {
     const signals = fakeSignals()
     const { lock, release } = fakeLock()
 
-    await pollerMain(['--interval', '1'], {
+    await runPollerMain(['--interval', '1'], {
       acquireLock: async () => lock,
       listRepos: async () => [],
       log: () => undefined,
@@ -510,13 +567,13 @@ describe('pollerMain · --concurrency', () => {
 
     for (const raw of ['0', '-1', '1.5', 'abc', String(DEFAULT_MAX_RUNNING_RUNS + 1)]) {
       process.exitCode = undefined
-      await pollerMain(['--concurrency', raw], { listRepos, acquireLock, tokenResolver })
+      await runPollerMain(['--concurrency', raw], { listRepos, acquireLock, tokenResolver })
       expect(process.exitCode, `--concurrency ${raw}`).toBe(1)
     }
 
     // 只写标志（解析成 true）同样拒绝
     process.exitCode = undefined
-    await pollerMain(['--concurrency'], { listRepos, acquireLock, tokenResolver })
+    await runPollerMain(['--concurrency'], { listRepos, acquireLock, tokenResolver })
     expect(process.exitCode).toBe(1)
 
     expect(listRepos).not.toHaveBeenCalled()
@@ -531,7 +588,7 @@ describe('pollerMain · --concurrency', () => {
     const started: number[] = []
     const releasers: Array<() => void> = []
 
-    const main = pollerMain(['--interval', '1', '--concurrency', '2'], {
+    const main = runPollerMain(['--interval', '1', '--concurrency', '2'], {
       listRepos: async () => [REPO],
       listIssues: async () =>
         ok<IssueList>({ issues: [1, 2, 3, 4].map(listedIssue), truncated: false }),
@@ -566,7 +623,7 @@ describe('pollerMain · --concurrency', () => {
     const releasers: Array<() => void> = []
     const logs: Record<string, unknown>[] = []
 
-    const main = pollerMain(['--interval', '1'], {
+    const main = runPollerMain(['--interval', '1'], {
       listRepos: async () => [REPO],
       listIssues: async () =>
         ok<IssueList>({ issues: [1, 2, 3, 4].map(listedIssue), truncated: false }),

@@ -551,8 +551,29 @@ describe('getIssue', () => {
       body: '',
       labels: ['keel', 'bug'],
       state: 'open',
+      closedAt: null,
       isPullRequest: false,
     })
+  })
+
+  it('closed issue 原样带出 closed_at —— 对账证据不本地编造', async () => {
+    routes.set(routeKey('GET', '/repos/acme/widget/issues/8'), () => ({
+      status: 200,
+      json: {
+        number: 8,
+        title: 'Closed',
+        body: 'done',
+        state: 'closed',
+        closed_at: '2026-11-07T12:34:56Z',
+        labels: [],
+      },
+    }))
+
+    const r = await provider().getIssue(REMOTE, 8)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value.state).toBe('closed')
+    expect(r.value.closedAt).toBe('2026-11-07T12:34:56Z')
   })
 
   it('含 pull_request 字段 → isPullRequest=true', async () => {

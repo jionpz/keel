@@ -93,6 +93,8 @@ export interface IssueInfo {
   readonly body: string
   readonly labels: readonly string[]
   readonly state: 'open' | 'closed'
+  /** GitHub 返回的关闭时间；open 时为 null。对账把它写进取消证据，不本地推断 */
+  readonly closedAt: string | null
   readonly isPullRequest: boolean
 }
 
@@ -548,6 +550,7 @@ export class GitHubProvider implements PullRequestGateway, CiGateway {
       title?: string
       body?: string | null
       state?: string
+      closed_at?: string | null
       labels?: { name: string }[]
       pull_request?: unknown
     } | null
@@ -564,6 +567,7 @@ export class GitHubProvider implements PullRequestGateway, CiGateway {
       body: raw.body ?? '',
       labels: Array.isArray(raw.labels) ? raw.labels.map((l) => l.name) : [],
       state: raw.state === 'closed' ? 'closed' : 'open',
+      closedAt: typeof raw.closed_at === 'string' ? raw.closed_at : null,
       isPullRequest: raw.pull_request !== undefined,
     })
   }

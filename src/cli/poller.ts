@@ -16,6 +16,7 @@ import { resolveGitHubToken, type TokenResolver } from '../fact/github-auth.js'
 import { GitHubProvider, type IssueList, parseRemoteUrl } from '../fact/github-provider.js'
 import { acquireResidentLock, lockErrorMessage, type ResidentLock } from '../fact/resident-lock.js'
 import {
+  createSafeDetail,
   DEFAULT_INTERVAL_MS,
   type PollerDeps,
   type PollerSignalSource,
@@ -25,7 +26,8 @@ import {
   runPollerForever,
   type StopToken,
 } from '../ingress/poller.js'
-import type { TaskStatus } from '../shared/ids.js'
+import type { CancelOutcome, IngestedTask, IssueState } from '../ingress/reconcile.js'
+import { type TaskStatus, TERMINAL_STATUSES } from '../shared/ids.js'
 import { parseArgs } from './argv.js'
 import { runIssue } from './run-issue.js'
 import {
@@ -39,6 +41,7 @@ import {
   resolveOptionalModel,
   warnWallClockOverride,
 } from './run-task.js'
+import { cleanupDriverIfNeeded, plainDriver } from './task-driver.js'
 
 /** `--interval <ms>`：只接受正整数，非法值不静默回退缺省 60000 */
 export function parseIntervalMs(raw: unknown): Result<number> {
@@ -123,6 +126,71 @@ export async function findTaskStatusByExternalRef(
   })
 }
 
+/**
+ * 已 ingest、非终态的 GitHub issue 任务 —— issue 关闭对账的输入。
+ *
+ * 只取注册在案的 github repo（与扫描范围一致）；终态用 `TERMINAL_STATUSES`
+ * 而不是 SQL 里再抄一遍状态名，避免两处漂移。
+ */
+export async function loadIngestedGithubTasks(): Promise<readonly IngestedTask[]> {
+  return asRole('keel_control', async (c) => {
+    const r = await c.query<{
+      task_id: string
+      status: TaskStatus
+      external_ref: string
+      remote_url: string
+    }>(
+      `SELECT DISTINCT ON (t.id)
+              t.id AS task_id, t.status, f.external_ref, r.remote_url
+       FROM task t
+       JOIN task_feedback tf ON tf.task_id = t.id
+       JOIN feedback f ON f.id = tf.feedback_id
+       JOIN repo r ON r.id = t.repo_id
+       WHERE f.source = 'github'
+         AND r.provider = 'github'
+         AND NOT (t.status = ANY($1::text[]))
+       ORDER BY t.id`,
+      [[...TERMINAL_STATUSES]],
+    )
+    return r.rows.map((row) => ({
+      taskId: row.task_id,
+      status: row.status,
+      externalRef: row.external_ref,
+      remoteUrl: row.remote_url,
+    }))
+  })
+}
+
+/**
+ * 把「issue 已关闭」落成 T-040 的 `Cancelled`。
+ *
+ * 有工作树时注入真实 workspace —— T-040 的 CleanWorkspace 才会真的移除它；
+ * 准备失败（仓库不可达等）**不阻断取消**：issue 关闭是外部事实，
+ * 不被网络卡住。此时 CleanWorkspace 会如实记一条 `SideEffectIntent`，
+ * 工作树留给运维手工清理。
+ *
+ * 刻意不解析 `KEEL_HUMAN_REVIEW_TTL_H`：T-040 只取消 timer、不武装 timer，
+ * 传 `null`（关闭调度）不会改变任何行为，也不让一个无关的 env 挡住取消。
+ */
+export async function cancelClosedIssue(
+  task: IngestedTask,
+  issue: IssueState,
+  now: string,
+): Promise<Result<CancelOutcome>> {
+  const driver = (await cleanupDriverIfNeeded(task.taskId, null)) ?? plainDriver(null)
+  const advanced = await driver.advance(
+    task.taskId,
+    { type: 'Cancelled', reason: 'issue_closed', closed_at: issue.closedAt },
+    now,
+  )
+  if (!advanced.ok) return advanced
+  return ok({
+    advanced: advanced.value.advanced,
+    transitionId: advanced.value.transition_id,
+    reason: advanced.value.reason,
+  })
+}
+
 export interface PollerMainDeps {
   readonly listRepos?: () => Promise<readonly RepoRow[]>
   readonly listIssues?: (repo: RepoRow) => Promise<Result<IssueList>>
@@ -144,6 +212,14 @@ export interface PollerMainDeps {
    * 返回 `null` 表示同库已有 poller 在运行（明确的启动失败，不等待）。
    */
   readonly acquireLock?: () => Promise<ResidentLock | null>
+  /** 测试注入：issue 关闭对账的三段依赖。省略则走真实数据库 / provider / driver */
+  readonly listIngestedTasks?: () => Promise<readonly IngestedTask[]>
+  readonly issueState?: (remoteUrl: string, issueNumber: number) => Promise<Result<IssueState>>
+  readonly cancelTask?: (
+    task: IngestedTask,
+    issue: IssueState,
+    now: string,
+  ) => Promise<Result<CancelOutcome>>
 }
 
 const HELP = `用法: keel poller [--interval <ms>] [--concurrency <n>] [--ci passed|failed|real]
@@ -340,6 +416,8 @@ export async function pollerMain(
     const provider = new GitHubProvider(
       deps.tokenResolver === undefined ? {} : { tokenResolver: deps.tokenResolver },
     )
+    const now = deps.now ?? (() => new Date().toISOString())
+    const log = deps.log ?? ((line) => console.log(JSON.stringify(line)))
     const pollerDeps: PollerDeps = {
       listRepos,
       listIssues:
@@ -357,8 +435,23 @@ export async function pollerMain(
             ...(model.value === undefined ? {} : { model: model.value }),
             ...(wallClock.value === undefined ? {} : { wallClockS: wallClock.value }),
           })),
-      now: deps.now ?? (() => new Date().toISOString()),
-      log: deps.log ?? ((line) => console.log(JSON.stringify(line))),
+      now,
+      log,
+      reconcile: {
+        listIngestedTasks: deps.listIngestedTasks ?? loadIngestedGithubTasks,
+        issueState:
+          deps.issueState ??
+          (async (remoteUrl, issueNumber) => {
+            const issue = await provider.getIssue(remoteUrl, issueNumber)
+            if (!issue.ok) return issue
+            return ok({ state: issue.value.state, closedAt: issue.value.closedAt })
+          }),
+        cancelTask: deps.cancelTask ?? cancelClosedIssue,
+        // 错误 detail 走与 scan 同一套脱敏：remote URL 可能内嵌 userinfo
+        redactDetail: createSafeDetail(),
+        now,
+        log,
+      },
     }
 
     // 启动期预检先于第一轮扫描；repos 为空时不需要任何 token。

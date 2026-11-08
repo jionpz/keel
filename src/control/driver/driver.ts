@@ -356,6 +356,11 @@ export class WorkflowDriver {
             ...(event.type === 'CIPassed' || event.type === 'CIFailed'
               ? { source: event.source }
               : {}),
+            // 自动对账的取消要把「为什么」留在事实里：
+            // 事后审计据此区分「人没来决策」与「issue 已被关闭」（issue #82）。
+            ...(event.type === 'Cancelled' && event.reason !== undefined
+              ? { reason: event.reason, closed_at: event.closed_at ?? null }
+              : {}),
           }),
           traceId,
           now,
