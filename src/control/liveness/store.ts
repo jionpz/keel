@@ -1,7 +1,7 @@
 /**
  * 运行 liveness 存储 —— 属 Control Plane。
  *
- * 设计约束（`.trellis/tasks/11-04-run-liveness-patrol/design.md` §4.3）：
+ * 设计约束（`docs/archive/tasks/2026-11/11-04-run-liveness-patrol/design.md` §4.3）：
  * - 这是**遥测**，不是 Fact：写失败只记日志，绝不让 Run 失败；
  * - 使用独立小 pool + 有界队列 + 合并写，不跟编排事务抢连接；
  * - 进展心跳最多 10s 一次；owner 心跳由 supervisor 按 15s 节奏调用；

@@ -97,7 +97,7 @@ keel status <taskId> [--events N]   # task/run/事件摘要
 `C4` 意味着：**修改 `04-state-machine.md` §2 的转移表后，
 必须同步 `src/control/transition/table.ts`，否则 CI 不过。**
 
-调研原始记录在 `.trellis/tasks/08-22-keel-architecture-framework/research/`。
+调研原始记录在 `docs/archive/tasks/2026-08/08-22-keel-architecture-framework/research/`。
 
 ---
 

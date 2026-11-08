@@ -1,6 +1,6 @@
 -- 运行 liveness 遥测与巡检健康。
 --
--- 事实来源：.trellis/tasks/11-04-run-liveness-patrol/design.md §4.3。
+-- 事实来源：docs/archive/tasks/2026-11/11-04-run-liveness-patrol/design.md §4.3。
 --
 -- 这两张表是**运行遥测**，不是 Fact：
 --   - 删除 run_liveness 不影响事件流重放得到的 Task 状态；

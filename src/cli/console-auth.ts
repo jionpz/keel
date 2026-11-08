@@ -1,7 +1,7 @@
 /**
  * 控制台鉴权：单口令 + 服务端会话 + 登录限流。
  *
- * 设计取舍见 .trellis/tasks/11-04-console-login-auth/design.md：
+ * 设计取舍见 docs/archive/tasks/2026-11/11-04-console-login-auth/design.md：
  *  - 口令只从环境变量或进程启动时的随机值来，不落盘、不下发页面；
  *  - 会话只存在进程内存里，重启即失效（明确接受）；
  *  - 口令比较走 scrypt + timingSafeEqual，失败文案统一；

@@ -1,7 +1,7 @@
 /**
  * 每 stage 的 liveness 策略 —— 常量集中在 Control Plane。
  *
- * 阈值来源：`.trellis/tasks/11-04-run-liveness-patrol/prd.md` R6。
+ * 阈值来源：`docs/archive/tasks/2026-11/11-04-run-liveness-patrol/prd.md` R6。
  * `silenceMs` 是「多久没有新进展算卡死」；`hardCapS` 是显式预算上限，
  * 不是 liveness 判据。`develop` 的 12h 覆盖合法的 10h 级长任务。
  */

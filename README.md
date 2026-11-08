@@ -178,6 +178,10 @@ pnpm run check     # CI 跑的就是这一条 —— 与本地完全一致
 
 `check` 聚合了 lint / typecheck / 架构边界 / 类型同步 / 转移表比对 / 纯度 / 测试。
 
+### AI 工作流
+
+所有 harness 使用 jstack：Claude Code / OMP 走 `/flow:route`，按任务大小路由到 `/spec:*`（需求澄清、拆票）或 `/pstack:poteto-mode`（实现）；Codex / DSH 暂无原生插件适配，按 `AGENTS.md` 工作，需要完整流程时读 jstack 仓库的入口 `SKILL.md`。项目编码规范在 `docs/spec/`。
+
 ### 控制台（口令登录）
 
 ```bash

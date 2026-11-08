@@ -23,7 +23,7 @@
 
 本项目最核心的资产是那套「让违规成为 CI 失败」的机制
 （四条架构约束 + 反例验证纪律）。一旦 `check` 开始因为**非代码原因**变红，
-人就会开始忽略它 —— 而 `.trellis/spec/backend/error-handling.md` 写得很清楚：
+人就会开始忽略它 —— 而 `docs/spec/backend/error-handling.md` 写得很清楚：
 **检查一旦不可信，就等于没有检查。**
 
 实测依据：`v01-criterion` 在一次 `check` 中失败、重跑通过
@@ -66,7 +66,7 @@ FEEDBACK 注释里分析过的那类夹具错误）；其唯一独特断言 —�
 
 ### 凭据
 
-详细矩阵见 `.trellis/spec/backend/quality-guidelines.md` §验收测试的凭据。要点：
+详细矩阵见 `docs/spec/backend/quality-guidelines.md` §验收测试的凭据。要点：
 
 | 环境变量 | 用途 | 要求 |
 |---|---|---|

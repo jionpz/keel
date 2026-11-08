@@ -15,6 +15,7 @@
 | [0007](./0007-migration-and-query-layer.md) | 迁移工具与查询层 | **Accepted** — node-pg-migrate + raw pg |
 | [0008](./0008-wall-clock-semantics.md) | 墙钟语义：Run 级预算 | **Accepted** — 实现已落地，五连 5/5 验证（2026-10-25 追认） |
 | [0009](./0009-liveness-by-progress.md) | 卡死判定按进展信号，而非总耗时 | **Accepted** — 2026-11-05，实现已落地并通过全量验证 |
+| [0010](./0010-workflow-jstack.md) | 开发工作流全员迁移到 jstack，Trellis 退役 | **Accepted** — 2026-11-07 |
 
 ## Status 语义
 
@@ -26,4 +27,4 @@
 
 ⚠️ 标记表示该 ADR 依赖的外部事实**尚未查证完成**（本次会话推理网关持续 429）。
 待查证清单见各 ADR 的 Consequences 与
-`.trellis/tasks/08-22-keel-architecture-framework/research/`。
+`docs/archive/tasks/2026-08/08-22-keel-architecture-framework/research/`。

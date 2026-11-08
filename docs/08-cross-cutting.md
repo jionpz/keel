@@ -29,7 +29,7 @@ Keel 的本职决定了它天生处在一个尴尬位置：
 
 ### 1.2 ⚠️ 仓库内 agent 配置 = 远程代码执行
 
-**已查证事实**（[research/harness-interfaces.md](../.trellis/tasks/08-22-keel-architecture-framework/research/harness-interfaces.md) §1.6）：
+**已查证事实**（[research/harness-interfaces.md](archive/tasks/2026-08/08-22-keel-architecture-framework/research/harness-interfaces.md) §1.6）：
 
 Claude Code 在**不加 `--bare`** 时，`-p` 会话会执行目标仓库 `.claude/settings.json` 里的 hooks、
 连接其 `.mcp.json` 里的服务器。官方文档原文是 **"even in a folder you've never trusted"**，

@@ -8,7 +8,7 @@
  * 一行字符串；没有固定 code 时，只能靠整段中文文案判断该重新绑定还是检查网络，
  * 而测试也只能断言「报错了」。code + 固定字段让两者都能机械处理。
  *
- * 事实来源：.trellis/tasks/10-27-local-project-binding/design.md §8。
+ * 事实来源：docs/archive/tasks/2026-10/10-27-local-project-binding/design.md §8。
  */
 
 import { type KeelError, makeError } from '../contracts/errors.js'

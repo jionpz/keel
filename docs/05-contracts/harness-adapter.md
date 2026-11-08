@@ -1,7 +1,7 @@
 # `HarnessAdapter`
 
 > 满足 PRD `R4`；关闭缺口 `G10`（Model 层与 Harness 职责重叠）。
-> 事实依据：[`research/harness-interfaces.md`](../../.trellis/tasks/08-22-keel-architecture-framework/research/harness-interfaces.md)
+> 事实依据：[`research/harness-interfaces.md`](../archive/tasks/2026-08/08-22-keel-architecture-framework/research/harness-interfaces.md)
 
 ---
 
@@ -207,7 +207,7 @@ RunSpec {
 - `output_contract.mode = "native"` 而无 `CAP-STRUCTURED_OUTPUT`
   → 返回 `CAPABILITY_UNSUPPORTED`；调用方应改用 `post_validate`
 - 相同 `idempotency_key` 的重复调用 → 返回已有 `RunHandle`，**不得启动第二个进程**
-- `model` 是调用方按 stage 路由出的最终值（见 `.trellis/tasks/11-03-execution-model-routing`）：
+- `model` 是调用方按 stage 路由出的最终值（见 `docs/archive/tasks/2026-11/11-03-execution-model-routing`）：
   与 `run.requested_model` 同源；不支持 `CAP-MODEL_OVERRIDE` 的 Harness 应忽略它，
   而不是静默换成一个不同的模型
 
@@ -277,7 +277,7 @@ Adapter 在 `startRun` 时记下当时 HEAD 作为基线，`collectChanges` 相�
 因此 `commits` **不再恒空**：有基线时填入本轮提交的 SHA。
 未跟踪文件由 porcelain 补进来（`git diff` 看不见它们）。
 采集时机必须在 `dispose` 与编排层 `commitAll` **之前**，细节见
-`.trellis/spec/backend/workspace-diff.md`。
+`docs/spec/backend/workspace-diff.md`。
 
 ### 3.5 `interrupt()` `[v0.1 必须]`
 

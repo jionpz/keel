@@ -1,6 +1,6 @@
 -- 本地项目绑定：repo.local_path。
 --
--- 事实来源：.trellis/tasks/10-27-local-project-binding/design.md §2/§3。
+-- 事实来源：docs/archive/tasks/2026-10/10-27-local-project-binding/design.md §2/§3。
 --
 -- `local_path` 让一个 repo 绑定用户已有的本地检出口。它在语义上属于
 -- 「这个远程仓库在我机器上的哪个副本」，是仓库身份的一部分，所以放在 repo 上，
