@@ -17,23 +17,14 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { existsSync } from 'node:fs'
 import { err, makeError, ok, type Result } from '../contracts/errors.js'
-import {
-  type AdvanceOptions,
-  type AdvanceOutcome,
-  WorkflowDriver,
-} from '../control/driver/driver.js'
-import type { WorkspaceBinding } from '../control/driver/effects.js'
-import { RuleBasedPolicyEngine } from '../control/policy/engine.js'
-import { DEFAULT_RULESET } from '../control/policy/ruleset.js'
+import type { AdvanceOptions, AdvanceOutcome } from '../control/driver/driver.js'
 import type { TransitionEvent } from '../control/transition/types.js'
 import { asRole } from '../fact/db.js'
-import { GitWorkspace } from '../fact/git-workspace.js'
 import type { ControlMode, TaskStatus } from '../shared/ids.js'
 import { parseArgs } from './argv.js'
 import { resolveHumanReviewTtlMs } from './human-review-ttl.js'
-import { loadTaskWorkspace } from './task-workspace.js'
+import { cleanupDriverIfNeeded, plainDriver, workspaceDriver } from './task-driver.js'
 
 export const DECISIONS = ['approve', 'reject', 'rework'] as const
 export type Decision = (typeof DECISIONS)[number]
@@ -103,15 +94,6 @@ async function readTask(taskId: string): Promise<TaskSnapshot | undefined> {
   return r.rows[0]
 }
 
-function plainDriver(humanReviewTtlMs: number | null): WorkflowDriver {
-  return new WorkflowDriver(
-    new RuleBasedPolicyEngine(DEFAULT_RULESET),
-    undefined,
-    undefined,
-    humanReviewTtlMs,
-  )
-}
-
 /**
  * 预检：状态与控制模式都要对得上，否则这条事件本来就不会转移成功。
  *
@@ -150,43 +132,6 @@ function precondition(
     )
   }
   return ok(snapshot)
-}
-
-/** approve 需要真实工作区，否则 T-014 的 CreateBranch 只会记一条意图、分支并不存在 */
-async function workspaceDriver(
-  taskId: string,
-  humanReviewTtlMs: number | null,
-): Promise<Result<WorkflowDriver>> {
-  const loaded = await loadTaskWorkspace(taskId)
-  if (!loaded.ok) return loaded
-  const binding: WorkspaceBinding = loaded.value
-  return ok(
-    new WorkflowDriver(
-      new RuleBasedPolicyEngine(DEFAULT_RULESET),
-      binding,
-      undefined,
-      humanReviewTtlMs,
-    ),
-  )
-}
-
-/**
- * reject 的终态清理需要工作区，但**只在已经有工作树时**才准备。
- *
- * 被驳回的任务可能停在两种位置：还没开工（S-RFC_READY 转人工，没有 worktree），
- * 或已经在开发/验收（有 worktree）。前者不该为一个什么都没做的任务去 clone / fetch。
- *
- * 准备失败（仓库不可达等）**不阻断驳回**：驳回是人的决定，不该被网络卡住；
- * 此时退回无绑定的 driver，`CleanWorkspace` 会如实记一条 `SideEffectIntent`
- * 而不是假装清理完成 —— 工作树留给人事后手工移除。
- */
-async function cleanupDriverIfNeeded(
-  taskId: string,
-  humanReviewTtlMs: number | null,
-): Promise<WorkflowDriver | undefined> {
-  if (!existsSync(new GitWorkspace().preservePath(taskId))) return undefined
-  const built = await workspaceDriver(taskId, humanReviewTtlMs)
-  return built.ok ? built.value : undefined
 }
 
 export async function decideTask(

@@ -43,7 +43,18 @@ export type TransitionEvent =
   | { readonly type: 'CIPassed'; readonly source: CiSource }
   | { readonly type: 'CIFailed'; readonly source: CiSource }
   | { readonly type: 'PRClosed' }
-  | { readonly type: 'Cancelled' }
+  /**
+   * 取消（T-040）。缺省来源是人工 / 外部命令。
+   *
+   * 自动对账发现 issue 已被关闭时带 `reason: 'issue_closed'` 与 `closed_at`：
+   * 弃单证据必须能区分「人没来决策」与「工作对象已不存在」（issue #82）。
+   */
+  | {
+      readonly type: 'Cancelled'
+      readonly reason?: 'issue_closed'
+      /** GitHub 返回的 issue 关闭时间；`null` = 响应里没有（不编造） */
+      readonly closed_at?: string | null
+    }
   | { readonly type: 'UnrecoverableError' }
 
 export type TransitionEventType = TransitionEvent['type']

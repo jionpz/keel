@@ -1,8 +1,9 @@
 # 接入自动化 Poller（`keel poller`）
 
-> 来源：`08-29-ingress-poller`（issue #70 §2）。代码：
+> 来源：`08-29-ingress-poller`（issue #70 §2）、issue 关闭对账（issue #82）。代码：
 > `src/cli/poller.ts`（接线）、`src/ingress/poller.ts`（轮询核心）、
-> `src/fact/github-provider.ts`（`listOpenIssues`）。
+> `src/ingress/reconcile.ts`（issue 关闭对账）、
+> `src/fact/github-provider.ts`（`listOpenIssues` / `getIssue`）。
 > 目标：7×24 无人值守，把「人工反复跑 `keel run-issue`」变成常驻进程。
 
 ---
@@ -42,10 +43,11 @@ export function issueUrlFor(parsed: ParsedRemote, number: number): string
 export interface PollerDeps {
   listRepos(); listIssues(repo); taskStatus(externalRef)
   runIssue(input: { issueUrl; repoId; label: string })
+  reconcile: ReconcileDeps                          // issue 关闭对账（见下）
   now(); log(line: Record<string, unknown>)
 }
 export function createStopToken(): StopToken          // requested / listenerCount / subscribe / request
-export function scanOnce(deps, opts?): Promise<{ stats: ScanStats; drives: DriveRequest[]; stopped }>
+export function scanOnce(deps, opts?): Promise<{ stats: ScanStats; drives: DriveRequest[]; openRefs: ReadonlySet<string>; stopped }>
 export function createDriveScheduler(deps, opts: {
   concurrency: number; shouldStop?; onFatal?
 }): DriveScheduler                                   // schedule / inFlight / drain / takeFatal
@@ -58,8 +60,21 @@ export const DEFAULT_DRIVE_CONCURRENCY = 3           // 与 N4 全局上限一�
 export function pollOnce(deps, opts?): Promise<PollRoundResult>   // 一次性同步语义（测试 / 脚本）
 export function runPollerForever(deps, opts?): Promise<void>      // opts.concurrency
 
+// src/ingress/reconcile.ts
+export interface IngestedTask { taskId; status; externalRef; remoteUrl }
+export interface IssueState { state: 'open' | 'closed'; closedAt: string | null }
+export interface ReconcileDeps {
+  listIngestedTasks(); issueState(remoteUrl, issueNumber)
+  cancelTask(task, issue, now); redactDetail(detail); now(); log(line)
+}
+export function cancellationApplies(status: TaskStatus): boolean   // T-040 的显式守卫
+export function reconcileClosedIssues(deps, openRefs, opts?): Promise<ReconcileStats>
+export function parseIssueNumber(externalRef): number | undefined
+
 // src/cli/poller.ts
 export function parseConcurrency(raw: unknown): Result<number>    // 缺省 DEFAULT_MAX_RUNNING_RUNS
+export function loadIngestedGithubTasks(): Promise<readonly IngestedTask[]>
+export function cancelClosedIssue(task, issue, now): Promise<Result<CancelOutcome>>
 ```
 
 ### 3. Contracts
@@ -100,6 +115,26 @@ export function parseConcurrency(raw: unknown): Result<number>    // 缺省 DEFA
   `in_flight`，计入 `skipped`，不会并发双跑。驱动结束（成功 / 可预期失败）后
   才从集合摘除，下一轮可再次驱动。
 
+**issue 关闭对账（issue #82）**
+
+- 每轮扫描之后、调度驱动之前跑一次 `reconcileClosedIssues`。
+- 候选集 = 已 ingest、非终态的 GitHub 任务（`loadIngestedGithubTasks`：
+  `task ⋈ task_feedback ⋈ feedback(source='github') ⋈ repo(provider='github')`）。
+- **本轮 open 列表里见过的任务零请求跳过**（`scanOnce` 返回 `openRefs`）；
+  没见过的才逐条 `getIssue` 回查，用来区分「已关闭」与「只是被摘了 label」。
+- 读到 `state=closed` → 发 `Cancelled`（T-040）：`reason: 'issue_closed'`、
+  `closed_at` 来自 GitHub 响应，写进 `TaskStatusChanged` 的 payload；
+  工作区由 T-040 的 `CleanWorkspace` 收掉（有工作树时注入真实 workspace，
+  准备失败不阻断取消，如实记 `SideEffectIntent`）。
+- **关闭 ≠ 取消的显式守卫**：`cancellationApplies(status)` 只对 `S-PR_OPEN` 返回 false。
+  PR 已经开出去时，交付物落在 PR 上继续收口，issue 关闭不撤单；这类任务计入
+  `reconcile.skipped` 并打 `reconcile_skipped`。其余非终态没有脱离 issue 仍成立的
+  交付物，关闭就是撤单。误取消不可逆（终态 I8），宁可漏取消也不能错取消。
+- 按设计**不重新驱动 closed issue 的任务**：`ingestIssue` 的关闭闸门是授权边界，
+  对账不绕过它。
+- 单条失败隔离：issue 状态查询或取消失败只记 `reconcile_error` + `errors += 1`，
+  不影响其它任务；取消因并发未推进记 `reconcile_noop`，不假装成功。
+
 **信号与退出**
 
 - SIGTERM / SIGINT：不再调度新 issue；**所有在途驱动**（`scheduler.drain()`）结束后退出。
@@ -114,15 +149,20 @@ export function parseConcurrency(raw: unknown): Result<number>    // 缺省 DEFA
 **日志**（单行 JSON）
 
 ```json
-{"ts":"...","event":"poll","repos":2,"scanned":5,"skipped":3,"errors":0,"truncated":false,"scheduled":2,"deferred":1,"inFlight":3,"stopped":false}
+{"ts":"...","event":"poll","repos":2,"scanned":5,"skipped":3,"errors":0,"truncated":false,"scheduled":2,"deferred":1,"inFlight":3,"reconcile":{"checked":1,"cancelled":1,"skipped":0,"errors":0},"stopped":false}
 {"ts":"...","event":"issue_driven","ref":"o/r#12","created":true}
+{"ts":"...","event":"reconcile_cancelled","ref":"o/r#12","task":"<uuid>","from":"S-HUMAN_REVIEW","transition":"T-040","closed_at":"2026-11-07T12:34:56Z"}
+{"ts":"...","event":"reconcile_skipped","ref":"o/r#12","task":"<uuid>","status":"S-PR_OPEN","reason":"pr_open"}
+{"ts":"...","event":"reconcile_error","ref":"o/r#12","kind":"...","detail":"..."}
+{"ts":"...","event":"reconcile_noop","ref":"o/r#12","task":"<uuid>","reason":"..."}
 {"ts":"...","event":"repo_error","repo":"o/r","label":"keel","kind":"...","detail":"..."}
 {"ts":"...","event":"issue_error","ref":"o/r#12","kind":"...","detail":"..."}
 {"ts":"...","event":"poller","state":"stopped"}
 ```
 
 - 常驻 `poll` 行：`scheduled` 是本轮**启动**的驱动数，不承诺完成数；
-  `deferred` 是本轮因并发上限未启动的请求数；`inFlight` 是打印时的在途数。
+  `deferred` 是本轮因并发上限未启动的请求数；`inFlight` 是打印时的在途数；
+  `reconcile` 是本轮 issue 关闭对账的四项计数。
 - `pollOnce` 的聚合行仍为 `repos / scanned / ingested / driven / skipped / errors /
   truncated / stopped`（兼容保留）。
 
@@ -146,6 +186,11 @@ export function parseConcurrency(raw: unknown): Result<number>    // 缺省 DEFA
 | 驱动数已达并发上限 | `deferred += 1`，不排队；下一轮重扫 |
 | 同一 `external_ref` 已在途 | `in_flight`，计入 `skipped`，不重复驱动 |
 | 驱动抛异常（DB 连接丢失等） | 记首个 fatal → 停止调度 → 在途收尾后抛出，不吞 |
+| issue 状态查询失败 | `reconcile_error`，`errors += 1`，继续下一条 |
+| issue 已关闭且任务 `S-PR_OPEN` | 不取消（显式守卫），`reconcile.skipped += 1`，打 `reconcile_skipped` |
+| issue 不在 open 列表但状态仍 open（label 被摘） | 不做任何动作 |
+| 取消因并发未推进 | `reconcile_noop`，不计入 `cancelled` |
+| `external_ref` 形状不对 | `reconcile_error`，不发请求、不取消 |
 | `listOpenIssues` 非数组 / 元素形状不对 | `PROTOCOL_ERROR`（不静默跳过） |
 
 ### 5. Good / Base / Bad Cases
@@ -182,10 +227,21 @@ export function parseConcurrency(raw: unknown): Result<number>    // 缺省 DEFA
 - 缺 token 前置失败；非法 `--concurrency` 不读 repo、不取锁、不解析 token
 - 循环抛错时连接池仍被关闭
 
+`src/ingress/reconcile.test.ts`（注入 deps，不碰数据库与 GitHub）：
+
+- closed → `cancelTask` 带 `closed_at`；`closed_at` 缺失保持 `null`
+- 本轮 `openRefs` 里见过 → 零请求；issue 仍 open（label 被摘）→ 不撤单
+- `S-PR_OPEN` 显式放行：不查 issue、不取消、计入 `skipped`
+- 状态查询失败 / 取消失败 / `external_ref` 形状不对 → 错误隔离
+- 取消未推进 → `reconcile_noop`，不计入 `cancelled`
+- 停止信号 → 不再发起新对账
+- `cancellationApplies` 只对 `S-PR_OPEN` 为 false
+
 `src/fact/github-provider.test.ts`：
 
 - PR 过滤、两页拼接、触顶 `truncated`、label 编码（空格 / 斜杠 / 中文）
 - 空 label 不发请求
+- `getIssue` 原样带出 `closed_at`（缺失为 `null`）
 
 ### 7. Wrong vs Correct
 
@@ -214,6 +270,10 @@ token.request()                        // 只置位一次并清空订阅者
   因此一个永不返回的驱动会让进程停在 drain —— 这是刻意的，不是挂死。
 - **deferred 不是队列**：本轮排不下的 issue 只计数、不保存；下一轮重新扫描时再试。
   调度器里唯一的状态是 `inFlight` 集合，进程重启即清空，不构成第二份待办事实。
+- **closed issue 的任务不再被驱动**：扫描只列 `state=open`，`ingestIssue` 的关闭闸门
+  也拒绝重新 ingest。对账因此只保证「不误判、不悬着」：非终态任务要么被取消，
+  要么（`S-PR_OPEN`）显式放行并停在原状态等 PR 收口 —— 后者不会自动推进 CI，
+  需要人重新打开 issue 或手工 `keel run-task`。
 - **扫描先于驱动**：一轮会先扫描完所有仓库再调度，所以停止信号只影响「是否继续调度」，
   不会回滚已经完成的扫描（`pollOnce` 的 `scanned` 因此可能多于旧版）。
 - **与 timer-worker 分工**：poller 管扫描与驱动，timer 管到期收割；poller 不处理 wall-clock timer。

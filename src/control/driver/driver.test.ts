@@ -510,6 +510,65 @@ describe('HumanDecision 事件', () => {
   })
 })
 
+describe('取消证据 · T-040 的 reason / closed_at', () => {
+  async function seedHumanReview(): Promise<string> {
+    const taskId = await seedTask()
+    await asOwner((c) =>
+      c.query("UPDATE task SET status = 'S-HUMAN_REVIEW' WHERE id = $1", [taskId]),
+    )
+    return taskId
+  }
+
+  async function lastStatusEvent(taskId: string): Promise<Record<string, unknown>> {
+    const r = await asOwner((c) =>
+      c.query<{ payload: Record<string, unknown> }>(
+        `SELECT payload FROM event
+         WHERE task_id = $1 AND type = 'TaskStatusChanged'
+         ORDER BY seq DESC LIMIT 1`,
+        [taskId],
+      ),
+    )
+    return r.rows[0]?.payload ?? {}
+  }
+
+  it('issue 关闭的取消：reason 与 closed_at 进 TaskStatusChanged，不冒充人工裁决', async () => {
+    const taskId = await seedHumanReview()
+
+    const r = await driver.advance(
+      taskId,
+      { type: 'Cancelled', reason: 'issue_closed', closed_at: '2026-11-07T12:34:56Z' },
+      NOW,
+    )
+    expect(r.ok && r.value.transition_id).toBe('T-040')
+
+    expect(await lastStatusEvent(taskId)).toMatchObject({
+      from: 'S-HUMAN_REVIEW',
+      to: 'S-ABANDONED',
+      transition: 'T-040',
+      event: 'Cancelled',
+      reason: 'issue_closed',
+      closed_at: '2026-11-07T12:34:56Z',
+    })
+
+    // 自动对账不是人的决定 —— 决策历史里不该多出一条「人工裁决」
+    const decisions = await asOwner((c) =>
+      c.query("SELECT 1 FROM event WHERE task_id = $1 AND type = 'HumanDecision'", [taskId]),
+    )
+    expect(decisions.rowCount).toBe(0)
+  })
+
+  it('人工 / 外部取消不带 reason 时不多出证据键', async () => {
+    const taskId = await seedHumanReview()
+
+    const r = await driver.advance(taskId, { type: 'Cancelled' }, NOW)
+    expect(r.ok && r.value.transition_id).toBe('T-040')
+
+    const payload = await lastStatusEvent(taskId)
+    expect(payload).not.toHaveProperty('reason')
+    expect(payload).not.toHaveProperty('closed_at')
+  })
+})
+
 // ────────────────────────── control_mode ──────────────────────────
 
 describe('control_mode 与状态正交', () => {
