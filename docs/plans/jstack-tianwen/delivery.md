@@ -1,6 +1,6 @@
 # 交付、生产准入与运维
 
-**状态**：JT-01 的只读影子协议与后台队列已开始交付，真实模型验收未完成；JT-02 至 JT-07 待实施。见[实施进度与可运行命令](./implementation.md)。尚未部署生产服务。
+**状态**：JT-01 的只读影子协议与后台队列代码已合入 `main`（PR #84），真实模型验收未完成；JT-02 至 JT-07 待实施。见[实施进度与可运行命令](./implementation.md)。尚未部署生产服务。
 
 阅读顺序：[主方案](./README.md) → [契约](./contracts.md) → 本页 → [验收](./acceptance.md)。本页的命令和配置是待实现接口建议，不可复制为现有能力。
 
@@ -21,7 +21,18 @@
 
 ## 2. 建议的垂直交付票
 
-这些是可发布到 tracker 的票据正文摘要；每张票都要打通可观察的端到端行为，不单独交付一层 schema。当前 GitHub 写接口返回 403，票据保留在本仓库，未伪造远程 issue ID。
+这些是垂直交付票的正文摘要；每张票都要打通可观察的端到端行为，不单独交付一层 schema。2026-11-10 已发布为真实 GitHub issues，具体状态、验收和非目标以对应 issue 为准：
+
+| 票 | GitHub issue | 当前状态 |
+|---|---|---|
+| 总览 | [#85](https://github.com/jionpz/keel/issues/85) | 进度与原生依赖总览 |
+| JT-01 | [#86](https://github.com/jionpz/keel/issues/86) | 代码已合入 PR #84；真实模型端到端验收 open |
+| JT-02 | [#90](https://github.com/jionpz/keel/issues/90) | 未实施；blocked by JT-01 |
+| JT-03 | [#91](https://github.com/jionpz/keel/issues/91) | 未实施；blocked by JT-02 |
+| JT-04 | [#92](https://github.com/jionpz/keel/issues/92) | 未实施；blocked by JT-02 |
+| JT-05 | [#93](https://github.com/jionpz/keel/issues/93) | 未实施；blocked by JT-03、JT-04 |
+| JT-06 | [#94](https://github.com/jionpz/keel/issues/94) | 未实施；blocked by JT-04、JT-05 |
+| JT-07 | [#95](https://github.com/jionpz/keel/issues/95) | 未实施；blocked by JT-01～JT-06 |
 
 ### JT-01：jstack 原生只读任务，经天问建议、人工答复后可恢复
 
@@ -184,4 +195,4 @@ runtime:
 
 已交付设计、接口、一致性规则、实施依赖与验收场景，并推进 JT-01 的代码及确定性回归。Terra 完成数据库/检查环境和受控文件读取，Luna 完成导出器、CLI 与契约回归，主代理完成持久运行、schema、接纳与整合。真实模型验收和后续生产项仍未完成，不能标为整个方案已交付。
 
-GitHub 写入返回 403，未发布 issue/PR；本地方案是完整可评审的材料，后续有写权限时可按 JT-01 至 JT-07 发布 tracker 票据。该限制不阻塞设计完成。
+2026-11-10 已把 JT-01 剩余验收与 JT-02～JT-07 发布到 GitHub：[#85](https://github.com/jionpz/keel/issues/85) 为进度总览，[#86](https://github.com/jionpz/keel/issues/86) 与 [#90](https://github.com/jionpz/keel/issues/90)～[#95](https://github.com/jionpz/keel/issues/95) 为子票，原生 sub-issue 与 blocked_by 已建立。历史：本方案初稿时 GitHub 写接口曾返回 403，当时只保留本地材料且未伪造远程 issue ID；该限制已解除。

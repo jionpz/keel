@@ -1,6 +1,6 @@
 /** 确定性协议与真实 PostgreSQL 测试：固定候选只测试接纳/恢复，不代表真实模型验收。 */
 import { randomUUID } from 'node:crypto'
-import { mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
@@ -74,7 +74,9 @@ async function events(taskId: string): Promise<string[]> {
   )
 }
 
-describe('managed investigation · 持久链路', () => {
+const linux = process.platform === 'linux'
+
+describe.skipIf(!linux)('managed investigation · 持久链路', () => {
   it('读文件→天问建议→人工答复→新worker完成，顺序和来源可审计', async () => {
     const { taskId } = await seed()
     expect(
@@ -318,5 +320,27 @@ describe('managed investigation · 持久链路', () => {
       c.query('SELECT payload FROM managed_event WHERE task_id=$1', [taskId]),
     )
     expect(JSON.stringify(audit.rows)).not.toContain('private-token-in-stderr')
+  })
+})
+
+describe.runIf(!linux)('managed investigation · 非 Linux 能力门', () => {
+  it('创建调查原样上抛 CAPABILITY_UNSUPPORTED，不伪装成工作区错误', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'keel-managed-'))
+    try {
+      const packagePath = join(root, 'workflow.json')
+      await writeFile(packagePath, JSON.stringify(workflow))
+      const repoId = randomUUID()
+      await asOwner((c) =>
+        c.query(
+          `INSERT INTO repo(id,provider,remote_url,default_branch,local_path) VALUES($1,'local',$2,'main',$3)`,
+          [repoId, `file://${root}`, root],
+        ),
+      )
+      const created = await createManagedInvestigation(repoId, '说明项目如何运行', packagePath)
+      expect(created.ok).toBe(false)
+      if (!created.ok) expect(created.error.kind).toBe('CAPABILITY_UNSUPPORTED')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
   })
 })

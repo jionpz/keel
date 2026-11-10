@@ -10,6 +10,7 @@
  */
 
 import { createServer } from 'node:http'
+import { runInNewContext } from 'node:vm'
 import { describe, expect, it } from 'vitest'
 import {
   type ConsoleActions,
@@ -19,7 +20,7 @@ import {
   type Row,
 } from './console.js'
 import { type AuthOptions, SESSION_COOKIE } from './console-auth.js'
-import { CONSOLE_TOKEN_PLACEHOLDER } from './console-page.js'
+import { CONSOLE_HTML, CONSOLE_TOKEN_PLACEHOLDER } from './console-page.js'
 import { DECISIONS } from './decide.js'
 
 const TASK_ID = '1d891a16-be91-4763-8333-38edd182a824'
@@ -144,6 +145,133 @@ function fakeQuery(rows: {
     if (sql.includes('FROM task_feedback')) return rows.feedbacks ?? []
     if (sql.includes('FROM timer')) return rows.timers ?? []
     return []
+  }
+}
+
+interface SeamElement {
+  innerHTML: string
+  style: Record<string, string>
+  classList: {
+    toggle(name: string, force?: boolean): void
+  }
+  addEventListener(...args: unknown[]): void
+  setAttribute(name: string, value: unknown): void
+  getAttribute(name: string): string | null
+  removeAttribute(name: string): void
+}
+
+interface ConsoleStateSeam {
+  meta: {
+    statuses: { stage: string[]; gate: string[]; terminal: string[] }
+    statusLabels: Record<string, string>
+    eventLabels: Record<string, string>
+    transitions: unknown[]
+  } | null
+  tasks: Row[]
+  mode: string
+}
+
+interface ConsoleSeam {
+  renderDecisionFacts(detail: Row): string
+  renderDecisionOptions(detail: Row): string
+  renderCockpitHeader(detail: Row): string
+  renderTasks(): void
+  projectGroupOf(status: string): string
+  isGateStatus(status: string): boolean
+  state: ConsoleStateSeam
+}
+
+function makeSeamElement(): SeamElement {
+  const attrs = new Map<string, string>()
+  const classes = new Set<string>()
+  return {
+    innerHTML: '',
+    style: {},
+    classList: {
+      toggle(name, force) {
+        const on = force ?? !classes.has(name)
+        if (on) classes.add(name)
+        else classes.delete(name)
+      },
+    },
+    addEventListener() {},
+    setAttribute(name, value) {
+      attrs.set(name, String(value))
+    },
+    getAttribute(name) {
+      return attrs.get(name) ?? null
+    },
+    removeAttribute(name) {
+      attrs.delete(name)
+    },
+  }
+}
+
+function loadConsoleSeam(): { seam: ConsoleSeam; elements: Map<string, SeamElement> } {
+  const start = CONSOLE_HTML.indexOf('<script>')
+  const end = CONSOLE_HTML.lastIndexOf('</script>')
+  const script = CONSOLE_HTML.slice(start + '<script>'.length, end)
+  const instrumented = script.replace(
+    /\}\)\(\);\s*$/,
+    `
+  globalThis.__keelSeam = {
+    renderDecisionFacts: renderDecisionFacts,
+    renderDecisionOptions: renderDecisionOptions,
+    renderCockpitHeader: renderCockpitHeader,
+    renderTasks: renderTasks,
+    projectGroupOf: projectGroupOf,
+    isGateStatus: isGateStatus,
+    state: state
+  };
+})();`,
+  )
+  if (instrumented === script) throw new Error('控制台脚本结尾变化，渲染 seam 注入失败')
+
+  const elements = new Map<string, SeamElement>()
+  const element = (id: string): SeamElement => {
+    const existing = elements.get(id)
+    if (existing !== undefined) return existing
+    const created = makeSeamElement()
+    elements.set(id, created)
+    return created
+  }
+  const document = {
+    documentElement: makeSeamElement(),
+    getElementById: element,
+    querySelectorAll: () => [],
+  }
+  const sandbox: Record<string, unknown> = {
+    document,
+    window: {
+      location: { hash: '' },
+      addEventListener() {},
+    },
+    localStorage: { getItem: () => null, removeItem() {} },
+    fetch: () => new Promise<never>(() => {}),
+    setInterval: () => 1,
+  }
+  runInNewContext(instrumented, sandbox)
+  const seam = sandbox.__keelSeam
+  if (seam === undefined) throw new Error('渲染 seam 未注入')
+  return { seam: seam as ConsoleSeam, elements }
+}
+
+function expectNoNesting(html: string, parent: string, children: readonly string[]): void {
+  const voids = new Set(['br', 'hr', 'img', 'input', 'meta', 'link'])
+  const stack: string[] = []
+  for (const match of html.matchAll(/<\/?([a-z][a-z0-9]*)\b[^>]*>/gi)) {
+    const tag = match[0]
+    const name = (match[1] ?? '').toLowerCase()
+    if (tag.startsWith('</')) {
+      const at = stack.lastIndexOf(name)
+      if (at >= 0) stack.length = at
+      continue
+    }
+    if (voids.has(name)) continue
+    if (stack.includes(parent) && children.includes(name)) {
+      throw new Error(`<${name}> 不允许嵌套在 <${parent}> 内`)
+    }
+    stack.push(name)
   }
 }
 
@@ -636,5 +764,174 @@ describe('keel console', () => {
       expect(body.error).toContain('connection refused')
       expect(body.connection).toContain('postgres')
     })
+  })
+})
+
+describe('console 页面渲染 seam', () => {
+  it('RFC 目标 / 验收条件按真实结构渲染，转义后 details 不再嵌在 span 里', () => {
+    const { seam } = loadConsoleSeam()
+    const detail: Row = {
+      task: { id: TASK_ID, status: 'S-HUMAN_REVIEW', work_branch: 'ai/demo' },
+      runs: [],
+      feedbacks: [],
+      timers: [],
+      artifacts: [
+        {
+          kind: 'rfc',
+          key: '',
+          version: 2,
+          body: {
+            title: '方案 <script>alert(1)</script>',
+            goals: ['目标 <b>一</b>', '目标 & 二'],
+            acceptance_criteria: [
+              { id: 'AC1', text: '验收 <img src=x>', verifiable_by: '人工 & 核对' },
+            ],
+          },
+        },
+      ],
+      events: [
+        {
+          seq: 7,
+          type: 'WorkspaceDiffCollected',
+          payload: {
+            patch: [
+              'diff --git a/src/a.ts b/src/a.ts',
+              '--- a/src/a.ts',
+              '+++ b/src/a.ts',
+              '@@ -1 +1 @@',
+              '-old',
+              '+new',
+              '+added',
+            ].join('\n'),
+          },
+        },
+      ],
+    }
+
+    const html = seam.renderDecisionFacts(detail)
+
+    expect(html).not.toContain('[object Object]')
+    expect(html).not.toContain('<script>')
+    expect(html).not.toContain('<img')
+    expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;')
+    expect(html).toContain('目标 &lt;b&gt;一&lt;/b&gt;')
+    expect(html).toContain('目标 &amp; 二')
+    expect(html).toContain('AC1')
+    expect(html).toContain('验收 &lt;img src=x&gt;')
+    expect(html).toContain('人工 &amp; 核对')
+    expect(html).toContain('src/a.ts')
+    expect(html).toContain('+2')
+    expect(html).toContain('-1')
+    expectNoNesting(html, 'span', ['details', 'div'])
+  })
+
+  it('任务列表把人工闸门和系统等待分开，只有前者标 needs-action', () => {
+    const { seam, elements } = loadConsoleSeam()
+    seam.state.meta = {
+      statuses: {
+        stage: ['S-DEVELOPING'],
+        gate: ['S-HUMAN_REVIEW', 'S-NEED_CLARIFICATION', 'S-NEW', 'S-RFC_READY', 'S-PR_OPEN'],
+        terminal: ['S-DONE'],
+      },
+      statusLabels: {
+        'S-HUMAN_REVIEW': '等待人工复核',
+        'S-RFC_READY': 'RFC 就绪',
+      },
+      eventLabels: {},
+      transitions: [],
+    }
+    seam.state.mode = 'tasks'
+    seam.state.tasks = [
+      {
+        id: TASK_ID,
+        title: '需要人',
+        status: 'S-HUMAN_REVIEW',
+        repo: 'file:///tmp/a',
+        updated_at: '2026-11-10T10:00:00Z',
+      },
+      {
+        id: '6f0d1cce-0f4b-4f4d-8f8e-2f5a8f7b6c5d',
+        title: '等系统',
+        status: 'S-RFC_READY',
+        repo: 'file:///tmp/a',
+        updated_at: '2026-11-10T11:00:00Z',
+      },
+    ]
+
+    seam.renderTasks()
+    const html = elements.get('task-list')?.innerHTML ?? ''
+    const items = html.split('<li ').slice(1)
+    const itemFor = (id: string): string =>
+      items.find((item) => item.includes(`data-id="${id}"`)) ?? ''
+    const human = itemFor(TASK_ID)
+    const waiting = itemFor('6f0d1cce-0f4b-4f4d-8f8e-2f5a8f7b6c5d')
+
+    expect(human).toContain('task-dot gate')
+    expect(human).toContain('needs-action')
+    expect(human).toContain('need-badge')
+    expect(human).toContain('（需处理）')
+    expect(waiting).toContain('task-dot waiting')
+    expect(waiting).not.toContain('needs-action')
+    expect(waiting).not.toContain('need-badge')
+    expect(waiting).not.toContain('（需处理）')
+
+    expect(seam.isGateStatus('S-HUMAN_REVIEW')).toBe(true)
+    expect(seam.isGateStatus('S-RFC_READY')).toBe(false)
+    expect(seam.projectGroupOf('S-HUMAN_REVIEW')).toBe('needs')
+    expect(seam.projectGroupOf('S-NEED_CLARIFICATION')).toBe('needs')
+    expect(seam.projectGroupOf('S-RFC_READY')).toBe('waiting')
+    expect(seam.projectGroupOf('S-NEW')).toBe('waiting')
+  })
+
+  it('只有批准卡片带主路径标记，返工与驳回不冒充默认选项', () => {
+    const { seam } = loadConsoleSeam()
+    const html = seam.renderDecisionOptions({
+      task: { id: TASK_ID, status: 'S-HUMAN_REVIEW', work_branch: 'ai/demo' },
+      runs: [{ stage: 'develop', attempt: 1, status: 'SUCCEEDED' }],
+    })
+    const cards = html.split('<div class="option-card ').slice(1)
+    const cardFor = (key: string): string => {
+      const card = cards.find((item) => item.slice(0, item.indexOf('"')).split(' ')[0] === key)
+      if (card === undefined) throw new Error(`没有 ${key} 选项卡片`)
+      return card
+    }
+
+    expect(cardFor('approve')).toContain('class="option-badge-recommended"')
+    expect(cardFor('approve')).toContain('主路径')
+    expect(cardFor('rework')).not.toContain('主路径')
+    expect(cardFor('reject')).not.toContain('主路径')
+    expect(html).not.toContain(' primary')
+  })
+
+  it('复制按钮的可见文案和 title 都指向 data-copy 里的同一条命令', () => {
+    const { seam } = loadConsoleSeam()
+    seam.state.meta = {
+      statuses: { stage: ['S-DEVELOPING'], gate: ['S-HUMAN_REVIEW'], terminal: ['S-DONE'] },
+      statusLabels: { 'S-HUMAN_REVIEW': '等待人工复核' },
+      eventLabels: {},
+      transitions: [],
+    }
+    const html = seam.renderCockpitHeader({
+      task: {
+        id: TASK_ID,
+        title: 'demo',
+        status: 'S-HUMAN_REVIEW',
+        repo: 'file:///tmp/demo',
+        work_branch: 'ai/demo',
+        base_branch: 'main',
+        created_at: '2026-11-10T10:00:00Z',
+        updated_at: '2026-11-10T10:00:00Z',
+      },
+      runs: [],
+      events: [],
+      artifacts: [],
+      feedbacks: [],
+      timers: [],
+    })
+
+    expect(html).toContain(`data-copy="pnpm keel status ${TASK_ID}"`)
+    expect(html).toContain(`title="复制 CLI 状态查询命令：pnpm keel status ${TASK_ID}"`)
+    expect(html).toContain(`data-copy="pnpm run timeline -- ${TASK_ID}"`)
+    expect(html).toContain(`title="复制完整时间线导出命令：pnpm run timeline -- ${TASK_ID}"`)
   })
 })

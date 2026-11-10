@@ -8,6 +8,9 @@
 
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { WorkflowDriver } from '../control/driver/driver.js'
 import { LivenessStore } from '../control/liveness/store.js'
@@ -345,6 +348,44 @@ describe('patrolStalledRuns', () => {
           new Promise((resolve) => setTimeout(resolve, 1_000)),
         ])
       }
+    }
+  })
+
+  it('默认探针给 ps 传 LC_ALL=C，并能解析启动时间', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'keel-patrol-ps-'))
+    const fakePs = join(dir, 'ps')
+    const log = join(dir, 'lc_all.txt')
+    writeFileSync(
+      fakePs,
+      '#!/bin/sh\nprintf "%s" "$LC_ALL" > "$KEEL_TEST_PS_LOG"\nprintf "%s\\n" "Thu Nov  5 10:00:00 2026"\n',
+    )
+    chmodSync(fakePs, 0o755)
+
+    const oldPath = process.env.PATH
+    const oldLog = process.env.KEEL_TEST_PS_LOG
+    process.env.PATH = `${dir}:${oldPath ?? ''}`
+    process.env.KEEL_TEST_PS_LOG = log
+    try {
+      const info = inspectProcess(process.pid)
+      expect(info.alive).toBe(true)
+      const startedAt = info.startedAt
+      expect(startedAt).not.toBeNull()
+      if (startedAt === null) return
+      expect([
+        startedAt.getFullYear(),
+        startedAt.getMonth(),
+        startedAt.getDate(),
+        startedAt.getHours(),
+        startedAt.getMinutes(),
+        startedAt.getSeconds(),
+      ]).toEqual([2026, 10, 5, 10, 0, 0])
+      expect(readFileSync(log, 'utf8')).toBe('C')
+    } finally {
+      if (oldPath === undefined) delete process.env.PATH
+      else process.env.PATH = oldPath
+      if (oldLog === undefined) delete process.env.KEEL_TEST_PS_LOG
+      else process.env.KEEL_TEST_PS_LOG = oldLog
+      rmSync(dir, { recursive: true, force: true })
     }
   })
 })
