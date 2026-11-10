@@ -39,14 +39,14 @@ export const HELP = `keel — AI Engineering Runtime CLI
   managed <investigate|status|questions|answer|worker>   jstack 只读调查与天问建议（JT-01 影子模式）
   console                          只读 Web 控制台(默认 http://127.0.0.1:4321)
   timer-worker [--interval <ms>]   到期收割 timer(默认单次;--interval 常驻)
-  run-task <taskId> [--max-steps N] [--ci passed|failed|real] [--model <id>] [--harness omp|claude] [--wall-clock <秒>]   驱动单 task 到终态
+  run-task <taskId> [--max-steps N] [--ci passed|failed|real] [--model <id>] [--harness omp|claude|pi] [--wall-clock <秒>]   驱动单 task 到终态
   status <taskId> [--events N]     查 task / run / 事件摘要
   decide <taskId> <approve|reject|rework> [--note <text>]   人工裁决 S-HUMAN_REVIEW 的任务
   answer <taskId> --text <text>    回答 S-NEED_CLARIFICATION 的澄清
   register-repo <remoteUrl> [--default-branch <name>] [--local-path <dir>] [--issue-label <name>]   注册 repo；可绑定本地项目目录、配置扫描 label
   ingest-issue <issueUrl> [--label <name>] [--repo <uuid>]   GitHub Issue → task
-  run-issue <issueUrl> [--label <name>] [--max-steps N] [--ci passed|failed|real] [--model <id>] [--harness omp|claude] [--wall-clock <秒>]   Issue → task → 驱动到终态
-  poller [--interval <ms>] [--concurrency <n>] [--ci passed|failed|real] [--model <id>] [--harness omp|claude] [--wall-clock <秒>]   常驻扫描各仓库 label 下的 open issue 并驱动
+  run-issue <issueUrl> [--label <name>] [--max-steps N] [--ci passed|failed|real] [--model <id>] [--harness omp|claude|pi] [--wall-clock <秒>]   Issue → task → 驱动到终态
+  poller [--interval <ms>] [--concurrency <n>] [--ci passed|failed|real] [--model <id>] [--harness omp|claude|pi] [--wall-clock <秒>]   常驻扫描各仓库 label 下的 open issue 并驱动
   unlock <repoId> [--force]        清理 SIGKILL 留下的 per-repo 锁（无 --force 只报告持有者）
 
 选项:

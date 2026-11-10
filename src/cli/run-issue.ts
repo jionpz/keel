@@ -13,7 +13,9 @@
 import type { Result } from '../contracts/errors.js'
 import { err, makeError, ok } from '../contracts/errors.js'
 import { type ClaudeAuthProbe, requireClaudeReady } from '../execution/adapters/claude-code.js'
+import { requirePiBinary } from '../execution/adapters/pi.js'
 import { parseAllowlist, parseProfile, preflightModelRouting } from '../execution/model-routing.js'
+import { loadConfiguredToolPolicy, type ToolPolicyDocument } from '../execution/tool-policy.js'
 import type { TokenResolver } from '../fact/github-auth.js'
 import { type GitHubProvider, parseIssueUrl } from '../fact/github-provider.js'
 import { parseArgs } from './argv.js'
@@ -61,6 +63,7 @@ export interface RunIssueOptions {
    */
   readonly tokenResolver?: TokenResolver
   readonly now?: string
+  readonly toolPolicy?: ToolPolicyDocument
 }
 
 export interface RunIssueResult extends RunTaskResult {
@@ -105,6 +108,9 @@ export async function runIssue(opts: RunIssueOptions): Promise<Result<RunIssueRe
         ? requireClaudeReady()
         : requireClaudeReady('claude', opts.claudeAuthProbe)
     if (!ready.ok) return ready
+  } else if (harness.value === 'pi') {
+    const ready = requirePiBinary()
+    if (!ready.ok) return ready
   }
 
   // 只把**显式**模型传下去；omp 缺省由 runTask 里的模型路由按 profile 补齐。
@@ -126,6 +132,10 @@ export async function runIssue(opts: RunIssueOptions): Promise<Result<RunIssueRe
   })
   if (!preflight.ok) return preflight
 
+  const toolPolicy =
+    opts.toolPolicy === undefined ? await loadConfiguredToolPolicy() : ok(opts.toolPolicy)
+  if (!toolPolicy.ok) return toolPolicy
+
   const ingested = await ingestIssue({
     issueUrl: opts.issueUrl,
     ...(opts.label === undefined ? {} : { label: opts.label }),
@@ -143,6 +153,7 @@ export async function runIssue(opts: RunIssueOptions): Promise<Result<RunIssueRe
     ...(model.value === undefined ? {} : { model: model.value }),
     humanReviewTtlMs: humanReviewTtl.value,
     ...(opts.tokenResolver === undefined ? {} : { tokenResolver: opts.tokenResolver }),
+    toolPolicy: toolPolicy.value,
     ci,
   })
   // 编排出错(克隆失败 / 超步数)时 ingest 已经落库了 —— 错误里必须带上 taskId,
@@ -178,7 +189,7 @@ export async function runIssueMain(
   const { positionals, flags } = parseArgs(argv)
   if (flags.help === true || positionals.length === 0) {
     console.log(`用法: keel run-issue <issueUrl> [--label <name>] [--repo <uuid>]
-                          [--max-steps N] [--ci passed|failed|real] [--model <id>] [--harness omp|claude]
+                          [--max-steps N] [--ci passed|failed|real] [--model <id>] [--harness omp|claude|pi]
                           [--wall-clock <秒>]
 
 ingest 一个 GitHub Issue 并把产生的 task 驱动到终态。
@@ -186,7 +197,7 @@ ingest 一个 GitHub Issue 并把产生的 task 驱动到终态。
 --ci 缺省 passed(模拟 CI);--ci real 接真实 GitHub PR / CI,凭据来源同上。
 --harness 缺省 omp，也可设 KEEL_HARNESS；非法值拒绝（不静默回退）。
 --model 对 omp 缺省 ${DEFAULT_OMP_MODEL}，也可设 KEEL_MODEL；空白值拒绝（不静默回退）。
-claude 未指定 --model / KEEL_MODEL 时不传 --model。
+claude / pi 未指定 --model / KEEL_MODEL 时不传 --model。
 KEEL_MODEL_PROFILE 可选 default|enterprise（缺省 default）：enterprise 按阶段使用企业网关目录；
 非法值启动即报错。KEEL_MODEL_ALLOWLIST 可选逗号分隔的允许模型；必须覆盖 profile 下所有阶段
 可能 spawn 的模型，否则在 ingest 之前就拒绝。

@@ -1,0 +1,265 @@
+{
+  "protocol_version": "1.0",
+  "source_commit": "4645f71b6b1da81ea38e8ba966ed525e73362858",
+  "stages": {
+    "size": "router",
+    "clarify": "analyst",
+    "plan": "planner",
+    "execute": "developer",
+    "verify": "verifier",
+    "review": "reviewer",
+    "land": "releaser",
+    "archive": "archivist"
+  },
+  "profiles": {
+    "router": {
+      "role": "router",
+      "capabilities": [
+        "read",
+        "grep",
+        "find",
+        "ls"
+      ],
+      "optional_capabilities": []
+    },
+    "analyst": {
+      "role": "analyst",
+      "capabilities": [
+        "read",
+        "grep",
+        "find",
+        "ls",
+        "edit",
+        "write",
+        "bash",
+        "delegate"
+      ],
+      "optional_capabilities": [
+        "web_search",
+        "web_fetch"
+      ]
+    },
+    "planner": {
+      "role": "planner",
+      "capabilities": [
+        "read",
+        "grep",
+        "find",
+        "ls",
+        "edit",
+        "write",
+        "bash",
+        "delegate"
+      ],
+      "optional_capabilities": [
+        "web_search",
+        "web_fetch"
+      ]
+    },
+    "developer": {
+      "role": "developer",
+      "capabilities": [
+        "read",
+        "grep",
+        "find",
+        "ls",
+        "edit",
+        "write",
+        "bash",
+        "delegate"
+      ],
+      "optional_capabilities": []
+    },
+    "verifier": {
+      "role": "verifier",
+      "capabilities": [
+        "read",
+        "grep",
+        "find",
+        "ls",
+        "bash"
+      ],
+      "optional_capabilities": []
+    },
+    "reviewer": {
+      "role": "reviewer",
+      "capabilities": [
+        "read",
+        "grep",
+        "find",
+        "ls",
+        "bash",
+        "delegate"
+      ],
+      "optional_capabilities": []
+    },
+    "releaser": {
+      "role": "releaser",
+      "capabilities": [
+        "read",
+        "grep",
+        "find",
+        "ls",
+        "bash"
+      ],
+      "optional_capabilities": []
+    },
+    "archivist": {
+      "role": "archivist",
+      "capabilities": [
+        "read",
+        "grep",
+        "find",
+        "ls",
+        "edit",
+        "write",
+        "bash"
+      ],
+      "optional_capabilities": []
+    },
+    "investigator": {
+      "role": "investigator",
+      "capabilities": [
+        "read",
+        "grep",
+        "find",
+        "ls",
+        "bash"
+      ],
+      "optional_capabilities": [
+        "web_search",
+        "web_fetch"
+      ]
+    },
+    "tianwen": {
+      "role": "tianwen",
+      "capabilities": [
+        "read",
+        "grep",
+        "find",
+        "ls"
+      ],
+      "optional_capabilities": [
+        "web_search",
+        "web_fetch"
+      ]
+    }
+  },
+  "harnesses": {
+    "pi": {
+      "read": {
+        "native": [
+          "read"
+        ]
+      },
+      "grep": {
+        "native": [
+          "grep"
+        ],
+        "fallback": "bash"
+      },
+      "find": {
+        "native": [
+          "find"
+        ],
+        "fallback": "bash"
+      },
+      "ls": {
+        "native": [
+          "ls"
+        ],
+        "fallback": "bash"
+      },
+      "edit": {
+        "native": [
+          "edit"
+        ]
+      },
+      "write": {
+        "native": [
+          "write"
+        ]
+      },
+      "bash": {
+        "native": [
+          "bash"
+        ]
+      },
+      "delegate": {
+        "native": [
+          "Agent"
+        ],
+        "extension": true
+      },
+      "web_search": {
+        "native": [
+          "web_search"
+        ],
+        "extension": true
+      },
+      "web_fetch": {
+        "native": [
+          "fetch_content"
+        ],
+        "extension": true
+      }
+    },
+    "claude-code": {
+      "read": {
+        "native": [
+          "Read"
+        ]
+      },
+      "grep": {
+        "native": [
+          "Grep"
+        ],
+        "fallback": "Bash"
+      },
+      "find": {
+        "native": [
+          "Glob"
+        ],
+        "fallback": "Bash"
+      },
+      "ls": {
+        "native": [
+          "LS"
+        ],
+        "fallback": "Bash"
+      },
+      "edit": {
+        "native": [
+          "Edit"
+        ]
+      },
+      "write": {
+        "native": [
+          "Write"
+        ]
+      },
+      "bash": {
+        "native": [
+          "Bash"
+        ]
+      },
+      "delegate": {
+        "native": [
+          "Task",
+          "Agent"
+        ]
+      },
+      "web_search": {
+        "native": [
+          "WebSearch"
+        ]
+      },
+      "web_fetch": {
+        "native": [
+          "WebFetch"
+        ]
+      }
+    }
+  },
+  "content_digest": "809656494ddd9c2625966346ceb6e8c7b9becc350a9a31945de57ee21f528aff"
+}

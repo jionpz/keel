@@ -1,5 +1,4 @@
 /** Schema 来自 docs/schemas/managed，不扩展旧 ArtifactKind。 */
-import { createHash } from 'node:crypto'
 import { Ajv2020 } from 'ajv/dist/2020.js'
 import { err, makeError, ok, type Result } from '../../contracts/errors.js'
 import type {
@@ -8,6 +7,7 @@ import type {
   TianwenSuggestion,
 } from '../../generated/managed.js'
 import { MANAGED_SCHEMAS } from '../../generated/managed.js'
+import { canonicalJson, sha256CanonicalJson } from '../../shared/canonical-json.js'
 
 const ajv = new Ajv2020({ allErrors: true })
 const validators = {
@@ -37,18 +37,8 @@ export function validateTianwen(value: unknown): Result<TianwenSuggestion> {
     : err(makeError('SCHEMA_VIOLATION', ajv.errorsText(validate.errors)))
 }
 
-/** 键排序使相同包不因 JSON 排列不同而换身份。 */
-export function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
-  if (value !== null && typeof value === 'object') {
-    return `{${Object.entries(value)
-      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-      .map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`)
-      .join(',')}}`
-  }
-  return JSON.stringify(value) ?? 'null'
+export function packageDigest(value: JstackInvestigationPackage): string {
+  return sha256CanonicalJson(value)
 }
 
-export function packageDigest(value: JstackInvestigationPackage): string {
-  return createHash('sha256').update(canonicalJson(value)).digest('hex')
-}
+export { canonicalJson }

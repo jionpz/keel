@@ -49,12 +49,17 @@ export interface ClaudeCodeOptions {
   readonly model?: string
   readonly spawnFn?: typeof spawn
   readonly interruptKillTimeoutMs?: number
+  readonly toolInventory?: readonly string[]
+  readonly allowShellFallback?: boolean
 }
 
 export interface ClaudeArgvOpts {
   readonly model?: string
   /** 有上一轮 session_ref 时加 `--resume`。RunSpec 无此字段，由调用方传入。 */
   readonly sessionRef?: string
+  readonly tools?: readonly string[]
+  readonly toolInventory?: readonly string[]
+  readonly allowShellFallback?: boolean
   /**
    * prompt 必须**紧跟 `-p`**。2.1.300 起把 prompt 放 argv 末位会报
    * `Input must be provided either through stdin or as a prompt argument`。
@@ -91,6 +96,7 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
       version: 'unknown',
       tier: tierOf(CLAUDE_CAPABILITIES),
       capabilities: CLAUDE_CAPABILITIES,
+      tool_inventory: this.opts.toolInventory ?? CLAUDE_TOOL_INVENTORY_2_1_314,
       cost_basis: 'estimated',
       limits: { max_input_bytes: null, max_wall_clock_s: null },
     }
@@ -111,6 +117,13 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
       )
     }
 
+    const tools = resolveClaudeTools(
+      spec.permissions.allowed_tools,
+      this.opts.toolInventory ?? CLAUDE_TOOL_INVENTORY_2_1_314,
+      this.opts.allowShellFallback ?? false,
+    )
+    if (!tools.ok) return err(tools.error)
+
     const existing = this.runs.get(spec.idempotency_key)
     if (existing !== undefined) return ok(existing.handle)
 
@@ -130,7 +143,7 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
       proc: null,
       promise: Promise.resolve(ok({} as RunResult)),
     }
-    state.promise = this.exec(spec, state)
+    state.promise = this.exec(spec, state, tools.value)
     this.runs.set(spec.idempotency_key, state)
     this.byHandle.set(handle, state)
     return ok(handle)
@@ -212,11 +225,16 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
     return latest
   }
 
-  private async exec(spec: RunSpec, state: RunState): Promise<Result<RunResult>> {
+  private async exec(
+    spec: RunSpec,
+    state: RunState,
+    tools: readonly string[],
+  ): Promise<Result<RunResult>> {
     const prompt = renderPrompt(spec)
     const argvOpts: ClaudeArgvOpts = {
       ...(this.model === undefined ? {} : { model: this.model }),
       prompt,
+      tools,
     }
     const argv = buildClaudeArgv(spec, argvOpts)
 
@@ -392,14 +410,22 @@ export function buildClaudeArgv(spec: RunSpec, opts: ClaudeArgvOpts = {}): strin
 
   argv.push('--permission-mode', permissionMode(spec.permissions.mode))
 
-  const tools = spec.permissions.allowed_tools.map(claudeToolName)
+  const tools =
+    opts.tools !== undefined
+      ? [...opts.tools]
+      : requireClaudeTools(
+          spec.permissions.allowed_tools,
+          opts.toolInventory ?? CLAUDE_TOOL_INVENTORY_2_1_314,
+          opts.allowShellFallback ?? false,
+        )
   if (tools.length === 0) {
     // help：Use "" to disable all tools
     argv.push('--tools', '')
-  } else if (spec.permissions.mode === 'deny_unlisted') {
-    argv.push('--allowedTools', tools.join(','))
   } else {
     argv.push('--tools', tools.join(','))
+    if (authorizesAutomatically(spec.permissions.mode, tools)) {
+      argv.push('--allowedTools', tools.join(','))
+    }
   }
 
   if (opts.sessionRef !== undefined && opts.sessionRef !== '') {
@@ -418,21 +444,144 @@ export function buildClaudeArgv(spec: RunSpec, opts: ClaudeArgvOpts = {}): strin
 }
 
 /**
- * Keel 内部工具名 → Claude Code 真实工具名。
+ * claude 2.1.314 实测的可用工具清单（`system.init.tools`）。
  *
- * 2.1.300 的可用工具是 `Bash` / `Edit` / `Read` —— **`Write` 已不存在**
- * （实测 `--tools Write` 得到空工具列表，且不报错，静默降级）。
- * 因此 `write` 映射到 `Edit`；新建文件的路径本版本未验证，不宣称支持。
+ * 不含 Grep / Glob / Agent：因此 `grep` / `find` / `ls` 回退 `Bash` 并获得 shell，
+ * 不是只读；`delegate` 按清单选 `Task` 或 `Agent`。
  */
-const CLAUDE_TOOL_NAMES: Readonly<Record<string, string>> = {
+export const CLAUDE_TOOL_INVENTORY_2_1_314: readonly string[] = [
+  'Task',
+  'Bash',
+  'CronCreate',
+  'CronDelete',
+  'CronList',
+  'DesignSync',
+  'Edit',
+  'EnterWorktree',
+  'ExitWorktree',
+  'ListAgents',
+  'LSP',
+  'Monitor',
+  'NotebookEdit',
+  'PushNotification',
+  'Read',
+  'ReportFindings',
+  'ScheduleWakeup',
+  'SendMessage',
+  'Skill',
+  'TaskStop',
+  'ToolSearch',
+  'WebFetch',
+  'WebSearch',
+  'Workflow',
+  'Write',
+]
+
+export const CLAUDE_SHELL_FALLBACK_TOOLS: readonly string[] = ['grep', 'find', 'ls']
+
+const CLAUDE_TOOL_ALIASES: Readonly<Record<string, string>> = {
   read: 'Read',
-  write: 'Edit',
+  write: 'Write',
   edit: 'Edit',
   bash: 'Bash',
 }
 
-function claudeToolName(tool: string): string {
-  return CLAUDE_TOOL_NAMES[tool.toLowerCase()] ?? tool
+const CLAUDE_SEARCH_ALIASES: Readonly<Record<string, readonly string[]>> = {
+  grep: ['Grep'],
+  find: ['Glob'],
+  ls: ['LS'],
+}
+
+type ClaudeToolResolution =
+  | { readonly name: string }
+  | { readonly missing: string }
+  | { readonly fallback: string }
+  | null
+
+function resolveClaudeToolName(
+  raw: string,
+  inventory: readonly string[],
+  allowShellFallback: boolean,
+): ClaudeToolResolution {
+  const trimmed = raw.trim()
+  if (trimmed === '') return null
+  if (inventory.includes(trimmed)) return { name: trimmed }
+  const key = trimmed.toLowerCase()
+  if (key === 'delegate') {
+    if (inventory.includes('Task')) return { name: 'Task' }
+    if (inventory.includes('Agent')) return { name: 'Agent' }
+    return { missing: 'Task / Agent' }
+  }
+  const mapped = CLAUDE_TOOL_ALIASES[key]
+  if (mapped !== undefined) {
+    return inventory.includes(mapped) ? { name: mapped } : { missing: mapped }
+  }
+  const native = CLAUDE_SEARCH_ALIASES[key]?.find((name) => inventory.includes(name))
+  if (native !== undefined) return { name: native }
+  if (!CLAUDE_SHELL_FALLBACK_TOOLS.includes(key)) return null
+  if (!allowShellFallback) return { fallback: 'Bash' }
+  return inventory.includes('Bash') ? { name: 'Bash' } : { missing: 'Bash' }
+}
+
+export function resolveClaudeTools(
+  tools: readonly string[],
+  inventory: readonly string[] = CLAUDE_TOOL_INVENTORY_2_1_314,
+  allowShellFallback = false,
+): Result<readonly string[]> {
+  const out: string[] = []
+  for (const raw of tools) {
+    const resolved = resolveClaudeToolName(raw, inventory, allowShellFallback)
+    if (resolved === null) {
+      return err(
+        makeError(
+          'CAPABILITY_UNSUPPORTED',
+          `未知工具名 ${raw}：当前 Claude Code 工具清单是 ${inventory.join(', ')}；` +
+            'grep / find / ls 需要原生 Grep / Glob / LS 或显式允许 Bash 回退，delegate 需要 Task 或 Agent。' +
+            '未知值不会静默丢弃。',
+        ),
+      )
+    }
+    if ('fallback' in resolved) {
+      return err(
+        makeError(
+          'CAPABILITY_UNSUPPORTED',
+          `工具名 ${raw} 在当前 Claude Code 清单里没有原生实现；` +
+            `回退 ${resolved.fallback} 会获得 shell 权限，必须显式 allowShellFallback。` +
+            '不会静默给只读角色加 shell。',
+        ),
+      )
+    }
+    if ('missing' in resolved) {
+      return err(
+        makeError(
+          'CAPABILITY_UNSUPPORTED',
+          `工具名 ${raw} 需要 ${resolved.missing}，但当前工具清单里没有它：` +
+            `${inventory.join(', ')}。不会静默丢弃该工具。`,
+        ),
+      )
+    }
+    if (!out.includes(resolved.name)) out.push(resolved.name)
+  }
+  return ok(out)
+}
+
+function requireClaudeTools(
+  tools: readonly string[],
+  inventory: readonly string[],
+  allowShellFallback: boolean,
+): string[] {
+  const resolved = resolveClaudeTools(tools, inventory, allowShellFallback)
+  if (!resolved.ok) throw new Error(resolved.error.detail)
+  return [...resolved.value]
+}
+
+function authorizesAutomatically(
+  mode: RunSpec['permissions']['mode'],
+  tools: readonly string[],
+): boolean {
+  if (mode === 'auto' || mode === 'deny_unlisted') return true
+  if (mode === 'accept_edits') return tools.includes('Bash')
+  return false
 }
 
 function permissionMode(mode: RunSpec['permissions']['mode']): string {

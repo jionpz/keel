@@ -89,6 +89,21 @@ export class OmpAdapter implements HarnessAdapter {
       version: 'unknown', // 可由 CAP-PROBE 在运行时校正；v0.1 不探测
       tier: tierOf(OMP_CAPABILITIES),
       capabilities: OMP_CAPABILITIES,
+      tool_inventory: [
+        'read',
+        'bash',
+        'edit',
+        'write',
+        'grep',
+        'glob',
+        'lsp',
+        'python',
+        'notebook',
+        'browser',
+        'task',
+        'todo',
+        'web_search',
+      ],
       // OMP 的 usage.cost.total 存在，但文档未说明口径。
       // 在确认前按 estimated —— 只有 billed 才可用于对外计费。
       cost_basis: 'estimated',

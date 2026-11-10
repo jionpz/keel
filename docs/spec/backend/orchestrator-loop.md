@@ -77,3 +77,31 @@ kind 用 `NOT_FOUND`（`retryable=false`），不新增 kind：本错误从不�
 | 按状态归类判卡住 | 人工撤回（`CANCELLED`）被误报成故障，退出码 1 制造噪音 |
 | 判出卡住后自动重派 | 幂等键撞车的原因没修，重派只会再丢一次；且把策略塞进编排器 |
 | `detail` 只说「没有待执行的 run」 | 定位成本原封不动转给下一个人 |
+
+## 阶段工具策略来自 jstack
+
+编排器不再按 `develop = read,write / 其他 = read` 硬编码。启动入口在执行任何数据库
+动作之前加载 `KEEL_TOOL_POLICY` 指向的文件；未设置时读
+`config/jstack-tools.json`（由 `jstack tools export` 生成）。文件缺失、JSON 损坏、
+digest 不符或阶段引用失效，都直接失败，不进入 loop。
+
+Keel 阶段到 jstack profile 的映射固定在 `src/execution/tool-policy.ts`：
+
+| Keel stage | jstack stage | profile |
+|---|---|---|
+| `pm` | `clarify` | `analyst` |
+| `brainstorm` / `rfc_draft` | `plan` | `planner` |
+| `critic` / `review` | `review` | `reviewer` |
+| `develop` | `execute` | `developer` |
+| `qa` | `verify` | `verifier` |
+
+解析器拿 `adapter.describe().tool_inventory` 做真实匹配，不按 harness 品牌猜：
+
+- 必需工具缺失 → `CAPABILITY_UNSUPPORTED`，run 不 spawn；
+- 可选工具缺失 → 只记录 `missing_optional`，不假装可用；
+- Claude 本版本没有 `Grep`/`Glob`/`LS` 时，只有显式 `KEEL_TOOL_SHELL_FALLBACK=1`
+  才允许 Bash 回退，并打印降级项；profile 含 `bash` 不等于允许搜索回退；
+- 解析结果用 `deny_unlisted` 同时约束可用工具与预授权，不复用 `auto` 的宽授权。
+
+JT-01 managed 调查仍保持无原生工具、由 Control 提供 `read_files`；在受控读取、
+子代理与 OS 隔离真实验收前，不把普通 profile 的工具权限下沉到 managed 路径。
