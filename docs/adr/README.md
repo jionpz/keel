@@ -16,6 +16,7 @@
 | [0008](./0008-wall-clock-semantics.md) | 墙钟语义：Run 级预算 | **Accepted** — 实现已落地，五连 5/5 验证（2026-10-25 追认） |
 | [0009](./0009-liveness-by-progress.md) | 卡死判定按进展信号，而非总耗时 | **Accepted** — 2026-11-05，实现已落地并通过全量验证 |
 | [0010](./0010-workflow-jstack.md) | 开发工作流全员迁移到 jstack，Trellis 退役 | **Accepted** — 2026-11-07 |
+| [0011](./0011-jstack-tianwen-runtime.md) | jstack 为主工作流，天问作为项目用户代表 | **Proposed** — 生产方案已记录，技术契约待实现与验证 |
 
 ## Status 语义
 

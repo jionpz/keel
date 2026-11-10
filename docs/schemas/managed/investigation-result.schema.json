@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ManagedInvestigationResult",
+  "oneOf": [
+    {
+      "type": "object", "additionalProperties": false,
+      "required": ["outcome", "paths"],
+      "properties": {
+        "outcome": {"const": "read_files"},
+        "paths": {"type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 512}}
+      }
+    },
+    {
+      "type": "object", "additionalProperties": false,
+      "required": ["outcome", "question", "options"],
+      "properties": {
+        "outcome": {"const": "waiting_decision"},
+        "question": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "options": {"type": "array", "minItems": 2, "maxItems": 6, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 1000}}
+      }
+    },
+    {
+      "type": "object", "additionalProperties": false,
+      "required": ["outcome", "report", "citations"],
+      "properties": {
+        "outcome": {"const": "completed"},
+        "report": {"type": "string", "minLength": 1, "maxLength": 16000},
+        "citations": {"type": "array", "minItems": 1, "maxItems": 32, "items": {
+          "type": "object", "additionalProperties": false, "required": ["path", "digest"],
+          "properties": {"path": {"type": "string", "minLength": 1}, "digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}
+        }}
+      }
+    }
+  ]
+}

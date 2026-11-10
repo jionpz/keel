@@ -159,8 +159,9 @@ export interface ProposalVerdict {
 export interface RunRef {
   readonly run_id: string
   readonly task_id: string
-  readonly stage: Stage
-  readonly role: RoleId
+  /** managed 尝试由独立表记录，不冒充旧 PM/Developer run。 */
+  readonly stage: Stage | 'managed_investigate' | 'tianwen'
+  readonly role: RoleId | 'Investigator' | 'Tianwen'
   readonly attempt: number
 }
 

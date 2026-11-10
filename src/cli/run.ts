@@ -19,6 +19,7 @@ import { closePool } from '../fact/db.js'
 import { consoleMain } from './console.js'
 import { answerMain, decideMain } from './decide.js'
 import { ingestIssueMain } from './ingest-issue.js'
+import { managedMain } from './managed.js'
 import { pollerMain } from './poller.js'
 import { registerRepoMain } from './register-repo.js'
 import { runIssueMain } from './run-issue.js'
@@ -35,6 +36,7 @@ export const HELP = `keel — AI Engineering Runtime CLI
   keel <command> [args]
 
 命令:
+  managed <investigate|status|questions|answer|worker>   jstack 只读调查与天问建议（JT-01 影子模式）
   console                          只读 Web 控制台(默认 http://127.0.0.1:4321)
   timer-worker [--interval <ms>]   到期收割 timer(默认单次;--interval 常驻)
   run-task <taskId> [--max-steps N] [--ci passed|failed|real] [--model <id>] [--harness omp|claude] [--wall-clock <秒>]   驱动单 task 到终态
@@ -61,6 +63,9 @@ export async function dispatch(argv: readonly string[]): Promise<void> {
   const [command, ...rest] = argv
 
   switch (command) {
+    case 'managed':
+      await managedMain(rest)
+      return
     case 'console':
       await consoleMain(rest)
       return

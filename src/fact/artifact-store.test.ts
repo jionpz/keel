@@ -358,7 +358,7 @@ describe('schema 与代码的一致性', () => {
     expect(dbValues).toHaveLength(3)
   })
 
-  it('十张业务表都存在(含 timer / run_liveness)—— 防假绿：读到 0 张表即失败', async () => {
+  it('业务表完整存在(含 managed 调查表)—— 防假绿：读到 0 张表即失败', async () => {
     const r = await asOwner((c) =>
       c.query<{ tablename: string }>(
         `SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename <> 'pgmigrations'`,
@@ -371,6 +371,11 @@ describe('schema 与代码的一致性', () => {
         'artifact',
         'event',
         'feedback',
+        'managed_attempt',
+        'managed_event',
+        'managed_package',
+        'managed_question',
+        'managed_task',
         'repo',
         'run',
         'run_liveness',

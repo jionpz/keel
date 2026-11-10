@@ -282,4 +282,19 @@ Fact Plane  ◀──[ Proposal ]──  Execution Plane      产出 → 校验�
 
 ---
 
+## 8. 下一版方案术语（待实现）
+
+以下用于 [jstack 与天问生产方案](./plans/jstack-tianwen/README.md)，不表示当前代码已具备这些能力。
+
+| 术语 | 定义与边界 |
+|---|---|
+| 天问（Tianwen） | 项目范围内代表用户查证、代答与作出授权内取舍的 Role；属于 Execution Plane，只提交 Proposal，不冒充真实用户 |
+| 决策请求（DecisionRequest） | 工作流提出的一个持久问题，包含来源节点、作用域、选项、前置条件和修订版本；所有系统生成的人工请求先进入天问 |
+| 委托策略（DelegationPolicy） | 用户明确确认的可复用权限范围；定义哪些决定/动作可由天问代决、需要哪些证据，以及何时必须由 owner 决定 |
+| 项目决策摘要（ProjectCapsule） | 从项目有效决定生成的有版本读模型，含来源、适用条件和日志水位；不是独立事实来源，也不替代最新授权检查 |
+| 工作流包（WorkflowPackage） | jstack 发布并由任务固定引用的阶段、路由、提供者、门禁及依赖的内容寻址版本 |
+| 项目记忆 | 本方案中对 Fact Plane 的项目决定及读模型的描述；不恢复初稿中作为独立组件/事实来源的 `Memory` 概念 |
+
+---
+
 **下一篇**：[`03-domain-model.md`](./03-domain-model.md) —— 把这些概念落成实体与表。
