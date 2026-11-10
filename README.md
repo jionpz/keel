@@ -26,7 +26,7 @@
 | [`docs/plans/jstack-tianwen/`](./docs/plans/jstack-tianwen/) | 当前 jstack + 天问路线（JT-01～JT-07）；进度见 [#85](https://github.com/jionpz/keel/issues/85) |
 | [`docs/archive/`](./docs/archive/) | 立项初稿（已归档，**请勿据其实现**） |
 
-**产品状态**：历史 v0.1 闭环与连续 5 个真实任务已完成并有归档证据；当前主线是 jstack 主工作流 + 天问。JT-01 只读影子链路代码已合入 `main`（PR #84），真实模型端到端验收仍未完成；JT-02～JT-07 未开始。JT-01 的 managed 安全读取目前只支持 Linux（`/proc/self/fd`），其他平台明确拒绝。当前不部署生产服务。
+**产品状态**：历史 v0.1 闭环与连续 5 个真实任务已完成并有归档证据；当前主线是 jstack 主工作流 + 天问。JT-01 只读影子链路代码已合入 `main`（PR #84）；原生 OMP 只读链路、等待与两处 SIGKILL 恢复已通过真实验收，验收入口随本 PR 提交（[#86](https://github.com/jionpz/keel/issues/86)）。JT-02～JT-07 尚未实现，完整生产交付未完成。JT-01 的 managed 安全读取目前只支持 Linux（`/proc/self/fd`），其他平台明确拒绝。进度与命令见 [`implementation.md`](./docs/plans/jstack-tianwen/implementation.md)。当前不部署生产服务。
 
 ## 中心不变量
 
