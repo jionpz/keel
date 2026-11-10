@@ -26,6 +26,7 @@ import {
   requireClaudeReady,
 } from '../execution/adapters/claude-code.js'
 import { DEFAULT_OMP_MODEL, OmpAdapter } from '../execution/adapters/omp.js'
+import { PiAdapter, requirePiBinary } from '../execution/adapters/pi.js'
 import {
   type ModelProfile,
   parseAllowlist,
@@ -33,6 +34,11 @@ import {
   preflightModelRouting,
 } from '../execution/model-routing.js'
 import { HarnessSessionManager } from '../execution/session/manager.js'
+import {
+  loadConfiguredToolPolicy,
+  readToolShellFallback,
+  type ToolPolicyDocument,
+} from '../execution/tool-policy.js'
 import { asRole } from '../fact/db.js'
 import { resolveGitHubToken, type TokenResolver } from '../fact/github-auth.js'
 import { GitHubProvider } from '../fact/github-provider.js'
@@ -46,7 +52,7 @@ import { loadTaskRemoteUrl, loadTaskWorkspace } from './task-workspace.js'
 export const CI_MODES = ['passed', 'failed', 'real'] as const
 export type CiMode = (typeof CI_MODES)[number]
 
-export const HARNESS_IDS = ['omp', 'claude'] as const
+export const HARNESS_IDS = ['omp', 'claude', 'pi'] as const
 export type HarnessId = (typeof HARNESS_IDS)[number]
 
 export function parseCiMode(raw: string): Result<CiMode> {
@@ -69,8 +75,8 @@ export { DEFAULT_OMP_MODEL }
  * 解析模型 id，**不**套缺省。CLI `--model` > env `KEEL_MODEL`；都没有 → `undefined`。
  * 空白 / 只写标志 → `CAPABILITY_UNSUPPORTED`。
  *
- * omp 用 `resolveModel` 再套 `DEFAULT_OMP_MODEL`；claude 用本函数，
- * 未指定则不传 `--model`（禁止把 deepseek 缺省塞给 claude）。
+ * omp 用 `resolveModel` 再套 `DEFAULT_OMP_MODEL`；claude / pi 用本函数，
+ * 未指定则不传 `--model`（禁止把 deepseek 缺省塞给它们）。
  */
 export function resolveOptionalModel(
   cli: string | number | boolean | undefined,
@@ -117,7 +123,7 @@ function parseHarnessToken(
     return err(
       makeError(
         'CAPABILITY_UNSUPPORTED',
-        `${source} 需要 omp 或 claude。只写标志没有值等同空白，` +
+        `${source} 需要 omp、claude 或 pi。只写标志没有值等同空白，` +
           '空白 harness 会静默回退缺省 omp，拒绝。',
       ),
     )
@@ -145,7 +151,7 @@ function parseHarnessToken(
 }
 
 /**
- * 按 harness 解析模型。omp 套缺省；claude 不套（禁止 deepseek 进 --model）。
+ * 按 harness 解析模型。omp 套缺省；claude / pi 不套（禁止 deepseek 进 --model）。
  * 新增 harness 必须加 case —— 没有 default 回退。
  */
 export function resolveModelForHarness(
@@ -160,6 +166,8 @@ export function resolveModelForHarness(
     }
     case 'claude':
       return resolveOptionalModel(cli, env)
+    case 'pi':
+      return resolveOptionalModel(cli, env)
   }
 }
 
@@ -170,6 +178,8 @@ export function createHarnessAdapter(
   switch (harness) {
     case 'claude':
       return new ClaudeCodeAdapter(model === undefined ? {} : { model })
+    case 'pi':
+      return new PiAdapter(model === undefined ? {} : { model })
     case 'omp':
       return new OmpAdapter({ model: model ?? DEFAULT_OMP_MODEL })
   }
@@ -372,7 +382,7 @@ export interface RunTaskOptions {
   readonly wallClockS?: number
   /**
    * `--model` 原值。omp：省略则 KEEL_MODEL / 缺省 deepseek；
-   * claude：省略则不传 `--model`。空白拒绝。
+   * claude / pi：省略则不传 `--model`。空白拒绝。
    */
   readonly model?: string | number | boolean
   /** `--harness` 原值。省略则 KEEL_HARNESS / 缺省 omp。 */
@@ -392,6 +402,7 @@ export interface RunTaskOptions {
    * 只用于 `--ci real` 的启动期预检；模拟模式不解析任何 token。
    */
   readonly tokenResolver?: TokenResolver
+  readonly toolPolicy?: ToolPolicyDocument
 }
 
 export interface RunTaskResult {
@@ -436,6 +447,9 @@ export async function runTask(
         ? requireClaudeReady()
         : requireClaudeReady('claude', opts.claudeAuthProbe)
     if (!ready.ok) return ready
+  } else if (harness.value === 'pi') {
+    const ready = requirePiBinary()
+    if (!ready.ok) return ready
   }
 
   // 模型路由：非法 profile / allowlist 在任何数据库动作前失败（R6）。
@@ -459,6 +473,10 @@ export async function runTask(
     ...(override.value === undefined ? {} : { override: override.value }),
   })
   if (!preflight.ok) return preflight
+
+  const toolPolicy =
+    opts.toolPolicy === undefined ? await loadConfiguredToolPolicy() : ok(opts.toolPolicy)
+  if (!toolPolicy.ok) return toolPolicy
 
   // 持久项目根 → 绑定项目 → 同步基线。失败即不创建 run。
   const loaded = await loadTaskWorkspace(taskId)
@@ -485,6 +503,8 @@ export async function runTask(
         now,
         modelProfile: profile.value,
         modelAllowlist: allowlist.value,
+        toolPolicy: toolPolicy.value,
+        toolPolicyAllowShellFallback: readToolShellFallback(),
         ...(override.value === undefined ? {} : { modelOverride: override.value }),
         ...(livenessStore === undefined ? {} : { livenessStore }),
         ...(opts.wallClockS === undefined ? {} : { wallClockS: opts.wallClockS }),
@@ -584,13 +604,13 @@ export async function runTaskMain(
 ): Promise<void> {
   const { positionals, flags } = parseArgs(argv)
   if (flags.help === true || positionals.length === 0) {
-    console.log(`用法: keel run-task <taskId> [--max-steps N] [--ci passed|failed|real] [--model <id>] [--harness omp|claude] [--wall-clock <秒>]
+    console.log(`用法: keel run-task <taskId> [--max-steps N] [--ci passed|failed|real] [--model <id>] [--harness omp|claude|pi] [--wall-clock <秒>]
 
 驱动单 task 到终态(真实 harness + worktree)。--ci 缺省 passed(模拟 CI 结果);
 --ci real 接真实 GitHub PR / CI,需要 GitHub 凭据（KEEL_GITHUB_TOKEN / GITHUB_TOKEN / gh auth login）。
 --harness 缺省 omp，也可设 KEEL_HARNESS；非法值拒绝（不静默回退）。
 --model 对 omp 缺省 ${DEFAULT_OMP_MODEL}，也可设 KEEL_MODEL；空白值拒绝（不静默回退）。
-claude 未指定 --model / KEEL_MODEL 时不传 --model（不把 omp 缺省塞给 claude）。
+claude / pi 未指定 --model / KEEL_MODEL 时不传 --model（不把 omp 缺省塞给它们）。
 KEEL_MODEL_PROFILE 可选 default|enterprise（缺省 default）：enterprise 按阶段使用企业网关目录；
 非法值启动即报错。KEEL_MODEL_ALLOWLIST 可选逗号分隔的允许模型；必须覆盖 profile 下所有阶段
 可能 spawn 的模型，否则启动即拒绝（不会等 run 认领后才失败）。

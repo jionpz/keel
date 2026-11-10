@@ -8,6 +8,7 @@ import {
 } from '../control/managed/runtime.js'
 import { answerManagedQuestion, getManagedTask } from '../control/managed/store.js'
 import { requireClaudeReady } from '../execution/adapters/claude-code.js'
+import { requirePiBinary } from '../execution/adapters/pi.js'
 import { managedInference } from '../execution/managed-inference.js'
 import { createStopToken, interruptibleSleep } from '../ingress/poller.js'
 import { createHarnessAdapter, resolveHarness, resolveOptionalModel } from './run-task.js'
@@ -89,7 +90,7 @@ investigate --repo UUID --question TEXT --package FILE
 status TASK_UUID
 questions [--task TASK_UUID]
 answer QUESTION_UUID --text TEXT
-worker [--once] [--interval MS] [--task TASK_UUID] [--harness omp|claude] [--model ID]
+worker [--once] [--interval MS] [--task TASK_UUID] [--harness omp|claude|pi] [--model ID]
 所有问题先经天问建议再等人工；尚未开放自动授权或代码修改。`)
       return
     }
@@ -158,6 +159,9 @@ async function runWorker(argv: readonly string[]): Promise<void> {
   // 启动预检在 tick/认领之前完成；探测输出丢弃，凭据不读取或打印。
   if (harness.value === 'claude') {
     const ready = requireClaudeReady()
+    if (!ready.ok) throw new Error(ready.error.detail)
+  } else if (harness.value === 'pi') {
+    const ready = requirePiBinary()
     if (!ready.ok) throw new Error(ready.error.detail)
   } else {
     try {

@@ -223,7 +223,7 @@ export interface PollerMainDeps {
 }
 
 const HELP = `用法: keel poller [--interval <ms>] [--concurrency <n>] [--ci passed|failed|real]
-                   [--model <id>] [--harness omp|claude] [--wall-clock <秒>]
+                   [--model <id>] [--harness omp|claude|pi] [--wall-clock <秒>]
 
 常驻扫描所有已注册 github repo 中带各自 issue_label 的 open issue，
 自动 ingest 并驱动到当前可停处(SIGTERM / SIGINT 后不再认领新 issue)。
@@ -236,7 +236,8 @@ const HELP = `用法: keel poller [--interval <ms>] [--concurrency <n>] [--ci pa
   --ci passed|failed|real
                        缺省 real;real 需要 GitHub 凭据(KEEL_GITHUB_TOKEN / GITHUB_TOKEN / gh auth login)
   --model <id>         对 omp 缺省 ${DEFAULT_OMP_MODEL},也可设 KEEL_MODEL;空白值拒绝
-  --harness omp|claude 缺省 omp,也可设 KEEL_HARNESS;非法值拒绝
+  --harness omp|claude|pi
+                       缺省 omp,也可设 KEEL_HARNESS;非法值拒绝
   --wall-clock <秒>    显式覆盖 stage 墙钟硬上限;缺省按 stage 策略(develop 12h);只接受正整数
 
 环境变量:

@@ -31,6 +31,7 @@ export interface HarnessDescriptor {
   readonly version: string
   readonly tier: HarnessTier
   readonly capabilities: readonly CapabilityId[]
+  readonly tool_inventory?: readonly string[]
   readonly cost_basis: Usage['cost_basis']
   readonly limits: {
     readonly max_input_bytes: number | null

@@ -23,4 +23,15 @@ export {
   type OmpOptions,
 } from './omp.js'
 export { type ParsedRun, parseOmpStream } from './omp-parse.js'
+export {
+  buildPiArgv,
+  PI_BUILTIN_TOOLS,
+  PI_CAPABILITIES,
+  PiAdapter,
+  type PiArgvOpts,
+  type PiOptions,
+  requirePiBinary,
+  resolvePiTools,
+} from './pi.js'
+export { type ParsedPiRun, PiStreamParser, parsePiStream } from './pi-parse.js'
 export { tierOf } from './tier.js'

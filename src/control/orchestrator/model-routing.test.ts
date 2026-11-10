@@ -19,6 +19,7 @@ import type {
   WorkspaceDiff,
 } from '../../contracts/harness-adapter.js'
 import { HarnessSessionManager } from '../../execution/session/manager.js'
+import { loadToolPolicy } from '../../execution/tool-policy.js'
 import { asOwner, closePool } from '../../fact/db.js'
 import type { Stage, TaskStatus } from '../../shared/ids.js'
 import { WorkflowDriver } from '../driver/driver.js'
@@ -44,6 +45,7 @@ class RecordingAdapter implements HarnessAdapter {
   constructor(
     private readonly harnessId: string,
     private readonly stage: Stage,
+    private readonly toolInventory?: readonly string[],
   ) {}
 
   describe(): HarnessDescriptor {
@@ -52,6 +54,7 @@ class RecordingAdapter implements HarnessAdapter {
       version: '0',
       tier: 'L2',
       capabilities: ['CAP-HEADLESS', 'CAP-STREAM', 'CAP-MODEL_OVERRIDE'],
+      ...(this.toolInventory === undefined ? {} : { tool_inventory: this.toolInventory }),
       cost_basis: 'unavailable',
       limits: { max_input_bytes: null, max_wall_clock_s: null },
     }
@@ -252,5 +255,62 @@ describe('claude 行为不变（R7）', () => {
     // claude 的模型来自 adapter 构造参数，RunSpec.model 不参与
     expect(adapter.specs[0]?.model).toBeUndefined()
     expect(await requestedModel(runId)).toBe('claude-opus-4-6')
+  })
+})
+
+describe('jstack 工具策略接线', () => {
+  it('pi 没有工具策略时拒绝 spawn，不退回统一 read/write', async () => {
+    const { taskId, runId } = await seed('develop', 'S-DEVELOPING')
+    const adapter = new RecordingAdapter('pi', 'develop', ['read', 'write'])
+
+    await runTaskToCompletion(taskId, deps(adapter), { maxSteps: 1 })
+
+    expect(adapter.specs).toHaveLength(0)
+    expect(await runErrorKind(runId)).toBe('CAPABILITY_UNSUPPORTED')
+  })
+
+  it('pi develop 使用 profile 的原生工具清单，而不是统一 read/write', async () => {
+    const { taskId } = await seed('develop', 'S-DEVELOPING')
+    const adapter = new RecordingAdapter('pi', 'develop', [
+      'read',
+      'grep',
+      'find',
+      'ls',
+      'edit',
+      'write',
+      'bash',
+      'Agent',
+    ])
+    const loaded = await loadToolPolicy(
+      new URL('../../../config/jstack-tools.json', import.meta.url).pathname,
+    )
+    expect(loaded.ok).toBe(true)
+    if (!loaded.ok) return
+
+    await runTaskToCompletion(taskId, deps(adapter, { toolPolicy: loaded.value }), {
+      maxSteps: 1,
+    })
+
+    expect(adapter.specs[0]?.permissions).toEqual({
+      allowed_tools: ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash', 'Agent'],
+      mode: 'deny_unlisted',
+    })
+  })
+
+  it('claude 缺必需原生工具时在 spawn 前失败，不静默降级', async () => {
+    const { taskId, runId } = await seed('develop', 'S-DEVELOPING')
+    const adapter = new RecordingAdapter('claude', 'develop', ['Read', 'Write'])
+    const loaded = await loadToolPolicy(
+      new URL('../../../config/jstack-tools.json', import.meta.url).pathname,
+    )
+    expect(loaded.ok).toBe(true)
+    if (!loaded.ok) return
+
+    await runTaskToCompletion(taskId, deps(adapter, { toolPolicy: loaded.value }), {
+      maxSteps: 1,
+    })
+
+    expect(adapter.specs).toHaveLength(0)
+    expect(await runErrorKind(runId)).toBe('CAPABILITY_UNSUPPORTED')
   })
 })

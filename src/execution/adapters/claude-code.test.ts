@@ -10,7 +10,9 @@
 
 import type { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import { readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -18,11 +20,14 @@ import type { RunSpec } from '../../contracts/harness-adapter.js'
 import {
   buildClaudeArgv,
   CLAUDE_CAPABILITIES,
+  CLAUDE_SHELL_FALLBACK_TOOLS,
+  CLAUDE_TOOL_INVENTORY_2_1_314,
   ClaudeCodeAdapter,
   claudeAuthMissingDetail,
   envCredentialName,
   requireClaudeAuth,
   requireClaudeBinary,
+  resolveClaudeTools,
   sanitizeClaudeEnv,
 } from './claude-code.js'
 import { parseClaudeStream } from './claude-code-parse.js'
@@ -212,13 +217,12 @@ describe('buildClaudeArgv', () => {
     expect(argv).toContain('--verbose')
   })
 
-  it('Keel 工具名映射到 claude 真实名（write→Edit，Write 已不存在）', () => {
+  it('Keel 工具名映射到 2.1.314 真实名：write→Write、read→Read、edit→Edit、bash→Bash', () => {
     const argv = buildClaudeArgv(
-      spec({ permissions: { allowed_tools: ['read', 'write'], mode: 'auto' } }),
+      spec({ permissions: { allowed_tools: ['read', 'write', 'edit', 'bash'], mode: 'manual' } }),
     )
     const i = argv.indexOf('--tools')
-    expect(argv[i + 1]).toBe('Read,Edit')
-    expect(argv[i + 1]).not.toContain('Write')
+    expect(argv[i + 1]).toBe('Read,Write,Edit,Bash')
   })
 
   it('缺省不传 --model，也不出现 omp 缺省 deepseek', () => {
@@ -268,14 +272,15 @@ describe('buildClaudeArgv', () => {
     expect(mode('auto')).not.toBe('dontAsk')
   })
 
-  it('deny_unlisted + 白名单 → permission-mode manual + --allowedTools', () => {
+  it('deny_unlisted → --tools 精确清单 + --allowedTools 同清单（预授权，不是可用集）', () => {
     const argv = buildClaudeArgv(
       spec({ permissions: { allowed_tools: ['Read'], mode: 'deny_unlisted' } }),
     )
     const i = argv.indexOf('--permission-mode')
     expect(argv[i + 1]).toBe('manual')
-    const j = argv.indexOf('--allowedTools')
-    expect(argv[j + 1]).toBe('Read')
+    expect(argv[argv.indexOf('--tools') + 1]).toBe('Read')
+    expect(argv[argv.indexOf('--allowedTools') + 1]).toBe('Read')
+    expect(argv).not.toContain('Bash')
   })
 
   it('有 sessionRef 才加 --resume；没有则不加（不编造）', () => {
@@ -303,6 +308,152 @@ describe('buildClaudeArgv', () => {
 
   it('argv 不含 --cwd（工作目录靠 spawn cwd）', () => {
     expect(buildClaudeArgv(spec())).not.toContain('--cwd')
+  })
+})
+
+describe('工具清单 toolInventory 与授权边界（2026-11-10 claude 2.1.314 实测）', () => {
+  function toolsArgv(
+    tools: readonly string[],
+    mode: RunSpec['permissions']['mode'],
+    allowShellFallback = false,
+  ): string[] {
+    return buildClaudeArgv(spec({ permissions: { allowed_tools: tools, mode } }), {
+      allowShellFallback,
+    })
+  }
+
+  function toolsOf(argv: string[]): string {
+    return argv[argv.indexOf('--tools') + 1] ?? ''
+  }
+
+  it('原生名透传；别名与原生名去重并保留首次出现顺序', () => {
+    expect(toolsOf(toolsArgv(['read', 'Read', 'bash', 'Bash', 'Write'], 'manual'))).toBe(
+      'Read,Bash,Write',
+    )
+  })
+
+  it('grep / find / ls 默认拒绝，必须显式允许 Bash 回退', () => {
+    expect(CLAUDE_SHELL_FALLBACK_TOOLS).toEqual(['grep', 'find', 'ls'])
+    for (const tool of CLAUDE_SHELL_FALLBACK_TOOLS) {
+      expect(() => toolsArgv([tool], 'manual')).toThrow(/allowShellFallback/)
+      expect(toolsArgv([tool], 'manual', true)).toContain('Bash')
+      expect(toolsArgv([tool], 'manual', true)).not.toContain(tool)
+    }
+  })
+
+  it('未来清单有原生 Grep / Glob / LS 时优先原生，不引入 Bash', () => {
+    const r = resolveClaudeTools(['grep', 'find', 'ls'], ['Read', 'Grep', 'Glob', 'LS'])
+    expect(r.ok && r.value).toEqual(['Grep', 'Glob', 'LS'])
+    for (const tool of CLAUDE_SHELL_FALLBACK_TOOLS) {
+      expect(resolveClaudeTools([tool], ['Read', 'Grep', 'Glob', 'LS']).ok).toBe(true)
+    }
+  })
+
+  it('清单里没有 Bash 时回退被拒绝，不降级成空清单', () => {
+    const r = resolveClaudeTools(['grep'], ['Read', 'Edit', 'Write'], true)
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('CAPABILITY_UNSUPPORTED')
+    expect(r.error.detail).toContain('Bash')
+  })
+
+  it('delegate 按清单选 Task 或 Agent，两者都没有则拒绝', () => {
+    expect(toolsOf(toolsArgv(['delegate'], 'manual'))).toBe('Task')
+    const agent = resolveClaudeTools(['delegate'], ['Read', 'Agent'])
+    expect(agent.ok && agent.value).toEqual(['Agent'])
+    const none = resolveClaudeTools(['delegate'], ['Read', 'Edit'])
+    expect(none.ok).toBe(false)
+    if (none.ok) return
+    expect(none.error.kind).toBe('CAPABILITY_UNSUPPORTED')
+  })
+
+  it('原生名不在清单里也拒绝（Task / Agent 不能互相冒充）', () => {
+    expect(resolveClaudeTools(['Task'], ['Read', 'Agent']).ok).toBe(false)
+    expect(resolveClaudeTools(['Agent'], CLAUDE_TOOL_INVENTORY_2_1_314).ok).toBe(false)
+  })
+
+  it('未知值在 startRun 前拒绝：返回 Result 错误且不启动进程', async () => {
+    const { spawnFn, calls } = recordingSpawn()
+    const a = new ClaudeCodeAdapter({ spawnFn })
+    const r = await a.startRun(
+      spec({ permissions: { allowed_tools: ['Read', 'deploy'], mode: 'auto' } }),
+    )
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('CAPABILITY_UNSUPPORTED')
+    expect(r.error.detail).toContain('deploy')
+    expect(calls.length).toBe(0)
+  })
+
+  it('构造参数 toolInventory 选择 Task 或 Agent，选不到就拒绝', async () => {
+    const calls: string[][] = []
+    const spawnFn = ((_bin: string, args: readonly string[]) => {
+      calls.push([...args])
+      const p = new EventEmitter() as EventEmitter & { stdout: Readable; stderr: Readable }
+      p.stdout = Readable.from([OK_STREAM])
+      p.stderr = Readable.from([])
+      p.stdout.on('end', () => p.emit('close', 0))
+      return p
+    }) as unknown as typeof spawn
+
+    const withAgent = new ClaudeCodeAdapter({
+      spawnFn,
+      toolInventory: ['Read', 'Edit', 'Agent'],
+    })
+    const started = await withAgent.startRun(
+      spec({ permissions: { allowed_tools: ['delegate'], mode: 'manual' } }),
+    )
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+    await withAgent.awaitResult(started.value)
+    expect(toolsOf(calls[0] ?? [])).toBe('Agent')
+
+    const noDelegate = new ClaudeCodeAdapter({ spawnFn, toolInventory: ['Read', 'Edit'] })
+    const rejected = await noDelegate.startRun(
+      spec({
+        idempotency_key: 't1/pm/2',
+        permissions: { allowed_tools: ['delegate'], mode: 'manual' },
+      }),
+    )
+    expect(rejected.ok).toBe(false)
+    expect(calls.length).toBe(1)
+  })
+
+  it('auto 用同清单 --allowedTools 预授权（Bash 不是只 prompt 就完）', () => {
+    const argv = toolsArgv(['read', 'bash'], 'auto')
+    expect(toolsOf(argv)).toBe('Read,Bash')
+    expect(argv[argv.indexOf('--allowedTools') + 1]).toBe('Read,Bash')
+  })
+
+  it('accept_edits 只在清单含 Bash 时预授权，编辑由 permission-mode 自动接受', () => {
+    const noBash = toolsArgv(['read', 'write'], 'accept_edits')
+    expect(noBash).not.toContain('--allowedTools')
+    const withBash = toolsArgv(['read', 'bash'], 'accept_edits')
+    expect(withBash[withBash.indexOf('--allowedTools') + 1]).toBe('Read,Bash')
+  })
+
+  it('manual 不做自动授权', () => {
+    expect(toolsArgv(['read', 'bash'], 'manual')).not.toContain('--allowedTools')
+  })
+
+  it('空清单：--tools 空串且不附 --allowedTools（deny_unlisted 也不）', () => {
+    const argv = toolsArgv([], 'deny_unlisted')
+    expect(toolsOf(argv)).toBe('')
+    expect(argv).not.toContain('--allowedTools')
+  })
+
+  it('--allowedTools 不会把清单外工具带进来', () => {
+    const argv = toolsArgv(['read'], 'deny_unlisted')
+    expect(argv.join(',')).not.toContain('Bash')
+    expect(argv.join(',')).not.toContain('Write')
+  })
+
+  it('Write 在当前清单里是真实工具，新建文件不靠 Edit 冒充', () => {
+    expect(CLAUDE_TOOL_INVENTORY_2_1_314).toContain('Write')
+    expect(toolsOf(toolsArgv(['write'], 'accept_edits'))).toBe('Write')
+    expect(CLAUDE_TOOL_INVENTORY_2_1_314).not.toContain('Grep')
+    expect(CLAUDE_TOOL_INVENTORY_2_1_314).not.toContain('Glob')
+    expect(CLAUDE_TOOL_INVENTORY_2_1_314).not.toContain('Agent')
   })
 })
 
@@ -863,4 +1014,42 @@ describe.skipIf(!REQUIRE_CLAUDE)('真实集成：claude CLI（不进默认 check
     const { execFileSync } = await import('node:child_process')
     expect(() => execFileSync('claude', ['--version'], { stdio: 'pipe' })).not.toThrow()
   })
+
+  it('Write 真实可用：--tools Write 能新建文件（不是靠 Edit 冒充）', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'keel-claude-write-'))
+    try {
+      const base = spec()
+      const a = new ClaudeCodeAdapter()
+      const started = await a.startRun({
+        ...base,
+        workspace: { path: dir, repo_id: 'r', branch: 'main', untrusted: false },
+        context: {
+          ...base.context,
+          sections: [
+            {
+              id: 'write-probe',
+              source_ref: 'fixed:test',
+              source_kind: 'fixed',
+              priority: 'required',
+              content:
+                '用 Write 工具在当前目录创建 keel-write-probe.txt，内容恰为 HARNESS-WRITE-OK。不要用 Bash。',
+              tokens: 20,
+            },
+          ],
+        },
+        permissions: { allowed_tools: ['write'], mode: 'auto' },
+      })
+      expect(started.ok).toBe(true)
+      if (!started.ok) return
+      const res = await a.awaitResult(started.value)
+      expect(res.ok).toBe(true)
+      if (!res.ok) return
+      expect(res.value.status).toBe('SUCCEEDED')
+      expect((await readFile(join(dir, 'keel-write-probe.txt'), 'utf8')).trim()).toBe(
+        'HARNESS-WRITE-OK',
+      )
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 180000)
 })

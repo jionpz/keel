@@ -27,6 +27,7 @@ import type {
 import type { Usage } from '../../contracts/types.js'
 import { type ModelProfile, resolveStageModel } from '../../execution/model-routing.js'
 import type { HarnessSessionManager } from '../../execution/session/manager.js'
+import { resolveKeelStageToolPolicy, type ToolPolicyDocument } from '../../execution/tool-policy.js'
 import { commitArtifactOn } from '../../fact/artifact-store.js'
 import { asRole } from '../../fact/db.js'
 import type { GitWorkspace, PreparedProject } from '../../fact/git-workspace.js'
@@ -104,6 +105,13 @@ export interface OrchestratorDeps {
   readonly modelProfile?: ModelProfile
   /** 非空时最终模型必须命中（`KEEL_MODEL_ALLOWLIST`）；缺省不校验 */
   readonly modelAllowlist?: readonly string[]
+  /**
+   * jstack 导出的阶段/角色工具策略。缺省时只对 Pi / Claude 之外保留旧权限；
+   * CLI 必须在执行前加载并传入，不能让生产静默退化为统一 read/write。
+   */
+  readonly toolPolicy?: ToolPolicyDocument
+  /** 显式允许只读 profile 通过 Bash 回退搜索；缺省 false */
+  readonly toolPolicyAllowShellFallback?: boolean
 }
 
 export interface StepRecord {
@@ -526,6 +534,11 @@ async function executeClaimedRun(
   /** supervisor 判定 stalled 时的证据；失败路径落进 RunStalled 事件 */
   let stallEvidence: StallEvidence | null = null
 
+  const stagePermissions = resolveStagePermissions(pending, descriptor, deps)
+  if (!stagePermissions.ok) {
+    return { ok: false, error: stagePermissions.error, usage: ZERO_USAGE }
+  }
+
   const outcome = await runSessionUntilValid(
     deps.sessions,
     {
@@ -550,13 +563,7 @@ async function executeClaimedRun(
         },
         context: ctx.value,
         output_contract: { schema_ref: expect.kind, mode: 'post_validate' },
-        // develop 阶段要真的改文件，必须给写权限。
-        // ⚠️ 工具名必须是 Harness 实际支持的 —— OMP 对无效名直接报错退出
-        // （不是静默忽略），这是好行为，但意味着这里不能凭想象写。
-        permissions:
-          pending.stage === 'develop'
-            ? { allowed_tools: ['read', 'write'], mode: 'auto' }
-            : { allowed_tools: ['read'], mode: 'auto' },
+        permissions: stagePermissions.value,
         limits: { wall_clock_s: wallClockS, budget_usd: null, max_turns: 8 },
         // 与 run.requested_model 同源（见上方 resolveRequestedModel）；
         // claude 不消费这个字段，它的模型来自 adapter 构造参数。
@@ -717,6 +724,52 @@ interface RequestedRunModel {
  * `--model`），RunSpec 不带 model；`requested_model` 只记录显式 override
  * （可能为 NULL）—— 那正是它实际 spawn 的模型来源。
  */
+function legacyStagePermissions(stage: Stage): {
+  readonly allowed_tools: readonly string[]
+  readonly mode: 'auto'
+} {
+  return stage === 'develop'
+    ? { allowed_tools: ['read', 'write'], mode: 'auto' }
+    : { allowed_tools: ['read'], mode: 'auto' }
+}
+
+function resolveStagePermissions(
+  pending: { readonly stage: Stage },
+  descriptor: HarnessDescriptor,
+  deps: OrchestratorDeps,
+): Result<{
+  readonly allowed_tools: readonly string[]
+  readonly mode: 'auto' | 'deny_unlisted'
+}> {
+  const harness = descriptor.harness_id === 'claude' ? 'claude-code' : descriptor.harness_id
+  if (deps.toolPolicy === undefined || descriptor.tool_inventory === undefined) {
+    if (harness === 'pi' || harness === 'claude-code') {
+      return err(
+        makeError(
+          'CAPABILITY_UNSUPPORTED',
+          `${harness} 必须提供 jstack 工具策略和真实 tool_inventory，` +
+            '不会静默退化为统一 read/write。运行 jstack tools export 并设置 KEEL_TOOL_POLICY。',
+        ),
+      )
+    }
+    return ok(legacyStagePermissions(pending.stage))
+  }
+  const resolved = resolveKeelStageToolPolicy(deps.toolPolicy, pending.stage, {
+    harness,
+    inventory: descriptor.tool_inventory,
+    ...(deps.toolPolicyAllowShellFallback === true ? { allowShellFallback: true } : {}),
+  })
+  if (!resolved.ok) return resolved
+  if (resolved.value.degradations.length > 0) {
+    console.warn(
+      `keel: ${resolved.value.profile}@${harness} 工具降级：${resolved.value.degradations
+        .map((item) => `${item.capability}→${item.fallback_native}`)
+        .join(', ')}`,
+    )
+  }
+  return ok(resolved.value.permissions)
+}
+
 function resolveRequestedModel(
   stage: Stage,
   harnessId: string,

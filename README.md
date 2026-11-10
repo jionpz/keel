@@ -244,3 +244,11 @@ pending 归并、runner 无 omp),记录见任务 `prd.md`。
 按阶段路由到企业网关目录:`KEEL_MODEL_PROFILE=enterprise`(develop/qa/review → `moonshotai/Kimi-K3`,其余 → `zai-org/GLM-5.3`);
 `KEEL_MODEL_ALLOWLIST=<id,...>` 可限制允许的最终模型;启动时按 profile 全部阶段预检,清单外直接拒绝(不会先 ingest 再失败)。
 `run.requested_model` 记录每次 run 实际请求的模型,与 spawn 的 `--model` 同源。
+
+阶段/角色工具策略由 jstack 发布,Keel 不再硬编码 `read`/`write`:
+`jstack tools export > config/jstack-tools.json`(或设置 `KEEL_TOOL_POLICY` 指向该文件)。
+启动时校验协议与 `content_digest`,再按适配器的真实 `tool_inventory` 解析原生工具名;
+缺必需工具会在 spawn 前拒绝。只读 profile 默认不允许 Bash 回退搜索,确需回退时显式设置
+`KEEL_TOOL_SHELL_FALLBACK=1`,启动日志会列出降级项。
+Pi 适配器只从用户作用域发现并显式加载已安装的 `@tintinweb/pi-subagents`,
+不读取目标仓库的扩展配置;子代理按自己的工具清单运行,父子权限边界尚未验收。
