@@ -28,6 +28,10 @@
 
 **赶时间只读三篇**：`01-overview` → `02-glossary` → `04-state-machine`。
 
+### 下一版生产方案与实施进度
+
+[jstack 主工作流与天问代理决策](./plans/jstack-tianwen/README.md)：完整生产目标及接口、交付票与验收场景。[JT-01 只读影子链路](./plans/jstack-tianwen/implementation.md)已有代码，尚待真实模型验收；项目记忆、委托代批与完整工程工作流仍待实现。
+
 ---
 
 ## 文档约定

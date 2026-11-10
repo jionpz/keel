@@ -85,6 +85,29 @@ export const ARTIFACT_KINDS = Object.keys(SCHEMAS) as ArtifactKind[]
 `
   writeFileSync(join(OUT_DIR, 'schemas.ts'), schemasFile, 'utf8')
 
+  // managed 协议不是旧 ArtifactKind，单独生成，避免污染旧状态机的 kind 注册表。
+  const managedDir = join(SCHEMA_DIR, 'managed')
+  const managedFiles = readdirSync(managedDir)
+    .filter((f) => f.endsWith('.schema.json'))
+    .sort()
+  const managedTypes: string[] = []
+  const managedSchemas: string[] = []
+  for (const file of managedFiles) {
+    const schema = JSON.parse(readFileSync(join(managedDir, file), 'utf8'))
+    managedTypes.push(
+      await compile(schema, schema.title, {
+        bannerComment: '',
+        additionalProperties: false,
+        format: false,
+      }),
+    )
+    managedSchemas.push(`${JSON.stringify(kindOf(file))}: ${JSON.stringify(schema)}`)
+  }
+  writeFileSync(
+    join(OUT_DIR, 'managed.ts'),
+    `${HEADER}\n${managedTypes.join('\n')}\nexport const MANAGED_SCHEMAS = {${managedSchemas.join(',\n')}} as const\n`,
+  )
+
   console.log(
     `✓ 由 ${files.length} 份 schema 生成 ${OUT_DIR}/artifacts.ts 与 ${OUT_DIR}/schemas.ts`,
   )

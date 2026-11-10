@@ -174,6 +174,14 @@ export async function runSessionUntilValid(
   prompt: string,
   opts: PipelineOptions = {},
 ): Promise<PipelineResult> {
+  const stage = spec.runSpec.run.stage
+  if (stage === 'managed_investigate' || stage === 'tianwen') {
+    return {
+      ok: false,
+      error: makeError('CAPABILITY_UNSUPPORTED', 'managed 尝试不得进入旧 Artifact 流水线'),
+      usage: ZERO_USAGE,
+    }
+  }
   const maxRetries = opts.maxProposalRetries ?? 3
   const rejections: string[][] = []
   let usage: Usage = ZERO_USAGE
@@ -270,7 +278,8 @@ export async function runSessionUntilValid(
       // 阶段专属成功条件必须先于围栏判定：asRole 正常返回即 COMMIT，
       // 一旦先置 SUCCEEDED，调用方的失败判定就只能留下假成功。
       const gate = opts.preCommitGate?.({
-        stage: spec.runSpec.run.stage,
+        // managed 不使用旧 Artifact 流水线；兼容的 gate 仍只接受旧阶段。
+        stage,
         diff,
         diff_error: diffError,
         usage,
