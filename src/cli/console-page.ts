@@ -512,8 +512,11 @@ export const CONSOLE_HTML = `<!doctype html>
   }
   .task-dot.stage { background: var(--move); }
   .task-dot.gate { background: var(--signal); }
+  .task-dot.waiting { background: var(--ink-3); }
   .task-dot.done { background: var(--good); }
   .task-dot.bad { background: var(--bad); }
+  .task-item.needs-action { border-left: 2px solid var(--signal); }
+  .task-status.need-badge { font-weight: 600; }
   .task-body { min-width: 0; flex: 1 1 auto; }
   .task-title-row {
     display: flex;
@@ -1305,6 +1308,68 @@ export const CONSOLE_HTML = `<!doctype html>
   .option-card.danger { border-top-color: var(--bad); }
   .option-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
   .option-title { font-size: 13px; font-weight: 600; color: var(--ink); }
+  .option-badge-recommended {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--ink-2);
+    border: 1px solid var(--rule-strong);
+    padding: 0 4px;
+    margin-left: 6px;
+    vertical-align: middle;
+  }
+  .decision-inline-preview {
+    margin-top: 6px;
+    padding: 6px 10px;
+    background: var(--code-bg);
+    border-radius: 2px;
+    font-size: 11.5px;
+  }
+  .decision-inline-preview summary {
+    cursor: pointer;
+    color: var(--ink-2);
+    font-weight: 500;
+    user-select: none;
+  }
+  .decision-inline-preview summary:hover {
+    color: var(--ink);
+  }
+  .decision-inline-body {
+    margin-top: 8px;
+    padding-top: 6px;
+    border-top: 1px solid var(--rule);
+  }
+  .decision-inline-sub {
+    font-weight: 600;
+    color: var(--ink-3);
+    margin: 4px 0 2px;
+    font-size: 11px;
+  }
+  .decision-inline-list,
+  .decision-inline-filelist {
+    margin: 0;
+    padding-left: 16px;
+    line-height: 1.6;
+    color: var(--ink);
+  }
+  .decision-inline-filelist {
+    list-style: none;
+    padding-left: 0;
+  }
+  .decision-inline-filelist li {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 2px 0;
+  }
+  .decision-inline-filelist li code {
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .option-terminal { font-size: 10.5px; font-weight: 600; color: var(--bad); }
   .option-effect { font-size: 12px; line-height: 1.55; color: var(--ink); }
   .option-note { font-size: 11px; color: var(--ink-3); }
@@ -2659,15 +2724,17 @@ export const CONSOLE_HTML = `<!doctype html>
       var runCount = t.run_count != null ? Number(t.run_count) : null;
       var cat = statusKind(t.status);
       var zh = statusLabel(t.status) || t.status;
-      html += '<li data-id="' + esc(t.id) + '" class="task-item' + (isAct ? ' active' : '') + '">' +
-        '<span class="task-dot ' + cat + '" title="' + esc(t.status) + '"></span>' +
+      var needsHuman = isGateStatus(t.status);
+      var dotCls = needsHuman ? 'gate' : (cat === 'gate' ? 'waiting' : cat);
+      html += '<li data-id="' + esc(t.id) + '" class="task-item' + (isAct ? ' active' : '') + (needsHuman ? ' needs-action' : '') + '">' +
+        '<span class="task-dot ' + dotCls + '" title="' + esc(t.status) + (needsHuman ? '（需人工处理）' : '') + '"></span>' +
         '<div class="task-body">' +
           '<div class="task-title-row">' +
             '<span class="task-title" title="' + esc(t.title) + '">' + esc(t.title) + '</span>' +
             '<span class="task-id">' + esc(shortId(t.id)) + '</span>' +
           '</div>' +
           '<div class="task-sub">' +
-            '<span class="task-status ' + cat + '">' + esc(zh) + '</span>' +
+            '<span class="task-status ' + cat + (needsHuman ? ' need-badge' : '') + '">' + esc(zh) + (needsHuman ? '（需处理）' : '') + '</span>' +
             (t.control_mode && t.control_mode !== 'auto'
               ? '<span class="task-mode">' + (t.control_mode === 'paused' ? '已暂停' : '人工') + '</span>' : '') +
             '<span class="task-repo" title="' + esc(t.repo) + '">' + esc(shortRepo(t.repo)) + '</span>' +
@@ -3810,22 +3877,67 @@ export const CONSOLE_HTML = `<!doctype html>
     var rfc = latestArtifactOfKind(d, 'rfc');
     if (rfc && rfc.body) {
       var title = rfc.body.title || rfc.body.summary || '';
+      var goals = Array.isArray(rfc.body.goals) ? rfc.body.goals : [];
+      var acs = Array.isArray(rfc.body.acceptance_criteria) ? rfc.body.acceptance_criteria : [];
+      var rfcPreview = '';
+      if (goals.length > 0 || acs.length > 0) {
+        rfcPreview = '<details class="decision-inline-preview"><summary>查看方案核心要点（' +
+          (goals.length ? goals.length + ' 个目标' : '') +
+          (goals.length && acs.length ? '，' : '') +
+          (acs.length ? acs.length + ' 条验收条件' : '') + '）</summary>' +
+          '<div class="decision-inline-body">';
+        if (goals.length > 0) {
+          rfcPreview += '<div class="decision-inline-sub">目标 (Goals)：</div><ul class="decision-inline-list">';
+          for (var gi = 0; gi < goals.length; gi++) rfcPreview += '<li>' + esc(goals[gi]) + '</li>';
+          rfcPreview += '</ul>';
+        }
+        if (acs.length > 0) {
+          rfcPreview += '<div class="decision-inline-sub">验收条件 (Acceptance Criteria)：</div><ul class="decision-inline-list">';
+          for (var ai = 0; ai < acs.length; ai++) {
+            var ac = acs[ai];
+            if (ac && typeof ac === 'object') {
+              rfcPreview += '<li>' +
+                (ac.id ? '<code>' + esc(ac.id) + '</code> ' : '') +
+                esc(ac.text || '') +
+                (ac.verifiable_by ? ' <span class="muted">（' + esc(ac.verifiable_by) + '）</span>' : '') +
+              '</li>';
+            } else {
+              rfcPreview += '<li>' + esc(ac) + '</li>';
+            }
+          }
+          rfcPreview += '</ul>';
+        }
+        rfcPreview += '</div></details>';
+      }
       rows += '<div class="evidence-row">' +
         '<span class="evidence-key">方案</span>' +
         '<span class="evidence-val">RFC v' + esc(rfc.version) +
           (title ? '《' + esc(String(title).slice(0, 80)) + '》' : '') +
           ' <button type="button" class="tab-link" data-goto="overview">查看全文</button></span>' +
-      '</div>';
+      '</div>' +
+      rfcPreview;
     }
 
     var diffEvents = extractDiffEvents(d.events || []);
     if (diffEvents.length > 0) {
       var lastDiff = diffEvents[diffEvents.length - 1].payload || {};
-      var n = Array.isArray(lastDiff.files_changed) ? lastDiff.files_changed.length : parseUnifiedDiff(lastDiff.patch || '').length;
+      var parsedFiles = parseUnifiedDiff(lastDiff.patch || '');
+      var n = Array.isArray(lastDiff.files_changed) ? lastDiff.files_changed.length : parsedFiles.length;
+      var diffPreview = '';
+      if (parsedFiles.length > 0) {
+        diffPreview = '<details class="decision-inline-preview"><summary>查看改动的 ' + parsedFiles.length + ' 个文件清单</summary>' +
+          '<div class="decision-inline-body"><ul class="decision-inline-filelist">';
+        for (var dfi = 0; dfi < parsedFiles.length; dfi++) {
+          var pf = parsedFiles[dfi];
+          diffPreview += '<li><code>' + esc(pf.file) + '</code> <span class="diff-add-stat">+' + pf.added + '</span> <span class="diff-del-stat">-' + pf.removed + '</span></li>';
+        }
+        diffPreview += '</ul></div></details>';
+      }
       rows += '<div class="evidence-row">' +
         '<span class="evidence-key">变更规模</span>' +
         '<span class="evidence-val">' + esc(n) + ' 个文件 <button type="button" class="tab-link" data-goto="diff">看 diff</button></span>' +
-      '</div>';
+      '</div>' +
+      diffPreview;
     }
 
     if (t.risk || t.complexity) {
@@ -3882,9 +3994,10 @@ export const CONSOLE_HTML = `<!doctype html>
     var html = '';
     for (var j = 0; j < options.length; j++) {
       var o = options[j];
+      var isApprove = o.key === 'approve';
       html += '<div class="option-card ' + esc(o.key) + (o.terminal ? ' danger' : '') + '" data-option="' + o.key + '">' +
         '<div class="option-head">' +
-          '<span class="option-title">' + esc(o.title) + '</span>' +
+          '<span class="option-title">' + esc(o.title) + (isApprove ? ' <span class="option-badge-recommended">主路径</span>' : '') + '</span>' +
           (o.terminal ? '<span class="option-terminal">终态，不可恢复</span>' : '') +
         '</div>' +
         '<div class="option-effect">' + esc(o.effect) + '</div>' +
@@ -4047,9 +4160,9 @@ export const CONSOLE_HTML = `<!doctype html>
           var toLabel = n.to === 'SELF'
             ? (statusLabel(status) || status) + '（自环）'
             : (statusLabel(n.to) || n.to);
-          opts.push(n.id + ' ' + (n.on || []).map(eventLabel).join(' / ') + ' → ' + toLabel);
+          opts.push((n.on || []).map(eventLabel).join(' / ') + ' → ' + toLabel + '（' + n.id + '）');
         }
-        text += '<span class="ss-next">。下一步：' + esc(opts.join('；') + (nexts.length > 3 ? ' 等' : '')) + '</span>';
+        text += '<span class="ss-next">。下一步预期：' + esc(opts.join('；') + (nexts.length > 3 ? ' 等' : '')) + '</span>';
       } else {
         text += '<span class="ss-next">。当前状态没有可用的下一次转移。</span>';
       }
@@ -4143,8 +4256,8 @@ export const CONSOLE_HTML = `<!doctype html>
         '</div>' +
         '<div class="cockpit-actions">' +
           '<button type="button" class="copy-btn" data-copy="' + esc(t.id) + '" title="复制 Task UUID">复制 ID: ' + esc(shortId(t.id)) + '</button>' +
-          '<button type="button" class="copy-btn" data-copy="pnpm keel status ' + esc(t.id) + '" title="复制 CLI 状态查询命令">复制 pnpm keel status</button>' +
-          '<button type="button" class="copy-btn" data-copy="pnpm run timeline -- ' + esc(t.id) + '" title="复制完整时间线导出命令">复制 timeline 命令</button>' +
+          '<button type="button" class="copy-btn" data-copy="pnpm keel status ' + esc(t.id) + '" title="复制 CLI 状态查询命令：pnpm keel status ' + esc(t.id) + '">复制状态命令</button>' +
+          '<button type="button" class="copy-btn" data-copy="pnpm run timeline -- ' + esc(t.id) + '" title="复制完整时间线导出命令：pnpm run timeline -- ' + esc(t.id) + '">复制时间线命令</button>' +
           '<button type="button" class="copy-btn" id="glossary-btn" aria-expanded="' + (state.glossaryOpen ? 'true' : 'false') + '" title="查看状态码、转移编号与核心术语的说明">术语表</button>' +
         '</div>' +
       '</div>' +

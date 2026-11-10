@@ -20,10 +20,13 @@
 | | |
 |---|---|
 | [`docs/README.md`](./docs/README.md) | 索引、阅读顺序、文档约定 |
-| [`docs/05-contracts/`](./docs/05-contracts/) | 5 个核心接口契约 |
-| [`docs/schemas/`](./docs/schemas/) | 8 份机器可读 JSON Schema |
-| [`docs/adr/`](./docs/adr/) | 6 份架构决策记录 |
+| [`docs/05-contracts/`](./docs/05-contracts/) | 7 个核心接口契约 |
+| [`docs/schemas/`](./docs/schemas/) | 11 份机器可读 JSON Schema（含 `managed/` 3 份） |
+| [`docs/adr/`](./docs/adr/) | 11 份架构决策记录（ADR-0001～0011） |
+| [`docs/plans/jstack-tianwen/`](./docs/plans/jstack-tianwen/) | 当前 jstack + 天问路线（JT-01～JT-07）；进度见 [#85](https://github.com/jionpz/keel/issues/85) |
 | [`docs/archive/`](./docs/archive/) | 立项初稿（已归档，**请勿据其实现**） |
+
+**产品状态**：历史 v0.1 闭环与连续 5 个真实任务已完成并有归档证据；当前主线是 jstack 主工作流 + 天问。JT-01 只读影子链路代码已合入 `main`（PR #84），真实模型端到端验收仍未完成；JT-02～JT-07 未开始。JT-01 的 managed 安全读取目前只支持 Linux（`/proc/self/fd`），其他平台明确拒绝。当前不部署生产服务。
 
 ## 中心不变量
 
@@ -61,7 +64,7 @@ Fact 与 Execution 之间只有两条单向通道：`Context` 下行、`Proposal
 
 **TypeScript / Node**（[`ADR-0002`](./docs/adr/0002-implementation-language.md)）。
 
-选它的主要收益是 `docs/schemas/` 的 8 份 JSON Schema 可以**直接生成类型** ——
+选它的主要收益是 `docs/schemas/` 的 11 份 JSON Schema 可以**直接生成类型** ——
 让"文档里的 schema"与"代码里的类型"机械对齐，而不是靠人维护同步。
 这一步必须纳入 CI，否则选 TS 与选任何语言就没区别了。
 

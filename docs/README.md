@@ -19,18 +19,20 @@
 | 3 | [`03-domain-model.md`](./03-domain-model.md) | 实体、逻辑 schema、**写权限矩阵** | `G11` |
 | 4 | [`04-state-machine.md`](./04-state-machine.md) | Task 级 + Run 级转移表、幂等与重放 | `G8` |
 | 5 | [`06-artifacts.md`](./06-artifacts.md) | 8 类产物的语义与示例 | `G4` `G6` |
-| 6 | [`05-contracts/`](./05-contracts/) | 5 个核心接口契约 | `G3` `G5` `G7` `G10` |
+| 6 | [`05-contracts/`](./05-contracts/) | 7 个核心接口契约 | `G3` `G5` `G7` `G10` |
 | 7 | [`07-flows.md`](./07-flows.md) | 3 条端到端流程（**骨架的证伪测试**） | — |
 | 8 | [`08-cross-cutting.md`](./08-cross-cutting.md) | 安全 / 可观测 / 成本 / 并发 | `G9` `G12` `G13` `G14` |
 | 9 | [`09-roadmap.md`](./09-roadmap.md) | Non-Goals、v0.1 判据、阶段触发条件 | `G15` `G16` `G17` |
-| — | [`adr/`](./adr/) | 6 份架构决策记录 | `G2` |
-| — | [`schemas/`](./schemas/) | 8 份机器可读 JSON Schema | — |
+| — | [`adr/`](./adr/) | 11 份架构决策记录（ADR-0001～0011） | `G2` |
+| — | [`schemas/`](./schemas/) | 11 份机器可读 JSON Schema（含 `managed/` 3 份） | — |
 
 **赶时间只读三篇**：`01-overview` → `02-glossary` → `04-state-machine`。
 
 ### 下一版生产方案与实施进度
 
-[jstack 主工作流与天问代理决策](./plans/jstack-tianwen/README.md)：完整生产目标及接口、交付票与验收场景。[JT-01 只读影子链路](./plans/jstack-tianwen/implementation.md)已有代码，尚待真实模型验收；项目记忆、委托代批与完整工程工作流仍待实现。
+[jstack 主工作流与天问代理决策](./plans/jstack-tianwen/README.md)：完整生产目标及接口、交付票与验收场景。[JT-01 只读影子链路](./plans/jstack-tianwen/implementation.md)的代码已合入 `main`（PR #84），真实模型端到端验收仍未完成；项目记忆、委托代批与完整工程工作流（JT-02～JT-07）待实现。
+
+当前路线的进度与原生依赖见 GitHub [#85](https://github.com/jionpz/keel/issues/85)：JT-01 剩余验收 [#86](https://github.com/jionpz/keel/issues/86)，JT-02～JT-07 为 [#90](https://github.com/jionpz/keel/issues/90)～[#95](https://github.com/jionpz/keel/issues/95)。历史 v0.1/阶段二结论属于 `legacy-v01`，不代表 JT 路线已完成。
 
 ---
 
@@ -68,24 +70,34 @@
 | 项 | 状态 |
 |---|---|
 | 文档集 | ✅ 完成 |
-| Harness 接口调研 | ⚠️ **完成 Claude Code 与 OMP**（后者见 ADR-0005 修订）；其余属阶段二 |
+| Harness 接口调研 | ⚠️ **完成 Claude Code 与 OMP**（后者见 ADR-0005 修订）；其余属阶段二。Claude Code 已于 2026-10-26 在真机跑通到 `S-DONE`；专门的 `claude-code-e2e` 套件是否完成仍无当前证据，不能据此宣称「Harness 可替换」已完整评测。 |
 | `ADR-0002` 实现语言 | ✅ **Accepted — TypeScript / Node** |
 | `ADR-0003` Workflow engine | ✅ **Accepted**（2026-08-26 查证:硬约束已自动化强制,迁移路径确证） |
 | `ADR-0005` Harness 分级 | ✅ **Accepted — Claude Code + OMP 首批**（2026-08-23 修订;OMP 接入时实测,其余 harness 未查证） |
 | 仓库骨架 | ✅ 完成 —— 四条架构约束已机械化，见下 |
-| v0.1 实现 | ✅ 核心闭环 + 真实 GitHub PR/CI + durable timer + CLI 已落地（`GitHubProvider` 实现 PR 网关与 CI 网关，编排器经 `opts.ci` 消费；CLI 见下） |
+| v0.1 实现 | ✅ 历史阶段完成 —— 核心闭环 + 真实 GitHub PR/CI + durable timer + CLI 已落地（`GitHubProvider` 实现 PR 网关与 CI 网关，编排器经 `opts.ci` 消费）；这是 `legacy-v01` 结论，不是 JT 路线完成 |
+| JT 路线（jstack + 天问） | ⏳ JT-01 代码已合入 `main`，真实模型验收开放；JT-02～JT-07 未实施。见 [#85](https://github.com/jionpz/keel/issues/85) |
 
-### CLI(2026-08-26 新增)
+### CLI 入口（2026-11-10 现状）
 
 ```bash
 pnpm run build                 # 产 dist/,bin 指向 dist/cli/index.js
-keel --help                    # 三命令:
-keel timer-worker              # 到期 timer 单次收割(+ --interval 常驻)
-keel run-task <taskId>         # 驱动单 task 到终态(真实 OMP + worktree)
-keel status <taskId> [--events N]   # task/run/事件摘要
+pnpm keel --help               # 完整命令清单以 src/cli/run.ts 的 HELP 为准
 ```
 
-开发未 build:`pnpm tsx src/cli/index.ts <cmd>`。
+开发未 build：`pnpm tsx src/cli/index.ts <cmd>`。当前已存在的主要入口：
+
+| 命令 | 用途 |
+|---|---|
+| `managed <investigate\|status\|questions\|answer\|worker>` | jstack 只读调查与天问建议（JT-01 影子模式，Linux only） |
+| `console` | Web 控制台、人工裁决与澄清答复（默认绑定 `127.0.0.1:4321`，需口令登录；`KEEL_CONSOLE_HOST` 可改监听地址） |
+| `timer-worker [--interval <ms>]` | 到期 timer 收割；`--interval` 常驻 |
+| `run-task` / `run-issue` | 驱动已有 task / GitHub Issue 到终态 |
+| `status <taskId>` | task / run / 事件摘要 |
+| `decide` / `answer` | 人工裁决 `S-HUMAN_REVIEW`、回答 `S-NEED_CLARIFICATION` |
+| `register-repo` / `ingest-issue` | 注册 repo（可绑定本地目录）、把 Issue 收为 task |
+| `poller` | 常驻扫描各 repo 的 issue label 并驱动 |
+| `unlock` | 清理 SIGKILL 留下的 per-repo 锁 |
 
 ### 文档与代码的一致性是被强制的，不是靠自觉
 

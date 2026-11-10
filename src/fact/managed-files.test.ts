@@ -15,7 +15,9 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
 })
 
-describe('managed files', () => {
+const linux = process.platform === 'linux'
+
+describe.skipIf(!linux)('managed files · Linux FD 锚定读取', () => {
   it('拒绝作为工作区根路径的软链接', async () => {
     const root = await fixture()
     await mkdir(path.join(root, 'actual'))
@@ -102,5 +104,19 @@ describe('managed files', () => {
     const result = await indexManagedWorkspace(root)
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error.kind).toBe('CONTEXT_BUDGET_EXCEEDED')
+  })
+})
+
+describe.runIf(!linux)('managed files · 非 Linux 能力门', () => {
+  it('索引与读取都明确返回 CAPABILITY_UNSUPPORTED', async () => {
+    const root = await fixture()
+    for (const result of [await indexManagedWorkspace(root), await readManagedFiles(root, [])]) {
+      expect(result.ok).toBe(false)
+      if (!result.ok) {
+        expect(result.error.kind).toBe('CAPABILITY_UNSUPPORTED')
+        expect(result.error.detail).toContain('/proc/self/fd')
+        expect(result.error.retryable).toBe(false)
+      }
+    }
   })
 })

@@ -4,6 +4,18 @@
 
 ---
 
+## 0. 历史阶段与当前路线（2026-11-10）
+
+本文档 §1–§5 记录的是 **2026-08 的 v0.1 与阶段二边界**。这些历史门槛已有归档证据：v0.1 判据、连续 5 个真实 Task、事件流四问均已完成；它们证明的是 `legacy-v01` 状态机闭环，不是当前 JT 路线已完成。
+
+2026-11 起，当前产品主线是 **jstack 主工作流 + 天问代理决策**（[ADR-0011](./adr/0011-jstack-tianwen-runtime.md)）。交付票、真实状态与原生依赖见 GitHub [#85](https://github.com/jionpz/keel/issues/85)：
+
+- JT-01 只读影子链路的代码已合入 `main`（PR #84），真实模型端到端验收仍开放（[#86](https://github.com/jionpz/keel/issues/86)）；managed 安全读取仍只支持 Linux。
+- JT-02～JT-07 尚未实施，按 [#90](https://github.com/jionpz/keel/issues/90)～[#95](https://github.com/jionpz/keel/issues/95) 的依赖推进。
+- 旧任务保留 `legacy-v01` 驱动，不自动迁移，也不与新的 jstack 任务并行跑两套主编排。
+
+---
+
 ## 1. v0.1 完成判据
 
 初稿 §20 说"先把核心闭环跑起来"，但没说**什么叫跑起来了**。
@@ -108,12 +120,14 @@
 
 ### 4.1 阶段二触发
 
-全部满足才进：
+全部满足才进（历史门槛，已于 2026-08/10 满足）：
 
-- [ ] v0.1 判据达成
-- [ ] **连续 5 个真实 Task 无人工干预完成** —— 一次成功可能是运气
-- [ ] 事件流能回答 `08-cross-cutting.md` §2.2 的全部四个问题
-- [ ] ADR-0003、0005 转为 `Accepted`（ADR-0002 已 Accepted）
+- [x] v0.1 判据达成 —— 真实 Issue → `S-DONE` + 真实 CI PR，归档见 `docs/archive/tasks/2026-08/08-27-github-issue-automation/` 与 PR #36。
+- [x] **连续 5 个真实 Task 无人工干预完成** —— 2026-08-29 第二次五连 5/5，证据见 `docs/archive/tasks/2026-08/08-29-five-run-campaign/`。
+- [x] 事件流能回答 `08-cross-cutting.md` §2.2 的全部四个问题 —— 抽样 task `68eb4965-9aca-4940-a586-d5f8a8f83beb` 的 `readEvents` + `ContextBuilt` `source_ref`/`dropped`。
+- [x] ADR-0003、0005 转为 `Accepted`（ADR-0002 已 Accepted）—— 0003 于 2026-08-26 查证后 Accepted；0005 于 2026-08-23 修订后 Accepted。
+
+> Claude Code Adapter 在 2026-08-29 时没有 e2e；2026-10-26 的 journal Session 5 记录真机 `claude` 已跑通到 `S-DONE`，因此不能再说「从未真跑」。专门的 `claude-code-e2e.acceptance.test.ts` 套件是否完成仍按证据保留未知；这不影响本节的历史触发结论，也不等于「Harness 可替换」已完整评测。当前 `envCredentialName` 也接受 `ANTHROPIC_AUTH_TOKEN`，因此不能把缺少 `ANTHROPIC_API_KEY` 直接判断为一定不可用。
 
 ### 4.2 阶段二内容（按优先级）
 
@@ -154,8 +168,8 @@
 | PRD | 问题 | 处置 |
 |---|---|---|
 | Q1 | 实现语言 | ✅ **已定：TypeScript / Node**（ADR-0002 Accepted） |
-| Q2 | Workflow engine | ADR-0003，推荐自研；待查证后转 Accepted |
-| Q3 | Harness 优先级 | ADR-0005，首批 Claude Code + Human |
+| Q2 | Workflow engine | ✅ **已定：自研最小状态机**（ADR-0003 Accepted，2026-08-26 查证） |
+| Q3 | Harness 优先级 | ✅ **首批 Claude Code + OMP + Human**（ADR-0005 Accepted，2026-08-23 修订） |
 | Q4 | v0.1 是否单仓库单项目 | **是**，见 §2.1 |
 | Q5 | 是否 dogfooding | 阶段二，见 §4.3 |
 

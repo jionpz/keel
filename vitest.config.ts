@@ -5,6 +5,8 @@ export default defineConfig({
   test: {
     ...SHARED_TEST_CONFIG,
 
+    include: ['src/**/*.test.ts'],
+
     // 验收测试不进默认 check —— 理由见 src/acceptance/README.md。
     //
     // 一句话：它们的断言依赖模型「说了什么」，因此天然有波动；

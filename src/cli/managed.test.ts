@@ -113,7 +113,7 @@ describe('managed CLI · 参数拒绝', () => {
   })
 })
 
-describe('managed worker · harness 预检早于认领', () => {
+describe.skipIf(process.platform !== 'linux')('managed worker · harness 预检早于认领', () => {
   it('坏 harness 或缺少 omp 时 READY 任务保持未认领', async () => {
     await asOwner((c) => c.query('TRUNCATE repo, managed_package RESTART IDENTITY CASCADE'))
     const { taskId, root } = await seedReadyTask()
@@ -131,6 +131,31 @@ describe('managed worker · harness 预检早于认领', () => {
       expect(task?.status).toBe('READY')
       expect(task?.attempts).toBe(0)
       await rm(emptyPath, { recursive: true, force: true })
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe.runIf(process.platform !== 'linux')('managed CLI · 非 Linux 能力门', () => {
+  it('investigate 明确报告缺少 Linux 文件读取能力', async () => {
+    await asOwner((c) => c.query('TRUNCATE repo, managed_package RESTART IDENTITY CASCADE'))
+    const root = await mkdtemp(join(tmpdir(), 'keel-managed-cli-'))
+    try {
+      const packagePath = join(root, 'workflow.json')
+      await writeFile(packagePath, JSON.stringify(WORKFLOW), 'utf8')
+      const repoId = randomUUID()
+      await asOwner((c) =>
+        c.query(
+          `INSERT INTO repo(id,provider,remote_url,default_branch,local_path)
+           VALUES($1,'local',$2,'main',$3)`,
+          [repoId, `file://${root}`, root],
+        ),
+      )
+      await expectRejected(
+        ['investigate', '--repo', repoId, '--question', '说明项目约束', '--package', packagePath],
+        '/proc/self/fd',
+      )
     } finally {
       await rm(root, { recursive: true, force: true })
     }

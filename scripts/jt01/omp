@@ -1,0 +1,162 @@
+#!/bin/sh
+set -eu
+
+MODEL_ID=opencode-go/deepseek-v4.1-flash
+PI_BIN="${JT01_PI_BIN:-/opt/pi/dist/bundle/cli.js}"
+MAX_TIME=90
+model=
+cwd=
+mode=
+print=0
+no_tools=0
+prompt=
+
+die() {
+  printf 'jt01-omp: %s\n' "$*" >&2
+  exit 2
+}
+
+help() {
+  cat <<'EOF'
+JT-01 Pi 兼容 runner，不代表原生 OMP 支持。
+
+只接受 Keel buildArgv 的实际参数：
+  -p                                           必填
+  --mode=json                                  必填
+  --model opencode-go/deepseek-v4.1-flash      必填
+  --cwd=/workspace 或 /workspace/<子目录>       必填，须解析后仍在 /workspace 内
+  --no-tools                                   必填
+  --no-extensions --no-skills --no-rules       可选（始终强制关闭）
+  --approval-mode=always-ask                   可选（仅此值）
+  --max-time=90                                可选，取值 1..90
+  <prompt>                                     必填，且必须是最后一个参数
+
+执行时调用真实 Pi：
+  node /opt/pi/dist/bundle/cli.js --provider magpie --model <目标>
+    --thinking max --no-tools --no-mcp --no-extensions --no-skills
+    --no-context-files --no-session --mode json -p <prompt>
+HOME 由外部设置；本 runner 不读取宿主 home，也不生成任何事件。
+真实 token 用量可验；cost 四项 0 是占位估算，不代表实际账单。
+EOF
+}
+
+case "${1:-}" in
+  --version)
+    [ "$#" -eq 1 ] || die '--version 不接受其他参数'
+    [ -r "$PI_BIN" ] || die "找不到 Pi bundle：$PI_BIN"
+    exec node "$PI_BIN" --version
+    ;;
+  --help|-h)
+    [ "$#" -eq 1 ] || die '--help 不接受其他参数'
+    help
+    exit 0
+    ;;
+esac
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -p)
+      print=1
+      shift
+      ;;
+    --mode=json)
+      mode=json
+      shift
+      ;;
+    --mode)
+      [ "${2:-}" = json ] || die '--mode 只支持 json'
+      mode=json
+      shift 2
+      ;;
+    --model=*)
+      model=${1#--model=}
+      shift
+      ;;
+    --model)
+      [ "$#" -ge 2 ] || die '--model 缺少值'
+      model=$2
+      shift 2
+      ;;
+    --cwd=*)
+      cwd=${1#--cwd=}
+      shift
+      ;;
+    --cwd)
+      [ "$#" -ge 2 ] || die '--cwd 缺少值'
+      cwd=$2
+      shift 2
+      ;;
+    --max-time=*)
+      MAX_TIME=${1#--max-time=}
+      shift
+      ;;
+    --max-time)
+      [ "$#" -ge 2 ] || die '--max-time 缺少值'
+      MAX_TIME=$2
+      shift 2
+      ;;
+    --no-tools)
+      no_tools=1
+      shift
+      ;;
+    --no-extensions|--no-skills|--no-rules)
+      shift
+      ;;
+    --approval-mode=always-ask)
+      shift
+      ;;
+    --approval-mode=*)
+      die "只接受 --approval-mode=always-ask：$1"
+      ;;
+    -*)
+      die "不支持或未批准的参数：$1"
+      ;;
+    *)
+      [ -z "$prompt" ] || die '只接受一个 prompt'
+      [ "$#" -eq 1 ] || die 'prompt 必须是最后一个参数'
+      prompt=$1
+      shift
+      ;;
+  esac
+done
+
+[ "$print" -eq 1 ] || die '缺少 -p'
+[ "$mode" = json ] || die '缺少 --mode=json'
+[ "$no_tools" -eq 1 ] || die '缺少 --no-tools'
+[ -n "$prompt" ] || die '缺少 prompt'
+[ "$model" = "$MODEL_ID" ] || die "模型必须是 $MODEL_ID，实际：${model:-<空>}"
+case "$MAX_TIME" in
+  ''|*[!0-9]*) die "非法 --max-time：$MAX_TIME" ;;
+esac
+[ "$MAX_TIME" -ge 1 ] && [ "$MAX_TIME" -le 90 ] || die "--max-time 必须在 1..90 之间"
+
+[ -n "$cwd" ] || die '缺少 --cwd'
+case "$cwd" in
+  /workspace|/workspace/*) ;;
+  *) die "cwd 必须是 /workspace 或其子目录：$cwd" ;;
+esac
+[ -d "$cwd" ] || die "cwd 不存在：$cwd"
+cd "$cwd" || die "无法进入 cwd：$cwd"
+real_cwd=$(pwd -P)
+case "$real_cwd" in
+  /workspace|/workspace/*) ;;
+  *) die "cwd 解析后不在 /workspace 内：$cwd -> $real_cwd" ;;
+esac
+
+[ -n "${HOME:-}" ] || die 'HOME 未设置'
+[ -r "$HOME/.pi/agent/models.json" ] || die 'Pi home 未初始化（缺少 models.json）'
+[ -r "$PI_BIN" ] || die "找不到 Pi bundle：$PI_BIN"
+command -v timeout >/dev/null 2>&1 || die '缺少 timeout，拒绝无墙钟执行'
+
+exec timeout "$MAX_TIME" node "$PI_BIN" \
+  --provider magpie \
+  --model "$MODEL_ID" \
+  --thinking max \
+  --no-tools \
+  --no-mcp \
+  --no-extensions \
+  --no-skills \
+  --no-context-files \
+  --no-session \
+  --mode json \
+  -p "$prompt"

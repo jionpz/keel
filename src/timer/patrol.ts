@@ -245,10 +245,10 @@ async function killOrphan(candidate: LivenessCandidate, deps: PatrolDeps): Promi
   try {
     kill(pgid, 'SIGKILL')
   } catch {
-    return inspect(pid).alive ? false : true
+    return !inspect(pid).alive
   }
   await wait(KILL_CONFIRM_MS)
-  return inspect(pid).alive ? false : true
+  return !inspect(pid).alive
 }
 
 /** 默认探针：`ps -o lstart=` 取启动时间（秒级），`kill(pid, 0)` 判存活 */
@@ -267,6 +267,7 @@ export function inspectProcess(pid: number): ProcessInfo {
     const out = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
+      env: { ...process.env, LC_ALL: 'C' },
     }).trim()
     if (out !== '') {
       const parsed = new Date(out)
