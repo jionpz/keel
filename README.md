@@ -26,7 +26,7 @@
 | [`docs/plans/jstack-tianwen/`](./docs/plans/jstack-tianwen/) | 当前 jstack + 天问路线（JT-01～JT-07）；进度见 [#85](https://github.com/jionpz/keel/issues/85) |
 | [`docs/archive/`](./docs/archive/) | 立项初稿（已归档，**请勿据其实现**） |
 
-**产品状态**：历史 v0.1 闭环与连续 5 个真实任务已完成并有归档证据；当前主线是 jstack 主工作流 + 天问。JT-01 至 JT-05 已合入 `main`（最近为 JT-05 PR #120），JT-06 的统一后台服务、故障恢复、备份与隔离恢复校验已实现并通过确定性回归，待提交/合入；JT-07 的真实试运行与评测尚未完成，完整生产交付未完成。JT-01 的 managed 安全读取目前只支持 Linux（`/proc/self/fd`），其他平台明确拒绝。进度与命令见 [`implementation.md`](./docs/plans/jstack-tianwen/implementation.md)。当前不部署生产服务。
+**产品状态**：历史 v0.1 闭环与连续 5 个真实任务已完成并有归档证据；当前主线是 jstack 主工作流 + 天问。JT-01 至 JT-06 已合入 `main`（JT-06 为 PR #122，merge `1391dec`）。JT-07 的 readiness 工具已实现：`keel doctor` 支持矩阵、`trial-start/status/stop` 试运行账本、迁移 `0021` 与真实 PostgreSQL 集成测试；**真实 2–3 项目连续 7 天试运行、30 个实际代决、5 个完成任务与独立评测仍未完成**，所以完整生产交付未完成。JT-01 的 managed 安全读取目前只支持 Linux（`/proc/self/fd`），其他平台明确拒绝。进度与命令见 [`implementation.md`](./docs/plans/jstack-tianwen/implementation.md)。当前不部署生产服务。
 
 ## 中心不变量
 

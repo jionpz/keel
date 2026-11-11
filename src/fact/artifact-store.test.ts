@@ -399,6 +399,8 @@ describe('schema 与代码的一致性', () => {
         'managed_ticket_event',
         'managed_ticket_stage',
         'managed_ticket_task',
+        'managed_trial',
+        'managed_trial_project',
         'managed_workflow',
         'managed_workflow_event',
         'managed_workflow_evidence',
