@@ -1,6 +1,13 @@
 /** JT-01 managed 影子模式的薄 CLI 接线。 */
 
 import { execFileSync } from 'node:child_process'
+import {
+  type ManagedActionGatewayDeps,
+  reconcileAction,
+  reconcileUncertainActions,
+  runActionGatewayOnce,
+} from '../control/managed/action-gateway.js'
+import { listActions, retryAction } from '../control/managed/action-store.js'
 import { answerManagedTicketDecision } from '../control/managed/decision-store.js'
 import {
   createManagedInvestigation,
@@ -18,6 +25,8 @@ import { requireClaudeReady } from '../execution/adapters/claude-code.js'
 import { requirePiBinary } from '../execution/adapters/pi.js'
 import { managedInference } from '../execution/managed-inference.js'
 import { ticketWorkerFromAdapter } from '../execution/ticket-stage-runner.js'
+import { GitCliPushGateway } from '../fact/git-push.js'
+import { GitHubProvider } from '../fact/github-provider.js'
 import { createStopToken, interruptibleSleep } from '../ingress/poller.js'
 import { createHarnessAdapter, resolveHarness, resolveOptionalModel } from './run-task.js'
 
@@ -105,6 +114,10 @@ ticket-stages TASK_UUID
 ticket-tick [--task TASK_UUID] [--harness omp|claude|pi] [--model ID]
 ticket-worker [--once] [--interval MS] [--task TASK_UUID] [--harness omp|claude|pi] [--model ID]
 ticket-answer REQUEST_UUID --revision N --option OPTION_ID
+action-list [--task TASK_UUID]
+action-gateway [--once] [--interval MS] [--reconcile]
+action-reconcile [--id OUTBOX_UUID] [--once] [--interval MS]
+action-retry OUTBOX_UUID
 调查模式的天问只在 E3 明确决定或 E1 可逆默认范围内自动答复。
 ticket 模式按固定包完成 execute→verify→review→land，交付 branch_ready；不 push、不创建 PR。`)
       return
@@ -196,9 +209,28 @@ ticket 模式按固定包完成 execute→verify→review→land，交付 branch
         printJson(result.value)
         return
       }
+      case 'action-list': {
+        const flags = parseFlags(rest, ['task'])
+        const taskId = optional(flags, 'task')
+        printJson(await listActions(taskId === undefined ? undefined : uuid(taskId, '--task')))
+        return
+      }
+      case 'action-gateway':
+        await runActionGateway(rest)
+        return
+      case 'action-reconcile':
+        await runActionReconcile(rest)
+        return
+      case 'action-retry': {
+        if (rest.length !== 1) throw new Error('用法：managed action-retry <outbox UUID>')
+        const result = await retryAction(uuid(rest[0] ?? '', 'outbox ID'), new Date().toISOString())
+        if (!result.ok) throw new Error(result.error.detail)
+        printJson(result.value)
+        return
+      }
       default:
         throw new Error(
-          '用法：managed investigate|status|questions|answer|worker|ticket-create|ticket-status|ticket-stages|ticket-tick|ticket-worker|ticket-answer',
+          '用法：managed investigate|status|questions|answer|worker|ticket-create|ticket-status|ticket-stages|ticket-tick|ticket-worker|ticket-answer|action-list|action-gateway|action-reconcile|action-retry',
         )
     }
   } catch (error) {
@@ -321,6 +353,93 @@ async function runTicketWorker(argv: readonly string[]): Promise<void> {
       if (!result.ok) throw new Error(result.error.detail)
       if (result.value !== null) printJson(result.value)
       else await interruptibleSleep(intervalMs, stop)
+    }
+  } finally {
+    process.off('SIGINT', onSignal)
+    process.off('SIGTERM', onSignal)
+  }
+}
+
+function actionGatewayDeps(): ManagedActionGatewayDeps {
+  return {
+    push: new GitCliPushGateway(),
+    pullRequests: new GitHubProvider(),
+  }
+}
+
+async function runActionGateway(argv: readonly string[]): Promise<void> {
+  const flags = parseFlags(argv, ['once', 'interval', 'reconcile'], ['once', 'reconcile'])
+  const once = flags.has('once')
+  const reconcile = flags.has('reconcile')
+  const intervalRaw = optional(flags, 'interval')
+  const intervalMs = intervalRaw === undefined ? 2000 : positiveInteger(intervalRaw, '--interval')
+  const deps = actionGatewayDeps()
+
+  const step = async (): Promise<boolean> => {
+    if (reconcile) {
+      const reconciled = await reconcileUncertainActions(deps)
+      if (!reconciled.ok) throw new Error(reconciled.error.detail)
+      if (reconciled.value.length > 0) printJson(reconciled.value)
+    }
+    const result = await runActionGatewayOnce(deps)
+    if (!result.ok) throw new Error(result.error.detail)
+    if (result.value !== null) printJson(result.value)
+    return result.value !== null
+  }
+
+  if (once) {
+    await step()
+    return
+  }
+  const stop = createStopToken()
+  const onSignal = (): void => stop.request()
+  process.on('SIGINT', onSignal)
+  process.on('SIGTERM', onSignal)
+  try {
+    while (!stop.requested) {
+      const worked = await step()
+      if (!worked) await interruptibleSleep(intervalMs, stop)
+    }
+  } finally {
+    process.off('SIGINT', onSignal)
+    process.off('SIGTERM', onSignal)
+  }
+}
+
+async function runActionReconcile(argv: readonly string[]): Promise<void> {
+  const flags = parseFlags(argv, ['id', 'once', 'interval'], ['once'])
+  const outboxRaw = optional(flags, 'id')
+  const outboxId = outboxRaw === undefined ? undefined : uuid(outboxRaw, '--id')
+  const once = flags.has('once') || outboxId !== undefined
+  const intervalRaw = optional(flags, 'interval')
+  const intervalMs = intervalRaw === undefined ? 5000 : positiveInteger(intervalRaw, '--interval')
+  const deps = actionGatewayDeps()
+
+  const step = async (): Promise<boolean> => {
+    if (outboxId !== undefined) {
+      const result = await reconcileAction(outboxId, deps)
+      if (!result.ok) throw new Error(result.error.detail)
+      printJson(result.value)
+      return true
+    }
+    const result = await reconcileUncertainActions(deps)
+    if (!result.ok) throw new Error(result.error.detail)
+    if (result.value.length > 0) printJson(result.value)
+    return result.value.length > 0
+  }
+
+  if (once) {
+    await step()
+    return
+  }
+  const stop = createStopToken()
+  const onSignal = (): void => stop.request()
+  process.on('SIGINT', onSignal)
+  process.on('SIGTERM', onSignal)
+  try {
+    while (!stop.requested) {
+      const worked = await step()
+      if (!worked) await interruptibleSleep(intervalMs, stop)
     }
   } finally {
     process.off('SIGINT', onSignal)

@@ -48,8 +48,10 @@ Keel 在绑定时读取一次包并保存到 `managed_package`；运行期只按
 | `READY` | 可认领；按 `current_stage` 执行 |
 | `RUNNING` | 已有 lease，worker 正在执行 |
 | `WAITING_HUMAN` | 已生成 `DecisionRequest`，等待本机操作员 |
+| `WAITING_GATEWAY` | land 已登记 action intent / outbox，等待受控 gateway |
 | `PAUSED` | 缺包、协议不兼容、tool profile 缺失、工作树漂移或门禁失败 |
-| `DONE` | land 完成，`handoff` 保存分支/提交/PR intent |
+| `PR_OPENED` | gateway 已推送并创建/复用 PR，`handoff` 保存 PR 信息 |
+| `DONE` | 兼容旧状态；新 managed 路径在 land 后进入 `WAITING_GATEWAY` |
 | `FAILED` | 尝试预算耗尽等不可继续状态 |
 | `CANCELLED` | 人工选择停止 |
 
@@ -64,7 +66,7 @@ baseline、输入 commit、输入摘要、输出摘要、证据摘要、结构�
 | `execute` | 必须产生新 commit，commit 等于当前 HEAD，与输入 commit 不同，工作树干净 |
 | `verify` | 至少一条 check；每条必须有 command、exit code、passed、输出摘要/摘录；`output_digest` 必须与实际摘录一致；HEAD 不能变化 |
 | `review` | `reviewed_commit` 必须等于当前 HEAD；`diff_digest` 必须等于 Keel 重新计算的 baseline..HEAD diff；open finding 只能进入 rework |
-| `land` | `land.commit` 必须等于当前 HEAD；只保存 `push_and_pr` action intent，不执行 push/PR |
+| `land` | `land.commit` 必须等于当前 HEAD；branch 必须是 `ai/*` 且不等于 base；只登记 `push_and_pr` intent/outbox，不执行 push/PR |
 
 review 的 diff 摘要由 Control 运行 `git diff --binary baseline..HEAD` 计算；模型自报的
 旧 SHA、旧 diff 或旧 verify 证据都会被拒绝。review 提出 open finding 时任务回到

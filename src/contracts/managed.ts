@@ -1,6 +1,10 @@
 /** JT-01：与旧 Artifact/Task 状态机分离的只读调查协议。 */
 
-import type { JstackTicketPackage, ManagedTicketStageResult } from '../generated/managed.js'
+import type {
+  JstackTicketPackage,
+  ManagedActionIntent,
+  ManagedTicketStageResult,
+} from '../generated/managed.js'
 import type { ResultWithUsage } from './errors.js'
 import type { Context, Usage } from './types.js'
 
@@ -78,7 +82,9 @@ export type ManagedTicketStatus =
   | 'READY'
   | 'RUNNING'
   | 'WAITING_HUMAN'
+  | 'WAITING_GATEWAY'
   | 'PAUSED'
+  | 'PR_OPENED'
   | 'DONE'
   | 'FAILED'
   | 'CANCELLED'
@@ -160,3 +166,45 @@ export type ManagedTicketStageRunner = (input: ManagedTicketStageInput) => Promi
     readonly usage: Usage
   }>
 >
+
+export type ManagedActionOutboxStatus =
+  | 'PENDING'
+  | 'LEASED'
+  | 'EXECUTING'
+  | 'SUCCEEDED'
+  | 'FAILED'
+  | 'BLOCKED'
+  | 'UNCERTAIN'
+
+export interface ManagedActionOutboxRecord {
+  readonly id: string
+  readonly action_intent_id: string
+  readonly status: ManagedActionOutboxStatus
+  readonly lease_token: string | null
+  readonly lease_until: string | null
+  readonly fence: number
+  readonly attempts: number
+  readonly permit_id: string | null
+  readonly remote_kind: 'pull_request' | null
+  readonly remote_id: string | null
+  readonly remote_url: string | null
+  readonly result: unknown
+  readonly last_error: string | null
+  readonly next_attempt_at: string | null
+  readonly created_at: string
+  readonly updated_at: string
+}
+
+export interface ManagedActionOutboxClaim {
+  readonly outbox: ManagedActionOutboxRecord
+  readonly intent: ManagedActionIntent
+}
+
+export interface ManagedActionGatewayResult {
+  readonly outboxId: string
+  readonly taskId: string
+  readonly status: ManagedActionOutboxStatus
+  readonly prNumber?: number
+  readonly prUrl?: string
+  readonly error?: string
+}

@@ -107,6 +107,7 @@ async function seed(): Promise<{
   await writeFile(join(root, 'README.md'), '# fixture\n')
   await git(root, 'add', '-A')
   await git(root, 'commit', '-m', 'initial')
+  await git(root, 'checkout', '-b', 'ai/ticket-test')
   const repoId = randomUUID()
   await asOwner((c) =>
     c.query(
@@ -164,7 +165,7 @@ function happyWorker(root: string): ManagedTicketWorker {
     }
     return success('land', {
       land: {
-        branch: 'main',
+        branch: 'ai/ticket-test',
         commit: current,
         action_intent: {
           kind: 'push_and_pr',
@@ -185,13 +186,13 @@ describe('managed ticket runtime', () => {
       const tick = await tickManagedTicket(worker, taskId)
       expect(tick.ok).toBe(true)
       if (!tick.ok) throw new Error(tick.error.detail)
-      expect(tick.value?.status).toBe(index === 3 ? 'DONE' : 'READY')
+      expect(tick.value?.status).toBe(index === 3 ? 'WAITING_GATEWAY' : 'READY')
     }
     const task = await getManagedTicket(taskId)
     expect(task.ok).toBe(true)
     if (!task.ok) throw new Error(task.error.detail)
-    expect(task.value.status).toBe('DONE')
-    expect(task.value.handoff).toMatchObject({ branch: 'main' })
+    expect(task.value.status).toBe('WAITING_GATEWAY')
+    expect(task.value.handoff).toMatchObject({ head_branch: 'ai/ticket-test' })
     const stages = await listManagedTicketStages(taskId)
     expect(stages.map((stage) => stage.stage)).toEqual(['execute', 'verify', 'review', 'land'])
     expect(stages.every((stage) => stage.status === 'SUCCEEDED')).toBe(true)
