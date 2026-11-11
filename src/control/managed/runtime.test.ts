@@ -352,7 +352,7 @@ describe.skipIf(!linux)('managed investigation · 持久链路', () => {
     if (!q) throw new Error('missing question')
     await answerManagedQuestion(q.id, '中文')
     expect((await getManagedTask(b.taskId))?.answers).toEqual([])
-    expect((await getManagedTask(b.taskId))?.status).toBe('WAITING_HUMAN')
+    expect((await getManagedTask(b.taskId))?.status).toBe('WAITING_TIANWEN')
   })
 
   it('模型不能扩大读取到索引外的文件', async () => {
