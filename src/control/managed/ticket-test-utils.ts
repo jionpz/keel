@@ -55,6 +55,7 @@ export function fixtureTicketPackage(
   overrides: {
     ticketId?: string
     ticketTitle?: string
+    ticketDescription?: string
     execute?: string
     verify?: string
     review?: string
@@ -108,6 +109,9 @@ export function fixtureTicketPackage(
     ticket: {
       id: overrides.ticketId ?? 'JT-TEST',
       title: overrides.ticketTitle ?? 'fixture ticket',
+      ...(overrides.ticketDescription === undefined
+        ? {}
+        : { description: overrides.ticketDescription }),
     },
     route: {
       size: 'S' as const,

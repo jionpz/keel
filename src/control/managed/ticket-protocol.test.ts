@@ -24,6 +24,16 @@ describe('managed ticket protocol', () => {
     expect(first.stages[0]?.content_digest).not.toBe(second.stages[0]?.content_digest)
   })
 
+  it('可选 ticket 正文进入完整包摘要', () => {
+    const withoutDescription = fixtureTicketPackage()
+    const withDescription = fixtureTicketPackage({
+      ticketDescription: '验收：新增文档，且只改 docs/agents。',
+    })
+    expect(validateTicketPackage(withDescription).ok).toBe(true)
+    expect(withDescription.ticket.description).toBe('验收：新增文档，且只改 docs/agents。')
+    expect(withDescription.content_digest).not.toBe(withoutDescription.content_digest)
+  })
+
   it('拒绝阶段缺失、顺序不兼容和来源摘要不符', () => {
     const missing = fixtureTicketPackage()
     missing.stages.pop()
