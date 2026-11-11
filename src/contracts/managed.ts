@@ -1,6 +1,8 @@
 /** JT-01：与旧 Artifact/Task 状态机分离的只读调查协议。 */
 
 import type {
+  JstackRoutePackage,
+  JstackRoutePlan,
   JstackTicketPackage,
   ManagedActionIntent,
   ManagedTicketStageResult,
@@ -122,7 +124,7 @@ export interface ManagedTicketStageRecord {
   readonly task_id: string
   readonly stage: ManagedTicketStageName
   readonly attempt: number
-  readonly status: 'RUNNING' | 'SUCCEEDED' | 'REWORK' | 'FAILED' | 'MUST_STOP'
+  readonly status: 'RUNNING' | 'SUCCEEDED' | 'REUSED' | 'REWORK' | 'FAILED' | 'MUST_STOP'
   readonly package_digest: string
   readonly baseline_commit: string
   readonly input_commit: string
@@ -133,6 +135,8 @@ export interface ManagedTicketStageRecord {
   readonly result: unknown
   readonly evidence: unknown
   readonly usage: unknown
+  readonly reused_from_evidence_id: string | null
+  readonly gate_digest: string | null
   readonly error: string | null
   readonly started_at: string
   readonly ended_at: string | null
@@ -185,6 +189,144 @@ export type ManagedTicketDecisionRunner = (input: ManagedTicketDecisionRunInput)
     readonly usage: Usage
   }>
 >
+
+export type ManagedWorkflowStatus =
+  | 'ROUTING'
+  | 'READY'
+  | 'RUNNING'
+  | 'WAITING_HUMAN'
+  | 'WAITING_GATEWAY'
+  | 'PR_READY'
+  | 'PAUSED'
+  | 'DONE'
+  | 'FAILED'
+  | 'CANCELLED'
+
+export interface ManagedWorkflow {
+  readonly id: string
+  readonly repo_id: string
+  readonly package_digest: string
+  readonly repo_config_digest: string
+  readonly baseline_commit: string
+  readonly worktree_root: string
+  readonly request: string
+  readonly scope_paths: readonly string[]
+  readonly external_issue: string | null
+  readonly completion_target: 'branch_ready' | 'pr_ready'
+  readonly status: ManagedWorkflowStatus
+  readonly current_graph_version: number
+  readonly lease_token: string | null
+  readonly lease_until: string | null
+  readonly attempts: number
+  readonly max_attempts: number
+  readonly last_error: string | null
+  readonly created_at: string
+  readonly updated_at: string
+}
+
+export type ManagedWorkflowNodeStatus =
+  | 'PENDING'
+  | 'READY'
+  | 'RUNNING'
+  | 'WAITING_HUMAN'
+  | 'WAITING_GATEWAY'
+  | 'PR_READY'
+  | 'ARCHIVED'
+  | 'FAILED'
+  | 'CANCELLED'
+
+export interface ManagedWorkflowNode {
+  readonly id: string
+  readonly workflow_id: string
+  readonly graph_version: number
+  readonly node_key: string
+  readonly ticket_id: string
+  readonly external_issue: string | null
+  readonly ticket_title: string
+  readonly ticket_size: 'XS' | 'S' | 'M'
+  readonly depends_on: readonly string[]
+  readonly scope_paths: readonly string[]
+  readonly acceptance: readonly string[]
+  readonly status: ManagedWorkflowNodeStatus
+  readonly ticket_task_id: string | null
+  readonly base_commit: string | null
+  readonly worktree_path: string | null
+  readonly output_commit: string | null
+  readonly last_error: string | null
+  readonly created_at: string
+  readonly updated_at: string
+}
+
+export interface ManagedWorkflowGraph {
+  readonly workflow_id: string
+  readonly version: number
+  readonly plan_digest: string
+  readonly plan: unknown
+  readonly status: 'COMMITTED' | 'SUPERSEDED'
+  readonly created_at: string
+  readonly committed_at: string
+  readonly invalidated_reason: string | null
+}
+
+export interface ManagedWorkflowEvidence {
+  readonly id: string
+  readonly workflow_id: string
+  readonly graph_version: number
+  readonly node_id: string
+  readonly source_node_id: string | null
+  readonly stage: ManagedTicketStageName | 'archive'
+  readonly input_commit: string
+  readonly diff_digest: string
+  readonly stage_digest: string
+  readonly branch: string
+  readonly target_digest: string
+  readonly result_digest: string
+  readonly evidence_digest: string
+  readonly result: unknown
+  readonly evidence: unknown
+  readonly status: 'VALID' | 'INVALIDATED'
+  readonly invalidated_reason: string | null
+  readonly created_at: string
+  readonly invalidated_at: string | null
+}
+
+export interface ManagedWorkflowPlanInput {
+  readonly attempt_id: string
+  readonly workflow_id: string
+  readonly repo_id: string
+  readonly request: string
+  readonly context: Context
+  readonly workspace_path: string
+  readonly scope_paths: readonly string[]
+  readonly package: JstackRoutePackage
+}
+
+export type ManagedWorkflowPlanRunner = (input: ManagedWorkflowPlanInput) => Promise<
+  ResultWithUsage<{
+    readonly output: JstackRoutePlan
+    readonly usage: Usage
+  }>
+>
+
+export interface ManagedWorkflowTickResult {
+  readonly workflowId: string
+  readonly status: ManagedWorkflowStatus
+  readonly action:
+    | 'planned'
+    | 'materialized'
+    | 'ticketed'
+    | 'waiting'
+    | 'plan_required'
+    | 'plan_failed'
+    | 'plan_rejected'
+    | 'context_budget'
+    | 'protocol_error'
+    | 'workspace_error'
+    | 'materialize_failed'
+  readonly nodeKey?: string
+  readonly ticketStatus?: string
+  readonly error?: string
+}
 
 export type ManagedActionOutboxStatus =
   | 'PENDING'

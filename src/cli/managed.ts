@@ -39,6 +39,14 @@ import {
 } from '../control/managed/ticket-runtime.js'
 import { listManagedTicketStages } from '../control/managed/ticket-store.js'
 import { runTicketTianwen, tickPendingTicketTianwen } from '../control/managed/ticket-tianwen.js'
+import {
+  commitManagedWorkflowPlan,
+  createManagedWorkflow,
+  getManagedWorkflowProjection,
+  listManagedWorkflowProjections,
+  retryManagedWorkflow,
+  tickManagedWorkflow,
+} from '../control/managed/workflow-runtime.js'
 import { requireClaudeReady } from '../execution/adapters/claude-code.js'
 import { requirePiBinary } from '../execution/adapters/pi.js'
 import {
@@ -147,6 +155,21 @@ function readMemoryRegression(path: string): MemoryRegressionCase[] {
   })
 }
 
+function readJsonFile(path: string, label: string): unknown {
+  let text: string
+  try {
+    text = readFileSync(path, 'utf8')
+  } catch {
+    throw new Error(`${label} 不存在或不可读：${path}`)
+  }
+  if (Buffer.byteLength(text) > 2 * 1024 * 1024) throw new Error(`${label} 超过 2MiB`)
+  try {
+    return JSON.parse(text) as unknown
+  } catch {
+    throw new Error(`${label} 不是合法 JSON：${path}`)
+  }
+}
+
 function printJson(value: unknown): void {
   console.log(JSON.stringify(value, null, 2))
 }
@@ -174,6 +197,13 @@ ticket-tick [--task TASK_UUID] [--harness omp|claude|pi] [--model ID]
 ticket-worker [--once] [--interval MS] [--task TASK_UUID] [--harness omp|claude|pi] [--model ID]
 ticket-answer REQUEST_UUID --revision N --option OPTION_ID
 ticket-tianwen REQUEST_UUID [--revision N] [--harness omp|claude|pi] [--model ID]
+workflow-create --repo UUID --package FILE --worktree-root PATH --scope PATH[,PATH] --request TEXT [--issue REF] [--baseline SHA]
+workflow-plan --workflow UUID --plan FILE [--replan]
+workflow-status WORKFLOW_UUID
+workflow-list
+workflow-retry --workflow UUID [--node NODE_KEY]
+workflow-tick [--workflow UUID] [--harness omp|claude|pi] [--model ID]
+workflow-worker [--once] [--interval MS] [--workflow UUID] [--harness omp|claude|pi] [--model ID]
 action-list [--task TASK_UUID]
 action-gateway [--once] [--interval MS] [--reconcile] [--check-timeout-ms MS]
 action-reconcile [--id OUTBOX_UUID] [--once] [--interval MS]
@@ -188,7 +218,8 @@ memory-rollback SUMMARY_UUID --project UUID --epoch N --reason TEXT
 memory-retrieve PROJECT_UUID --query TEXT [--key DECISION_KEY] [--request UUID] [--budget-entries N] [--budget-tokens N]
 memory-promote REQUEST_UUID --revision N --key DECISION_KEY [--statement TEXT] [--valid-from TIME] [--valid-until TIME] [--supersedes UUID]
 调查模式的天问只在 E3 明确决定或 E1 可逆默认范围内自动答复。
-ticket 模式按固定包完成 execute→verify→review→land；阶段执行器不 push，
+workflow 模式由 jstack 规划 XS/S/M/L/XL 依赖图，每个节点仍按固定包完成
+execute→verify→review→land；阶段执行器不 push，
 受控 action gateway 创建 PR，check gateway 在准确 SHA 的必需检查通过后推进 pr_ready。`)
       return
     }
@@ -304,6 +335,72 @@ ticket 模式按固定包完成 execute→verify→review→land；阶段执行�
         printJson(result.value)
         return
       }
+      case 'workflow-create': {
+        const flags = parseFlags(
+          rest,
+          ['repo', 'package', 'worktree-root', 'scope', 'request', 'issue', 'baseline'],
+          [],
+        )
+        const scopePaths = required(flags, 'scope')
+          .split(',')
+          .map((entry) => entry.trim())
+          .filter((entry) => entry !== '')
+        if (scopePaths.length === 0) throw new Error('--scope 至少需要一个路径')
+        const baseline = optional(flags, 'baseline')
+        const issue = optional(flags, 'issue')
+        const result = await createManagedWorkflow(
+          uuid(required(flags, 'repo'), '--repo'),
+          required(flags, 'package'),
+          required(flags, 'request'),
+          {
+            scopePaths,
+            worktreeRoot: required(flags, 'worktree-root'),
+            ...(baseline === undefined ? {} : { baselineCommit: baseline }),
+            ...(issue === undefined ? {} : { externalIssue: issue }),
+          },
+        )
+        if (!result.ok) throw new Error(result.error.detail)
+        console.log(result.value)
+        return
+      }
+      case 'workflow-plan': {
+        const flags = parseFlags(rest, ['workflow', 'plan', 'replan'], ['replan'])
+        const result = await commitManagedWorkflowPlan(
+          uuid(required(flags, 'workflow'), '--workflow'),
+          readJsonFile(required(flags, 'plan'), 'route plan'),
+          flags.has('replan'),
+        )
+        if (!result.ok) throw new Error(result.error.detail)
+        printJson(result.value)
+        return
+      }
+      case 'workflow-status': {
+        if (rest.length !== 1) throw new Error('用法：managed workflow-status <workflow UUID>')
+        const result = await getManagedWorkflowProjection(uuid(rest[0] ?? '', 'workflow ID'))
+        if (!result.ok) throw new Error(result.error.detail)
+        printJson(result.value)
+        return
+      }
+      case 'workflow-list':
+        printJson(await listManagedWorkflowProjections())
+        return
+      case 'workflow-retry': {
+        const flags = parseFlags(rest, ['workflow', 'node'])
+        const nodeKey = optional(flags, 'node')
+        const result = await retryManagedWorkflow(
+          uuid(required(flags, 'workflow'), '--workflow'),
+          nodeKey,
+        )
+        if (!result.ok) throw new Error(result.error.detail)
+        printJson(result.value)
+        return
+      }
+      case 'workflow-tick':
+        await runWorkflowTick(rest)
+        return
+      case 'workflow-worker':
+        await runWorkflowWorker(rest)
+        return
       case 'action-list': {
         const flags = parseFlags(rest, ['task'])
         const taskId = optional(flags, 'task')
@@ -491,7 +588,7 @@ ticket 模式按固定包完成 execute→verify→review→land；阶段执行�
       }
       default:
         throw new Error(
-          '用法：managed investigate|status|questions|answer|worker|ticket-create|ticket-status|ticket-stages|ticket-tick|ticket-worker|ticket-answer|action-list|action-gateway|action-reconcile|action-retry|action-check-gateway|action-checks|memory-status|memory-summary|memory-publish|memory-reject|memory-rollback|memory-retrieve|memory-promote',
+          '用法：managed investigate|status|questions|answer|worker|ticket-create|ticket-status|ticket-stages|ticket-tick|ticket-worker|ticket-answer|workflow-create|workflow-plan|workflow-status|workflow-list|workflow-retry|workflow-tick|workflow-worker|action-list|action-gateway|action-reconcile|action-retry|action-check-gateway|action-checks|memory-status|memory-summary|memory-publish|memory-reject|memory-rollback|memory-retrieve|memory-promote',
         )
     }
   } catch (error) {
@@ -591,6 +688,51 @@ async function runTicketTick(argv: readonly string[]): Promise<void> {
   const result = await tickManagedTicket(worker, taskId)
   if (!result.ok) throw new Error(result.error.detail)
   printJson(result.value)
+}
+
+async function runWorkflowTick(argv: readonly string[]): Promise<void> {
+  const flags = parseFlags(argv, ['workflow', 'harness', 'model'])
+  const workflowRaw = optional(flags, 'workflow')
+  const workflowId = workflowRaw === undefined ? undefined : uuid(workflowRaw, '--workflow')
+  const worker = await createTicketWorker(flags)
+  if (await drainPendingDecision(worker)) return
+  const result = await tickManagedWorkflow(worker, workflowId)
+  if (!result.ok) throw new Error(result.error.detail)
+  printJson(result.value)
+}
+
+async function runWorkflowWorker(argv: readonly string[]): Promise<void> {
+  const flags = parseFlags(argv, ['once', 'interval', 'workflow', 'harness', 'model'], ['once'])
+  const once = flags.has('once')
+  const intervalRaw = optional(flags, 'interval')
+  const intervalMs = intervalRaw === undefined ? 1000 : positiveInteger(intervalRaw, '--interval')
+  const workflowRaw = optional(flags, 'workflow')
+  const workflowId = workflowRaw === undefined ? undefined : uuid(workflowRaw, '--workflow')
+  const worker = await createTicketWorker(flags)
+  if (once) {
+    if (await drainPendingDecision(worker)) return
+    const result = await tickManagedWorkflow(worker, workflowId)
+    if (!result.ok) throw new Error(result.error.detail)
+    printJson(result.value)
+    return
+  }
+
+  const stop = createStopToken()
+  const onSignal = (): void => stop.request()
+  process.on('SIGINT', onSignal)
+  process.on('SIGTERM', onSignal)
+  try {
+    while (!stop.requested) {
+      if (await drainPendingDecision(worker)) continue
+      const result = await tickManagedWorkflow(worker, workflowId)
+      if (!result.ok) throw new Error(result.error.detail)
+      if (result.value !== null) printJson(result.value)
+      else await interruptibleSleep(intervalMs, stop)
+    }
+  } finally {
+    process.off('SIGINT', onSignal)
+    process.off('SIGTERM', onSignal)
+  }
 }
 
 async function drainPendingDecision(

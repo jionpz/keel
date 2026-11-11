@@ -1,6 +1,6 @@
 # 交付、生产准入与运维
 
-**状态**：JT-01 的只读影子协议与后台队列已合入 `main`（PR #84），原生 OMP 真实模型烟测与提问前/答复后两处 SIGKILL 故障恢复均已实测通过；JT-02、JT-03 已合入；JT-01 仍为影子模式，原生 Claude 未验，JT-04 至 JT-07 与 7 天真实试运行未完成。见[实施进度与可运行命令](./implementation.md)。尚未部署生产服务。
+**状态**：JT-01 的只读影子协议与后台队列已合入 `main`（PR #84），原生 OMP 真实模型烟测与提问前/答复后两处 SIGKILL 故障恢复均已实测通过；JT-02、JT-03 已合入；JT-04 代码、确定性验收与真实 L 多 ticket E2E 已完成、待合入，XL 未单独跑；JT-01 仍为影子模式，原生 Claude 未验，JT-05 至 JT-07 与 7 天真实试运行未完成。见[实施进度与可运行命令](./implementation.md)。尚未部署生产服务。
 
 阅读顺序：[主方案](./README.md) → [契约](./contracts.md) → 本页 → [验收](./acceptance.md)。本页的命令和配置是待实现接口建议，不可复制为现有能力。
 
@@ -29,7 +29,7 @@
 | JT-01 | [#86](https://github.com/jionpz/keel/issues/86) | PR #84 已合入；原生 OMP 烟测与两处故障恢复已验；原生 Claude 未验 |
 | JT-02 | [#90](https://github.com/jionpz/keel/issues/90) | PR #116 已合入；原生 OMP 真实 E2E 已验证 |
 | JT-03 | [#91](https://github.com/jionpz/keel/issues/91) | PR #117 已合并（merge `72d92b3`）；#91 已关闭 |
-| JT-04 | [#92](https://github.com/jionpz/keel/issues/92) | 依赖 JT-02；未实施 |
+| JT-04 | [#92](https://github.com/jionpz/keel/issues/92) | 依赖 JT-02；代码、确定性验收与真实 L E2E 完成，待 PR；XL 未单独跑 |
 | JT-05 | [#93](https://github.com/jionpz/keel/issues/93) | 依赖 JT-03、JT-04；未实施 |
 | JT-06 | [#94](https://github.com/jionpz/keel/issues/94) | 依赖 JT-04、JT-05；未实施 |
 | JT-07 | [#95](https://github.com/jionpz/keel/issues/95) | 依赖 JT-01～JT-06；未实施 |
@@ -193,6 +193,6 @@ runtime:
 
 ## 6. 本次方案工作的交付边界
 
-已交付设计、接口、一致性规则、实施依赖与验收场景，并推进 JT-01、JT-02、JT-03 的代码及确定性回归。Terra 完成数据库/检查环境和受控文件读取，Luna 完成导出器、CLI 与契约回归，主代理完成持久运行、schema、接纳、记忆整合与验证。原生 OMP 真实模型烟测与提问前/答复后两处 SIGKILL 故障恢复均已通过；原生 Claude、JT-04～07、7 天真实试运行等后续生产项未完成，不能标为整个方案已交付。
+已交付设计、接口、一致性规则、实施依赖与验收场景，并推进 JT-01、JT-02、JT-03、JT-04 的代码及确定性回归。Terra 完成数据库/检查环境和受控文件读取，Luna 完成导出器、CLI 与契约回归，主代理完成持久运行、schema、接纳、记忆整合、路线图调度与验证。原生 OMP 真实模型烟测与提问前/答复后两处 SIGKILL 故障恢复均已通过；JT-04 的真实 L 多 ticket 模型 E2E 已通过，XL 未单独跑；原生 Claude、JT-05～07、7 天真实试运行等后续生产项未完成，不能标为整个方案已交付。
 
 2026-11-10 已把 JT-01 剩余验收与 JT-02～JT-07 发布到 GitHub：[#85](https://github.com/jionpz/keel/issues/85) 为进度总览，[#86](https://github.com/jionpz/keel/issues/86) 与 [#90](https://github.com/jionpz/keel/issues/90)～[#95](https://github.com/jionpz/keel/issues/95) 为子票，原生 sub-issue 与依赖关系已建立。历史：本方案初稿时 GitHub 写接口曾返回 403，当时只保留本地材料且未伪造远程 issue ID；该限制已解除。

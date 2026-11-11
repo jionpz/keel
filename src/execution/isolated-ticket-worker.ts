@@ -5,6 +5,7 @@ import type {
   ManagedInference,
   ManagedTicketDecisionRunner,
   ManagedTicketStageRunner,
+  ManagedWorkflowPlanRunner,
 } from '../contracts/managed.js'
 import { ZERO_USAGE } from '../contracts/types.js'
 import type { ManagedTicketWorker } from '../control/managed/ticket-runtime.js'
@@ -57,12 +58,22 @@ export function createIsolatedTicketWorker(
       return { ok: false, error: managedEnvError(error), usage: ZERO_USAGE }
     }
   }
+  const plan: ManagedWorkflowPlanRunner = async (input) => {
+    try {
+      return await withIsolatedAdapter(options, input.workspace_path, (adapter) =>
+        ticketWorkerFromAdapter(adapter).plan(input),
+      )
+    } catch (error) {
+      return { ok: false, error: managedEnvError(error), usage: ZERO_USAGE }
+    }
+  }
 
   return {
     harness,
     toolInventory: options.descriptor.tool_inventory ?? [],
     run,
     decide,
+    plan,
   }
 }
 

@@ -468,7 +468,7 @@ export const CONSOLE_HTML = `<!doctype html>
   .sb-live.wait b { color: var(--signal); }
 
   /* ─── Task List ─── */
-  #task-list {
+  #task-list, #workflow-list {
     list-style: none;
     margin: 0;
     padding: 0 6px 8px;
@@ -478,7 +478,7 @@ export const CONSOLE_HTML = `<!doctype html>
     flex-direction: column;
     gap: 1px;
   }
-  #task-list li.task-item {
+  #task-list li.task-item, #workflow-list li.task-item {
     position: relative;
     padding: 6px 8px 6px 10px;
     border-radius: 0;
@@ -488,9 +488,9 @@ export const CONSOLE_HTML = `<!doctype html>
     gap: 8px;
     transition: background 0.1s;
   }
-  #task-list li.task-item:hover { background: var(--hover); }
-  #task-list li.task-item.active { background: var(--select); }
-  #task-list li.task-item.active::before {
+  #task-list li.task-item:hover, #workflow-list li.task-item:hover { background: var(--hover); }
+  #task-list li.task-item.active, #workflow-list li.task-item.active { background: var(--select); }
+  #task-list li.task-item.active::before, #workflow-list li.task-item.active::before {
     content: "";
     position: absolute;
     left: 0;
@@ -499,7 +499,8 @@ export const CONSOLE_HTML = `<!doctype html>
     width: 2px;
     background: var(--ink);
   }
-  #task-list li.task-item.active .task-title { color: var(--ink); font-weight: 600; }
+  #task-list li.task-item.active .task-title,
+  #workflow-list li.task-item.active .task-title { color: var(--ink); font-weight: 600; }
 
   /* 状态只用一个方块表达；中文短名放在第二行，机器码留给详情页 */
   .task-dot {
@@ -559,6 +560,45 @@ export const CONSOLE_HTML = `<!doctype html>
     flex: 0 1 auto;
   }
   .task-sub .task-time { flex: 0 0 auto; margin-left: auto; }
+
+  /* ─── Workflow List（托管工作流侧栏） ───
+     legacy-v01 任务与 jstack-managed-v1 工作流共用一套列表骨架，
+     但工作流多一行节点计数，并把 projection 明确写在列表上方。 */
+  .workflow-projection {
+    margin: 0 10px 6px;
+    padding: 6px 8px 6px 10px;
+    border-left: 2px solid var(--move);
+    background: var(--move-wash);
+    color: var(--ink-2);
+    font-size: 10.5px;
+    line-height: 1.5;
+    flex: 0 0 auto;
+  }
+  .workflow-projection code {
+    display: block;
+    margin-top: 1px;
+    color: var(--ink);
+    font-size: 10.5px;
+    word-break: break-all;
+  }
+  #workflow-list .workflow-sub {
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+  #workflow-list .workflow-sub .task-time { margin-left: auto; }
+  .workflow-counts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 8px;
+    margin-top: 2px;
+    font-size: 10.5px;
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+  }
+  .workflow-counts .waiting-human {
+    color: var(--signal);
+    font-weight: 600;
+  }
 
   /* ─── Project List（项目模式侧栏） ───
      一项两行：先回答「哪个项目、有没有事等我」，再给规模与新鲜度。
@@ -748,6 +788,110 @@ export const CONSOLE_HTML = `<!doctype html>
     margin: 14px 0;
     font-size: 12.5px;
     color: var(--ink-3);
+  }
+
+  /* ─── Workflow View（只读托管工作流详情） ─── */
+  .wf-kicker {
+    font-size: 10.5px;
+    color: var(--ink-3);
+    letter-spacing: 0.06em;
+    margin-bottom: 2px;
+  }
+  .wf-head-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .wf-head-title h2 { margin: 0; }
+  .wf-projection-line {
+    align-self: flex-start;
+    padding-left: 9px;
+    border-left: 2px solid var(--move);
+    color: var(--ink-2);
+    font-size: 11px;
+    font-family: var(--mono);
+    word-break: break-all;
+  }
+  .wf-request-text {
+    margin: 0;
+    max-width: 82ch;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--ink);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .wf-facts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 0 20px;
+  }
+  .wf-fact {
+    min-width: 0;
+    padding: 7px 0;
+    border-bottom: 1px solid var(--rule);
+  }
+  .wf-fact-label {
+    font-size: 10.5px;
+    color: var(--ink-3);
+  }
+  .wf-fact-value {
+    margin-top: 2px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--ink-2);
+    word-break: break-all;
+  }
+  .wf-table-wrap { overflow-x: auto; }
+  .wf-table { min-width: 1040px; }
+  .wf-table.evidence-table { min-width: 680px; }
+  .wf-table th, .wf-table td { padding: 8px 9px; }
+  .wf-code {
+    font-size: 10.5px;
+    word-break: break-all;
+  }
+  .wf-chip-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .wf-chip {
+    padding: 1px 5px;
+    border: 1px solid var(--rule);
+    background: var(--code-bg);
+    color: var(--ink-2);
+    font-size: 10.5px;
+    word-break: break-all;
+  }
+  .wf-acceptance {
+    margin: 0;
+    padding-left: 17px;
+    max-width: 360px;
+    font-size: 11.5px;
+  }
+  .wf-acceptance li + li { margin-top: 3px; }
+  .wf-readonly-note {
+    font-size: 10.5px;
+    color: var(--ink-3);
+  }
+  .wf-error {
+    max-width: 78ch;
+    margin: 0 auto;
+    padding: 40px 20px;
+    text-align: left;
+    white-space: pre-wrap;
+    line-height: 1.7;
+  }
+  #workflow-list li.wf-error-item {
+    padding: 14px 10px;
+    color: var(--ink-2);
+    font-size: 11.5px;
+    line-height: 1.6;
+    word-break: break-word;
   }
 
   /* ─── 概览（Overview） ─── */
@@ -2252,10 +2396,19 @@ export const CONSOLE_HTML = `<!doctype html>
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h8" stroke-linecap="round"/></svg>
         <span class="mode-label">任务</span><span class="mode-count" id="mode-count-tasks">0</span>
       </button>
+      <button type="button" class="mode-btn" data-mode="workflows" role="tab" aria-selected="false">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="2" y="2" width="4" height="4"/><rect x="10" y="10" width="4" height="4"/><path d="M6 4h3.2c1.5 0 2.8 1.2 2.8 2.8V10M10 12H6.8C5.3 12 4 10.8 4 9.2V6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span class="mode-label">工作流</span><span class="mode-count" id="mode-count-workflows">0</span>
+      </button>
       <button type="button" class="mode-btn" data-mode="projects" role="tab" aria-selected="false">
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><path d="M1.8 4.2c0-.7.6-1.2 1.2-1.2h3l1.3 1.5h5.7c.7 0 1.2.6 1.2 1.2v5.9c0 .7-.6 1.2-1.2 1.2H3c-.7 0-1.2-.6-1.2-1.2V4.2z" stroke-linejoin="round"/></svg>
         <span class="mode-label">项目</span><span class="mode-count" id="mode-count-projects">0</span>
       </button>
+    </div>
+
+    <div class="workflow-projection" id="workflow-projection" hidden>
+      托管工作流，与 legacy 任务分开
+      <code>projection=jstack-managed-v1</code>
     </div>
 
     <div class="explorer-controls" id="explorer-controls">
@@ -2279,6 +2432,7 @@ export const CONSOLE_HTML = `<!doctype html>
 
     <ul id="task-list"></ul>
     <ul id="project-list" hidden></ul>
+    <ul id="workflow-list" hidden></ul>
   </aside>
 
   <main id="detail">
@@ -2334,13 +2488,16 @@ export const CONSOLE_HTML = `<!doctype html>
 
   var state = {
     tasks: [],
+    workflows: [],
     meta: null,
     // 默认落点：概览先回答「最近怎么样」，再往里点任务 / 项目
     mode: 'overview',
     selectedRepo: null,
+    selectedWorkflowId: null,
     repoFilter: 'all',
     selectedId: null,
     detail: null,
+    workflowDetail: null,
     activeTab: 'overview',
     // 用户是否亲手选过 Tab：没选过时，闸门状态默认落在决策页；选过就尊重用户
     tabChosen: false,
@@ -2354,6 +2511,9 @@ export const CONSOLE_HTML = `<!doctype html>
     glossaryOpen: false,
     tasksSig: '',
     detailSig: '',
+    workflowsSig: '',
+    workflowDetailSig: '',
+    workflowsError: '',
     stats: null,
     statsSig: '',
     statsError: false,
@@ -2390,12 +2550,14 @@ export const CONSOLE_HTML = `<!doctype html>
     var parts = h.split('&');
     var explicitMode = '';
     var hasTask = false;
+    var hasWorkflow = false;
     for (var i = 0; i < parts.length; i++) {
       var kv = parts[i].split('=');
       var k = decodeURIComponent(kv[0] || '');
       var v = decodeURIComponent(kv[1] || '');
       if (k === 'task' && v) { state.selectedId = v; hasTask = true; }
-      if (k === 'mode' && (v === 'tasks' || v === 'projects' || v === 'overview')) explicitMode = v;
+      if (k === 'workflow' && v) { state.selectedWorkflowId = v; hasWorkflow = true; }
+      if (k === 'mode' && (v === 'tasks' || v === 'workflows' || v === 'projects' || v === 'overview')) explicitMode = v;
       if (k === 'repo' && v) state.selectedRepo = v;
       if (k === 'tab' && (v === 'overview' || v === 'runs' || v === 'diff' || v === 'timeline' || v === 'decision')) {
         state.activeTab = v;
@@ -2405,6 +2567,7 @@ export const CONSOLE_HTML = `<!doctype html>
     // 只有 task 键的链接回落到任务模式，否则从项目模式点任务会两边都不对
     if (explicitMode) state.mode = explicitMode;
     else if (hasTask) state.mode = 'tasks';
+    else if (hasWorkflow) state.mode = 'workflows';
   }
 
   function syncHash() {
@@ -2413,6 +2576,8 @@ export const CONSOLE_HTML = `<!doctype html>
       nextHash = '#mode=overview';
     } else if (state.mode === 'projects') {
       nextHash = '#mode=projects' + (state.selectedRepo ? '&repo=' + encodeURIComponent(state.selectedRepo) : '');
+    } else if (state.mode === 'workflows') {
+      nextHash = '#mode=workflows' + (state.selectedWorkflowId ? '&workflow=' + encodeURIComponent(state.selectedWorkflowId) : '');
     } else if (state.selectedId) {
       nextHash = '#task=' + encodeURIComponent(state.selectedId) + '&tab=' + encodeURIComponent(state.activeTab);
     } else {
@@ -3000,7 +3165,299 @@ export const CONSOLE_HTML = `<!doctype html>
     syncHash();
   }
 
-  /** 两种模式共用同一个侧栏骨架：只切换可见容器与按钮态。 */
+  // ─── 托管工作流（jstack-managed-v1） ───
+
+  var WORKFLOW_STATUS_LABELS = {
+    ROUTING: '规划中',
+    READY: '就绪',
+    RUNNING: '运行中',
+    WAITING_HUMAN: '等待人工',
+    WAITING_GATEWAY: '等待网关',
+    PR_READY: 'PR 就绪',
+    PAUSED: '已暂停',
+    DONE: '已完成',
+    FAILED: '失败',
+    CANCELLED: '已取消',
+    PENDING: '等待',
+    ARCHIVED: '已归档',
+    VALID: '有效',
+    INVALIDATED: '已失效',
+    COMMITTED: '已提交',
+    SUPERSEDED: '已作废',
+    SUCCEEDED: '成功'
+  };
+
+  function workflowBadgeKind(status) {
+    if (status === 'FAILED' || status === 'CANCELLED' || status === 'INVALIDATED') return 'bad';
+    if (status === 'WAITING_HUMAN' || status === 'WAITING_GATEWAY' || status === 'PAUSED') return 'gate';
+    if (status === 'DONE' || status === 'PR_READY' || status === 'ARCHIVED' || status === 'VALID' || status === 'COMMITTED') return 'done';
+    if (status === 'ROUTING' || status === 'READY' || status === 'RUNNING' || status === 'PENDING' || status === 'SUCCEEDED') return 'stage';
+    return 'neutral';
+  }
+
+  function workflowBadge(status, compact) {
+    var code = String(status || 'UNKNOWN');
+    var zh = WORKFLOW_STATUS_LABELS[code] || '';
+    var body = zh
+      ? '<span class="badge-zh">' + esc(zh) + '</span>' + (compact ? '' : '<span class="badge-code">' + esc(code) + '</span>')
+      : '<span class="badge-code">' + esc(code) + '</span>';
+    return '<span class="badge ' + workflowBadgeKind(code) + '" title="' + esc(code) + '">' +
+      '<span class="dot"></span>' + body + '</span>';
+  }
+
+  /** pg 的 jsonb 列通常已是数组；这里也接受测试 / 旧客户端传来的 JSON 字符串。 */
+  function workflowArray(value) {
+    if (Array.isArray(value)) return value;
+    if (typeof value === 'string' && value.trim()) {
+      try {
+        var parsed = JSON.parse(value);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (_e) {
+        return [];
+      }
+    }
+    return [];
+  }
+
+  function workflowText(value) {
+    if (value == null || value === '') return '—';
+    if (typeof value === 'string') return value;
+    try {
+      return JSON.stringify(value);
+    } catch (_e) {
+      return String(value);
+    }
+  }
+
+  function workflowChips(value) {
+    var items = workflowArray(value);
+    if (items.length === 0) return '<span class="muted">—</span>';
+    var html = '<ul class="wf-chip-list">';
+    for (var i = 0; i < items.length; i++) {
+      html += '<li class="wf-chip">' + esc(workflowText(items[i])) + '</li>';
+    }
+    return html + '</ul>';
+  }
+
+  function workflowAcceptance(value) {
+    var items = workflowArray(value);
+    if (items.length === 0) return '<span class="muted">—</span>';
+    var html = '<ol class="wf-acceptance">';
+    for (var i = 0; i < items.length; i++) {
+      html += '<li>' + esc(workflowText(items[i])) + '</li>';
+    }
+    return html + '</ol>';
+  }
+
+  function workflowRequestSummary(value) {
+    var text = String(value || '').replace(/\\s+/g, ' ').trim();
+    if (!text) return '（无 request）';
+    return text.length > 96 ? text.slice(0, 96) + '…' : text;
+  }
+
+  function workflowFact(label, value) {
+    return '<div class="wf-fact">' +
+      '<div class="wf-fact-label">' + esc(label) + '</div>' +
+      '<div class="wf-fact-value">' + esc(workflowText(value)) + '</div>' +
+    '</div>';
+  }
+
+  function workflowFactRaw(label, valueHtml) {
+    return '<div class="wf-fact">' +
+      '<div class="wf-fact-label">' + esc(label) + '</div>' +
+      '<div class="wf-fact-value">' + valueHtml + '</div>' +
+    '</div>';
+  }
+
+  function renderWorkflowList() {
+    var list = document.getElementById('workflow-list');
+    if (!list) return;
+    var modeCount = document.getElementById('mode-count-workflows');
+    if (modeCount) modeCount.textContent = String(state.workflows.length);
+
+    if (state.workflowsError) {
+      list.innerHTML = '<li class="wf-error-item">' + esc(state.workflowsError) + '</li>';
+      if (state.mode === 'workflows') document.getElementById('count').textContent = '工作流加载失败';
+      return;
+    }
+
+    var html = '';
+    for (var i = 0; i < state.workflows.length; i++) {
+      var w = state.workflows[i];
+      var active = w.id === state.selectedWorkflowId;
+      var waiting = Number(w.waiting_human || 0);
+      var needsHuman = w.status === 'WAITING_HUMAN' || waiting > 0;
+      var dotCls = workflowBadgeKind(w.status);
+      html += '<li data-workflow-id="' + esc(w.id) + '" class="task-item workflow-item' +
+          (active ? ' active' : '') + (needsHuman ? ' needs-action' : '') + '">' +
+        '<span class="task-dot ' + dotCls + '" title="' + esc(w.status) + '"></span>' +
+        '<div class="task-body">' +
+          '<div class="task-title-row">' +
+            '<span class="task-title" title="' + esc(workflowRequestSummary(w.request)) + '">' + esc(workflowRequestSummary(w.request)) + '</span>' +
+            '<span class="task-id">' + esc(shortId(w.id)) + '</span>' +
+          '</div>' +
+          '<div class="task-sub workflow-sub">' +
+            workflowBadge(w.status, false) +
+            '<span>图 v' + esc(w.current_graph_version == null ? '—' : w.current_graph_version) + '</span>' +
+            '<span class="task-time">更新 ' + esc(fmtListTime(w.updated_at)) + '</span>' +
+          '</div>' +
+          '<div class="workflow-counts">' +
+            '<span>' + esc(w.node_count == null ? 0 : w.node_count) + ' tickets</span>' +
+            '<span>' + esc(w.archived_count == null ? 0 : w.archived_count) + ' 已归档</span>' +
+            '<span' + (waiting > 0 ? ' class="waiting-human"' : '') + '>' + esc(waiting) + ' 等待人工</span>' +
+          '</div>' +
+        '</div>' +
+      '</li>';
+    }
+    list.innerHTML = html || '<li class="empty" style="padding:24px 12px">还没有托管工作流</li>';
+    if (state.mode === 'workflows') {
+      document.getElementById('count').textContent = state.workflows.length + ' 个工作流';
+    }
+  }
+
+  function renderWorkflowDetail(data) {
+    state.workflowDetail = data;
+    var detailEl = document.getElementById('detail');
+    var w = data.workflow || {};
+    var graph = data.graph || null;
+    var nodes = data.nodes || [];
+    var evidence = data.evidence || [];
+    var graphVersion = graph && graph.version != null ? graph.version : w.current_graph_version;
+    var graphStatus = graph && graph.status ? graph.status : '尚无图';
+
+    var facts = '';
+    facts += workflowFact('workflow id', w.id);
+    facts += workflowFactRaw('状态', workflowBadge(w.status, false));
+    facts += workflowFact('当前图版本', 'v' + workflowText(w.current_graph_version));
+    facts += workflowFact('完成目标', w.completion_target);
+    facts += workflowFact('baseline_commit', w.baseline_commit);
+    facts += workflowFact('external_issue', w.external_issue);
+    facts += workflowFact('创建时间', fmtTime(w.created_at));
+    facts += workflowFact('更新时间', fmtTime(w.updated_at));
+    if (w.last_error) facts += workflowFact('last_error', w.last_error);
+    facts += workflowFactRaw('scope_paths', workflowChips(w.scope_paths));
+
+    var graphFacts = '';
+    if (graph) {
+      graphFacts += workflowFact('graph.version', graph.version);
+      graphFacts += workflowFactRaw('graph.status', workflowBadge(graph.status, false));
+      graphFacts += workflowFact('plan_digest', graph.plan_digest);
+      graphFacts += workflowFact('committed_at', fmtTime(graph.committed_at));
+    } else {
+      graphFacts = '<p class="proj-empty">当前工作流还没有提交的图。</p>';
+    }
+
+    var nodeRows = '';
+    for (var i = 0; i < nodes.length; i++) {
+      var node = nodes[i];
+      nodeRows += '<tr>' +
+        '<td><code class="wf-code">' + esc(workflowText(node.node_key)) + '</code></td>' +
+        '<td><code class="wf-code">' + esc(workflowText(node.ticket_id)) + '</code></td>' +
+        '<td>' + esc(workflowText(node.ticket_size)) + '</td>' +
+        '<td>' + workflowBadge(node.status, false) + '</td>' +
+        '<td>' + workflowChips(node.depends_on) + '</td>' +
+        '<td>' + workflowChips(node.scope_paths) + '</td>' +
+        '<td>' + workflowAcceptance(node.acceptance) + '</td>' +
+        '<td><code class="wf-code">' + esc(workflowText(node.ticket_task_id)) + '</code></td>' +
+      '</tr>';
+    }
+
+    var evidenceRows = '';
+    for (var j = 0; j < evidence.length; j++) {
+      var ev = evidence[j];
+      var target = String(ev.target_digest || '');
+      evidenceRows += '<tr>' +
+        '<td><code class="wf-code">' + esc(workflowText(ev.stage)) + '</code></td>' +
+        '<td>' + workflowBadge(ev.status, false) + '</td>' +
+        '<td><code class="wf-code">' + esc(workflowText(ev.input_commit)) + '</code></td>' +
+        '<td><code class="wf-code">' + esc(target.slice(0, 12) || '—') + '</code></td>' +
+      '</tr>';
+    }
+
+    var html = '<div class="view workflow-view">' +
+      '<div class="view-head">' +
+        '<div class="wf-kicker">托管工作流</div>' +
+        '<div class="wf-head-title">' +
+          '<h2 class="cockpit-title" title="' + esc(w.id) + '">工作流 ' + esc(shortId(w.id)) + '</h2>' +
+          workflowBadge(w.status, false) +
+        '</div>' +
+        '<div class="wf-projection-line">projection=jstack-managed-v1，只读</div>' +
+        '<p class="wf-request-text">' + esc(workflowText(w.request)) + '</p>' +
+        '<p class="proj-meta">图 v' + esc(workflowText(graphVersion)) + '，' +
+          esc(workflowText(graphStatus)) + '，更新 ' + esc(fmtListTime(w.updated_at)) + '</p>' +
+      '</div>' +
+      '<div class="view-body">' +
+        '<div class="card">' +
+          '<div class="card-header"><h3>工作流</h3><span class="wf-readonly-note">只读，不提供写操作</span></div>' +
+          '<div class="wf-facts">' + facts + '</div>' +
+        '</div>' +
+        '<div class="card">' +
+          '<div class="card-header"><h3>图</h3><span class="wf-readonly-note">版本与提交状态</span></div>' +
+          '<div class="wf-facts">' + graphFacts + '</div>' +
+        '</div>' +
+        '<div class="card">' +
+          '<div class="card-header"><h3>节点 <span class="tab-count">' + nodes.length + '</span></h3></div>' +
+          (nodes.length === 0
+            ? '<p class="proj-empty">当前图还没有节点。</p>'
+            : '<div class="wf-table-wrap"><table class="wf-table"><thead><tr>' +
+                '<th>node_key</th><th>ticket_id</th><th>size</th><th>status</th>' +
+                '<th>depends_on</th><th>scope_paths</th><th>acceptance</th><th>ticket_task_id</th>' +
+              '</tr></thead><tbody>' + nodeRows + '</tbody></table></div>') +
+        '</div>' +
+        '<div class="card">' +
+          '<div class="card-header"><h3>证据 <span class="tab-count">' + evidence.length + '</span></h3>' +
+            '<span class="wf-readonly-note">target_digest 显示前 12 位</span></div>' +
+          (evidence.length === 0
+            ? '<p class="proj-empty">还没有工作流证据。</p>'
+            : '<div class="wf-table-wrap"><table class="wf-table evidence-table"><thead><tr>' +
+                '<th>stage</th><th>status</th><th>input_commit</th><th>target_digest</th>' +
+              '</tr></thead><tbody>' + evidenceRows + '</tbody></table></div>') +
+        '</div>' +
+      '</div>' +
+    '</div>';
+    detailEl.innerHTML = html;
+    syncHash();
+  }
+
+  function workflowFailureText(err, endpoint) {
+    var message = err && err.message ? err.message : String(err || '未知错误');
+    return '无法加载工作流：' + message + '。 ' +
+      '请检查 GET ' + endpoint + ' 与 managed_workflow 数据库迁移；legacy 任务视图不受影响。';
+  }
+
+  function renderWorkflowLoading() {
+    document.getElementById('detail').innerHTML = '<div class="empty">正在加载托管工作流…</div>';
+  }
+
+  function renderWorkflowEmpty() {
+    state.workflowDetail = null;
+    state.workflowDetailSig = '';
+    document.getElementById('detail').innerHTML =
+      '<div class="view"><div class="view-head">' +
+        '<div class="wf-kicker">托管工作流</div>' +
+        '<h2 class="cockpit-title" style="margin:0">工作流</h2>' +
+        '<div class="wf-projection-line">projection=jstack-managed-v1，只读</div>' +
+      '</div><div class="view-body">' +
+        '<div class="empty">还没有托管工作流。legacy 任务仍可在「任务」模式查看。</div>' +
+      '</div></div>';
+    syncHash();
+  }
+
+  function renderWorkflowDetailFailure(err, id) {
+    state.workflowDetail = null;
+    state.workflowDetailSig = '';
+    document.getElementById('detail').innerHTML =
+      '<div class="view"><div class="view-head">' +
+        '<div class="wf-kicker">托管工作流</div>' +
+        '<h2 class="cockpit-title" style="margin:0">工作流 ' + esc(shortId(id)) + '</h2>' +
+        '<div class="wf-projection-line">projection=jstack-managed-v1，只读</div>' +
+      '</div><div class="view-body"><div class="empty wf-error">' +
+        esc(workflowFailureText(err, '/api/workflows/' + encodeURIComponent(id))) +
+      '</div></div></div>';
+    syncHash();
+  }
+
+  /** 四种模式共用同一个侧栏骨架：只切换可见容器与按钮态。 */
   function applyModeChrome() {
     var mode = state.mode;
     var buttons = document.querySelectorAll('#mode-switch .mode-btn');
@@ -3010,18 +3467,22 @@ export const CONSOLE_HTML = `<!doctype html>
       buttons[i].setAttribute('aria-selected', on ? 'true' : 'false');
     }
     var isProjects = mode === 'projects';
+    var isWorkflows = mode === 'workflows';
     var isOverview = mode === 'overview';
-    document.getElementById('task-list').hidden = isProjects;
+    document.getElementById('task-list').hidden = isProjects || isWorkflows;
     document.getElementById('project-list').hidden = !isProjects;
+    document.getElementById('workflow-list').hidden = !isWorkflows;
+    var projection = document.getElementById('workflow-projection');
+    if (projection) projection.hidden = !isWorkflows;
     // 概览看的是全量，搜索/筛选在这里没有作用对象，整块收起来
     var controls = document.getElementById('explorer-controls');
-    if (controls) controls.hidden = isOverview;
+    if (controls) controls.hidden = isOverview || isWorkflows;
     // 项目下拉只属于任务模式；状态 chip 只在任务模式留在侧栏。
     // 项目模式把 chip 放进任务列表上方 —— 它筛谁，就站在谁旁边。
     var row = document.getElementById('repo-filter-row');
-    if (row) row.hidden = isProjects || isOverview;
+    if (row) row.hidden = isProjects || isOverview || isWorkflows;
     var filters = document.getElementById('status-filters');
-    if (filters) filters.hidden = isOverview || isProjects;
+    if (filters) filters.hidden = isOverview || isProjects || isWorkflows;
     var search = document.getElementById('task-search');
     if (search) {
       search.placeholder = isProjects ? '搜索项目名或仓库地址…' : '搜索任务标题、ID、仓库、分支…';
@@ -3375,6 +3836,8 @@ export const CONSOLE_HTML = `<!doctype html>
       loadStats(false).then(function () {
         if (state.mode === 'overview') renderOverview();
       });
+    } else if (mode === 'workflows') {
+      enterWorkflows();
     } else {
       renderTasks();
       if (state.selectedId) {
@@ -4991,6 +5454,122 @@ export const CONSOLE_HTML = `<!doctype html>
     return [t.id, t.status, t.control_mode, t.updated_at, runs.length, runStatuses.join(','), lastSeq, (d.artifacts || []).length].join('|');
   }
 
+  function computeWorkflowsSig(workflows) {
+    var parts = [];
+    for (var i = 0; i < workflows.length; i++) {
+      var w = workflows[i];
+      parts.push([
+        w.id, w.status, w.current_graph_version, w.node_count, w.archived_count,
+        w.waiting_human, w.updated_at
+      ].join(':'));
+    }
+    return parts.join('|');
+  }
+
+  function computeWorkflowDetailSig(data) {
+    var w = data.workflow || {};
+    var graph = data.graph || {};
+    var nodes = data.nodes || [];
+    var evidence = data.evidence || [];
+    var nodeParts = [];
+    for (var i = 0; i < nodes.length; i++) {
+      nodeParts.push(nodes[i].node_key + ':' + nodes[i].status + ':' + nodes[i].ticket_task_id);
+    }
+    var evidenceParts = [];
+    for (var j = 0; j < evidence.length; j++) {
+      evidenceParts.push(evidence[j].id + ':' + evidence[j].stage + ':' + evidence[j].status);
+    }
+    return [w.id, w.status, w.current_graph_version, w.updated_at, graph.version, graph.status,
+      nodeParts.join(','), evidenceParts.join(',')].join('|');
+  }
+
+  function ensureWorkflowSelection() {
+    if (state.selectedWorkflowId) {
+      for (var i = 0; i < state.workflows.length; i++) {
+        if (state.workflows[i].id === state.selectedWorkflowId) return state.selectedWorkflowId;
+      }
+    }
+    state.selectedWorkflowId = state.workflows.length > 0 ? state.workflows[0].id : null;
+    return state.selectedWorkflowId;
+  }
+
+  function loadWorkflows(silent) {
+    return fetchJSON('/api/workflows').then(function (data) {
+      var next = data.workflows || [];
+      var sig = computeWorkflowsSig(next);
+      var changed = sig !== state.workflowsSig || !!state.workflowsError;
+      state.workflows = next;
+      state.workflowsSig = sig;
+      state.workflowsError = '';
+      if (!silent || changed) renderWorkflowList();
+      return true;
+    }).catch(function (err) {
+      // 工作流是独立投影；这一路失败不能把 legacy 任务列表与详情一起拖垮
+      state.workflowsError = workflowFailureText(err, '/api/workflows');
+      renderWorkflowList();
+      return false;
+    });
+  }
+
+  function loadWorkflowDetail(id, silent) {
+    return fetchJSON('/api/workflows/' + encodeURIComponent(id)).then(function (data) {
+      if (state.mode !== 'workflows' || state.selectedWorkflowId !== id) return;
+      var sig = computeWorkflowDetailSig(data);
+      if (silent && state.workflowDetail && sig === state.workflowDetailSig) return;
+      state.workflowDetailSig = sig;
+      renderWorkflowDetail(data);
+    }).catch(function (err) {
+      if (state.mode !== 'workflows' || state.selectedWorkflowId !== id) return;
+      renderWorkflowDetailFailure(err, id);
+    });
+  }
+
+  function selectWorkflow(id) {
+    if (!id) return;
+    state.selectedWorkflowId = id;
+    state.workflowDetail = null;
+    state.workflowDetailSig = '';
+    if (state.mode !== 'workflows') {
+      setMode('workflows');
+      return;
+    }
+    renderWorkflowList();
+    syncHash();
+    renderWorkflowLoading();
+    return loadWorkflowDetail(id, false);
+  }
+
+  function enterWorkflows() {
+    renderWorkflowList();
+    if (state.workflows.length === 0) renderWorkflowLoading();
+    return loadWorkflows(false).then(function (ok) {
+      if (state.mode !== 'workflows') return;
+      if (!ok) {
+        document.getElementById('detail').innerHTML =
+          '<div class="view"><div class="view-head">' +
+            '<div class="wf-kicker">托管工作流</div>' +
+            '<h2 class="cockpit-title" style="margin:0">工作流</h2>' +
+            '<div class="wf-projection-line">projection=jstack-managed-v1，只读</div>' +
+          '</div><div class="view-body"><div class="empty wf-error">' +
+            esc(state.workflowsError) +
+          '</div></div></div>';
+        syncHash();
+        return;
+      }
+      var id = ensureWorkflowSelection();
+      renderWorkflowList();
+      if (!id) {
+        renderWorkflowEmpty();
+        return;
+      }
+      return loadWorkflowDetail(id, false);
+    }).catch(function (err) {
+      if (state.mode !== 'workflows') return;
+      document.getElementById('detail').innerHTML =
+        '<div class="empty wf-error">' + esc(workflowFailureText(err, '/api/workflows')) + '</div>';
+    });
+  }
+
   function loadTasks(silent) {
     return fetchJSON('/api/tasks').then(function (data) {
       var nextTasks = data.tasks || [];
@@ -5000,7 +5579,7 @@ export const CONSOLE_HTML = `<!doctype html>
         state.tasksSig = sig;
         if (state.mode === 'projects') {
           renderProjects();
-        } else {
+        } else if (state.mode !== 'workflows') {
           renderTasks();
         }
       }
@@ -5053,6 +5632,18 @@ export const CONSOLE_HTML = `<!doctype html>
       if (state.mode === 'overview') {
         return loadStats(!!silent).then(function (statsChanged) {
           if (!silent || statsChanged || state.tasksSig !== prevTasksSig) renderOverview();
+        });
+      }
+      if (state.mode === 'workflows') {
+        return loadWorkflows(!!silent).then(function (ok) {
+          if (!ok || state.mode !== 'workflows') return;
+          var id = ensureWorkflowSelection();
+          renderWorkflowList();
+          if (!id) {
+            renderWorkflowEmpty();
+            return;
+          }
+          return loadWorkflowDetail(id, !!silent);
         });
       }
       if (state.mode === 'projects') {
@@ -5230,6 +5821,11 @@ export const CONSOLE_HTML = `<!doctype html>
       renderProjects();
       syncHash();
     }
+  });
+
+  document.getElementById('workflow-list').addEventListener('click', function (ev) {
+    var li = ev.target.closest('li[data-workflow-id]');
+    if (li) selectWorkflow(li.getAttribute('data-workflow-id'));
   });
 
   document.getElementById('detail').addEventListener('click', function (ev) {
@@ -5445,12 +6041,15 @@ export const CONSOLE_HTML = `<!doctype html>
     var prevTab = state.activeTab;
     var prevMode = state.mode;
     var prevRepo = state.selectedRepo;
+    var prevWorkflowId = state.selectedWorkflowId;
     parseHash();
     if (state.mode !== prevMode) {
       setMode(state.mode);
     } else if (state.mode === 'projects' && state.selectedRepo !== prevRepo) {
       renderProjects();
       renderProjectView();
+    } else if (state.mode === 'workflows' && state.selectedWorkflowId !== prevWorkflowId) {
+      selectWorkflow(state.selectedWorkflowId);
     } else if (state.selectedId && state.selectedId !== prevId) {
       select(state.selectedId);
     } else if (state.activeTab !== prevTab && state.detail) {

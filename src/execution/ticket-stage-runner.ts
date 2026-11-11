@@ -5,11 +5,17 @@ import type {
   ManagedTicketStageInput,
   ManagedTicketStageRunner,
   ManagedTicketToolPlan,
+  ManagedWorkflowPlanRunner,
 } from '../contracts/managed.js'
 import type { Usage } from '../contracts/types.js'
-import type { ManagedTicketStageResult, TianwenDecision } from '../generated/managed.js'
+import type {
+  JstackRoutePlan,
+  ManagedTicketStageResult,
+  TianwenDecision,
+} from '../generated/managed.js'
 import type { RoleId } from '../shared/ids.js'
 import { extractJson } from './session/extract.js'
+import { parseToolPolicy, resolveToolPolicy } from './tool-policy.js'
 
 const ROLE_MAP: Readonly<Record<string, RoleId>> = {
   developer: 'Developer',
@@ -30,6 +36,7 @@ export interface ManagedTicketWorkerAdapter {
   readonly toolInventory: readonly string[]
   readonly run: ManagedTicketStageRunner
   readonly decide: ManagedTicketDecisionRunner
+  readonly plan: ManagedWorkflowPlanRunner
 }
 
 function timeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
@@ -176,7 +183,77 @@ export function ticketWorkerFromAdapter(adapter: HarnessAdapter): ManagedTicketW
       await adapter.dispose(started.value)
     }
   }
-  return { harness, toolInventory, run, decide }
+  const plan: ManagedWorkflowPlanRunner = async (input) => {
+    const policy = parseToolPolicy(input.package.tool_policy)
+    if (!policy.ok) return { ok: false, error: policy.error, usage: ZERO }
+    const resolved = resolveToolPolicy(policy.value, {
+      stage: 'plan',
+      harness,
+      inventory: toolInventory,
+      allowShellFallback: false,
+    })
+    if (!resolved.ok) return { ok: false, error: resolved.error, usage: ZERO }
+    const started = await adapter.startRun({
+      run: {
+        run_id: input.attempt_id,
+        task_id: input.workflow_id,
+        stage: 'brainstorm',
+        role: 'Architect' as RoleId,
+        attempt: 1,
+      },
+      idempotency_key: input.attempt_id,
+      workspace: {
+        path: input.workspace_path,
+        repo_id: input.repo_id,
+        branch: 'managed-route',
+        untrusted: true,
+      },
+      context: input.context,
+      output_contract: { schema_ref: 'route-plan', mode: 'post_validate' },
+      permissions: {
+        allowed_tools: resolved.value.native_tools,
+        mode: 'deny_unlisted',
+      },
+      limits: { wall_clock_s: 300, budget_usd: null, max_turns: 40 },
+    })
+    if (!started.ok) return { ok: false, error: started.error, usage: ZERO }
+    try {
+      const result = await timeout(adapter.awaitResult(started.value), 300000)
+      if (result === null)
+        return {
+          ok: false,
+          error: makeError('RUN_TIMEOUT', 'managed route plan wall clock'),
+          usage: ZERO,
+        }
+      if (!result.ok) return { ok: false, error: result.error, usage: ZERO }
+      if (result.value.status !== 'SUCCEEDED')
+        return {
+          ok: false,
+          error: makeError(
+            result.value.status === 'TIMEOUT' ? 'RUN_TIMEOUT' : 'PROTOCOL_ERROR',
+            `managed route plan ${result.value.status}`,
+          ),
+          usage: result.value.usage,
+        }
+      const parsed = extractJson(result.value.text ?? '')
+      if (!parsed.ok)
+        return {
+          ok: false,
+          error: makeError('PROTOCOL_ERROR', parsed.reason),
+          usage: result.value.usage,
+        }
+      return {
+        ok: true,
+        value: {
+          output: parsed.value as JstackRoutePlan,
+          usage: result.value.usage,
+        },
+      }
+    } finally {
+      await adapter.dispose(started.value)
+    }
+  }
+  return { harness, toolInventory, run, decide, plan }
 }
 
 const ZERO = {

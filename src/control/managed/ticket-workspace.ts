@@ -74,6 +74,42 @@ export async function resolveCommit(path: string, commit: string): Promise<strin
   }
 }
 
+export async function isAncestor(
+  path: string,
+  ancestor: string,
+  descendant: string,
+): Promise<boolean> {
+  if (!(await commitExists(path, ancestor)) || !(await commitExists(path, descendant))) return false
+  try {
+    await git(path, ['merge-base', '--is-ancestor', ancestor, descendant])
+    return true
+  } catch {
+    return false
+  }
+}
+
+export async function branchExists(path: string, branch: string): Promise<boolean> {
+  try {
+    const resolved = await git(path, ['rev-parse', '--verify', `refs/heads/${branch}`])
+    return /^[a-f0-9]{40}$/.test(resolved)
+  } catch {
+    return false
+  }
+}
+
+export async function addWorktree(
+  repoPath: string,
+  path: string,
+  branch: string,
+  base: string,
+): Promise<void> {
+  if (await branchExists(repoPath, branch)) {
+    await git(repoPath, ['worktree', 'add', path, branch])
+    return
+  }
+  await git(repoPath, ['worktree', 'add', '-b', branch, path, base])
+}
+
 export async function diffDigest(
   path: string,
   baseline: string,
@@ -96,5 +132,20 @@ export async function diffDigest(
     return ok(sha256Text(output.stdout))
   } catch {
     return err(makeError('WORKSPACE_ERROR', '无法读取 ticket diff'))
+  }
+}
+
+export async function changedFiles(
+  path: string,
+  baseline: string,
+  head: string,
+): Promise<Result<readonly string[]>> {
+  if (!(await commitExists(path, baseline)) || !(await commitExists(path, head)))
+    return err(makeError('WORKSPACE_ERROR', 'changed-files 基线或目标 commit 不存在'))
+  try {
+    const output = await git(path, ['diff', '--name-only', '-z', `${baseline}..${head}`])
+    return ok([...new Set(output.split('\0'))].filter((entry) => entry !== '').sort())
+  } catch {
+    return err(makeError('WORKSPACE_ERROR', '无法读取 ticket changed files'))
   }
 }

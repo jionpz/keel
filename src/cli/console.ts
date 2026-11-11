@@ -502,6 +502,89 @@ export function createConsoleHandler(
       return
     }
 
+    if (path === '/api/workflows') {
+      try {
+        const rows = await deps.query(
+          `SELECT w.id, w.repo_id, w.status, w.current_graph_version,
+                  w.request, w.scope_paths, w.external_issue, w.completion_target,
+                  w.package_digest, w.baseline_commit, w.last_error,
+                  w.created_at, w.updated_at,
+                  COALESCE(n.node_count, 0)::int AS node_count,
+                  COALESCE(n.archived_count, 0)::int AS archived_count,
+                  COALESCE(n.waiting_human, 0)::int AS waiting_human,
+                  COALESCE(n.failed_count, 0)::int AS failed_count
+           FROM managed_workflow w
+           LEFT JOIN LATERAL (
+             SELECT count(*) AS node_count,
+                    count(*) FILTER (WHERE status = 'ARCHIVED') AS archived_count,
+                    count(*) FILTER (WHERE status = 'WAITING_HUMAN') AS waiting_human,
+                    count(*) FILTER (WHERE status = 'FAILED') AS failed_count
+             FROM managed_workflow_node
+             WHERE workflow_id = w.id AND graph_version = w.current_graph_version
+           ) n ON true
+           ORDER BY w.updated_at DESC`,
+          [],
+        )
+        sendJson(res, 200, { projection: 'jstack-managed-v1', workflows: rows })
+      } catch (e) {
+        sendJson(res, 503, {
+          error: '数据库不可用',
+          detail: message(e),
+          connection: connectionString(),
+        })
+      }
+      return
+    }
+
+    const workflowMatch = /^\/api\/workflows\/([^/]+)$/.exec(path)
+    if (workflowMatch !== null) {
+      const id = decodeURIComponent(workflowMatch[1] ?? '')
+      if (!UUID_RE.test(id)) {
+        sendJson(res, 404, { error: 'workflow not found', detail: `不是合法的 workflow id：${id}` })
+        return
+      }
+      try {
+        const [workflow, nodes, evidence, graph] = await Promise.all([
+          deps.query('SELECT * FROM managed_workflow WHERE id = $1', [id]),
+          deps.query(
+            `SELECT * FROM managed_workflow_node
+             WHERE workflow_id = $1
+               AND graph_version = (SELECT current_graph_version FROM managed_workflow WHERE id = $1)
+             ORDER BY node_key`,
+            [id],
+          ),
+          deps.query(
+            'SELECT * FROM managed_workflow_evidence WHERE workflow_id = $1 ORDER BY created_at DESC',
+            [id],
+          ),
+          deps.query(
+            `SELECT * FROM managed_workflow_graph
+             WHERE workflow_id = $1
+               AND version = (SELECT current_graph_version FROM managed_workflow WHERE id = $1)`,
+            [id],
+          ),
+        ])
+        if (workflow[0] === undefined) {
+          sendJson(res, 404, { error: 'workflow not found', detail: `找不到 workflow ${id}` })
+          return
+        }
+        sendJson(res, 200, {
+          projection: 'jstack-managed-v1',
+          workflow: workflow[0],
+          graph: graph[0] ?? null,
+          nodes,
+          evidence,
+        })
+      } catch (e) {
+        sendJson(res, 503, {
+          error: '数据库不可用',
+          detail: message(e),
+          connection: connectionString(),
+        })
+      }
+      return
+    }
+
     if (path === '/api/tasks') {
       try {
         const rows = await deps.query(
@@ -527,7 +610,7 @@ export function createConsoleHandler(
            ORDER BY t.updated_at DESC`,
           [],
         )
-        sendJson(res, 200, { tasks: rows })
+        sendJson(res, 200, { projection: 'legacy-v01', tasks: rows })
       } catch (e) {
         sendJson(res, 503, {
           error: '数据库不可用',
@@ -551,7 +634,7 @@ export function createConsoleHandler(
           sendJson(res, 404, { error: 'task not found', detail: `找不到 task ${id}` })
           return
         }
-        sendJson(res, 200, detail)
+        sendJson(res, 200, { projection: 'legacy-v01', ...(detail as Record<string, unknown>) })
       } catch (e) {
         sendJson(res, 503, {
           error: '数据库不可用',

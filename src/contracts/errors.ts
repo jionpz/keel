@@ -24,6 +24,8 @@ export const ERROR_KINDS = [
   'CAPABILITY_UNSUPPORTED',
   'CONFLICT',
   'CONTEXT_BUDGET_EXCEEDED',
+  'STAGE_GATE_FAILED',
+  'STALE_EVIDENCE',
   'NOT_FOUND',
 ] as const
 
@@ -63,6 +65,10 @@ export const RETRYABLE: Readonly<Record<ErrorKind, boolean>> = {
   CONFLICT: true,
   /** Context required section 摘要后仍超预算 —— 见 context-builder.md §4.3，直接升人工 */
   CONTEXT_BUDGET_EXCEEDED: false,
+  /** 阶段门证据缺失或未通过 —— 补齐证据 / 重做后才能继续 */
+  STAGE_GATE_FAILED: false,
+  /** 证据绑定的 commit / diff 已过期 —— 必须重新执行或重规划 */
+  STALE_EVIDENCE: false,
   /** 查询的产物 / 事件不存在。重试不会让它出现 */
   NOT_FOUND: false,
 }
@@ -77,6 +83,23 @@ export interface KeelError {
 export function makeError(kind: ErrorKind, detail: string, cause?: KeelError): KeelError {
   const base = { kind, detail, retryable: RETRYABLE[kind] }
   return cause === undefined ? base : { ...base, cause }
+}
+
+export function errorFrom(error: unknown, kind: ErrorKind, fallbackDetail: string): KeelError {
+  if (
+    error !== null &&
+    typeof error === 'object' &&
+    'kind' in error &&
+    typeof error.kind === 'string' &&
+    (ERROR_KINDS as readonly string[]).includes(error.kind) &&
+    'detail' in error &&
+    typeof error.detail === 'string' &&
+    'retryable' in error &&
+    typeof error.retryable === 'boolean'
+  ) {
+    return error as KeelError
+  }
+  return makeError(kind, error instanceof Error ? error.message : fallbackDetail)
 }
 
 /** 契约方法的统一返回：成功值或错误。避免用异常表达可预期的失败。 */

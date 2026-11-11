@@ -38,7 +38,7 @@
       "additionalProperties": false,
       "required": ["size", "stages"],
       "properties": {
-        "size": {"enum": ["XS", "S"]},
+        "size": {"enum": ["XS", "S", "M", "L", "XL"]},
         "stages": {
           "type": "array",
           "minItems": 4,

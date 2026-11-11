@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { PoolClient } from 'pg'
-import { err, makeError, ok, type Result } from '../../contracts/errors.js'
+import { err, errorFrom, makeError, ok, type Result } from '../../contracts/errors.js'
 import type {
   ManagedTicketDecisionRunner,
   ManagedTicketStageInput,
@@ -12,6 +12,7 @@ import type {
   ManagedTicketStageRunner,
   ManagedTicketTask,
   ManagedTicketToolPlan,
+  ManagedWorkflowPlanRunner,
 } from '../../contracts/managed.js'
 import type { Context, ContextSection, Usage } from '../../contracts/types.js'
 import { ZERO_USAGE } from '../../contracts/types.js'
@@ -46,21 +47,29 @@ import {
 } from './ticket-store.js'
 import { runTicketTianwen } from './ticket-tianwen.js'
 import {
+  changedFiles,
   commitExists,
   diffDigest,
   inspectTicketWorktree,
   resolveCommit,
 } from './ticket-workspace.js'
+import {
+  findReusableWorkflowEvidence,
+  insertWorkflowEvidence,
+  invalidateNodeEvidence,
+} from './workflow-store.js'
 
 export interface ManagedTicketWorker {
   readonly harness: string
   readonly toolInventory: readonly string[]
   readonly run: ManagedTicketStageRunner
   readonly decide?: ManagedTicketDecisionRunner
+  readonly plan?: ManagedWorkflowPlanRunner
 }
 
 export interface CreateManagedTicketOptions {
   readonly baselineCommit?: string
+  readonly taskId?: string
 }
 
 export interface ManagedTicketTickResult {
@@ -245,6 +254,17 @@ export async function createManagedTicketTask(
   }
   const validated = validateTicketPackage(raw)
   if (!validated.ok) return validated
+  return createManagedTicketTaskFromPackage(repoId, validated.value.package, worktreePath, options)
+}
+
+export async function createManagedTicketTaskFromPackage(
+  repoId: string,
+  worksheetPackage: JstackTicketPackage,
+  worktreePath: string,
+  options: CreateManagedTicketOptions = {},
+): Promise<Result<string>> {
+  const validated = validateTicketPackage(worksheetPackage)
+  if (!validated.ok) return validated
   const worktree = await inspectTicketWorktree(worktreePath)
   if (!worktree.ok) return worktree
   const isolated = await isolationViolations(worktree.value.path)
@@ -261,9 +281,10 @@ export async function createManagedTicketTask(
     c.query<{ id: string }>('SELECT id FROM repo WHERE id=$1', [repoId]),
   )
   if (repo.rowCount !== 1) return err(makeError('NOT_FOUND', '找不到 repo'))
-  const worksheetPackage = validated.value.package
   const digest = ticketPackageDigest(worksheetPackage)
-  const id = randomUUID()
+  const id = options.taskId ?? randomUUID()
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))
+    return err(makeError('SCHEMA_VIOLATION', 'ticket task id 必须是 UUID'))
   try {
     await asRole('keel_control', async (c) => {
       const inserted = await c.query(
@@ -282,6 +303,22 @@ export async function createManagedTicketTask(
           canonicalJson(existing.body) !== canonicalJson(worksheetPackage)
         )
           throw makeError('CONFLICT', '相同 ticket 包摘要已存在但内容不同')
+      }
+      const existingTask = await c.query<ManagedTicketTask>(
+        'SELECT * FROM managed_ticket_task WHERE id=$1',
+        [id],
+      )
+      if (existingTask.rows[0] !== undefined) {
+        const existing = existingTask.rows[0]
+        if (
+          existing.repo_id !== repoId ||
+          existing.package_digest !== digest ||
+          existing.ticket_id !== worksheetPackage.ticket.id ||
+          existing.baseline_commit !== baseline ||
+          existing.worktree_path !== worktree.value.path
+        )
+          throw makeError('CONFLICT', 'ticket task id 已绑定到不同输入')
+        return
       }
       await c.query(
         `INSERT INTO managed_ticket_task(
@@ -309,7 +346,7 @@ export async function createManagedTicketTask(
       })
     })
   } catch (error) {
-    return err(makeError('CONFLICT', error instanceof Error ? error.message : 'ticket 绑定失败'))
+    return err(errorFrom(error, 'CONFLICT', 'ticket 绑定失败'))
   }
   return ok(id)
 }
@@ -355,6 +392,19 @@ async function buildTicketContext(
     .filter((record) => record.status === 'REWORK')
     .flatMap((r) => openFindings(r.result))
   const decisions = await humanDecisions(c, claim.task.id)
+  const workflowNode = (
+    await c.query<{
+      node_key: string
+      ticket_id: string
+      scope_paths: string[]
+      acceptance: string[]
+      depends_on: string[]
+    }>(
+      `SELECT node_key,ticket_id,scope_paths,acceptance,depends_on
+       FROM managed_workflow_node WHERE ticket_task_id=$1 LIMIT 1`,
+      [claim.task.id],
+    )
+  ).rows[0]
   const stageDefinition = ticketPackage.stages.find((entry) => entry.stage === stage)
   if (stageDefinition === undefined) throw new Error(`固定包缺少阶段 ${stage}`)
   const history = stages.map((record) => ({
@@ -365,6 +415,12 @@ async function buildTicketContext(
     summary: stageSummary(record),
     error: record.error,
   }))
+  const expectedDiff = await diffDigest(
+    claim.task.worktree_path,
+    claim.task.baseline_commit,
+    inputCommit,
+  )
+  const expectedDiffDigest = expectedDiff.ok ? expectedDiff.value : null
   const snapshot = JSON.stringify({
     ticket: ticketPackage.ticket,
     route: ticketPackage.route,
@@ -374,10 +430,12 @@ async function buildTicketContext(
     completion_target: ticketPackage.completion_target,
     baseline_commit: claim.task.baseline_commit,
     input_commit: inputCommit,
+    expected_diff_digest: expectedDiffDigest,
     worktree: claim.task.worktree_path,
     tool_plan: plan,
     must_stop: ticketPackage.must_stop,
     history,
+    workflow_node: workflowNode ?? null,
     rework_notes: reworkNotes,
     human_decisions: decisions,
   })
@@ -386,6 +444,27 @@ async function buildTicketContext(
     section('workflow', ticketPackage.instructions.route, 'managed-ticket:route'),
     section('stages', ticketPackage.instructions.stages, 'managed-ticket:stages'),
     section('stage', stageDefinition.instructions, `managed-ticket:${stageDefinition.provider}`),
+    ...(stage === 'review' && expectedDiffDigest !== null
+      ? [
+          section(
+            'evidence_contract',
+            `review.reviewed_commit 必须精确等于 ${inputCommit}；` +
+              `review.diff_digest 必须精确等于 ${expectedDiffDigest}。` +
+              '这两个值由 Keel 从当前工作树计算，不要用近似值或旧摘要。',
+            'fixed:ticket/review-evidence-v1',
+          ),
+        ]
+      : []),
+    ...(stage === 'land' && ticketPackage.completion_target === 'branch_ready'
+      ? [
+          section(
+            'completion',
+            '本次完成目标是 branch_ready：只提交本地分支与 handoff，不 push、不创建 PR，' +
+              '也不要把 push/PR 列为 requested_action。外部动作由后续人工或 pr_ready 工作流处理。',
+            'fixed:ticket/branch-ready-v1',
+          ),
+        ]
+      : []),
     section('must_stop', ticketPackage.instructions.must_stop, 'managed-ticket:must-stop'),
     {
       ...section('facts', snapshot, `managed-ticket:${claim.task.id}/attempt:${claim.attempt}`),
@@ -423,9 +502,188 @@ function expectedInputCommit(
   task: ManagedTicketTask,
   stages: readonly ManagedTicketStageRecord[],
 ): string {
-  const succeeded = stages.filter((record) => record.status === 'SUCCEEDED')
+  const succeeded = stages.filter(
+    (record) => record.status === 'SUCCEEDED' || record.status === 'REUSED',
+  )
   const last = succeeded[succeeded.length - 1]
   return last?.output_commit ?? task.baseline_commit
+}
+
+interface WorkflowNodeReference {
+  readonly id: string
+  readonly workflow_id: string
+  readonly graph_version: number
+  readonly ticket_id: string
+  readonly scope_paths: readonly string[]
+  readonly acceptance: readonly string[]
+}
+
+async function workflowNodeForTicket(taskId: string): Promise<WorkflowNodeReference | null> {
+  const row = await asRole('keel_control', (c) =>
+    c.query<WorkflowNodeReference>(
+      `SELECT id,workflow_id,graph_version,ticket_id,scope_paths,acceptance
+       FROM managed_workflow_node
+       WHERE ticket_task_id=$1 LIMIT 1`,
+      [taskId],
+    ),
+  )
+  return row.rows[0] ?? null
+}
+
+function workflowNodeBinding(node: WorkflowNodeReference): string {
+  return sha256CanonicalJson({
+    ticket_id: node.ticket_id,
+    scope_paths: node.scope_paths,
+    acceptance: node.acceptance,
+  })
+}
+
+function scopeAllows(scope: string, path: string): boolean {
+  return scope === '*' || path === scope || path.startsWith(`${scope}/`)
+}
+
+function stageGateDigest(stage: JstackTicketPackage['stages'][number]): string {
+  return sha256CanonicalJson({
+    content_digest: stage.content_digest,
+    gate: sha256Text(stage.gate),
+    tool_profile: stage.tool_profile,
+  })
+}
+
+function workflowEvidenceTarget(input: {
+  readonly stage: ManagedTicketStageName | 'archive'
+  readonly nodeBinding: string
+  readonly stageDigest: string
+  readonly inputCommit: string
+  readonly diffDigest: string
+  readonly branch: string
+}): string {
+  return sha256CanonicalJson({
+    stage: input.stage,
+    node_binding: input.nodeBinding,
+    stage_digest: input.stageDigest,
+    input_commit: input.inputCommit,
+    diff_digest: input.diffDigest,
+    branch: input.branch,
+  })
+}
+
+async function tryReuseStage(
+  claim: ManagedTicketClaim,
+  node: WorkflowNodeReference | null,
+  stageId: string,
+  stage: ManagedTicketStageName,
+  stageDefinition: JstackTicketPackage['stages'][number],
+  inputCommit: string,
+  inputDigest: string,
+): Promise<Result<boolean>> {
+  if (node === null || (stage !== 'verify' && stage !== 'review')) return ok(false)
+  const diff = await diffDigest(claim.task.worktree_path, claim.task.baseline_commit, inputCommit)
+  if (!diff.ok) return diff
+  const target = workflowEvidenceTarget({
+    stage,
+    nodeBinding: workflowNodeBinding(node),
+    stageDigest: stageGateDigest(stageDefinition),
+    inputCommit,
+    diffDigest: diff.value,
+    branch: '',
+  })
+  const evidence = await asRole('keel_control', (c) =>
+    findReusableWorkflowEvidence(c, node.workflow_id, stage, target),
+  )
+  if (evidence === null) return ok(false)
+  const nextStage = ticketStageAt(ticketStageIndex(stage) + 1)
+  if (nextStage === null) return err(makeError('PROTOCOL_ERROR', '复用阶段没有后继阶段'))
+  try {
+    const reused = await withManagedTicketClaim(claim, async (c) => {
+      await c.query(
+        `INSERT INTO managed_ticket_stage(
+          id,task_id,stage,attempt,status,package_digest,baseline_commit,input_commit,
+          input_digest,gate_digest,reused_from_evidence_id
+        ) VALUES($1,$2,$3,$4,'RUNNING',$5,$6,$7,$8,$9,$10)`,
+        [
+          stageId,
+          claim.task.id,
+          stage,
+          claim.attempt,
+          claim.task.package_digest,
+          claim.task.baseline_commit,
+          inputCommit,
+          inputDigest,
+          stageGateDigest(stageDefinition),
+          evidence.id,
+        ],
+      )
+      await c.query(
+        `UPDATE managed_ticket_stage SET status='REUSED',output_commit=$2,output_digest=$3,
+           evidence_digest=$4,result=$5::jsonb,evidence=$6::jsonb,usage='{}'::jsonb,
+           ended_at=now()
+         WHERE id=$1`,
+        [
+          stageId,
+          inputCommit,
+          evidence.result_digest,
+          evidence.evidence_digest,
+          JSON.stringify(evidence.result),
+          JSON.stringify(evidence.evidence),
+        ],
+      )
+      await c.query(
+        `UPDATE managed_ticket_task SET status='READY',current_stage=$2,lease_token=NULL,
+           lease_until=NULL,last_error=NULL,updated_at=now() WHERE id=$1`,
+        [claim.task.id, nextStage],
+      )
+      await ticketEvent(c, claim.task.id, 'ManagedTicketEvidenceReused', {
+        stageId,
+        stage,
+        nextStage,
+        inputCommit,
+        targetDigest: target,
+        evidenceId: evidence.id,
+        sourceNodeId: evidence.node_id,
+      })
+    })
+    return reused.ok ? ok(true) : reused
+  } catch (error) {
+    return err(errorFrom(error, 'CONFLICT', '证据复用失败'))
+  }
+}
+
+async function recordWorkflowStageEvidence(
+  c: PoolClient,
+  node: WorkflowNodeReference | null,
+  stage: ManagedTicketStageName,
+  stageDefinition: JstackTicketPackage['stages'][number],
+  inputCommit: string,
+  diffDigestValue: string,
+  branch: string,
+  result: unknown,
+  evidence: unknown,
+): Promise<void> {
+  if (node === null) return
+  const stageDigest = stageGateDigest(stageDefinition)
+  await insertWorkflowEvidence(c, {
+    workflow_id: node.workflow_id,
+    graph_version: node.graph_version,
+    node_id: node.id,
+    stage,
+    input_commit: inputCommit,
+    diff_digest: diffDigestValue,
+    stage_digest: stageDigest,
+    branch,
+    target_digest: workflowEvidenceTarget({
+      stage,
+      nodeBinding: workflowNodeBinding(node),
+      stageDigest,
+      inputCommit,
+      diffDigest: diffDigestValue,
+      branch,
+    }),
+    result_digest: sha256CanonicalJson(result),
+    evidence_digest: sha256CanonicalJson(evidence),
+    result,
+    evidence,
+  })
 }
 
 function isMustStopAction(
@@ -441,6 +699,11 @@ function isMustStopAction(
     if (normalized.includes(entry.action.toLowerCase())) return true
   }
   return false
+}
+
+function isPushAndPullRequestAction(action: string): boolean {
+  const normalized = action.toLowerCase()
+  return /\bpush\b/.test(normalized) && /(pull request|\bpr\b)/.test(normalized)
 }
 
 async function pauseTicketWithError(
@@ -577,12 +840,7 @@ async function pauseForDecision(
     })
     if (!paused.ok) return paused
   } catch (error) {
-    return err(
-      makeError(
-        'CONFLICT',
-        error instanceof Error ? error.message : '无法创建 ticket DecisionRequest',
-      ),
-    )
+    return err(errorFrom(error, 'CONFLICT', '无法创建 ticket DecisionRequest'))
   }
   return ok({ taskId: claim.task.id, status: 'WAITING_HUMAN', stage: claim.task.current_stage })
 }
@@ -651,12 +909,6 @@ export async function tickManagedTicket(
       `worktree HEAD ${worktree.value.head} 与绑定输入 ${inputCommit} 不一致`,
     )
 
-  const context = await asRole('keel_control', (c) =>
-    buildTicketContext(c, claim, ticketPackage, stage, inputCommit, plan.value),
-  )
-  if (context.total_tokens > 60000)
-    return pauseTicketWithError(claim, 'CONTEXT_BUDGET_EXCEEDED', 'ticket 阶段上下文超预算')
-
   const stageId = randomUUID()
   const inputDigest = sha256CanonicalJson({
     package_digest: claim.task.package_digest,
@@ -671,11 +923,31 @@ export async function tickManagedTicket(
       output_digest: record.output_digest,
     })),
   })
+  const workflowNode = await workflowNodeForTicket(claim.task.id)
+  const reused = await tryReuseStage(
+    claim,
+    workflowNode,
+    stageId,
+    stage,
+    stageDefinition,
+    inputCommit,
+    inputDigest,
+  )
+  if (!reused.ok) return reused
+  if (reused.value) return ok({ taskId: claim.task.id, status: 'READY', stage })
+
+  const context = await asRole('keel_control', (c) =>
+    buildTicketContext(c, claim, ticketPackage, stage, inputCommit, plan.value),
+  )
+  if (context.total_tokens > 60000)
+    return pauseTicketWithError(claim, 'CONTEXT_BUDGET_EXCEEDED', 'ticket 阶段上下文超预算')
+
+  const gateDigest = stageGateDigest(stageDefinition)
   const recorded = await withManagedTicketClaim(claim, async (c) => {
     await c.query(
       `INSERT INTO managed_ticket_stage(
-        id,task_id,stage,attempt,status,package_digest,baseline_commit,input_commit,input_digest
-      ) VALUES($1,$2,$3,$4,'RUNNING',$5,$6,$7,$8)`,
+        id,task_id,stage,attempt,status,package_digest,baseline_commit,input_commit,input_digest,gate_digest
+      ) VALUES($1,$2,$3,$4,'RUNNING',$5,$6,$7,$8,$9)`,
       [
         stageId,
         claim.task.id,
@@ -685,6 +957,7 @@ export async function tickManagedTicket(
         claim.task.baseline_commit,
         inputCommit,
         inputDigest,
+        gateDigest,
       ],
     )
     await ticketEvent(c, claim.task.id, 'ManagedTicketStageStarted', {
@@ -731,7 +1004,17 @@ export async function tickManagedTicket(
   const usage = outcome.value.usage
   const parsed = validateTicketStageResult(outcome.value.output)
   if (!parsed.ok) return failStage(claim, stageId, 'SCHEMA_VIOLATION', usage, true)
-  const result = parsed.value
+  const result: typeof parsed.value = {
+    ...parsed.value,
+    ...(parsed.value.checks === undefined
+      ? {}
+      : {
+          checks: parsed.value.checks.map((check) => ({
+            ...check,
+            output_digest: sha256Text(check.output_excerpt),
+          })),
+        }),
+  }
   if (result.stage !== stage) return failStage(claim, stageId, 'PROTOCOL_ERROR', usage, true)
 
   const after = await inspectTicketWorktree(claim.task.worktree_path)
@@ -760,7 +1043,18 @@ export async function tickManagedTicket(
     land: result.land ?? null,
   }
   const requestedAction = result.requested_action?.action ?? null
-  if (result.status === 'must_stop' || result.status === 'blocked' || requestedAction !== null) {
+  const branchReadyHandoff =
+    result.status === 'completed' &&
+    stage === 'land' &&
+    ticketPackage.completion_target === 'branch_ready' &&
+    result.land !== undefined &&
+    requestedAction !== null &&
+    isPushAndPullRequestAction(requestedAction)
+  if (
+    result.status === 'must_stop' ||
+    result.status === 'blocked' ||
+    (requestedAction !== null && !branchReadyHandoff)
+  ) {
     const paused = await pauseForDecision(
       claim,
       ticketPackage,
@@ -786,14 +1080,24 @@ export async function tickManagedTicket(
       resolvedCommit === inputCommit
     )
       return failStage(claim, stageId, 'STAGE_GATE_FAILED', usage, true)
+    if (workflowNode !== null) {
+      const changed = await changedFiles(
+        claim.task.worktree_path,
+        claim.task.baseline_commit,
+        after.value.head,
+      )
+      if (!changed.ok) return failStage(claim, stageId, 'WORKSPACE_ERROR', usage, true)
+      const outside = changed.value.filter(
+        (path) => !workflowNode.scope_paths.some((scope) => scopeAllows(scope, path)),
+      )
+      if (outside.length > 0) return failStage(claim, stageId, 'SCOPE_VIOLATION', usage, true)
+    }
   }
   if (stage === 'verify') {
     if (result.status !== 'completed' || (result.checks?.length ?? 0) === 0)
       return failStage(claim, stageId, 'VERIFICATION_EVIDENCE_MISSING', usage, true)
     if (result.checks?.some((check) => !check.passed || check.exit_code !== 0))
       return failStage(claim, stageId, 'VERIFICATION_FAILED', usage, true)
-    if (result.checks?.some((check) => check.output_digest !== sha256Text(check.output_excerpt)))
-      return failStage(claim, stageId, 'EVIDENCE_DIGEST_MISMATCH', usage, true)
     const verifiedHead =
       result.worktree_head === undefined
         ? null
@@ -862,6 +1166,15 @@ export async function tickManagedTicket(
         ],
       )
       if (rework) {
+        if (workflowNode !== null) {
+          await invalidateNodeEvidence(
+            c,
+            workflowNode.workflow_id,
+            workflowNode.id,
+            `rework requested by ${stage}`,
+            ['verify', 'review', 'land'],
+          )
+        }
         await c.query(
           `UPDATE managed_ticket_task SET status='READY',current_stage='execute',rework_count=rework_count+1,
              lease_token=NULL,lease_until=NULL,last_error=NULL,updated_at=now() WHERE id=$1`,
@@ -875,33 +1188,64 @@ export async function tickManagedTicket(
         })
         return 'READY'
       }
+      await recordWorkflowStageEvidence(
+        c,
+        workflowNode,
+        stage,
+        stageDefinition,
+        after.value.head,
+        changedDiff.value,
+        stage === 'land' ? after.value.branch : '',
+        result,
+        evidence,
+      )
       if (stage === 'land' && result.land !== undefined && repoBinding !== null) {
-        await enqueueActionIntent(c, {
-          task_id: claim.task.id,
-          project_id: claim.task.repo_id,
-          repo_id: claim.task.repo_id,
-          remote_url: repoBinding.remote_url,
-          base_branch: repoBinding.default_branch,
-          head_branch: result.land.branch,
-          head_sha: after.value.head,
-          diff_digest: changedDiff.value,
-          environment: 'production',
-          reversibility: 'reversible',
-          affected_resources: [
-            repoBinding.remote_url,
-            `branch:${result.land.branch}`,
-            `base:${repoBinding.default_branch}`,
-          ],
-          pr_title: result.land.action_intent.pr_title,
-          pr_body: ticketPrBody({
-            ticketId: claim.task.ticket_id,
-            baselineCommit: claim.task.baseline_commit,
-            headCommit: after.value.head,
-            diffDigest: changedDiff.value,
-            modelBody: result.land.action_intent.pr_body,
-          }),
-          created_at: new Date().toISOString(),
-        })
+        if (ticketPackage.completion_target === 'branch_ready') {
+          await c.query(
+            `UPDATE managed_ticket_task SET status='DONE',handoff=$2::jsonb,
+               lease_token=NULL,lease_until=NULL,last_error=NULL,updated_at=now() WHERE id=$1`,
+            [
+              claim.task.id,
+              JSON.stringify({
+                action: 'branch_ready',
+                remote_url: repoBinding.remote_url,
+                base_branch: repoBinding.default_branch,
+                head_branch: result.land.branch,
+                head_sha: after.value.head,
+                baseline_commit: claim.task.baseline_commit,
+                diff_digest: changedDiff.value,
+                completion_target: 'branch_ready',
+              }),
+            ],
+          )
+        } else {
+          await enqueueActionIntent(c, {
+            task_id: claim.task.id,
+            project_id: claim.task.repo_id,
+            repo_id: claim.task.repo_id,
+            remote_url: repoBinding.remote_url,
+            base_branch: repoBinding.default_branch,
+            head_branch: result.land.branch,
+            head_sha: after.value.head,
+            diff_digest: changedDiff.value,
+            environment: 'production',
+            reversibility: 'reversible',
+            affected_resources: [
+              repoBinding.remote_url,
+              `branch:${result.land.branch}`,
+              `base:${repoBinding.default_branch}`,
+            ],
+            pr_title: result.land.action_intent.pr_title,
+            pr_body: ticketPrBody({
+              ticketId: claim.task.ticket_id,
+              baselineCommit: claim.task.baseline_commit,
+              headCommit: after.value.head,
+              diffDigest: changedDiff.value,
+              modelBody: result.land.action_intent.pr_body,
+            }),
+            created_at: new Date().toISOString(),
+          })
+        }
         await ticketEvent(c, claim.task.id, 'ManagedTicketCompleted', {
           stageId,
           stage,
@@ -909,7 +1253,7 @@ export async function tickManagedTicket(
           handoff: result.land,
           completionTarget: ticketPackage.completion_target,
         })
-        return 'WAITING_GATEWAY'
+        return ticketPackage.completion_target === 'branch_ready' ? 'DONE' : 'WAITING_GATEWAY'
       }
       await c.query(
         `UPDATE managed_ticket_task SET status='READY',current_stage=$2,lease_token=NULL,

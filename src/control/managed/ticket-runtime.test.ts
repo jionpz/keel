@@ -139,7 +139,7 @@ function happyWorker(root: string): ManagedTicketWorker {
             command: 'git status --porcelain',
             exit_code: 0,
             passed: true,
-            output_digest: sha256Text('clean'),
+            output_digest: '0'.repeat(64),
             output_excerpt: 'clean',
           },
         ],

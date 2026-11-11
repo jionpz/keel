@@ -131,10 +131,20 @@ function fakeQuery(rows: {
   timers?: readonly Row[]
   statsDays?: readonly Row[]
   statsTotals?: readonly Row[]
+  workflows?: readonly Row[]
+  workflow?: readonly Row[]
+  workflowNodes?: readonly Row[]
+  workflowEvidence?: readonly Row[]
+  workflowGraph?: readonly Row[]
 }): QueryFn {
   return async (sql: string) => {
     if (sql.includes('WITH days AS')) return rows.statsDays ?? []
     if (sql.includes('AS tasks_done')) return rows.statsTotals ?? []
+    if (sql.includes('FROM managed_workflow_evidence')) return rows.workflowEvidence ?? []
+    if (sql.includes('FROM managed_workflow_graph')) return rows.workflowGraph ?? []
+    if (sql.includes('FROM managed_workflow w')) return rows.workflows ?? []
+    if (sql.includes('FROM managed_workflow_node')) return rows.workflowNodes ?? []
+    if (sql.includes('FROM managed_workflow WHERE id = $1')) return rows.workflow ?? []
     if (sql.includes('FROM task t JOIN repo r') && sql.includes('WHERE t.id = $1')) {
       return rows.task ?? []
     }
@@ -168,7 +178,10 @@ interface ConsoleStateSeam {
     transitions: unknown[]
   } | null
   tasks: Row[]
+  workflows: Row[]
   mode: string
+  selectedWorkflowId: string | null
+  workflowsError: string
 }
 
 interface ConsoleSeam {
@@ -176,6 +189,11 @@ interface ConsoleSeam {
   renderDecisionOptions(detail: Row): string
   renderCockpitHeader(detail: Row): string
   renderTasks(): void
+  renderWorkflowList(): void
+  renderWorkflowDetail(data: Row): void
+  loadWorkflows(silent?: boolean): Promise<boolean>
+  loadWorkflowDetail(id: string, silent?: boolean): Promise<void>
+  selectWorkflow(id: string): Promise<void> | void
   projectGroupOf(status: string): string
   isGateStatus(status: string): boolean
   state: ConsoleStateSeam
@@ -207,7 +225,21 @@ function makeSeamElement(): SeamElement {
   }
 }
 
-function loadConsoleSeam(): { seam: ConsoleSeam; elements: Map<string, SeamElement> } {
+type SeamFetch = (url: string, init?: RequestInit) => Promise<Response>
+
+function jsonResponse(body: unknown, status = 200): Promise<Response> {
+  return Promise.resolve(
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { 'content-type': 'application/json' },
+    }),
+  )
+}
+
+function loadConsoleSeam(fetchImpl: SeamFetch = () => new Promise<never>(() => {})): {
+  seam: ConsoleSeam
+  elements: Map<string, SeamElement>
+} {
   const start = CONSOLE_HTML.indexOf('<script>')
   const end = CONSOLE_HTML.lastIndexOf('</script>')
   const script = CONSOLE_HTML.slice(start + '<script>'.length, end)
@@ -219,6 +251,11 @@ function loadConsoleSeam(): { seam: ConsoleSeam; elements: Map<string, SeamEleme
     renderDecisionOptions: renderDecisionOptions,
     renderCockpitHeader: renderCockpitHeader,
     renderTasks: renderTasks,
+    renderWorkflowList: renderWorkflowList,
+    renderWorkflowDetail: renderWorkflowDetail,
+    loadWorkflows: loadWorkflows,
+    loadWorkflowDetail: loadWorkflowDetail,
+    selectWorkflow: selectWorkflow,
     projectGroupOf: projectGroupOf,
     isGateStatus: isGateStatus,
     state: state
@@ -247,7 +284,7 @@ function loadConsoleSeam(): { seam: ConsoleSeam; elements: Map<string, SeamEleme
       addEventListener() {},
     },
     localStorage: { getItem: () => null, removeItem() {} },
-    fetch: () => new Promise<never>(() => {}),
+    fetch: fetchImpl,
     setInterval: () => 1,
   }
   runInNewContext(instrumented, sandbox)
@@ -450,9 +487,14 @@ describe('keel console', () => {
       expect(html).toContain('mode-switch')
       expect(html).toContain('task-search')
       expect(html).toContain('status-filters')
-      // 三个视图 + 底部状态栏是页面骨架的一部分，掉一个就是回归
+      // 四个视图 + 底部状态栏是页面骨架的一部分，掉一个就是回归
       expect(html).toContain('data-mode="overview"')
       expect(html).toContain('data-mode="projects"')
+      expect(html).toContain('data-mode="workflows"')
+      expect(html).toContain('<span class="mode-label">工作流</span>')
+      expect(html).toContain('id="workflow-list"')
+      expect(html).toContain('id="workflow-projection"')
+      expect(html).toContain('projection=jstack-managed-v1')
       expect(html).toContain('id="statusbar"')
       // 项目页：按行动分组、待处理徽章、筛选项随列表 —— 掉一个就是回到指标仪表盘
       expect(html).toContain('需要你处理')
@@ -469,6 +511,8 @@ describe('keel console', () => {
       // 退出入口：令牌来自 meta，POST /api/logout 后回登录页
       expect(html).toContain('id="logout"')
       expect(html).toContain("fetch('/api/logout'")
+      expect(html).toContain("fetchJSON('/api/workflows')")
+      expect(html).toContain("fetchJSON('/api/workflows/' + encodeURIComponent(id))")
     })
   })
 
@@ -487,7 +531,7 @@ describe('keel console', () => {
         '--good',
         '--bad',
       ]) {
-        expect(html).toContain(token + ':')
+        expect(html).toContain(`${token}:`)
       }
       // 旧 macOS 系统色必须清干净：看到它们就是回退到「AI 默认皮肤」
       for (const gone of ['#0a7aff', '#f5f5f7', '#ff9f0a', '#30d158', '#ff453a']) {
@@ -517,9 +561,196 @@ describe('keel console', () => {
       const res = await api('/api/tasks')
       expect(res.status).toBe(200)
       const body = (await res.json()) as { tasks: Row[] }
+      expect((body as { projection?: string }).projection).toBe('legacy-v01')
       expect(body.tasks).toHaveLength(1)
       expect(body.tasks[0]?.title).toBe('demo')
     })
+  })
+
+  it('GET /api/workflows 返回 managed 投影与节点计数', async () => {
+    const workflows: Row[] = [
+      {
+        id: TASK_ID,
+        status: 'RUNNING',
+        current_graph_version: 2,
+        node_count: 3,
+        archived_count: 1,
+        waiting_human: 1,
+      },
+    ]
+    await withServer(fakeQuery({ workflows }), async (_base, api) => {
+      const res = await api('/api/workflows')
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as { projection: string; workflows: Row[] }
+      expect(body.projection).toBe('jstack-managed-v1')
+      expect(body.workflows[0]?.node_count).toBe(3)
+    })
+  })
+
+  it('GET /api/workflows/:id 返回图、节点与证据，缺 workflow 时 404', async () => {
+    const query = fakeQuery({
+      workflow: [{ id: TASK_ID, status: 'READY', current_graph_version: 1 }],
+      workflowNodes: [{ id: 'n1', node_key: 'ticket-1', status: 'ARCHIVED' }],
+      workflowEvidence: [{ id: 'e1', stage: 'archive' }],
+      workflowGraph: [{ version: 1, status: 'COMMITTED' }],
+    })
+    await withServer(query, async (_base, api) => {
+      const res = await api(`/api/workflows/${TASK_ID}`)
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as {
+        projection: string
+        workflow: Row
+        graph: Row
+        nodes: Row[]
+        evidence: Row[]
+      }
+      expect(body.projection).toBe('jstack-managed-v1')
+      expect(body.workflow.id).toBe(TASK_ID)
+      expect(body.graph.version).toBe(1)
+      expect(body.nodes[0]?.status).toBe('ARCHIVED')
+      expect(body.evidence[0]?.stage).toBe('archive')
+    })
+    await withServer(fakeQuery({ workflow: [] }), async (_base, api) => {
+      const res = await api(`/api/workflows/${TASK_ID}`)
+      expect(res.status).toBe(404)
+    })
+  })
+
+  it('工作流侧栏通过 /api/workflows 加载，并显示 jstack 投影计数', async () => {
+    const workflows: Row[] = [
+      {
+        id: TASK_ID,
+        status: 'RUNNING',
+        current_graph_version: 2,
+        node_count: 3,
+        archived_count: 1,
+        waiting_human: 1,
+        request: '实现工作流控制台视图',
+        updated_at: '2026-11-10T12:34:00Z',
+      },
+    ]
+    await withServer(fakeQuery({ workflows }), async (_base, api) => {
+      const payload = await (await api('/api/workflows')).json()
+      const calls: string[] = []
+      const { seam, elements } = loadConsoleSeam((url) => {
+        calls.push(url)
+        if (url === '/api/workflows') return jsonResponse(payload)
+        return new Promise<never>(() => {})
+      })
+
+      await expect(seam.loadWorkflows(false)).resolves.toBe(true)
+
+      expect(calls).toContain('/api/workflows')
+      const html = elements.get('workflow-list')?.innerHTML ?? ''
+      expect(html).toContain(`data-workflow-id="${TASK_ID}"`)
+      expect(html).toContain('1d891a16')
+      expect(html).toContain('RUNNING')
+      expect(html).toContain('图 v2')
+      expect(html).toContain('3 tickets')
+      expect(html).toContain('1 已归档')
+      expect(html).toContain('1 等待人工')
+      expect(html).toContain('实现工作流控制台视图')
+      expect(html).toContain('更新 ')
+    })
+  })
+
+  it('工作流详情只读渲染图、节点与证据，digest 只露前 12 位', async () => {
+    const ticketTaskId = '9f8e7d6c-5b4a-4938-8271-6f5e4d3c2b1a'
+    const targetDigest = '0123456789abcdef'.repeat(4)
+    const workflow: Row[] = [
+      {
+        id: TASK_ID,
+        status: 'RUNNING',
+        current_graph_version: 2,
+        request: '实现工作流控制台视图',
+        completion_target: 'branch_ready',
+        baseline_commit: 'abcdef1234567',
+        scope_paths: ['src/cli'],
+        created_at: '2026-11-10T10:00:00Z',
+        updated_at: '2026-11-10T12:34:00Z',
+      },
+    ]
+    const workflowGraph: Row[] = [
+      {
+        version: 2,
+        status: 'COMMITTED',
+        plan_digest: 'f'.repeat(64),
+        committed_at: '2026-11-10T11:00:00Z',
+      },
+    ]
+    const workflowNodes: Row[] = [
+      {
+        id: 'node-1',
+        node_key: 'ticket-a',
+        ticket_id: 'T-101',
+        ticket_size: 'S',
+        status: 'WAITING_HUMAN',
+        depends_on: ['ticket-root'],
+        scope_paths: ['src/cli/console-page.ts'],
+        acceptance: ['控制台可只读查看工作流'],
+        ticket_task_id: ticketTaskId,
+      },
+    ]
+    const workflowEvidence: Row[] = [
+      {
+        id: 'evidence-1',
+        stage: 'execute',
+        status: 'VALID',
+        input_commit: 'abcdef1234567',
+        target_digest: targetDigest,
+      },
+    ]
+    await withServer(
+      fakeQuery({ workflow, workflowGraph, workflowNodes, workflowEvidence }),
+      async (_base, api) => {
+        const detailPayload = await (await api(`/api/workflows/${TASK_ID}`)).json()
+        const { seam, elements } = loadConsoleSeam((url) => {
+          if (url === `/api/workflows/${TASK_ID}`) return jsonResponse(detailPayload)
+          return new Promise<never>(() => {})
+        })
+        seam.state.mode = 'workflows'
+        seam.state.selectedWorkflowId = TASK_ID
+        seam.state.workflows = workflow
+
+        await seam.selectWorkflow(TASK_ID)
+
+        const html = elements.get('detail')?.innerHTML ?? ''
+        expect(html).toContain('projection=jstack-managed-v1，只读')
+        expect(html).toContain(TASK_ID)
+        expect(html).toContain('graph.version')
+        expect(html).toContain('COMMITTED')
+        expect(html).toContain('ticket-a')
+        expect(html).toContain('T-101')
+        expect(html).toContain('WAITING_HUMAN')
+        expect(html).toContain('ticket-root')
+        expect(html).toContain('src/cli/console-page.ts')
+        expect(html).toContain('控制台可只读查看工作流')
+        expect(html).toContain(ticketTaskId)
+        expect(html).toContain('execute')
+        expect(html).toContain('VALID')
+        expect(html).toContain('abcdef1234567')
+        expect(html).toContain(targetDigest.slice(0, 12))
+        expect(html).not.toContain(targetDigest)
+        expect(html).not.toContain('data-act=')
+        expect(html).not.toContain('data-write')
+      },
+    )
+  })
+
+  it('工作流 API 失败时返回诊断文案，不抛未处理异常', async () => {
+    const { seam, elements } = loadConsoleSeam((url) =>
+      url === '/api/workflows'
+        ? jsonResponse({ error: '数据库不可用', detail: 'connection refused' }, 503)
+        : new Promise<never>(() => {}),
+    )
+
+    await expect(seam.loadWorkflows(false)).resolves.toBe(false)
+
+    const html = elements.get('workflow-list')?.innerHTML ?? ''
+    expect(html).toContain('无法加载工作流')
+    expect(html).toContain('/api/workflows')
+    expect(html).toContain('HTTP 503')
+    expect(html).toContain('legacy 任务视图不受影响')
   })
 
   it('GET /api/tasks/:id 组装 task / runs / events / artifacts / feedbacks / timers', async () => {

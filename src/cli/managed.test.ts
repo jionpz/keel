@@ -1,12 +1,17 @@
 /** JT-01 managed CLI：参数拒绝与 worker 认领前置检查。 */
+import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { promisify } from 'node:util'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { fixtureRoutePackage, fixtureRoutePlan } from '../control/managed/route-test-utils.js'
 import { getManagedTask } from '../control/managed/store.js'
 import { asOwner, closePool } from '../fact/db.js'
 import { managedMain } from './managed.js'
+
+const run = promisify(execFile)
 
 const WORKFLOW = {
   protocol_version: '1.0',
@@ -41,6 +46,19 @@ afterEach(() => {
 })
 
 afterAll(closePool)
+
+async function git(cwd: string, ...args: string[]): Promise<string> {
+  const result = await run('git', ['-C', cwd, ...args], {
+    encoding: 'utf8',
+    env: {
+      PATH: process.env.PATH ?? '/usr/bin:/bin',
+      GIT_CONFIG_GLOBAL: '/dev/null',
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_TERMINAL_PROMPT: '0',
+    },
+  })
+  return result.stdout.trim()
+}
 
 async function expectRejected(argv: readonly string[], message?: string): Promise<void> {
   const priorExitCode = process.exitCode
@@ -116,6 +134,76 @@ describe('managed CLI · 参数拒绝', () => {
       ['memory-retrieve', randomUUID(), '--query', '报告', '--budget-entries', '0'],
       '正整数',
     )
+  })
+})
+
+describe('managed CLI · workflow 接线', () => {
+  it('创建、导入计划、查询和列出 route workflow', async () => {
+    await asOwner((c) => c.query('TRUNCATE repo, managed_package RESTART IDENTITY CASCADE'))
+    const base = await mkdtemp(join(tmpdir(), 'keel-workflow-cli-'))
+    const repo = join(base, 'repo')
+    try {
+      await run('git', ['init', '-b', 'main', repo])
+      await git(repo, 'config', 'user.name', 'Keel Test')
+      await git(repo, 'config', 'user.email', 'keel@example.test')
+      await mkdir(join(repo, 'src'), { recursive: true })
+      await writeFile(join(repo, 'src', 'README.md'), '# fixture\n')
+      await git(repo, 'add', '-A')
+      await git(repo, 'commit', '-m', 'initial')
+      const repoId = randomUUID()
+      await asOwner((c) =>
+        c.query(
+          `INSERT INTO repo(id,provider,remote_url,default_branch,local_path)
+           VALUES($1,'local',$2,'main',$3)`,
+          [repoId, `file://${repo}`, repo],
+        ),
+      )
+      const routePath = join(base, 'route.json')
+      const planPath = join(base, 'plan.json')
+      await writeFile(
+        routePath,
+        JSON.stringify(fixtureRoutePackage({ completionTarget: 'branch_ready' })),
+      )
+      await writeFile(planPath, JSON.stringify(fixtureRoutePlan('S', 1)))
+
+      const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+      await managedMain([
+        'workflow-create',
+        '--repo',
+        repoId,
+        '--package',
+        routePath,
+        '--worktree-root',
+        join(base, 'worktrees'),
+        '--scope',
+        'src',
+        '--request',
+        '实现 fixture',
+      ])
+      expect(process.exitCode).not.toBe(1)
+      const workflowId = String(log.mock.calls.at(-1)?.[0] ?? '')
+      expect(workflowId).toMatch(/^[0-9a-f-]{36}$/i)
+
+      await managedMain(['workflow-plan', '--workflow', workflowId, '--plan', planPath])
+      expect(process.exitCode).not.toBe(1)
+      await managedMain(['workflow-status', workflowId])
+      const status = JSON.parse(String(log.mock.calls.at(-1)?.[0] ?? '{}')) as {
+        projection: string
+        workflow: { id: string; current_graph_version: number }
+        nodes: unknown[]
+      }
+      expect(status.projection).toBe('jstack-managed-v1')
+      expect(status.workflow.id).toBe(workflowId)
+      expect(status.workflow.current_graph_version).toBe(1)
+      expect(status.nodes).toHaveLength(1)
+
+      await managedMain(['workflow-list'])
+      const list = JSON.parse(String(log.mock.calls.at(-1)?.[0] ?? '[]')) as unknown[]
+      expect(list).toHaveLength(1)
+      log.mockRestore()
+    } finally {
+      await rm(base, { recursive: true, force: true })
+    }
   })
 })
 
