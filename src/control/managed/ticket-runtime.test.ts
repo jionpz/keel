@@ -183,6 +183,7 @@ describe('managed ticket runtime', () => {
   it('天问按项目决定解决偏好问题后把 ticket 放回 READY', async () => {
     const { repoId, taskId } = await seed()
     const decisionId = randomUUID()
+    let observedMemory: unknown = null
     const recorded = await recordProjectDecision({
       schema_version: '1.0',
       id: decisionId,
@@ -230,22 +231,29 @@ describe('managed ticket runtime', () => {
           },
         },
       })),
-      decide: async () => ({
-        ok: true,
-        value: {
-          output: {
-            recommendation: 'answer',
-            answer_option_id: 'option-1',
-            rationale: '项目决定要求使用中文',
-            basis_refs: [{ kind: 'project_decision', id: decisionId, version: 1 }],
-            assumptions: [],
-            alternatives: [],
-            unresolved_conflicts: [],
-            missing_authority: [],
+      decide: async (input) => {
+        const facts = input.context.sections.find((section) => section.id === 'facts')
+        if (facts !== undefined) {
+          const snapshot = JSON.parse(facts.content) as { project_memory?: unknown }
+          observedMemory = snapshot.project_memory
+        }
+        return {
+          ok: true,
+          value: {
+            output: {
+              recommendation: 'answer',
+              answer_option_id: 'option-1',
+              rationale: '项目决定要求使用中文',
+              basis_refs: [{ kind: 'project_decision', id: decisionId, version: 1 }],
+              assumptions: [],
+              alternatives: [],
+              unresolved_conflicts: [],
+              missing_authority: [],
+            },
+            usage: ZERO_USAGE,
           },
-          usage: ZERO_USAGE,
-        },
-      }),
+        }
+      },
     }
     const paused = await tickManagedTicket(worker, taskId)
     if (!paused.ok) throw new Error(paused.error.detail)
@@ -280,6 +288,10 @@ describe('managed ticket runtime', () => {
     ).rows[0]
     expect(resolution?.disposition).toBe('delegated')
     expect(resolution?.answer).toBe('使用中文')
+    expect(observedMemory).toMatchObject({
+      referenced_decision_ids: [decisionId],
+      entries: [{ decision_id: decisionId }],
+    })
     const stages = await listManagedTicketStages(taskId)
     expect(stages[0]?.status).toBe('MUST_STOP')
     expect(stages[0]?.result).toMatchObject({ decision: { decision_key: 'ticket.e2e.style' } })

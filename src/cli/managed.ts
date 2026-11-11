@@ -1,6 +1,7 @@
 /** JT-01 managed 影子模式的薄 CLI 接线。 */
 
 import { execFileSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import {
   type ManagedActionGatewayDeps,
   reconcileAction,
@@ -14,6 +15,16 @@ import {
 } from '../control/managed/check-gateway.js'
 import { listCheckEvidence } from '../control/managed/check-store.js'
 import { answerManagedTicketDecision } from '../control/managed/decision-store.js'
+import {
+  createProjectMemorySummary,
+  getProjectMemoryState,
+  type MemoryRegressionCase,
+  promoteHumanAnswerToProjectRule,
+  publishProjectMemorySummary,
+  rejectProjectMemorySummary,
+  retrieveProjectMemory,
+  rollbackProjectMemorySummary,
+} from '../control/managed/memory-store.js'
 import {
   createManagedInvestigation,
   listManagedQuestions,
@@ -98,6 +109,44 @@ function positiveInteger(value: string, label: string): number {
   return parsed
 }
 
+function nonNegativeInteger(value: string, label: string): number {
+  if (!/^\d+$/.test(value)) throw new Error(`${label} 必须是非负整数：${value}`)
+  const parsed = Number(value)
+  if (!Number.isSafeInteger(parsed) || parsed < 0)
+    throw new Error(`${label} 必须是安全范围内的非负整数：${value}`)
+  return parsed
+}
+
+function readMemoryRegression(path: string): MemoryRegressionCase[] {
+  const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
+  const rawCases =
+    typeof parsed === 'object' && parsed !== null && 'cases' in parsed
+      ? (parsed as { cases?: unknown }).cases
+      : parsed
+  if (!Array.isArray(rawCases)) throw new Error('回归文件必须是数组或 {"cases": [...]}')
+  return rawCases.map((value, index) => {
+    if (typeof value !== 'object' || value === null)
+      throw new Error(`回归用例 ${index + 1} 必须是对象`)
+    const query = (value as { query?: unknown }).query
+    const decisionKey = (value as { decision_key?: unknown }).decision_key
+    const expected = (value as { expected_decision_ids?: unknown }).expected_decision_ids
+    if (typeof query !== 'string' || query.trim() === '')
+      throw new Error(`回归用例 ${index + 1} 缺少 query`)
+    if (decisionKey !== undefined && typeof decisionKey !== 'string')
+      throw new Error(`回归用例 ${index + 1} 的 decision_key 非法`)
+    if (
+      !Array.isArray(expected) ||
+      !expected.every((id): id is string => typeof id === 'string' && UUID.test(id))
+    )
+      throw new Error(`回归用例 ${index + 1} 的 expected_decision_ids 必须是 UUID 数组`)
+    return {
+      query: query.trim(),
+      ...(decisionKey === undefined ? {} : { decision_key: decisionKey }),
+      expected_decision_ids: expected,
+    }
+  })
+}
+
 function printJson(value: unknown): void {
   console.log(JSON.stringify(value, null, 2))
 }
@@ -131,6 +180,13 @@ action-reconcile [--id OUTBOX_UUID] [--once] [--interval MS]
 action-retry OUTBOX_UUID
 action-check-gateway [--once] [--interval MS]
 action-checks [--task TASK_UUID] [--id TARGET_UUID]
+memory-status PROJECT_UUID
+memory-summary PROJECT_UUID --generated-by TEXT [--model-version TEXT]
+memory-publish SUMMARY_UUID --project UUID --epoch N [--regression FILE]
+memory-reject SUMMARY_UUID --project UUID [--reason TEXT]
+memory-rollback SUMMARY_UUID --project UUID --epoch N --reason TEXT
+memory-retrieve PROJECT_UUID --query TEXT [--key DECISION_KEY] [--request UUID] [--budget-entries N] [--budget-tokens N]
+memory-promote REQUEST_UUID --revision N --key DECISION_KEY [--statement TEXT] [--valid-from TIME] [--valid-until TIME] [--supersedes UUID]
 调查模式的天问只在 E3 明确决定或 E1 可逆默认范围内自动答复。
 ticket 模式按固定包完成 execute→verify→review→land；阶段执行器不 push，
 受控 action gateway 创建 PR，check gateway 在准确 SHA 的必需检查通过后推进 pr_ready。`)
@@ -282,9 +338,160 @@ ticket 模式按固定包完成 execute→verify→review→land；阶段执行�
         printJson(result.value)
         return
       }
+      case 'memory-status': {
+        if (rest.length !== 1) throw new Error('用法：managed memory-status <project UUID>')
+        const result = await getProjectMemoryState(uuid(rest[0] ?? '', 'project ID'))
+        if (!result.ok) throw new Error(result.error.detail)
+        printJson(result.value)
+        return
+      }
+      case 'memory-summary': {
+        if (rest[0]?.startsWith('--'))
+          throw new Error('用法：managed memory-summary <project UUID> --generated-by TEXT')
+        const projectId = uuid(rest[0] ?? '', 'project ID')
+        const flags = parseFlags(rest.slice(1), ['generated-by', 'model-version'])
+        const result = await createProjectMemorySummary({
+          project_id: projectId,
+          generated_by: required(flags, 'generated-by'),
+          ...(optional(flags, 'model-version') === undefined
+            ? {}
+            : { model_version: optional(flags, 'model-version') as string }),
+          now: new Date().toISOString(),
+        })
+        if (!result.ok) throw new Error(result.error.detail)
+        printJson(result.value)
+        return
+      }
+      case 'memory-publish': {
+        if (rest[0]?.startsWith('--'))
+          throw new Error('用法：managed memory-publish <summary UUID> --project UUID --epoch N')
+        const summaryId = uuid(rest[0] ?? '', 'summary ID')
+        const flags = parseFlags(rest.slice(1), ['project', 'epoch', 'regression'])
+        const regressionRaw = optional(flags, 'regression')
+        const regression =
+          regressionRaw === undefined ? undefined : readMemoryRegression(regressionRaw)
+        const result = await publishProjectMemorySummary({
+          project_id: uuid(required(flags, 'project'), '--project'),
+          summary_id: summaryId,
+          expected_epoch: nonNegativeInteger(required(flags, 'epoch'), '--epoch'),
+          actor: 'local-operator',
+          now: new Date().toISOString(),
+          ...(regression === undefined ? {} : { regression_cases: regression }),
+        })
+        if (!result.ok) throw new Error(result.error.detail)
+        printJson(result.value)
+        return
+      }
+      case 'memory-reject': {
+        if (rest[0]?.startsWith('--'))
+          throw new Error('用法：managed memory-reject <summary UUID> --project UUID')
+        const summaryId = uuid(rest[0] ?? '', 'summary ID')
+        const flags = parseFlags(rest.slice(1), ['project', 'reason'])
+        const result = await rejectProjectMemorySummary({
+          project_id: uuid(required(flags, 'project'), '--project'),
+          summary_id: summaryId,
+          actor: 'local-operator',
+          ...(optional(flags, 'reason') === undefined
+            ? {}
+            : { reason: optional(flags, 'reason') as string }),
+          now: new Date().toISOString(),
+        })
+        if (!result.ok) throw new Error(result.error.detail)
+        printJson({ rejected: summaryId })
+        return
+      }
+      case 'memory-rollback': {
+        if (rest[0]?.startsWith('--'))
+          throw new Error(
+            '用法：managed memory-rollback <summary UUID> --project UUID --epoch N --reason TEXT',
+          )
+        const summaryId = uuid(rest[0] ?? '', 'summary ID')
+        const flags = parseFlags(rest.slice(1), ['project', 'epoch', 'reason'])
+        const result = await rollbackProjectMemorySummary({
+          project_id: uuid(required(flags, 'project'), '--project'),
+          summary_id: summaryId,
+          expected_epoch: nonNegativeInteger(required(flags, 'epoch'), '--epoch'),
+          actor: 'local-operator',
+          reason: required(flags, 'reason'),
+          now: new Date().toISOString(),
+        })
+        if (!result.ok) throw new Error(result.error.detail)
+        printJson(result.value)
+        return
+      }
+      case 'memory-retrieve': {
+        if (rest[0]?.startsWith('--'))
+          throw new Error('用法：managed memory-retrieve <project UUID> --query TEXT')
+        const projectId = uuid(rest[0] ?? '', 'project ID')
+        const flags = parseFlags(rest.slice(1), [
+          'query',
+          'key',
+          'request',
+          'budget-entries',
+          'budget-tokens',
+        ])
+        const entriesRaw = optional(flags, 'budget-entries')
+        const tokensRaw = optional(flags, 'budget-tokens')
+        const result = await retrieveProjectMemory({
+          project_id: projectId,
+          query: required(flags, 'query'),
+          ...(optional(flags, 'key') === undefined
+            ? {}
+            : { decision_key: optional(flags, 'key') as string }),
+          ...(optional(flags, 'request') === undefined
+            ? {}
+            : { request_id: uuid(optional(flags, 'request') as string, '--request') }),
+          ...(entriesRaw === undefined
+            ? {}
+            : { budget_entries: positiveInteger(entriesRaw, '--budget-entries') }),
+          ...(tokensRaw === undefined
+            ? {}
+            : { budget_tokens: positiveInteger(tokensRaw, '--budget-tokens') }),
+        })
+        if (!result.ok) throw new Error(result.error.detail)
+        printJson(result.value)
+        return
+      }
+      case 'memory-promote': {
+        if (rest[0]?.startsWith('--'))
+          throw new Error(
+            '用法：managed memory-promote <request UUID> --revision N --key DECISION_KEY',
+          )
+        const requestId = uuid(rest[0] ?? '', 'request ID')
+        const flags = parseFlags(rest.slice(1), [
+          'revision',
+          'key',
+          'statement',
+          'valid-from',
+          'valid-until',
+          'supersedes',
+        ])
+        const result = await promoteHumanAnswerToProjectRule({
+          request_id: requestId,
+          revision: positiveInteger(required(flags, 'revision'), '--revision'),
+          decision_key: required(flags, 'key'),
+          actor: 'local-operator',
+          now: new Date().toISOString(),
+          ...(optional(flags, 'statement') === undefined
+            ? {}
+            : { statement: optional(flags, 'statement') as string }),
+          ...(optional(flags, 'valid-from') === undefined
+            ? {}
+            : { valid_from: optional(flags, 'valid-from') as string }),
+          ...(optional(flags, 'valid-until') === undefined
+            ? {}
+            : { valid_until: optional(flags, 'valid-until') as string }),
+          ...(optional(flags, 'supersedes') === undefined
+            ? {}
+            : { supersedes_id: uuid(optional(flags, 'supersedes') as string, '--supersedes') }),
+        })
+        if (!result.ok) throw new Error(result.error.detail)
+        printJson(result.value)
+        return
+      }
       default:
         throw new Error(
-          '用法：managed investigate|status|questions|answer|worker|ticket-create|ticket-status|ticket-stages|ticket-tick|ticket-worker|ticket-answer|action-list|action-gateway|action-reconcile|action-retry|action-check-gateway|action-checks',
+          '用法：managed investigate|status|questions|answer|worker|ticket-create|ticket-status|ticket-stages|ticket-tick|ticket-worker|ticket-answer|action-list|action-gateway|action-reconcile|action-retry|action-check-gateway|action-checks|memory-status|memory-summary|memory-publish|memory-reject|memory-rollback|memory-retrieve|memory-promote',
         )
     }
   } catch (error) {

@@ -32,6 +32,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Ingress Poller](./ingress-poller.md) | 每仓库 `issue_label`、分页与 `truncated`、轮内去重、`StopToken` 订阅制、日志脱敏 | ✅ 已填（`08-29-ingress-poller`） |
 | [CLI Lifecycle](./cli-lifecycle.md) | 分发层统一关池（`finally`）、常驻循环 SIGTERM 必跳出、监听不叠加、关池失败不改退出码、常驻角色单实例 advisory lock | ✅ 已填（11-04 生命周期收口；`11-05-poller-single-instance` 补单实例锁） |
 | [Decision Acceptance](./decision-acceptance.md) | 项目决定/委托版本、E3/E1 确定性接纳、request revision CAS、唯一决议与角色权限 | ✅ 已填（JT-02B；未接 runtime 自动唤醒） |
+| [Project Memory](./project-memory.md) | 项目记忆事实源、版本化摘要、epoch/水位增量、检索预算、回滚与人工规则提升 | ✅ 已填（JT-03） |
 | [Ticket Execution](./ticket-execution.md) | jstack 单 ticket 固定包、阶段门禁、verify/review 证据绑定、must-stop DecisionRequest、branch_ready 边界 | ✅ 已填（JT-02C） |
 | [Action Gateway](./action-gateway.md) | action intent / ExecutionPermit / 持久 outbox、受控 push 与 PR、required checks 与准确 SHA 的 `pr_ready` | ✅ 已填（JT-02D/02E） |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | ⏳ 暂缓 —— 尚无日志代码 |

@@ -1,8 +1,28 @@
 # 实施进度：JT-01 只读影子链路
 
 **日期**：2026-11-10。协议与后台队列已实现，Linux 原生 OMP 真实烟测通过，
-提问前与答复后两处 SIGKILL 故障恢复均已实测通过；原生 Claude 与 JT-02～07
+提问前与答复后两处 SIGKILL 故障恢复均已实测通过；原生 Claude 与 JT-04～07
 尚未完成，JT-01 仍为影子模式，不能把 JT-01 当作完整交付。
+
+## JT-03 项目记忆（已实现）
+
+`ai/jt03-memory` 已实现：
+
+- `ProjectMemoryContent` schema 与生成类型；
+- `managed_project_memory_state/summary/event/retrieval` 迁移，决定插入/替代/撤销
+  自动 bump epoch，摘要发布/回滚/拒绝走 SECURITY DEFINER 单入口；
+- 确定性摘要构建、schema/权威快照校验、同一关键词冲突标注；
+- 按项目检索 ACTIVE 摘要，stale 时用当前决定覆盖并追加增量；
+- 关键候选预算不足明确升级，非关键省略与检索预算写审计日志；
+- ticket 天问上下文从“全量项目决定”改为摘要 + 增量检索，接纳器仍读取完整权威决定；
+- 人工 `human_confirmed` 答案显式提升为 owner_confirmed 项目规则；
+- `memory-status/summary/publish/reject/rollback/retrieve/promote` CLI。
+
+规范见 `docs/spec/backend/project-memory.md`。已在全新专用 PostgreSQL 库完成
+`up → down 1 → up` 迁移和真实 store 验收；`memory-protocol` 13 项、`memory-store`
+16 项、`decision-store` 11 项、`ticket-runtime` 11 项测试通过。全量 `pnpm run test`
+为 88 个文件 / 1265 项通过；`typecheck`、`build`、`boundaries`、`check:transitions`、
+`check:purity` 均通过。
 
 ## 已实现
 

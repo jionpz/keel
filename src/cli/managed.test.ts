@@ -110,6 +110,12 @@ describe('managed CLI · 参数拒绝', () => {
     )
     await expectRejected(['status', 'not-a-uuid'], 'UUID')
     await expectRejected(['worker', '--interval', '0'], '正整数')
+    await expectRejected(['memory-status', 'not-a-uuid'], 'UUID')
+    await expectRejected(['memory-summary', '--generated-by', 'local-operator'], '用法')
+    await expectRejected(
+      ['memory-retrieve', randomUUID(), '--query', '报告', '--budget-entries', '0'],
+      '正整数',
+    )
   })
 })
 
