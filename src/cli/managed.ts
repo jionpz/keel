@@ -1,15 +1,23 @@
 /** JT-01 managed 影子模式的薄 CLI 接线。 */
 
 import { execFileSync } from 'node:child_process'
+import { answerManagedTicketDecision } from '../control/managed/decision-store.js'
 import {
   createManagedInvestigation,
   listManagedQuestions,
   tickManaged,
 } from '../control/managed/runtime.js'
 import { answerManagedQuestion, getManagedTask } from '../control/managed/store.js'
+import {
+  createManagedTicketTask,
+  getManagedTicket,
+  tickManagedTicket,
+} from '../control/managed/ticket-runtime.js'
+import { listManagedTicketStages } from '../control/managed/ticket-store.js'
 import { requireClaudeReady } from '../execution/adapters/claude-code.js'
 import { requirePiBinary } from '../execution/adapters/pi.js'
 import { managedInference } from '../execution/managed-inference.js'
+import { ticketWorkerFromAdapter } from '../execution/ticket-stage-runner.js'
 import { createStopToken, interruptibleSleep } from '../ingress/poller.js'
 import { createHarnessAdapter, resolveHarness, resolveOptionalModel } from './run-task.js'
 
@@ -91,7 +99,14 @@ status TASK_UUID
 questions [--task TASK_UUID]
 answer QUESTION_UUID --text TEXT（必须精确匹配请求选项）
 worker [--once] [--interval MS] [--task TASK_UUID] [--harness omp|claude|pi] [--model ID]
-天问只在 E3 明确决定或 E1 可逆默认范围内自动答复；其余等待人工。尚未开放代码修改或 PR。`)
+ticket-create --repo UUID --package FILE --worktree PATH [--baseline SHA]
+ticket-status TASK_UUID
+ticket-stages TASK_UUID
+ticket-tick [--task TASK_UUID] [--harness omp|claude|pi] [--model ID]
+ticket-worker [--once] [--interval MS] [--task TASK_UUID] [--harness omp|claude|pi] [--model ID]
+ticket-answer REQUEST_UUID --revision N --option OPTION_ID
+调查模式的天问只在 E3 明确决定或 E1 可逆默认范围内自动答复。
+ticket 模式按固定包完成 execute→verify→review→land，交付 branch_ready；不 push、不创建 PR。`)
       return
     }
     switch (command) {
@@ -133,8 +148,58 @@ worker [--once] [--interval MS] [--task TASK_UUID] [--harness omp|claude|pi] [--
       case 'worker':
         await runWorker(rest)
         return
+      case 'ticket-create': {
+        const flags = parseFlags(rest, ['repo', 'package', 'worktree', 'baseline'])
+        const repoId = uuid(required(flags, 'repo'), '--repo')
+        const packagePath = required(flags, 'package')
+        const worktreePath = required(flags, 'worktree')
+        const baseline = optional(flags, 'baseline')
+        const result = await createManagedTicketTask(repoId, packagePath, worktreePath, {
+          ...(baseline === undefined ? {} : { baselineCommit: baseline }),
+        })
+        if (!result.ok) throw new Error(result.error.detail)
+        console.log(result.value)
+        return
+      }
+      case 'ticket-status': {
+        if (rest.length !== 1) throw new Error('用法：managed ticket-status <task UUID>')
+        const task = await getManagedTicket(uuid(rest[0] ?? '', 'task ID'))
+        if (!task.ok) throw new Error(task.error.detail)
+        printJson(task.value)
+        return
+      }
+      case 'ticket-stages': {
+        if (rest.length !== 1) throw new Error('用法：managed ticket-stages <task UUID>')
+        printJson(await listManagedTicketStages(uuid(rest[0] ?? '', 'task ID')))
+        return
+      }
+      case 'ticket-tick':
+        await runTicketTick(rest)
+        return
+      case 'ticket-worker':
+        await runTicketWorker(rest)
+        return
+      case 'ticket-answer': {
+        if (rest[0]?.startsWith('--'))
+          throw new Error('用法：managed ticket-answer <request UUID> --revision N --option OPTION')
+        const requestId = uuid(rest[0] ?? '', 'request ID')
+        const flags = parseFlags(rest.slice(1), ['revision', 'option'])
+        const revision = positiveInteger(required(flags, 'revision'), '--revision')
+        const optionId = required(flags, 'option')
+        const result = await answerManagedTicketDecision(
+          requestId,
+          revision,
+          optionId,
+          new Date().toISOString(),
+        )
+        if (!result.ok) throw new Error(result.error.detail)
+        printJson(result.value)
+        return
+      }
       default:
-        throw new Error('用法：managed investigate|status|questions|answer|worker')
+        throw new Error(
+          '用法：managed investigate|status|questions|answer|worker|ticket-create|ticket-status|ticket-stages|ticket-tick|ticket-worker|ticket-answer',
+        )
     }
   } catch (error) {
     reportFailure(error)
@@ -187,6 +252,72 @@ async function runWorker(argv: readonly string[]): Promise<void> {
   try {
     while (!stop.requested) {
       const result = await tickManaged(infer, taskId)
+      if (!result.ok) throw new Error(result.error.detail)
+      if (result.value !== null) printJson(result.value)
+      else await interruptibleSleep(intervalMs, stop)
+    }
+  } finally {
+    process.off('SIGINT', onSignal)
+    process.off('SIGTERM', onSignal)
+  }
+}
+
+async function createTicketWorker(
+  flags: Map<string, FlagValue>,
+): Promise<ReturnType<typeof ticketWorkerFromAdapter>> {
+  const harnessRaw = optional(flags, 'harness')
+  const modelRaw = optional(flags, 'model')
+  const harness = resolveHarness(harnessRaw, process.env.KEEL_HARNESS)
+  if (!harness.ok) throw new Error(harness.error.detail)
+  const model = resolveOptionalModel(modelRaw, process.env.KEEL_MODEL)
+  if (!model.ok) throw new Error(model.error.detail)
+  if (harness.value === 'claude') {
+    const ready = requireClaudeReady()
+    if (!ready.ok) throw new Error(ready.error.detail)
+  } else if (harness.value === 'pi') {
+    const ready = requirePiBinary()
+    if (!ready.ok) throw new Error(ready.error.detail)
+  } else {
+    try {
+      execFileSync('omp', ['--version'], { stdio: 'ignore' })
+    } catch {
+      throw new Error('找不到可用的 omp CLI；ticket worker 未认领任务')
+    }
+  }
+  return ticketWorkerFromAdapter(createHarnessAdapter(harness.value, model.value))
+}
+
+async function runTicketTick(argv: readonly string[]): Promise<void> {
+  const flags = parseFlags(argv, ['task', 'harness', 'model'])
+  const taskRaw = optional(flags, 'task')
+  const taskId = taskRaw === undefined ? undefined : uuid(taskRaw, '--task')
+  const worker = await createTicketWorker(flags)
+  const result = await tickManagedTicket(worker, taskId)
+  if (!result.ok) throw new Error(result.error.detail)
+  printJson(result.value)
+}
+
+async function runTicketWorker(argv: readonly string[]): Promise<void> {
+  const flags = parseFlags(argv, ['once', 'interval', 'task', 'harness', 'model'], ['once'])
+  const once = flags.has('once')
+  const intervalRaw = optional(flags, 'interval')
+  const intervalMs = intervalRaw === undefined ? 1000 : positiveInteger(intervalRaw, '--interval')
+  const taskRaw = optional(flags, 'task')
+  const taskId = taskRaw === undefined ? undefined : uuid(taskRaw, '--task')
+  const worker = await createTicketWorker(flags)
+  if (once) {
+    const result = await tickManagedTicket(worker, taskId)
+    if (!result.ok) throw new Error(result.error.detail)
+    printJson(result.value)
+    return
+  }
+  const stop = createStopToken()
+  const onSignal = (): void => stop.request()
+  process.on('SIGINT', onSignal)
+  process.on('SIGTERM', onSignal)
+  try {
+    while (!stop.requested) {
+      const result = await tickManagedTicket(worker, taskId)
       if (!result.ok) throw new Error(result.error.detail)
       if (result.value !== null) printJson(result.value)
       else await interruptibleSleep(intervalMs, stop)

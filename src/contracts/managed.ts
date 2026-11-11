@@ -1,5 +1,6 @@
 /** JT-01：与旧 Artifact/Task 状态机分离的只读调查协议。 */
 
+import type { JstackTicketPackage, ManagedTicketStageResult } from '../generated/managed.js'
 import type { ResultWithUsage } from './errors.js'
 import type { Context, Usage } from './types.js'
 
@@ -68,6 +69,94 @@ export interface ManagedInferenceInput {
 export type ManagedInference = (input: ManagedInferenceInput) => Promise<
   ResultWithUsage<{
     readonly value: unknown
+    readonly usage: Usage
+  }>
+>
+
+export type ManagedTicketStageName = 'execute' | 'verify' | 'review' | 'land'
+export type ManagedTicketStatus =
+  | 'READY'
+  | 'RUNNING'
+  | 'WAITING_HUMAN'
+  | 'PAUSED'
+  | 'DONE'
+  | 'FAILED'
+  | 'CANCELLED'
+
+export interface ManagedTicketTask {
+  readonly id: string
+  readonly repo_id: string
+  readonly package_digest: string
+  readonly ticket_id: string
+  readonly ticket_title: string
+  readonly baseline_commit: string
+  readonly worktree_path: string
+  readonly current_stage: ManagedTicketStageName
+  readonly status: ManagedTicketStatus
+  readonly completion_target: 'branch_ready'
+  readonly lease_token: string | null
+  readonly lease_until: string | null
+  readonly attempts: number
+  readonly max_attempts: number
+  readonly rework_count: number
+  readonly pending_decision_id: string | null
+  readonly pending_decision_revision: number | null
+  readonly last_error: string | null
+  readonly handoff: unknown
+  readonly created_at: string
+  readonly updated_at: string
+}
+
+export interface ManagedTicketStageRecord {
+  readonly id: string
+  readonly task_id: string
+  readonly stage: ManagedTicketStageName
+  readonly attempt: number
+  readonly status: 'RUNNING' | 'SUCCEEDED' | 'REWORK' | 'FAILED' | 'MUST_STOP'
+  readonly package_digest: string
+  readonly baseline_commit: string
+  readonly input_commit: string
+  readonly output_commit: string | null
+  readonly input_digest: string
+  readonly output_digest: string | null
+  readonly evidence_digest: string | null
+  readonly result: unknown
+  readonly evidence: unknown
+  readonly usage: unknown
+  readonly error: string | null
+  readonly started_at: string
+  readonly ended_at: string | null
+}
+
+export interface ManagedTicketToolPlan {
+  readonly harness: string
+  readonly stage: ManagedTicketStageName
+  readonly profile: string
+  readonly role: string
+  readonly native_tools: readonly string[]
+  readonly degradations: readonly unknown[]
+  readonly missing_optional: readonly string[]
+}
+
+export interface ManagedTicketStageInput {
+  readonly attempt_id: string
+  readonly task_id: string
+  readonly repo_id: string
+  readonly stage: ManagedTicketStageName
+  readonly context: Context
+  readonly workspace_path: string
+  readonly package: JstackTicketPackage
+  readonly stage_definition: JstackTicketPackage['stages'][number]
+  readonly tool_plan: ManagedTicketToolPlan
+  readonly baseline_commit: string
+  readonly input_commit: string
+  readonly rework_notes: readonly string[]
+  readonly human_decisions: readonly unknown[]
+}
+
+export type ManagedTicketStageRunner = (input: ManagedTicketStageInput) => Promise<
+  ResultWithUsage<{
+    readonly output: ManagedTicketStageResult
     readonly usage: Usage
   }>
 >

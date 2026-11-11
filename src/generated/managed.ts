@@ -17,6 +17,7 @@ project_id: string
 repo_id: string
 managed_task_id?: string
 managed_question_id?: string
+managed_ticket_task_id?: string
 task_id?: string
 node_id?: string
 attempt_id?: string
@@ -847,6 +848,186 @@ rationale: string
 missing_information: []|[string]|[string, string]|[string, string, string]|[string, string, string, string]|[string, string, string, string, string]|[string, string, string, string, string, string]|[string, string, string, string, string, string, string]|[string, string, string, string, string, string, string, string]|[string, string, string, string, string, string, string, string, string]|[string, string, string, string, string, string, string, string, string, string]|[string, string, string, string, string, string, string, string, string, string, string]|[string, string, string, string, string, string, string, string, string, string, string, string]
 }
 
+export interface JstackTicketPackage {
+protocol_version: "1.0"
+workflow_id: "jstack"
+mode: "ticket"
+source_commit: string
+ticket: {
+id: string
+title: string
+}
+route: {
+size: ("XS" | "S")
+/**
+ * @minItems 4
+ * @maxItems 4
+ */
+stages: [("execute" | "verify" | "review" | "land"), ("execute" | "verify" | "review" | "land"), ("execute" | "verify" | "review" | "land"), ("execute" | "verify" | "review" | "land")]
+}
+/**
+ * @minItems 4
+ * @maxItems 4
+ */
+stages: [{
+stage: ("execute" | "verify" | "review" | "land")
+provider: string
+provider_path: string
+gate: string
+tool_profile: string
+instructions: string
+content_digest: string
+}, {
+stage: ("execute" | "verify" | "review" | "land")
+provider: string
+provider_path: string
+gate: string
+tool_profile: string
+instructions: string
+content_digest: string
+}, {
+stage: ("execute" | "verify" | "review" | "land")
+provider: string
+provider_path: string
+gate: string
+tool_profile: string
+instructions: string
+content_digest: string
+}, {
+stage: ("execute" | "verify" | "review" | "land")
+provider: string
+provider_path: string
+gate: string
+tool_profile: string
+instructions: string
+content_digest: string
+}]
+instructions: {
+route: string
+stages: string
+must_stop: string
+}
+tool_policy: {
+protocol_version: "1.0"
+source_commit: string
+stages: {
+[k: string]: string
+}
+profiles: {
+[k: string]: {
+
+}
+}
+harnesses: {
+[k: string]: {
+
+}
+}
+content_digest: string
+}
+must_stop: {
+content: string
+/**
+ * @minItems 1
+ */
+actions: [{
+action: string
+hook: string
+}, ...({
+action: string
+hook: string
+})[]]
+content_digest: string
+}
+completion_target: "branch_ready"
+/**
+ * @minItems 4
+ */
+sources: [{
+path: string
+sha256: string
+bytes: number
+}, {
+path: string
+sha256: string
+bytes: number
+}, {
+path: string
+sha256: string
+bytes: number
+}, {
+path: string
+sha256: string
+bytes: number
+}, ...({
+path: string
+sha256: string
+bytes: number
+})[]]
+content_digest: string
+}
+
+export interface ManagedTicketStageResult {
+schema_version: "1.0"
+stage: ("execute" | "verify" | "review" | "land")
+status: ("completed" | "rework" | "blocked" | "must_stop")
+summary: string
+commit?: string
+worktree_head?: string
+checks?: {
+command: string
+exit_code: number
+passed: boolean
+output_digest: string
+output_excerpt: string
+}[]
+review?: {
+reviewed_commit: string
+diff_digest: string
+findings: {
+id: string
+severity: ("low" | "medium" | "high" | "critical")
+summary: string
+disposition: ("dismissed" | "open")
+reason: string
+}[]
+}
+land?: {
+branch: string
+commit: string
+action_intent: {
+kind: "push_and_pr"
+remote: string
+pr_title: string
+pr_body: string
+}
+}
+requested_action?: {
+action: string
+reason: string
+}
+decision?: {
+decision_key: string
+kind: ("clarification" | "preference" | "design" | "approval" | "recovery" | "budget")
+question: string
+/**
+ * @minItems 2
+ * @maxItems 12
+ */
+options: [string, string]|[string, string, string]|[string, string, string, string]|[string, string, string, string, string]|[string, string, string, string, string, string]|[string, string, string, string, string, string, string]|[string, string, string, string, string, string, string, string]|[string, string, string, string, string, string, string, string, string]|[string, string, string, string, string, string, string, string, string, string]|[string, string, string, string, string, string, string, string, string, string, string]|[string, string, string, string, string, string, string, string, string, string, string, string]
+action_category: string
+impact: {
+environment: ("local" | "test" | "staging" | "production")
+reversibility: ("reversible" | "partially_reversible" | "irreversible")
+/**
+ * @minItems 1
+ * @maxItems 64
+ */
+affected_resources: [string, ...(string)[]]
+}
+}
+}
+
 export interface JstackInvestigationPackage {
 protocol_version: "1.0"
 workflow_id: "jstack"
@@ -864,7 +1045,7 @@ execute: string
 }
 }
 
-export const MANAGED_SCHEMAS = {"decision_request": {"$schema":"https://json-schema.org/draft/2020-12/schema","title":"DecisionRequest","type":"object","additionalProperties":false,"required":["schema_version","id","revision","idempotency_key","project_id","repo_id","decision_key","kind","question","options","constraints","missing_information","impact","action_category","input_digest","status","created_at"],"properties":{"schema_version":{"const":"1.0"},"id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"revision":{"type":"integer","minimum":1},"idempotency_key":{"type":"string","minLength":1,"maxLength":300},"project_id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"repo_id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"managed_task_id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"managed_question_id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"task_id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"node_id":{"type":"string","minLength":1,"maxLength":300},"attempt_id":{"type":"string","minLength":1,"maxLength":300},"decision_key":{"type":"string","pattern":"^[a-z0-9][a-z0-9._-]{0,127}$"},"kind":{"enum":["clarification","preference","design","approval","recovery","budget"]},"question":{"type":"string","minLength":1,"maxLength":16000},"options":{"type":"array","minItems":2,"maxItems":12,"items":{"type":"object","additionalProperties":false,"required":["id","text"],"properties":{"id":{"type":"string","minLength":1,"maxLength":100},"text":{"type":"string","minLength":1,"maxLength":4000}}}},"suggested_option_id":{"type":"string","minLength":1,"maxLength":100},"constraints":{"type":"array","maxItems":32,"items":{"type":"string","minLength":1,"maxLength":2000}},"missing_information":{"type":"array","maxItems":32,"items":{"type":"string","minLength":1,"maxLength":2000}},"impact":{"type":"object","additionalProperties":false,"required":["environment","reversibility","affected_resources"],"properties":{"environment":{"enum":["local","test","staging","production"]},"reversibility":{"enum":["reversible","partially_reversible","irreversible"]},"affected_resources":{"type":"array","minItems":1,"maxItems":64,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":512}}}},"action_category":{"type":"string","minLength":1,"maxLength":128},"workflow_digest":{"type":"string","pattern":"^[a-f0-9]{64}$"},"observed_memory_epoch":{"type":"integer","minimum":0},"input_digest":{"type":"string","pattern":"^[a-f0-9]{64}$"},"status":{"enum":["OPEN","PROCESSING","WAITING_HUMAN","RESOLVED","CANCELLED","SUPERSEDED"]},"expires_at":{"type":"string","minLength":1,"maxLength":64},"created_at":{"type":"string","minLength":1,"maxLength":64}}},
+export const MANAGED_SCHEMAS = {"decision_request": {"$schema":"https://json-schema.org/draft/2020-12/schema","title":"DecisionRequest","type":"object","additionalProperties":false,"required":["schema_version","id","revision","idempotency_key","project_id","repo_id","decision_key","kind","question","options","constraints","missing_information","impact","action_category","input_digest","status","created_at"],"properties":{"schema_version":{"const":"1.0"},"id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"revision":{"type":"integer","minimum":1},"idempotency_key":{"type":"string","minLength":1,"maxLength":300},"project_id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"repo_id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"managed_task_id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"managed_question_id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"managed_ticket_task_id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"task_id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"node_id":{"type":"string","minLength":1,"maxLength":300},"attempt_id":{"type":"string","minLength":1,"maxLength":300},"decision_key":{"type":"string","pattern":"^[a-z0-9][a-z0-9._-]{0,127}$"},"kind":{"enum":["clarification","preference","design","approval","recovery","budget"]},"question":{"type":"string","minLength":1,"maxLength":16000},"options":{"type":"array","minItems":2,"maxItems":12,"items":{"type":"object","additionalProperties":false,"required":["id","text"],"properties":{"id":{"type":"string","minLength":1,"maxLength":100},"text":{"type":"string","minLength":1,"maxLength":4000}}}},"suggested_option_id":{"type":"string","minLength":1,"maxLength":100},"constraints":{"type":"array","maxItems":32,"items":{"type":"string","minLength":1,"maxLength":2000}},"missing_information":{"type":"array","maxItems":32,"items":{"type":"string","minLength":1,"maxLength":2000}},"impact":{"type":"object","additionalProperties":false,"required":["environment","reversibility","affected_resources"],"properties":{"environment":{"enum":["local","test","staging","production"]},"reversibility":{"enum":["reversible","partially_reversible","irreversible"]},"affected_resources":{"type":"array","minItems":1,"maxItems":64,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":512}}}},"action_category":{"type":"string","minLength":1,"maxLength":128},"workflow_digest":{"type":"string","pattern":"^[a-f0-9]{64}$"},"observed_memory_epoch":{"type":"integer","minimum":0},"input_digest":{"type":"string","pattern":"^[a-f0-9]{64}$"},"status":{"enum":["OPEN","PROCESSING","WAITING_HUMAN","RESOLVED","CANCELLED","SUPERSEDED"]},"expires_at":{"type":"string","minLength":1,"maxLength":64},"created_at":{"type":"string","minLength":1,"maxLength":64}}},
 "decision_resolution": {"$schema":"https://json-schema.org/draft/2020-12/schema","title":"DecisionResolution","type":"object","additionalProperties":false,"required":["schema_version","id","request_id","request_revision","input_digest","disposition","rationale","evidence_grade","basis_refs","actor","authority_refs","validity_conditions","context_digest","resolved_at"],"properties":{"schema_version":{"const":"1.0"},"id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"request_id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"request_revision":{"type":"integer","minimum":1},"input_digest":{"type":"string","pattern":"^[a-f0-9]{64}$"},"disposition":{"enum":["delegated","human_confirmed","owner_required","denied"]},"answer_option_id":{"type":"string","minLength":1,"maxLength":100},"answer":{"type":"string","minLength":1,"maxLength":4000},"rationale":{"type":"string","minLength":1,"maxLength":16000},"evidence_grade":{"enum":["E0","E1","E2","E3"]},"basis_refs":{"type":"array","maxItems":64,"items":{"type":"object","additionalProperties":false,"required":["kind","id","version"],"properties":{"kind":{"enum":["project_decision","delegation_policy"]},"id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"version":{"type":"integer","minimum":1}}}},"actor":{"type":"object","additionalProperties":false,"required":["type","authenticated_id"],"properties":{"type":{"enum":["tianwen","human","policy"]},"authenticated_id":{"type":"string","minLength":1,"maxLength":300}}},"authority_refs":{"type":"array","maxItems":64,"items":{"type":"object","additionalProperties":false,"required":["kind","id","version"],"properties":{"kind":{"enum":["project_decision","delegation_policy"]},"id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"version":{"type":"integer","minimum":1}}}},"validity_conditions":{"type":"array","maxItems":64,"items":{"type":"string","minLength":1,"maxLength":2000}},"memory_epoch":{"type":"integer","minimum":0},"delegation_policy_id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"delegation_policy_version":{"type":"integer","minimum":1},"context_digest":{"type":"string","pattern":"^[a-f0-9]{64}$"},"resolved_at":{"type":"string","minLength":1,"maxLength":64}}},
 "delegation_policy": {"$schema":"https://json-schema.org/draft/2020-12/schema","title":"DelegationPolicyVersion","type":"object","additionalProperties":false,"required":["schema_version","id","policy_id","version","project_id","approved_by_owner","approved_at","valid_from","rules","created_at"],"properties":{"schema_version":{"const":"1.0"},"id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"policy_id":{"type":"string","pattern":"^[a-z0-9][a-z0-9._-]{0,127}$"},"version":{"type":"integer","minimum":1},"project_id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"approved_by_owner":{"type":"string","minLength":1,"maxLength":200},"approved_at":{"type":"string","minLength":1,"maxLength":64},"valid_from":{"type":"string","minLength":1,"maxLength":64},"valid_until":{"type":"string","minLength":1,"maxLength":64},"rules":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"object","additionalProperties":false,"required":["id","decision_kinds","actions","resource_selectors","environments","reversibility","impact_limits","budget_limits","required_evidence","required_checks","mode"],"properties":{"id":{"type":"string","pattern":"^[a-z0-9][a-z0-9._-]{0,127}$"},"decision_kinds":{"type":"array","minItems":1,"uniqueItems":true,"items":{"enum":["*","clarification","preference","design","approval","recovery","budget"]}},"actions":{"type":"array","minItems":1,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":128}},"resource_selectors":{"type":"array","minItems":1,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":512}},"environments":{"type":"array","minItems":1,"uniqueItems":true,"items":{"enum":["*","local","test","staging","production"]}},"reversibility":{"enum":["reversible","partially_reversible","irreversible"]},"impact_limits":{"type":"object","additionalProperties":false,"required":["environments","reversibilities","max_affected_resources"],"properties":{"environments":{"type":"array","minItems":1,"uniqueItems":true,"items":{"enum":["local","test","staging","production"]}},"reversibilities":{"type":"array","minItems":1,"uniqueItems":true,"items":{"enum":["reversible","partially_reversible","irreversible"]}},"max_affected_resources":{"type":"integer","minimum":1,"maximum":64}}},"budget_limits":{"type":"object","additionalProperties":false,"properties":{"max_cost_usd":{"type":"number","minimum":0},"max_tokens":{"type":"integer","minimum":0},"max_attempts":{"type":"integer","minimum":1}}},"required_evidence":{"type":"array","maxItems":16,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":200}},"required_checks":{"type":"array","maxItems":16,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":200}},"mode":{"enum":["delegated","owner_required","deny"]},"default_option_id":{"type":"string","minLength":1,"maxLength":100}}}},"supersedes_id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"superseded_by":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"revoked_at":{"type":"string","minLength":1,"maxLength":64},"revoked_by":{"type":"string","minLength":1,"maxLength":200},"revocation_reason":{"type":"string","minLength":1,"maxLength":2000},"created_at":{"type":"string","minLength":1,"maxLength":64}}},
 "investigation_result": {"$schema":"https://json-schema.org/draft/2020-12/schema","title":"ManagedInvestigationResult","oneOf":[{"type":"object","additionalProperties":false,"required":["outcome","paths"],"properties":{"outcome":{"const":"read_files"},"paths":{"type":"array","minItems":1,"maxItems":8,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":512}}}},{"type":"object","additionalProperties":false,"required":["outcome","question","options","decision_key","kind","action_category","impact"],"properties":{"outcome":{"const":"waiting_decision"},"question":{"type":"string","minLength":1,"maxLength":4000},"options":{"type":"array","minItems":2,"maxItems":6,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":1000}},"decision_key":{"type":"string","pattern":"^[a-z0-9][a-z0-9._-]{0,127}$"},"kind":{"enum":["clarification","preference","design","approval","recovery","budget"]},"action_category":{"type":"string","minLength":1,"maxLength":128},"impact":{"type":"object","additionalProperties":false,"required":["environment","reversibility","affected_resources"],"properties":{"environment":{"enum":["local","test","staging","production"]},"reversibility":{"enum":["reversible","partially_reversible","irreversible"]},"affected_resources":{"type":"array","minItems":1,"maxItems":64,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":512}}}}}},{"type":"object","additionalProperties":false,"required":["outcome","report","citations"],"properties":{"outcome":{"const":"completed"},"report":{"type":"string","minLength":1,"maxLength":16000},"citations":{"type":"array","minItems":1,"maxItems":32,"items":{"type":"object","additionalProperties":false,"required":["path","digest"],"properties":{"path":{"type":"string","minLength":1},"digest":{"type":"string","pattern":"^[a-f0-9]{64}$"}}}}}}]},
@@ -872,4 +1053,6 @@ export const MANAGED_SCHEMAS = {"decision_request": {"$schema":"https://json-sch
 "tianwen_decision": {"$schema":"https://json-schema.org/draft/2020-12/schema","title":"TianwenDecision","type":"object","additionalProperties":false,"required":["recommendation","rationale","basis_refs","assumptions","alternatives","unresolved_conflicts","missing_authority"],"properties":{"recommendation":{"enum":["answer","approve","reject","defer"]},"answer_option_id":{"type":"string","minLength":1,"maxLength":100},"rationale":{"type":"string","minLength":1,"maxLength":16000},"basis_refs":{"type":"array","maxItems":64,"items":{"type":"object","additionalProperties":false,"required":["kind","id","version"],"properties":{"kind":{"enum":["project_decision","delegation_policy"]},"id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"version":{"type":"integer","minimum":1}}}},"assumptions":{"type":"array","maxItems":64,"items":{"type":"string","minLength":1,"maxLength":2000}},"alternatives":{"type":"array","maxItems":32,"items":{"type":"string","minLength":1,"maxLength":2000}},"unresolved_conflicts":{"type":"array","maxItems":32,"items":{"type":"string","minLength":1,"maxLength":2000}},"missing_authority":{"type":"array","maxItems":32,"items":{"type":"string","minLength":1,"maxLength":2000}}}},
 "tianwen_proposal": {"$schema":"https://json-schema.org/draft/2020-12/schema","title":"TianwenProposal","type":"object","additionalProperties":false,"required":["schema_version","request_id","request_revision","input_digest","recommendation","rationale","claimed_evidence_grade","basis_refs","observed_fact_refs","assumptions","alternatives","unresolved_conflicts","missing_authority"],"properties":{"schema_version":{"const":"1.0"},"request_id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"request_revision":{"type":"integer","minimum":1},"input_digest":{"type":"string","pattern":"^[a-f0-9]{64}$"},"recommendation":{"enum":["answer","approve","reject","defer"]},"answer_option_id":{"type":"string","minLength":1,"maxLength":100},"rationale":{"type":"string","minLength":1,"maxLength":16000},"claimed_evidence_grade":{"enum":["E0","E1","E2","E3"]},"basis_refs":{"type":"array","maxItems":64,"items":{"type":"object","additionalProperties":false,"required":["kind","id","version"],"properties":{"kind":{"enum":["project_decision","delegation_policy"]},"id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"version":{"type":"integer","minimum":1}}}},"observed_fact_refs":{"type":"array","maxItems":64,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":1000}},"assumptions":{"type":"array","maxItems":64,"items":{"type":"string","minLength":1,"maxLength":2000}},"alternatives":{"type":"array","maxItems":32,"items":{"type":"string","minLength":1,"maxLength":2000}},"unresolved_conflicts":{"type":"array","maxItems":32,"items":{"type":"string","minLength":1,"maxLength":2000}},"missing_authority":{"type":"array","maxItems":32,"items":{"type":"string","minLength":1,"maxLength":2000}},"validation_plan":{"type":"string","minLength":1,"maxLength":8000},"rollback_plan":{"type":"string","minLength":1,"maxLength":8000},"model_profile_version":{"type":"string","minLength":1,"maxLength":300}}},
 "tianwen_suggestion": {"$schema":"https://json-schema.org/draft/2020-12/schema","title":"TianwenSuggestion","type":"object","additionalProperties":false,"required":["recommendation","rationale","missing_information"],"properties":{"recommendation":{"type":"string","minLength":1,"maxLength":4000},"rationale":{"type":"string","minLength":1,"maxLength":4000},"missing_information":{"type":"array","maxItems":12,"items":{"type":"string","minLength":1,"maxLength":1000}}}},
+"ticket_package": {"$schema":"https://json-schema.org/draft/2020-12/schema","title":"JstackTicketPackage","type":"object","additionalProperties":false,"required":["protocol_version","workflow_id","mode","source_commit","ticket","route","stages","instructions","tool_policy","must_stop","completion_target","sources","content_digest"],"properties":{"protocol_version":{"const":"1.0"},"workflow_id":{"const":"jstack"},"mode":{"const":"ticket"},"source_commit":{"type":"string","minLength":1,"maxLength":100},"ticket":{"type":"object","additionalProperties":false,"required":["id","title"],"properties":{"id":{"type":"string","minLength":1,"maxLength":200},"title":{"type":"string","minLength":1,"maxLength":1000}}},"route":{"type":"object","additionalProperties":false,"required":["size","stages"],"properties":{"size":{"enum":["XS","S"]},"stages":{"type":"array","minItems":4,"maxItems":4,"items":{"enum":["execute","verify","review","land"]}}}},"stages":{"type":"array","minItems":4,"maxItems":4,"items":{"type":"object","additionalProperties":false,"required":["stage","provider","provider_path","gate","tool_profile","instructions","content_digest"],"properties":{"stage":{"enum":["execute","verify","review","land"]},"provider":{"type":"string","minLength":1,"maxLength":300},"provider_path":{"type":"string","minLength":1,"maxLength":500},"gate":{"type":"string","minLength":1,"maxLength":2000},"tool_profile":{"type":"string","pattern":"^[a-z][a-z0-9-]{0,63}$"},"instructions":{"type":"string","minLength":1,"maxLength":200000},"content_digest":{"type":"string","pattern":"^[a-f0-9]{64}$"}}}},"instructions":{"type":"object","additionalProperties":false,"required":["route","stages","must_stop"],"properties":{"route":{"type":"string","minLength":1,"maxLength":200000},"stages":{"type":"string","minLength":1,"maxLength":100000},"must_stop":{"type":"string","minLength":1,"maxLength":100000}}},"tool_policy":{"type":"object","additionalProperties":false,"required":["protocol_version","source_commit","stages","profiles","harnesses","content_digest"],"properties":{"protocol_version":{"const":"1.0"},"source_commit":{"type":"string","minLength":1,"maxLength":100},"stages":{"type":"object","minProperties":1,"additionalProperties":{"type":"string","minLength":1}},"profiles":{"type":"object","minProperties":1,"additionalProperties":{"type":"object"}},"harnesses":{"type":"object","minProperties":1,"additionalProperties":{"type":"object"}},"content_digest":{"type":"string","pattern":"^[a-f0-9]{64}$"}}},"must_stop":{"type":"object","additionalProperties":false,"required":["content","actions","content_digest"],"properties":{"content":{"type":"string","minLength":1,"maxLength":100000},"actions":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"required":["action","hook"],"properties":{"action":{"type":"string","minLength":1,"maxLength":2000},"hook":{"type":"string","minLength":1,"maxLength":200}}}},"content_digest":{"type":"string","pattern":"^[a-f0-9]{64}$"}}},"completion_target":{"enum":["branch_ready"]},"sources":{"type":"array","minItems":4,"items":{"type":"object","additionalProperties":false,"required":["path","sha256","bytes"],"properties":{"path":{"type":"string","minLength":1,"maxLength":500},"sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"bytes":{"type":"integer","minimum":1}}}},"content_digest":{"type":"string","pattern":"^[a-f0-9]{64}$"}}},
+"ticket_stage_result": {"$schema":"https://json-schema.org/draft/2020-12/schema","title":"ManagedTicketStageResult","type":"object","additionalProperties":false,"required":["schema_version","stage","status","summary"],"properties":{"schema_version":{"const":"1.0"},"stage":{"enum":["execute","verify","review","land"]},"status":{"enum":["completed","rework","blocked","must_stop"]},"summary":{"type":"string","minLength":1,"maxLength":16000},"commit":{"type":"string","pattern":"^[a-f0-9]{7,64}$"},"worktree_head":{"type":"string","pattern":"^[a-f0-9]{7,64}$"},"checks":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["command","exit_code","passed","output_digest","output_excerpt"],"properties":{"command":{"type":"string","minLength":1,"maxLength":4000},"exit_code":{"type":"integer","minimum":0,"maximum":255},"passed":{"type":"boolean"},"output_digest":{"type":"string","pattern":"^[a-f0-9]{64}$"},"output_excerpt":{"type":"string","minLength":1,"maxLength":16000}}}},"review":{"type":"object","additionalProperties":false,"required":["reviewed_commit","diff_digest","findings"],"properties":{"reviewed_commit":{"type":"string","pattern":"^[a-f0-9]{7,64}$"},"diff_digest":{"type":"string","pattern":"^[a-f0-9]{64}$"},"findings":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["id","severity","summary","disposition","reason"],"properties":{"id":{"type":"string","minLength":1,"maxLength":200},"severity":{"enum":["low","medium","high","critical"]},"summary":{"type":"string","minLength":1,"maxLength":4000},"disposition":{"enum":["dismissed","open"]},"reason":{"type":"string","minLength":1,"maxLength":4000}}}}}},"land":{"type":"object","additionalProperties":false,"required":["branch","commit","action_intent"],"properties":{"branch":{"type":"string","minLength":1,"maxLength":300},"commit":{"type":"string","pattern":"^[a-f0-9]{7,64}$"},"action_intent":{"type":"object","additionalProperties":false,"required":["kind","remote","pr_title","pr_body"],"properties":{"kind":{"const":"push_and_pr"},"remote":{"type":"string","minLength":1,"maxLength":100},"pr_title":{"type":"string","minLength":1,"maxLength":1000},"pr_body":{"type":"string","minLength":1,"maxLength":16000}}}}},"requested_action":{"type":"object","additionalProperties":false,"required":["action","reason"],"properties":{"action":{"type":"string","minLength":1,"maxLength":500},"reason":{"type":"string","minLength":1,"maxLength":4000}}},"decision":{"type":"object","additionalProperties":false,"required":["decision_key","kind","question","options","action_category","impact"],"properties":{"decision_key":{"type":"string","pattern":"^[a-z0-9][a-z0-9._-]{0,127}$"},"kind":{"enum":["clarification","preference","design","approval","recovery","budget"]},"question":{"type":"string","minLength":1,"maxLength":16000},"options":{"type":"array","minItems":2,"maxItems":12,"items":{"type":"string","minLength":1,"maxLength":4000}},"action_category":{"type":"string","minLength":1,"maxLength":128},"impact":{"type":"object","additionalProperties":false,"required":["environment","reversibility","affected_resources"],"properties":{"environment":{"enum":["local","test","staging","production"]},"reversibility":{"enum":["reversible","partially_reversible","irreversible"]},"affected_resources":{"type":"array","minItems":1,"maxItems":64,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":512}}}}}}}},
 "workflow_package": {"$schema":"https://json-schema.org/draft/2020-12/schema","title":"JstackInvestigationPackage","type":"object","additionalProperties":false,"required":["protocol_version","workflow_id","mode","source_commit","stages","instructions"],"properties":{"protocol_version":{"const":"1.0"},"workflow_id":{"const":"jstack"},"mode":{"const":"investigation"},"source_commit":{"type":"string","minLength":1,"maxLength":100},"stages":{"type":"array","minItems":1,"maxItems":1,"items":{"const":"execute"}},"instructions":{"type":"object","additionalProperties":false,"required":["route","stages","execute"],"properties":{"route":{"type":"string","minLength":1,"maxLength":100000},"stages":{"type":"string","minLength":1,"maxLength":50000},"execute":{"type":"string","minLength":1,"maxLength":30000}}}}}} as const

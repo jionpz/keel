@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ManagedTicketStageResult",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "stage", "status", "summary"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "stage": {"enum": ["execute", "verify", "review", "land"]},
+    "status": {"enum": ["completed", "rework", "blocked", "must_stop"]},
+    "summary": {"type": "string", "minLength": 1, "maxLength": 16000},
+    "commit": {"type": "string", "pattern": "^[a-f0-9]{7,64}$"},
+    "worktree_head": {"type": "string", "pattern": "^[a-f0-9]{7,64}$"},
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["command", "exit_code", "passed", "output_digest", "output_excerpt"],
+        "properties": {
+          "command": {"type": "string", "minLength": 1, "maxLength": 4000},
+          "exit_code": {"type": "integer", "minimum": 0, "maximum": 255},
+          "passed": {"type": "boolean"},
+          "output_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+          "output_excerpt": {"type": "string", "minLength": 1, "maxLength": 16000}
+        }
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reviewed_commit", "diff_digest", "findings"],
+      "properties": {
+        "reviewed_commit": {"type": "string", "pattern": "^[a-f0-9]{7,64}$"},
+        "diff_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "severity", "summary", "disposition", "reason"],
+            "properties": {
+              "id": {"type": "string", "minLength": 1, "maxLength": 200},
+              "severity": {"enum": ["low", "medium", "high", "critical"]},
+              "summary": {"type": "string", "minLength": 1, "maxLength": 4000},
+              "disposition": {"enum": ["dismissed", "open"]},
+              "reason": {"type": "string", "minLength": 1, "maxLength": 4000}
+            }
+          }
+        }
+      }
+    },
+    "land": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["branch", "commit", "action_intent"],
+      "properties": {
+        "branch": {"type": "string", "minLength": 1, "maxLength": 300},
+        "commit": {"type": "string", "pattern": "^[a-f0-9]{7,64}$"},
+        "action_intent": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "remote", "pr_title", "pr_body"],
+          "properties": {
+            "kind": {"const": "push_and_pr"},
+            "remote": {"type": "string", "minLength": 1, "maxLength": 100},
+            "pr_title": {"type": "string", "minLength": 1, "maxLength": 1000},
+            "pr_body": {"type": "string", "minLength": 1, "maxLength": 16000}
+          }
+        }
+      }
+    },
+    "requested_action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "reason"],
+      "properties": {
+        "action": {"type": "string", "minLength": 1, "maxLength": 500},
+        "reason": {"type": "string", "minLength": 1, "maxLength": 4000}
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "decision_key",
+        "kind",
+        "question",
+        "options",
+        "action_category",
+        "impact"
+      ],
+      "properties": {
+        "decision_key": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+        },
+        "kind": {
+          "enum": ["clarification", "preference", "design", "approval", "recovery", "budget"]
+        },
+        "question": {"type": "string", "minLength": 1, "maxLength": 16000},
+        "options": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 12,
+          "items": {"type": "string", "minLength": 1, "maxLength": 4000}
+        },
+        "action_category": {"type": "string", "minLength": 1, "maxLength": 128},
+        "impact": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["environment", "reversibility", "affected_resources"],
+          "properties": {
+            "environment": {"enum": ["local", "test", "staging", "production"]},
+            "reversibility": {
+              "enum": ["reversible", "partially_reversible", "irreversible"]
+            },
+            "affected_resources": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 64,
+              "uniqueItems": true,
+              "items": {"type": "string", "minLength": 1, "maxLength": 512}
+            }
+          }
+        }
+      }
+    }
+  }
+}
