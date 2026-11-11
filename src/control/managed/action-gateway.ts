@@ -33,10 +33,20 @@ export interface ManagedActionGatewayDeps {
   readonly push: GitPushGateway
   readonly pullRequests: PullRequestGateway
   readonly now?: () => string
+  readonly checkTimeoutMs?: number
 }
 
 function clock(deps: ManagedActionGatewayDeps): string {
   return deps.now?.() ?? new Date().toISOString()
+}
+
+const DEFAULT_CHECK_TIMEOUT_MS = 30 * 60_000
+
+function checkDeadline(now: string, deps: ManagedActionGatewayDeps): string {
+  const timeout = deps.checkTimeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS
+  if (!Number.isSafeInteger(timeout) || timeout <= 0)
+    throw makeError('SCHEMA_VIOLATION', 'checkTimeoutMs 必须是正整数')
+  return new Date(Date.parse(now) + timeout).toISOString()
 }
 
 function result(
@@ -201,7 +211,7 @@ async function executeClaim(
     return ok(result(claim, settled.value.status, { error: pr.error.detail }))
   }
 
-  const settled = await settleActionSuccess(claim, permit, pr.value, now)
+  const settled = await settleActionSuccess(claim, permit, pr.value, now, checkDeadline(now, deps))
   if (!settled.ok) return settled
   return ok(
     result(claim, settled.value.status, {
@@ -269,7 +279,7 @@ async function reconcileClaim(
     body: claim.intent.pr_body,
   })
   if (!pr.ok) return ok(result(claim, 'UNCERTAIN', { error: pr.error.detail }))
-  const settled = await markReconciledSuccess(claim, pr.value, now)
+  const settled = await markReconciledSuccess(claim, pr.value, now, checkDeadline(now, deps))
   if (!settled.ok) return settled
   return ok(
     result(claim, settled.value.status, {

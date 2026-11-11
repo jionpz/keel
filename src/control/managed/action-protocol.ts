@@ -49,6 +49,7 @@ export function actionAuthorizationDigest(input: {
   readonly policy_id: string
   readonly policy_version: number
   readonly rule_id: string
+  readonly required_checks: readonly string[]
 }): string {
   return sha256CanonicalJson({
     project_id: input.project_id,
@@ -59,5 +60,6 @@ export function actionAuthorizationDigest(input: {
     policy_id: input.policy_id,
     policy_version: input.policy_version,
     rule_id: input.rule_id,
+    required_checks: [...input.required_checks].sort(),
   })
 }

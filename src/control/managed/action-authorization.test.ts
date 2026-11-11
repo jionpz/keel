@@ -103,9 +103,59 @@ describe('managed action authorization', () => {
     })
   })
 
-  it('要求尚未执行的证据或 check 时拒绝自动许可', () => {
-    expect(authorizeAction(request(), [policy({}, { required_checks: ['ci'] })]).ok).toBe(false)
+  it('required_checks 随许可返回，required_evidence 仍拒绝自动许可', () => {
+    expect(authorizeAction(request(), [policy({}, { required_checks: ['ci'] })])).toMatchObject({
+      ok: true,
+      required_checks: ['ci'],
+    })
     expect(authorizeAction(request(), [policy({}, { required_evidence: ['diff'] })]).ok).toBe(false)
+  })
+
+  it('多个匹配 delegated 规则的 required_checks 取并集', () => {
+    const second = policy(
+      { id: '66666666-6666-4666-8666-666666666666', version: 2 },
+      { id: 'checks-2', required_checks: ['integration', 'ci'] },
+    )
+    expect(
+      authorizeAction(request(), [policy({}, { required_checks: ['ci'] }), second]),
+    ).toMatchObject({
+      ok: true,
+      required_checks: ['ci', 'integration'],
+    })
+  })
+
+  it('required_checks 并集超过 16 条时拒绝自动许可', () => {
+    const first = policy(
+      {},
+      {
+        required_checks: [
+          'check-00',
+          'check-01',
+          'check-02',
+          'check-03',
+          'check-04',
+          'check-05',
+          'check-06',
+          'check-07',
+          'check-08',
+          'check-09',
+          'check-10',
+          'check-11',
+          'check-12',
+          'check-13',
+          'check-14',
+          'check-15',
+        ],
+      },
+    )
+    const second = policy(
+      { id: '77777777-7777-4777-8777-777777777777', version: 2 },
+      { id: 'checks-2', required_checks: ['overflow'] },
+    )
+    expect(authorizeAction(request(), [first, second])).toMatchObject({
+      ok: false,
+      restrictive: true,
+    })
   })
 
   it('资源、环境或可逆性不匹配时拒绝', () => {

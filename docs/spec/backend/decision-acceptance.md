@@ -87,4 +87,5 @@ request 状态。并发提交同一 revision 时一个成功，其余返回 `CON
   从认证会话核验 owner 身份的项目映射尚未接线。
 - `impact` 仍由调查模型声明；JT-02D 的执行网关必须重新核对动作、环境与资源，
   `approval` 在本切片不会自动委派。
-- outbox、PR 网关与 required checks 属 JT-02D/E；本切片不执行任何写动作。
+- outbox/PR 属 JT-02D，required checks 属 JT-02E；决策接纳器仍按本切片规则拒绝
+  带这些要求的自动代答，而 action gateway 独立消费 `required_checks`。

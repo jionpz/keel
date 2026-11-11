@@ -8,6 +8,11 @@ import {
   runActionGatewayOnce,
 } from '../control/managed/action-gateway.js'
 import { listActions, retryAction } from '../control/managed/action-store.js'
+import {
+  type ManagedCheckGatewayDeps,
+  runCheckGatewayOnce,
+} from '../control/managed/check-gateway.js'
+import { listCheckEvidence } from '../control/managed/check-store.js'
 import { answerManagedTicketDecision } from '../control/managed/decision-store.js'
 import {
   createManagedInvestigation,
@@ -115,11 +120,14 @@ ticket-tick [--task TASK_UUID] [--harness omp|claude|pi] [--model ID]
 ticket-worker [--once] [--interval MS] [--task TASK_UUID] [--harness omp|claude|pi] [--model ID]
 ticket-answer REQUEST_UUID --revision N --option OPTION_ID
 action-list [--task TASK_UUID]
-action-gateway [--once] [--interval MS] [--reconcile]
+action-gateway [--once] [--interval MS] [--reconcile] [--check-timeout-ms MS]
 action-reconcile [--id OUTBOX_UUID] [--once] [--interval MS]
 action-retry OUTBOX_UUID
+action-check-gateway [--once] [--interval MS]
+action-checks [--task TASK_UUID] [--id TARGET_UUID]
 调查模式的天问只在 E3 明确决定或 E1 可逆默认范围内自动答复。
-ticket 模式按固定包完成 execute→verify→review→land，交付 branch_ready；不 push、不创建 PR。`)
+ticket 模式按固定包完成 execute→verify→review→land；阶段执行器不 push，
+受控 action gateway 创建 PR，check gateway 在准确 SHA 的必需检查通过后推进 pr_ready。`)
       return
     }
     switch (command) {
@@ -215,8 +223,23 @@ ticket 模式按固定包完成 execute→verify→review→land，交付 branch
         printJson(await listActions(taskId === undefined ? undefined : uuid(taskId, '--task')))
         return
       }
+      case 'action-checks': {
+        const flags = parseFlags(rest, ['task', 'id'])
+        const taskRaw = optional(flags, 'task')
+        const targetRaw = optional(flags, 'id')
+        printJson(
+          await listCheckEvidence({
+            ...(taskRaw === undefined ? {} : { taskId: uuid(taskRaw, '--task') }),
+            ...(targetRaw === undefined ? {} : { targetId: uuid(targetRaw, '--id') }),
+          }),
+        )
+        return
+      }
       case 'action-gateway':
         await runActionGateway(rest)
+        return
+      case 'action-check-gateway':
+        await runActionCheckGateway(rest)
         return
       case 'action-reconcile':
         await runActionReconcile(rest)
@@ -230,7 +253,7 @@ ticket 模式按固定包完成 execute→verify→review→land，交付 branch
       }
       default:
         throw new Error(
-          '用法：managed investigate|status|questions|answer|worker|ticket-create|ticket-status|ticket-stages|ticket-tick|ticket-worker|ticket-answer|action-list|action-gateway|action-reconcile|action-retry',
+          '用法：managed investigate|status|questions|answer|worker|ticket-create|ticket-status|ticket-stages|ticket-tick|ticket-worker|ticket-answer|action-list|action-gateway|action-reconcile|action-retry|action-check-gateway|action-checks',
         )
     }
   } catch (error) {
@@ -360,20 +383,28 @@ async function runTicketWorker(argv: readonly string[]): Promise<void> {
   }
 }
 
-function actionGatewayDeps(): ManagedActionGatewayDeps {
+function actionGatewayDeps(checkTimeoutMs?: number): ManagedActionGatewayDeps {
   return {
     push: new GitCliPushGateway(),
     pullRequests: new GitHubProvider(),
+    ...(checkTimeoutMs === undefined ? {} : { checkTimeoutMs }),
   }
 }
 
 async function runActionGateway(argv: readonly string[]): Promise<void> {
-  const flags = parseFlags(argv, ['once', 'interval', 'reconcile'], ['once', 'reconcile'])
+  const flags = parseFlags(
+    argv,
+    ['once', 'interval', 'reconcile', 'check-timeout-ms'],
+    ['once', 'reconcile'],
+  )
   const once = flags.has('once')
   const reconcile = flags.has('reconcile')
   const intervalRaw = optional(flags, 'interval')
   const intervalMs = intervalRaw === undefined ? 2000 : positiveInteger(intervalRaw, '--interval')
-  const deps = actionGatewayDeps()
+  const timeoutRaw = optional(flags, 'check-timeout-ms')
+  const checkTimeoutMs =
+    timeoutRaw === undefined ? undefined : positiveInteger(timeoutRaw, '--check-timeout-ms')
+  const deps = actionGatewayDeps(checkTimeoutMs)
 
   const step = async (): Promise<boolean> => {
     if (reconcile) {
@@ -387,6 +418,44 @@ async function runActionGateway(argv: readonly string[]): Promise<void> {
     return result.value !== null
   }
 
+  if (once) {
+    await step()
+    return
+  }
+  const stop = createStopToken()
+  const onSignal = (): void => stop.request()
+  process.on('SIGINT', onSignal)
+  process.on('SIGTERM', onSignal)
+  try {
+    while (!stop.requested) {
+      const worked = await step()
+      if (!worked) await interruptibleSleep(intervalMs, stop)
+    }
+  } finally {
+    process.off('SIGINT', onSignal)
+    process.off('SIGTERM', onSignal)
+  }
+}
+
+function checkGatewayDeps(intervalMs: number): ManagedCheckGatewayDeps {
+  return {
+    checks: new GitHubProvider(),
+    pollIntervalMs: intervalMs,
+  }
+}
+
+async function runActionCheckGateway(argv: readonly string[]): Promise<void> {
+  const flags = parseFlags(argv, ['once', 'interval'], ['once'])
+  const once = flags.has('once')
+  const intervalRaw = optional(flags, 'interval')
+  const intervalMs = intervalRaw === undefined ? 10_000 : positiveInteger(intervalRaw, '--interval')
+  const deps = checkGatewayDeps(intervalMs)
+  const step = async (): Promise<boolean> => {
+    const result = await runCheckGatewayOnce(deps)
+    if (!result.ok) throw new Error(result.error.detail)
+    if (result.value !== null) printJson(result.value)
+    return result.value !== null
+  }
   if (once) {
     await step()
     return

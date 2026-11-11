@@ -11,6 +11,7 @@ import { asRole } from '../../fact/db.js'
 import type { ManagedActionIntent, ManagedExecutionPermit } from '../../generated/managed.js'
 import type { ActionAuthorization } from './action-authorization.js'
 import { actionTargetDigest } from './action-protocol.js'
+import { insertCheckTarget } from './check-store.js'
 import { ticketEvent } from './ticket-store.js'
 
 const INTENT_JSON = `jsonb_strip_nulls(to_jsonb(i)) AS body
@@ -44,6 +45,37 @@ function outboxRow(row: Record<string, unknown>): ManagedActionOutboxRecord {
     next_attempt_at: iso(row.next_attempt_at as Date | string | null),
     created_at: iso(row.created_at as Date | string) ?? String(row.created_at),
     updated_at: iso(row.updated_at as Date | string) ?? String(row.updated_at),
+  }
+}
+
+function permitRow(row: Record<string, unknown>): ManagedExecutionPermit {
+  const checks = row.required_checks
+  if (!Array.isArray(checks) || !checks.every((item): item is string => typeof item === 'string'))
+    throw makeError('PROTOCOL_ERROR', 'ExecutionPermit required_checks 不是字符串数组')
+  return {
+    schema_version: '1.0',
+    id: String(row.id),
+    action_intent_id: String(row.action_intent_id),
+    project_id: String(row.project_id),
+    repo_id: String(row.repo_id),
+    action: 'push_and_pr',
+    authorization: {
+      kind: 'delegation_policy',
+      id: String(row.authorization_id),
+      version: Number(row.authorization_version),
+      rule_id: String(row.authorization_rule_id),
+      digest: String(row.authorization_digest),
+    },
+    expected_sha: String(row.expected_sha),
+    diff_digest: String(row.diff_digest),
+    target_digest: String(row.target_digest),
+    required_checks: checks,
+    environment: row.environment as ManagedExecutionPermit['environment'],
+    fencing_token: Number(row.fencing_token),
+    idempotency_key: String(row.idempotency_key),
+    issued_at: iso(row.issued_at as Date | string) ?? String(row.issued_at),
+    expires_at: iso(row.expires_at as Date | string) ?? String(row.expires_at),
+    status: row.status as ManagedExecutionPermit['status'],
   }
 }
 
@@ -121,7 +153,7 @@ export async function enqueueActionIntent(
         head_branch: input.head_branch,
         head_sha: input.head_sha,
         diff_digest: input.diff_digest,
-        completion_target: 'branch_ready',
+        completion_target: 'pr_ready',
       }),
       input.created_at,
     ],
@@ -284,8 +316,12 @@ export async function issuePermit(
       `INSERT INTO managed_execution_permit(
         id,action_intent_id,project_id,repo_id,action,authorization_kind,
         authorization_id,authorization_version,authorization_rule_id,authorization_digest,
-        expected_sha,diff_digest,target_digest,environment,idempotency_key,issued_at,expires_at
-      ) VALUES($1,$2,$3,$4,'push_and_pr','delegation_policy',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+        expected_sha,diff_digest,target_digest,required_checks,environment,idempotency_key,
+        issued_at,expires_at
+      ) VALUES(
+        $1,$2,$3,$4,'push_and_pr','delegation_policy',$5,$6,$7,$8,$9,$10,$11,$12::jsonb,
+        $13,$14,$15,$16
+      )
       RETURNING *`,
       [
         randomUUID(),
@@ -299,6 +335,7 @@ export async function issuePermit(
         claim.intent.head_sha,
         claim.intent.diff_digest,
         actionTargetDigest(claim.intent),
+        JSON.stringify(authorization.required_checks),
         claim.intent.environment,
         `permit:${claim.intent.id}:${randomUUID()}`,
         now,
@@ -307,31 +344,23 @@ export async function issuePermit(
     )
     const row = inserted.rows[0]
     if (row === undefined) throw makeError('CONFLICT', '执行许可写入失败')
-    return {
-      schema_version: '1.0',
-      id: String(row.id),
-      action_intent_id: String(row.action_intent_id),
-      project_id: String(row.project_id),
-      repo_id: String(row.repo_id),
-      action: 'push_and_pr',
-      authorization: {
-        kind: 'delegation_policy',
-        id: String(row.authorization_id),
-        version: Number(row.authorization_version),
-        rule_id: String(row.authorization_rule_id),
-        digest: String(row.authorization_digest),
-      },
-      expected_sha: String(row.expected_sha),
-      diff_digest: String(row.diff_digest),
-      target_digest: String(row.target_digest),
-      environment: row.environment as ManagedExecutionPermit['environment'],
-      fencing_token: Number(row.fencing_token),
-      idempotency_key: String(row.idempotency_key),
-      issued_at: iso(row.issued_at as Date | string) ?? String(row.issued_at),
-      expires_at: iso(row.expires_at as Date | string) ?? String(row.expires_at),
-      status: row.status as ManagedExecutionPermit['status'],
-    }
+    return permitRow(row)
   })
+}
+
+export async function getExecutionPermit(
+  id: string,
+  client?: PoolClient,
+): Promise<ManagedExecutionPermit | null> {
+  const run = async (c: PoolClient): Promise<ManagedExecutionPermit | null> => {
+    const row = (
+      await c.query<Record<string, unknown>>('SELECT * FROM managed_execution_permit WHERE id=$1', [
+        id,
+      ])
+    ).rows[0]
+    return row === undefined ? null : permitRow(row)
+  }
+  return client === undefined ? asRole('keel_control', run) : run(client)
 }
 
 export async function markActionExecuting(
@@ -391,6 +420,7 @@ export async function settleActionSuccess(
   permit: ManagedExecutionPermit,
   pullRequest: { readonly number: number; readonly url: string; readonly created: boolean },
   now: string,
+  deadlineAt = new Date(Date.parse(now) + 30 * 60_000).toISOString(),
 ): Promise<Result<ManagedActionOutboxRecord>> {
   return asRole('keel_control', async (c) => {
     const result = {
@@ -418,6 +448,7 @@ export async function settleActionSuccess(
     )
     if (updated.rows[0] === undefined)
       return err(makeError('CONFLICT', 'action outbox fence 不匹配，拒绝写入成功结果'))
+    await insertCheckTarget(c, permit, claim.intent, pullRequest, deadlineAt, now)
     await c.query(
       `UPDATE managed_execution_permit SET status='CONSUMED' WHERE id=$1 AND status='VALID'`,
       [permit.id],
@@ -430,7 +461,7 @@ export async function settleActionSuccess(
         now,
         JSON.stringify({
           pull_request: result.pull_request,
-          completion_target: 'branch_ready',
+          completion_target: 'pr_ready',
         }),
         claim.intent.task_id,
       ],
@@ -575,6 +606,7 @@ export async function markReconciledSuccess(
   claim: ManagedActionOutboxClaim,
   pullRequest: { readonly number: number; readonly url: string; readonly created: boolean },
   now: string,
+  deadlineAt = new Date(Date.parse(now) + 30 * 60_000).toISOString(),
 ): Promise<Result<ManagedActionOutboxRecord>> {
   return asRole('keel_control', async (c) => {
     const result = {
@@ -595,6 +627,11 @@ export async function markReconciledSuccess(
     )
     if (updated.rows[0] === undefined)
       return err(makeError('CONFLICT', 'action outbox 已不在 UNCERTAIN 状态'))
+    if (claim.outbox.permit_id === null)
+      throw makeError('CONFLICT', 'UNCERTAIN action 缺少 ExecutionPermit')
+    const permit = await getExecutionPermit(claim.outbox.permit_id, c)
+    if (permit === null) throw makeError('NOT_FOUND', '找不到 ExecutionPermit')
+    await insertCheckTarget(c, permit, claim.intent, pullRequest, deadlineAt, now)
     if (claim.outbox.permit_id !== null) {
       await c.query(
         `UPDATE managed_execution_permit SET status='CONSUMED'
@@ -610,7 +647,7 @@ export async function markReconciledSuccess(
         now,
         JSON.stringify({
           pull_request: result.pull_request,
-          completion_target: 'branch_ready',
+          completion_target: 'pr_ready',
           reconciled: true,
         }),
         claim.intent.task_id,

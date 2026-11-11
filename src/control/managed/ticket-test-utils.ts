@@ -121,7 +121,7 @@ export function fixtureTicketPackage(
       actions: [{ action: 'sudo', hook: 'sudo' }] as JstackTicketPackage['must_stop']['actions'],
       content_digest: sha256Text(instructions.must_stop),
     },
-    completion_target: 'branch_ready' as const,
+    completion_target: 'pr_ready' as const,
     sources,
   }
   const digest = ticketPackageDigest({

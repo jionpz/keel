@@ -85,6 +85,9 @@ export type ManagedTicketStatus =
   | 'WAITING_GATEWAY'
   | 'PAUSED'
   | 'PR_OPENED'
+  | 'CHECKING'
+  | 'PR_READY'
+  | 'PR_CHECKS_FAILED'
   | 'DONE'
   | 'FAILED'
   | 'CANCELLED'
@@ -99,7 +102,7 @@ export interface ManagedTicketTask {
   readonly worktree_path: string
   readonly current_stage: ManagedTicketStageName
   readonly status: ManagedTicketStatus
-  readonly completion_target: 'branch_ready'
+  readonly completion_target: 'branch_ready' | 'pr_ready'
   readonly lease_token: string | null
   readonly lease_until: string | null
   readonly attempts: number
@@ -206,5 +209,15 @@ export interface ManagedActionGatewayResult {
   readonly status: ManagedActionOutboxStatus
   readonly prNumber?: number
   readonly prUrl?: string
+  readonly error?: string
+}
+
+export interface ManagedCheckGatewayResult {
+  readonly targetId: string
+  readonly taskId: string
+  readonly status: 'PENDING' | 'CHECKING' | 'READY' | 'FAILED'
+  readonly prNumber: number
+  readonly headSha: string
+  readonly evidenceDigest?: string
   readonly error?: string
 }

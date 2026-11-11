@@ -18,6 +18,7 @@ export type ActionAuthorization =
       readonly policy_version: number
       readonly rule_id: string
       readonly digest: string
+      readonly required_checks: readonly string[]
     }
   | {
       readonly ok: false
@@ -88,7 +89,6 @@ function ruleMatches(
 function ruleNeedsUnsupportedEnforcement(rule: DelegationPolicyVersion['rules'][number]): boolean {
   return (
     rule.required_evidence.length > 0 ||
-    rule.required_checks.length > 0 ||
     rule.budget_limits.max_attempts !== undefined ||
     rule.budget_limits.max_cost_usd !== undefined ||
     rule.budget_limits.max_tokens !== undefined
@@ -113,7 +113,7 @@ export function authorizeAction(
   if (matching.some(({ rule }) => ruleNeedsUnsupportedEnforcement(rule)))
     return {
       ok: false,
-      reason: '匹配的委托规则要求本切片尚未执行的证据、check 或预算门禁',
+      reason: '匹配的委托规则要求本切片尚未执行的证据或预算门禁',
       restrictive: true,
     }
 
@@ -138,6 +138,14 @@ export function authorizeAction(
   if (selected === undefined)
     return { ok: false, reason: '没有可用的 delegated 规则', restrictive: false }
 
+  const requiredChecks = [...new Set(matching.flatMap(({ rule }) => rule.required_checks))].sort()
+  if (requiredChecks.length > 16)
+    return {
+      ok: false,
+      reason: `required checks 并集 ${requiredChecks.length} 条超过 16 条上限`,
+      restrictive: true,
+    }
+
   return {
     ok: true,
     kind: 'delegation_policy',
@@ -153,6 +161,8 @@ export function authorizeAction(
       policy_id: selected.policy.id,
       policy_version: selected.policy.version,
       rule_id: selected.rule.id,
+      required_checks: requiredChecks,
     }),
+    required_checks: requiredChecks,
   }
 }

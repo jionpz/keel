@@ -376,6 +376,8 @@ describe('schema 与代码的一致性', () => {
         'feedback',
         'managed_action_intent',
         'managed_action_outbox',
+        'managed_check_observation',
+        'managed_check_target',
         'managed_attempt',
         'managed_decision_change',
         'managed_decision_request',
@@ -418,6 +420,28 @@ describe('schema 与代码的一致性', () => {
       c.query<{ privilege_type: string }>(
         `SELECT privilege_type FROM information_schema.role_table_grants
          WHERE grantee='keel_control' AND table_name='timer'`,
+      ),
+    )
+    const privs = r.rows.map((x) => x.privilege_type).sort()
+    expect(privs).toEqual(['INSERT', 'SELECT', 'UPDATE'].sort())
+  })
+
+  it('keel_control 只能追加 check observation，不能改删既有证据', async () => {
+    const r = await asOwner((c) =>
+      c.query<{ privilege_type: string }>(
+        `SELECT privilege_type FROM information_schema.role_table_grants
+         WHERE grantee='keel_control' AND table_name='managed_check_observation'`,
+      ),
+    )
+    const privs = r.rows.map((x) => x.privilege_type).sort()
+    expect(privs).toEqual(['INSERT', 'SELECT'].sort())
+  })
+
+  it('keel_control 对 check target 无 DELETE 权限', async () => {
+    const r = await asOwner((c) =>
+      c.query<{ privilege_type: string }>(
+        `SELECT privilege_type FROM information_schema.role_table_grants
+         WHERE grantee='keel_control' AND table_name='managed_check_target'`,
       ),
     )
     const privs = r.rows.map((x) => x.privilege_type).sort()

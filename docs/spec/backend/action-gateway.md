@@ -1,8 +1,9 @@
-# 受控 action outbox 与 PR 网关
+# 受控 action outbox、PR 与 required checks 网关
 
-> 范围：JT-02D。ticket 的 `land` 阶段只登记外部动作意图；独立的 action gateway
+> 范围：JT-02D/02E。ticket 的 `land` 阶段只登记外部动作意图；独立的 action gateway
 > 重验当前授权与证据后签发 `ExecutionPermit`，再由它执行 push 和创建 PR。
-> 本切片不消费 required checks，也不声称到达 `pr_ready`。
+> 独立 check gateway 只读取准确 PR head SHA 上的 required checks，全部显式成功
+> 后才把任务推进到 `PR_READY`。
 
 ## 1. 事实来源与边界
 
@@ -14,6 +15,7 @@
 
 执行器和 Harness 不持有 GitHub 写凭据，也不执行 `git push`、PR API 或 legacy
 发布 CLI。只有 `keel managed action-gateway` 进程读取 outbox，签发许可并执行外部动作。
+check gateway 只做 GitHub 读操作，不接收模型或阶段结果里的“completed”自报。
 
 ## 2. 绑定与状态
 
@@ -46,6 +48,7 @@
 - `action_intent_id`、项目/repo、动作；
 - 授权来源（当前仅 `delegation_policy`）的 id、版本、规则 id 与摘要；
 - 准确 `expected_sha`、`diff_digest` 与完整目标摘要 `target_digest`；
+- 本次授权规则声明的 `required_checks` 快照；
 - 环境、单调递增的 `fencing_token`、幂等键、签发/过期时间。
 
 签发许可前，gateway 用 `FOR SHARE` 语义锁定授权策略并重新校验其项目、版本、
@@ -59,7 +62,12 @@ gateway 读取项目内当前有效的 `managed_delegation_policy`，只接受�
 - `actions` 覆盖 `push_and_pr`；
 - 环境、可逆性与资源选择器匹配；
 - `impact_limits` 覆盖资源数量；
-- 规则模式为 `delegated`，且没有本切片尚未执行的 evidence/check/预算要求。
+- 规则模式为 `delegated`；
+- `required_evidence` 与预算上限仍属未实现门禁，命中时拒绝自动许可；
+- `required_checks` 不再拒绝，而是固化进 permit，并由 check gateway 执行。
+
+多个匹配 delegated 规则的 `required_checks` 取并集；任一匹配规则要求更严格模式时，
+仍按 `deny` > `owner_required` > `delegated` 阻断。
 
 多个匹配规则取最严格处置：`deny` > `owner_required` > `delegated`。撤销、替代、
 过期或没有匹配规则时，outbox 进入 `BLOCKED`，task 进入 `PAUSED`，不执行任何外部写。
@@ -79,7 +87,9 @@ gateway 读取项目内当前有效的 `managed_delegation_policy`，只接受�
 1. `git ls-remote` 确认远端 `ai/*` 分支不存在或已指向同一 SHA；
 2. `git push <sha>:refs/heads/<branch>`，绝不 force；
 3. `GitHubProvider.createPullRequest`，按 head 分支幂等复用已有 PR；
-4. 成功后 outbox `SUCCEEDED`、permit `CONSUMED`、task `PR_OPENED`，handoff 记录 PR。
+4. 成功后 outbox `SUCCEEDED`、permit `CONSUMED`、task `PR_OPENED`，handoff 记录 PR；
+5. 同一事务创建 `managed_check_target`，绑定 intent、permit、repo/PR、准确
+   `head_sha`、`diff_digest`、授权版本、`required_checks` 截止时间与 PR 编号。
 
 push 或 PR 结果不确定时：
 
@@ -88,14 +98,36 @@ push 或 PR 结果不确定时：
   则复用/创建 PR；不同 SHA 则失败；
 - 不盲目重放 push，也不把数据库提交当成 GitHub exactly-once。
 
-## 6. 凭据
+## 6. required checks 与 `PR_READY`
+
+`managed_check_target` 一个动作只允许一条，初始 `PENDING`。check gateway 认领后：
+
+1. 重新检查 task 仍在 check 阶段、repo/base 未变化、授权策略仍有效；
+2. 重新检查 worktree 干净、HEAD/branch/diff 与 intent/permit 完全一致；
+3. 通过 GitHub API 读取**该 PR 编号**的当前 head，再按该完整 SHA 读取 check-runs
+   与 commit statuses；两次读取之间 PR head 变化则整次证据作废；
+4. 每个 required check 只接受 `success`。`missing`、`pending`、`neutral`、
+   `skipped`、`cancelled`、`timed_out`、`failure` 均不能完成；
+5. 缺失或仍在运行的 check 保持 `CHECKING` 并持久化观察；到截止时间仍未全绿则
+   `FAILED`；
+6. 全部成功后 target `READY`、task `PR_READY`，handoff 写入 evidence digest。
+
+每次观察写入 `managed_check_observation`，保存 repo、PR 号、实际 PR head SHA、
+head/base branch、PR 状态、check 名称、事实源、结论、外部 id 与观察时间。
+观察表 append-only；SHA-A 的绿色结论无法挂到 SHA-B，因为查询路径和证据行都绑定
+实际 head SHA，控制层还会比较 intent/permit/worktree 的完整 SHA。
+
+不调用 legacy `CiGateway.waitForCi()` 的“无人上报静默后视为通过”语义。required 列表
+是策略事实；即使仓库没有配置 CI，只要策略要求了 check，缺失就会在超时后失败。
+
+## 7. 凭据
 
 - GitHub API token 只存在于 gateway 进程；复用 `resolveGitHubToken` 的来源优先级。
 - git HTTP 认证只为单次子进程注入 `GIT_CONFIG_*`，token 不进 URL、不进 argv、
   不进事件 payload 或错误文本；错误输出经 `redactSecrets` 脱敏。
 - Harness 的凭据负例与容器边界继续由 JT-02A 的 `check:agents` / `check:isolation` 证明。
 
-## 7. CLI
+## 8. CLI
 
 ```bash
 pnpm keel managed action-list --task <task-uuid>
@@ -103,12 +135,16 @@ pnpm keel managed action-gateway --once
 pnpm keel managed action-gateway --interval 5000 --reconcile
 pnpm keel managed action-reconcile --id <outbox-uuid>
 pnpm keel managed action-retry <outbox-uuid>
+pnpm keel managed action-check-gateway --once
+pnpm keel managed action-check-gateway --interval 10000
+pnpm keel managed action-checks --task <task-uuid>
 ```
 
 `action-retry` 只允许对 `BLOCKED` / `FAILED` 使用；`UNCERTAIN` 必须先回查。
+`action-gateway --check-timeout-ms` 设置新 check target 的等待上限；
+`action-checks` 输出 target 与全部观察历史，供审计和 02F 验收引用。
 
-## 8. 未完成
+## 9. 未完成
 
-- required check 语义、PR head SHA / 必需 check 证据链属 JT-02E；
 - 真实单 ticket 端到端验收属 JT-02F；
-- 本切片不自动 merge、不部署、不申请新凭据。
+- 自动 merge、部署与申请新凭据不在本路径内；`PR_READY` 不表示已合并。
