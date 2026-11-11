@@ -33,6 +33,7 @@ import { runIssue } from './run-issue.js'
 import {
   type CiMode,
   DEFAULT_OMP_MODEL,
+  type HarnessId,
   parseCiMode,
   parseWallClock,
   readLivenessMode,
@@ -308,6 +309,77 @@ function authHelpFor(hosts: readonly string[]): string {
   return lines.join('\n')
 }
 
+export interface BuildPollerRuntimeOptions {
+  readonly ci: CiMode
+  readonly harness: HarnessId
+  readonly model?: string
+  readonly wallClockS?: number
+  readonly deps?: PollerMainDeps
+  readonly now?: () => string
+  readonly log?: (line: Record<string, unknown>) => void
+}
+
+export interface BuiltPollerRuntime {
+  readonly deps: PollerDeps
+  readonly missingHosts: readonly string[]
+}
+
+/**
+ * 构造 poller 的真实依赖，并做启动前凭据预检。
+ *
+ * `poller` CLI 与统一 `serve` 共用这一入口，避免两套 provider / 对账接线漂移。
+ * 预检只解析主机与 token 是否存在，不发起 GitHub 请求。
+ */
+export async function buildPollerRuntime(
+  options: BuildPollerRuntimeOptions,
+): Promise<BuiltPollerRuntime> {
+  const deps = options.deps ?? {}
+  const listRepos = deps.listRepos ?? loadGithubRepos
+  const provider = new GitHubProvider(
+    deps.tokenResolver === undefined ? {} : { tokenResolver: deps.tokenResolver },
+  )
+  const now = options.now ?? deps.now ?? (() => new Date().toISOString())
+  const log = options.log ?? deps.log ?? ((line) => console.log(JSON.stringify(line)))
+  const pollerDeps: PollerDeps = {
+    listRepos,
+    listIssues:
+      deps.listIssues ?? ((repo) => provider.listOpenIssues(repo.remote_url, repo.issue_label)),
+    taskStatus: deps.taskStatus ?? findTaskStatusByExternalRef,
+    runIssue:
+      deps.runIssue ??
+      ((input) =>
+        runIssue({
+          issueUrl: input.issueUrl,
+          label: input.label,
+          repoId: input.repoId,
+          ci: options.ci,
+          harness: options.harness,
+          ...(options.model === undefined ? {} : { model: options.model }),
+          ...(options.wallClockS === undefined ? {} : { wallClockS: options.wallClockS }),
+        })),
+    now,
+    log,
+    reconcile: {
+      listIngestedTasks: deps.listIngestedTasks ?? loadIngestedGithubTasks,
+      issueState:
+        deps.issueState ??
+        (async (remoteUrl, issueNumber) => {
+          const issue = await provider.getIssue(remoteUrl, issueNumber)
+          if (!issue.ok) return issue
+          return ok({ state: issue.value.state, closedAt: issue.value.closedAt })
+        }),
+      cancelTask: deps.cancelTask ?? cancelClosedIssue,
+      redactDetail: createSafeDetail(),
+      now,
+      log,
+    },
+  }
+  return {
+    deps: pollerDeps,
+    missingHosts: await missingTokenHosts(listRepos, deps.tokenResolver),
+  }
+}
+
 export async function pollerMain(
   argv: readonly string[],
   deps: PollerMainDeps = {},
@@ -413,58 +485,23 @@ export async function pollerMain(
     // 列出 issue 必须有凭据（provider 在无 token 时直接 AUTH_FAILED）。
     // 预检放在第一轮扫描之前：常驻进程不能「每轮每个仓库一条 AUTH_FAILED」地空转。
     // host 从已注册仓库的 remote 推导 —— GHES 部署要按自己的 host 取登录态。
-    const listRepos = deps.listRepos ?? loadGithubRepos
-    const provider = new GitHubProvider(
-      deps.tokenResolver === undefined ? {} : { tokenResolver: deps.tokenResolver },
-    )
-    const now = deps.now ?? (() => new Date().toISOString())
-    const log = deps.log ?? ((line) => console.log(JSON.stringify(line)))
-    const pollerDeps: PollerDeps = {
-      listRepos,
-      listIssues:
-        deps.listIssues ?? ((repo) => provider.listOpenIssues(repo.remote_url, repo.issue_label)),
-      taskStatus: deps.taskStatus ?? findTaskStatusByExternalRef,
-      runIssue:
-        deps.runIssue ??
-        ((input) =>
-          runIssue({
-            issueUrl: input.issueUrl,
-            label: input.label,
-            repoId: input.repoId,
-            ci: ci.value,
-            harness: harness.value,
-            ...(model.value === undefined ? {} : { model: model.value }),
-            ...(wallClock.value === undefined ? {} : { wallClockS: wallClock.value }),
-          })),
-      now,
-      log,
-      reconcile: {
-        listIngestedTasks: deps.listIngestedTasks ?? loadIngestedGithubTasks,
-        issueState:
-          deps.issueState ??
-          (async (remoteUrl, issueNumber) => {
-            const issue = await provider.getIssue(remoteUrl, issueNumber)
-            if (!issue.ok) return issue
-            return ok({ state: issue.value.state, closedAt: issue.value.closedAt })
-          }),
-        cancelTask: deps.cancelTask ?? cancelClosedIssue,
-        // 错误 detail 走与 scan 同一套脱敏：remote URL 可能内嵌 userinfo
-        redactDetail: createSafeDetail(),
-        now,
-        log,
-      },
-    }
+    const runtime = await buildPollerRuntime({
+      ci: ci.value,
+      harness: harness.value,
+      ...(model.value === undefined ? {} : { model: model.value }),
+      ...(wallClock.value === undefined ? {} : { wallClockS: wallClock.value }),
+      deps,
+    })
 
     // 启动期预检先于第一轮扫描；repos 为空时不需要任何 token。
     // 预检读一次仓库列表，循环内仍走 live `listRepos` —— 新注册的仓库照常生效。
-    const missing = await missingTokenHosts(listRepos, deps.tokenResolver)
-    if (missing.length > 0) {
-      console.error(authHelpFor(missing))
+    if (runtime.missingHosts.length > 0) {
+      console.error(authHelpFor(runtime.missingHosts))
       process.exitCode = 1
       return
     }
 
-    await runPollerForever(pollerDeps, {
+    await runPollerForever(runtime.deps, {
       intervalMs: interval.value,
       concurrency: concurrency.value,
       ...(deps.signals === undefined ? {} : { signals: deps.signals }),

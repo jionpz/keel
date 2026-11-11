@@ -1,6 +1,6 @@
 # 交付、生产准入与运维
 
-**状态**：JT-01 的只读影子协议与后台队列已合入 `main`（PR #84），原生 OMP 真实模型烟测与提问前/答复后两处 SIGKILL 故障恢复均已实测通过；JT-02、JT-03、JT-04 已合入；JT-05 授权生命周期、受控 permit、人工暂停/取消/恢复/覆盖与 policy CLI 已实现并通过确定性验收，待合入；XL 未单独跑；JT-01 仍为影子模式，原生 Claude 未验，JT-06 至 JT-07 与 7 天真实试运行未完成。见[实施进度与可运行命令](./implementation.md)。尚未部署生产服务。
+**状态**：JT-01 的只读影子协议与后台队列已合入 `main`（PR #84），原生 OMP 真实模型烟测与提问前/答复后两处 SIGKILL 故障恢复均已实测通过；JT-02、JT-03、JT-04、JT-05 已合入；JT-06 统一服务、故障恢复与备份恢复校验已实现并通过确定性回归，待提交/合入；XL 未单独跑；JT-01 仍为影子模式，原生 Claude 未验，JT-07 与 7 天真实试运行未完成。见[实施进度与可运行命令](./implementation.md)。尚未部署生产服务。
 
 阅读顺序：[主方案](./README.md) → [契约](./contracts.md) → 本页 → [验收](./acceptance.md)。本页的命令和配置是待实现接口建议，不可复制为现有能力。
 
@@ -29,9 +29,9 @@
 | JT-01 | [#86](https://github.com/jionpz/keel/issues/86) | PR #84 已合入；原生 OMP 烟测与两处故障恢复已验；原生 Claude 未验 |
 | JT-02 | [#90](https://github.com/jionpz/keel/issues/90) | PR #116 已合入；原生 OMP 真实 E2E 已验证 |
 | JT-03 | [#91](https://github.com/jionpz/keel/issues/91) | PR #117 已合并（merge `72d92b3`）；#91 已关闭 |
-| JT-04 | [#92](https://github.com/jionpz/keel/issues/92) | 依赖 JT-02；代码、确定性验收与真实 L E2E 完成，待 PR；XL 未单独跑 |
-| JT-05 | [#93](https://github.com/jionpz/keel/issues/93) | 依赖 JT-03、JT-04；代码与确定性验收完成，待合入 |
-| JT-06 | [#94](https://github.com/jionpz/keel/issues/94) | 依赖 JT-04、JT-05；未实施 |
+| JT-04 | [#92](https://github.com/jionpz/keel/issues/92) | 依赖 JT-02；已合入（PR #119）；XL 未单独跑 |
+| JT-05 | [#93](https://github.com/jionpz/keel/issues/93) | 依赖 JT-03、JT-04；已合入（PR #120） |
+| JT-06 | [#94](https://github.com/jionpz/keel/issues/94) | 依赖 JT-04、JT-05；实现与确定性回归完成，待提交/合入 |
 | JT-07 | [#95](https://github.com/jionpz/keel/issues/95) | 依赖 JT-01～JT-06；未实施 |
 
 ### JT-01：jstack 原生只读任务，经天问建议、人工答复后可恢复
@@ -101,6 +101,15 @@ must-stop 先进入天问，只有精确委托才能代批；停止选项转 `CA
 **同时包含**：持久队列公平调度、租约/fencing、资源上限、退避/死信、信号退出、无副作用的健康检查、指标/审计、数据库与包/blob 的一致性备份、恢复脚本和手册。
 
 **验收**：注入进程 SIGKILL、数据库短断、模型超时、GitHub 响应丢失、重复 webhook；没有丢请求或盲重试破坏性操作；恢复备份可以继续等待问题，凭据缺失时明确停住。
+
+**本次实现**：`keel serve` 统一承载 ingress、managed、memory、maintenance、
+outbox、checks；角色健康与原因码写入 `worker_health`，`service-status` /
+`service-health` 只读查询；ticket/workflow/outbox 按项目公平认领；SIGTERM
+停止新认领并等待当前安全边界；`keel backup` 以 PostgreSQL exported snapshot
+打包 DB 与 blob，`keel restore-verify` 在隔离库恢复并核对摘要、队列与待答问题。
+恢复报告对 `EXECUTING/UNCERTAIN`、缺凭据和待人工分别给出阻塞原因，不自动重放
+外部动作。确定性测试覆盖组件故障隔离、退避、信号收尾、健康无副作用、公平调度
+与真实备份恢复。详细规范见 [service-runtime.md](../../spec/backend/service-runtime.md)。
 
 ### JT-07：真实评测、受限生产试运行与扩大范围
 
@@ -204,6 +213,6 @@ doctor 和审计导出；policy publish/revoke 与 ticket pause/cancel/resume/ov
 
 ## 6. 本次方案工作的交付边界
 
-已交付设计、接口、一致性规则、实施依赖与验收场景，并推进 JT-01、JT-02、JT-03、JT-04 的代码及确定性回归。Terra 完成数据库/检查环境和受控文件读取，Luna 完成导出器、CLI 与契约回归，主代理完成持久运行、schema、接纳、记忆整合、路线图调度与验证。原生 OMP 真实模型烟测与提问前/答复后两处 SIGKILL 故障恢复均已通过；JT-04 的真实 L 多 ticket 模型 E2E 已通过，XL 未单独跑；原生 Claude、JT-05～07、7 天真实试运行等后续生产项未完成，不能标为整个方案已交付。
+已交付设计、接口、一致性规则、实施依赖与验收场景，并推进 JT-01 至 JT-06 的代码及确定性回归。Terra 完成数据库/检查环境和受控文件读取，Luna 完成导出器、CLI 与契约回归，主代理完成持久运行、schema、接纳、记忆整合、路线图调度、授权生命周期与统一服务。原生 OMP 真实模型烟测与提问前/答复后两处 SIGKILL 故障恢复均已通过；JT-04 的真实 L 多 ticket 模型 E2E 已通过，XL 未单独跑；原生 Claude、JT-07、7 天真实试运行等后续生产项未完成，不能标为整个方案已交付。
 
 2026-11-10 已把 JT-01 剩余验收与 JT-02～JT-07 发布到 GitHub：[#85](https://github.com/jionpz/keel/issues/85) 为进度总览，[#86](https://github.com/jionpz/keel/issues/86) 与 [#90](https://github.com/jionpz/keel/issues/90)～[#95](https://github.com/jionpz/keel/issues/95) 为子票，原生 sub-issue 与依赖关系已建立。历史：本方案初稿时 GitHub 写接口曾返回 403，当时只保留本地材料且未伪造远程 issue ID；该限制已解除。

@@ -17,7 +17,7 @@
 import { Client } from 'pg'
 import { connectionString } from './db.js'
 
-export type ResidentRole = 'poller' | 'timer-worker'
+export type ResidentRole = 'poller' | 'timer-worker' | 'keel-service'
 
 /** advisory lock 的 classid：ASCII "KEEL" */
 export const RESIDENT_LOCK_CLASS_ID = 0x4b45454c
@@ -26,6 +26,7 @@ export const RESIDENT_LOCK_CLASS_ID = 0x4b45454c
 export const RESIDENT_LOCK_OBJ_IDS = {
   poller: 1,
   'timer-worker': 2,
+  'keel-service': 3,
 } as const satisfies Record<ResidentRole, number>
 
 export interface ResidentLock {

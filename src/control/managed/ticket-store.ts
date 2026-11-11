@@ -48,10 +48,16 @@ export async function claimManagedTicketTask(
 ): Promise<ManagedTicketClaim | null> {
   return asRole('keel_control', async (c) => {
     const candidates = await c.query<ManagedTicketTask>(
-      `SELECT * FROM managed_ticket_task
-       WHERE ($1::uuid IS NULL OR id=$1)
-         AND (status='READY' OR (status='RUNNING' AND lease_until <= clock_timestamp()))
-       ORDER BY updated_at,id FOR UPDATE SKIP LOCKED LIMIT 1`,
+      `SELECT t.* FROM managed_ticket_task t
+       JOIN (
+         SELECT DISTINCT ON (repo_id) id
+         FROM managed_ticket_task
+         WHERE ($1::uuid IS NULL OR id=$1)
+           AND (status='READY' OR (status='RUNNING' AND lease_until <= clock_timestamp()))
+         ORDER BY repo_id,updated_at,id
+       ) fair ON fair.id=t.id
+       ORDER BY t.updated_at,t.id
+       FOR UPDATE OF t SKIP LOCKED LIMIT 1`,
       [taskId ?? null],
     )
     const task = candidates.rows[0]

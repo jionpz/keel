@@ -260,11 +260,18 @@ export async function getRepoBinding(
 export async function claimActionOutbox(now: string): Promise<ManagedActionOutboxClaim | null> {
   return asRole('keel_control', async (c) => {
     const candidates = await c.query<Record<string, unknown>>(
-      `SELECT * FROM managed_action_outbox
-       WHERE (status='PENDING' AND (next_attempt_at IS NULL OR next_attempt_at <= $1))
-          OR (status='LEASED' AND lease_until <= $1)
-       ORDER BY created_at,id
-       FOR UPDATE SKIP LOCKED LIMIT 1`,
+      `SELECT o.* FROM managed_action_outbox o
+       JOIN managed_action_intent i ON i.id=o.action_intent_id
+       JOIN (
+         SELECT DISTINCT ON (i2.project_id) o2.id
+         FROM managed_action_outbox o2
+         JOIN managed_action_intent i2 ON i2.id=o2.action_intent_id
+         WHERE (o2.status='PENDING' AND (o2.next_attempt_at IS NULL OR o2.next_attempt_at <= $1))
+            OR (o2.status='LEASED' AND o2.lease_until <= $1)
+         ORDER BY i2.project_id,o2.created_at,o2.id
+       ) fair ON fair.id=o.id
+       ORDER BY o.created_at,o.id
+       FOR UPDATE OF o SKIP LOCKED LIMIT 1`,
       [now],
     )
     const row = candidates.rows[0]

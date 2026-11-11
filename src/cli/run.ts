@@ -16,6 +16,7 @@
  */
 
 import { closePool } from '../fact/db.js'
+import { backupMain, restoreVerifyMain } from './backup.js'
 import { consoleMain } from './console.js'
 import { answerMain, decideMain } from './decide.js'
 import { ingestIssueMain } from './ingest-issue.js'
@@ -24,6 +25,7 @@ import { pollerMain } from './poller.js'
 import { registerRepoMain } from './register-repo.js'
 import { runIssueMain } from './run-issue.js'
 import { runTaskMain } from './run-task.js'
+import { serveMain, serviceHealthMain, serviceStatusMain } from './service.js'
 import { statusMain } from './status.js'
 import { timerWorkerMain } from './timer-worker.js'
 import { unlockMain } from './unlock.js'
@@ -36,7 +38,12 @@ export const HELP = `keel — AI Engineering Runtime CLI
   keel <command> [args]
 
 命令:
-    managed <investigate|status|questions|answer|worker|ticket-*|policy-*|workflow-*|action-*|memory-*>   调查、ticket、授权生命周期、路线图、受控 PR、required checks 与项目记忆（JT-01–05）
+  serve [--harness omp|claude|pi] [--no-ingress]   统一常驻服务（JT-06）
+  service-status [--stale-ms <ms>]             只读角色、队列与恢复状态
+  service-health [--json]                      无副作用健康检查（非健康时退出 1）
+  managed <investigate|status|questions|answer|worker|ticket-*|policy-*|workflow-*|action-*|memory-*>   调查、ticket、授权生命周期、路线图、受控 PR、required checks 与项目记忆（JT-01–05）
+  backup --out <目录> [--blob-dir <目录>]      一致性备份数据库与 blob
+  restore-verify --backup <目录> [--keep-database]   隔离恢复并校验备份
   console                          只读 Web 控制台(默认 http://127.0.0.1:4321)
   timer-worker [--interval <ms>]   到期收割 timer(默认单次;--interval 常驻)
   run-task <taskId> [--max-steps N] [--ci passed|failed|real] [--model <id>] [--harness omp|claude|pi] [--wall-clock <秒>]   驱动单 task 到终态
@@ -63,6 +70,21 @@ export async function dispatch(argv: readonly string[]): Promise<void> {
   const [command, ...rest] = argv
 
   switch (command) {
+    case 'serve':
+      await serveMain(rest)
+      return
+    case 'service-status':
+      await serviceStatusMain(rest)
+      return
+    case 'service-health':
+      await serviceHealthMain(rest)
+      return
+    case 'backup':
+      await backupMain(rest)
+      return
+    case 'restore-verify':
+      await restoreVerifyMain(rest)
+      return
     case 'managed':
       await managedMain(rest)
       return
