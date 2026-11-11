@@ -3,6 +3,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { err, makeError, ok, type Result } from '../../contracts/errors.js'
 import { buildExecutorEnv } from './executor-env.js'
+import { type ManagedOsSandbox, prepareManagedOsSandbox } from './os-sandbox.js'
 
 export type ManagedHarness = 'pi' | 'claude' | 'omp'
 
@@ -15,6 +16,8 @@ export interface ManagedExecutorEnv {
   readonly env: NodeJS.ProcessEnv
   /** Pi 子代理扩展的隔离副本；没有安装时为空。 */
   readonly piExtensions: readonly string[]
+  /** 操作系统级文件系统/网络边界；未指定 workspace 时为 undefined。 */
+  readonly sandbox?: ManagedOsSandbox
   dispose(): Promise<void>
 }
 
@@ -26,6 +29,10 @@ export interface PrepareManagedEnvOptions {
   /** 宿主 HOME，只用于读取模型配置；默认 os.homedir()。 */
   readonly hostHome?: string
   readonly rootBase?: string
+  /** 任务 worktree；提供时强制建立操作系统沙箱。 */
+  readonly workspace?: string
+  /** 沙箱允许访问的本机端口；默认 3425（模型网关）。 */
+  readonly sandboxNetworkPorts?: readonly number[]
   /** 测试注入；默认读宿主 ~/.pi/agent/models.json。 */
   readonly piModels?: unknown
   /** 测试注入；默认读宿主 ~/.claude/settings.json。 */
@@ -94,7 +101,12 @@ export async function prepareManagedExecutorEnv(
         )
         break
       case 'claude':
-        await prepareClaudeConfig(home, options.hostHome ?? homedir(), options.claudeSettings)
+        await prepareClaudeConfig(
+          home,
+          tmpdir,
+          options.hostHome ?? homedir(),
+          options.claudeSettings,
+        )
         break
       case 'omp':
         await prepareOmpConfig(
@@ -106,12 +118,29 @@ export async function prepareManagedExecutorEnv(
         break
     }
 
+    let sandbox: ManagedOsSandbox | undefined
+    if (options.workspace !== undefined) {
+      const preparedSandbox = await prepareManagedOsSandbox({
+        workspace: options.workspace,
+        root,
+        home,
+        tmpdir,
+        hostHome: options.hostHome ?? homedir(),
+        ...(options.sandboxNetworkPorts === undefined
+          ? {}
+          : { networkPorts: options.sandboxNetworkPorts }),
+      })
+      if (!preparedSandbox.ok) throw preparedSandbox.error
+      sandbox = preparedSandbox.value
+    }
+
     return ok({
       root,
       home,
       tmpdir,
       env,
       piExtensions,
+      ...(sandbox === undefined ? {} : { sandbox }),
       dispose: async () => {
         await rm(root, { recursive: true, force: true, maxRetries: 3 })
       },
@@ -258,6 +287,7 @@ async function copyNpmDependencies(
 
 async function prepareClaudeConfig(
   home: string,
+  tmpdir: string,
   hostHome: string,
   injectedSettings: unknown,
 ): Promise<void> {
@@ -301,6 +331,9 @@ async function prepareClaudeConfig(
 
   const claudeDir = join(home, '.claude')
   await mkdir(claudeDir, { recursive: true, mode: 0o700 })
+  const claudeTmpDir = join(tmpdir, 'claude')
+  await mkdir(claudeTmpDir, { recursive: true, mode: 0o700 })
+  safeEnv.CLAUDE_CODE_TMPDIR = claudeTmpDir
   await writeJson(join(claudeDir, 'settings.json'), {
     env: safeEnv,
     attribution: { commit: '', pr: '' },
