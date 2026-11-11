@@ -1,12 +1,53 @@
 # 实施进度：jstack 天问后台路线
 
 **日期**：2026-11-11。协议与后台队列已实现，Linux 原生 OMP 真实烟测通过，
-提问前与答复后两处 SIGKILL 故障恢复均已实测通过；JT-02、JT-03、JT-04、JT-05
-已合入；JT-06 统一服务、恢复和备份校验已实现并通过确定性回归，待提交/合入；
-XL 未单独跑；原生 Claude 与 JT-07 尚未完成，JT-01 仍为影子模式，不能把 JT-01
-当作完整交付。
+提问前与答复后两处 SIGKILL 故障恢复均已实测通过；JT-01～JT-06 已合入 `main`
+（JT-06 为 PR #122，merge `1391dec`）。JT-07 的 `doctor` 支持矩阵与试运行账本
+已实现并通过专用 PostgreSQL 库测试，但真实 2–3 项目连续 7 天试运行、30 个实际
+代决、5 个完成任务与独立评测未完成；XL 未单独跑，原生 Claude 未验，JT-01 仍为
+影子模式，不能把任何单项证据当作整套生产交付。
 
-## JT-06 统一后台、故障恢复和备份（已实现，待合入）
+## JT-07 就绪矩阵与试运行账本（工具已实现，真实试运行未开始）
+
+本切片只交付“能否开始受限试运行”的可观察工具，不把工具存在当成生产准入：
+
+- `keel doctor [--harness omp|claude|pi] [--json]`：只读探测 Harness 二进制/版本/
+  capability/tier、凭据可判定性、PostgreSQL schema、GitHub 凭据、`git`/`pg_dump`、
+  Linux `/proc/self/fd` managed 读取能力与试运行门槛。不会调用模型、访问 GitHub、
+  认领队列，也不会读取或输出 token。
+- `keel trial-start --projects <uuid,uuid> --confirm [--note TEXT]`：把 2–3 个已登记
+  项目绑定到一个试运行窗口；数据库唯一索引保证单 owner 同时只有一个进行中的试运行。
+- `keel trial-status [--json] [--require-eligible]`：从真实
+  `managed_decision_resolution`、`managed_ticket_task`、待答问题与 action outbox
+  统计窗口内样本，输出 `RUNNING` / `STOPPED` / `NOT_STARTED`。
+- `keel trial-stop --reason TEXT --confirm`：显式停止并保留样本；停止后的窗口即使
+  时间与数量足够也不能通过连续试运行门槛。
+
+门槛固定为：2–3 个项目、连续 7 天、至少 30 个实际代决、至少 5 个真实完成任务。
+满足门槛只输出 `eligible_for_owner_review=true`，含义是“owner 可以开始抽样复核”，
+不是“正确率达标”，也不会自动扩大授权、自动合并或自动部署。
+
+迁移 `migrations/1000000000021_trial-readiness.sql` 新增 `managed_trial` 与
+`managed_trial_project`。`keel_execution` 对两张表没有读写权限，`keel_control`
+只能 SELECT/INSERT/UPDATE，不能 DELETE；真实 PostgreSQL 集成测试覆盖项目数量/
+重复/非法/不存在项目、单活试运行、30 次代决 + 5 个完成任务、窗口外与跨项目样本
+排除、停止后不通过，以及 open question / `UNCERTAIN` / `FAILED` outbox 风险信号。
+
+### 当前支持矩阵（doctor 输出口径）
+
+| Harness | tier | 验证等级 | 当前结论 | 明确限制 |
+|---|---|---|---|---|
+| 原生 OMP | L2 | `native-live` | Linux 原生真实模型、SIGKILL 恢复与工具负例已验 | managed 读取仅 Linux `/proc/self/fd`；doctor 不读取 token |
+| Pi | L0 | `compat-live` | 兼容 runner 真实烟测已验 | 不声明 `CAP-RESUME` / `CAP-STRUCTURED_OUTPUT`；原生 managed 写执行未验 |
+| Claude Code | L2 | `deterministic-only` | adapter 契约/事件解析/spawn 门禁有确定性测试 | 原生 managed 真实 E2E 未验；未声明 `CAP-STRUCTURED_OUTPUT` |
+
+`doctor` 的 `blockers` 才是当前环境的硬阻断。2026-11-11 macOS 本机实测：
+`managed_read` 因无 `/proc/self/fd` 被阻断；`pi auth check --provider opencode-go`
+返回 `not_ready`；OMP 模型目录不含默认选择器。三者均如实显示，不能用单测或兼容烟测
+替代。真实试运行必须在 Linux 目标环境、凭据可用且 `doctor` 无阻断后，由 owner 明确
+选择项目再启动。
+
+## JT-06 统一后台、故障恢复和备份（已合入 main，PR #122）
 
 `ai/jt06-service` 已实现：
 
@@ -30,7 +71,7 @@ XL 未单独跑；原生 Claude 与 JT-07 尚未完成，JT-01 仍为影子模�
 `up → down 1 → up`。确定性测试覆盖运行时故障隔离/退避/SIGTERM、健康只读、
 公平调度，以及真实备份/隔离恢复/篡改/缺凭据/uncertain 场景。
 
-## JT-05 授权生命周期与人工控制（已实现，待合入）
+## JT-05 授权生命周期与人工控制（已合入）
 
 `ai/jt05-authorization` 已实现：
 
@@ -140,8 +181,8 @@ Keel 侧确定性验收：
   模型没有原生工具；Linux FD 锚定读取只允许项目内受控普通文本，
   拒绝软链、隐藏/凭据路径、二进制和越界。
 - 每个人工问题先执行天问，保存建议或失败原因，再进入人工队列。
-  **JT-01 是影子模式**：所有此类问题仍等真实用户；
-  项目长期历史、摘要和委托代批尚未接入。
+  **JT-01 调查子链路仍是影子模式**：此类问题仍等真实用户；项目长期历史、摘要与
+  委托代批在 JT-02+ 的 ticket/workflow 路径生效，两条路径不能混写。
 - 任务/问题/尝试/审计独立于旧 `S-*` 状态机；旧 poller/driver 不驱动它们。
   后台认领使用 PostgreSQL 行锁、租约和 fencing token，过期可重取，迟到结果不可提交。
 - 答复与任务 READY 状态在同一事务提交；重复相同答复幂等，不同答复冲突；
@@ -150,17 +191,20 @@ Keel 侧确定性验收：
 
 ## Harness 支持矩阵
 
-| 能力 | 原生 OMP（Linux） | 原生 Claude | Pi 兼容 |
+| 能力 | 原生 OMP（Linux） | 原生 Claude | Pi |
 |---|---|---|---|
-| 受控读取 / 真实问题 / 天问建议 | 已验 | 未验 | 已验（兼容） |
-| 等待人工后新 worker 自动续跑 | 已验 | 未验 | 已验（兼容） |
-| 原生工具禁用 | 已验 | 未验 | 不适用 |
+| 受控读取 / 真实问题 / 天问建议 | 已验 | 未验 | 兼容 runner 已验 |
+| ticket 写执行到 `pr_ready` | 原生真实 E2E 已验（JT-02） | 未验 | 原生 managed 未验 |
+| 等待人工后新 worker 自动续跑 | 已验 | 未验 | 兼容 runner 已验 |
+| 原生工具禁用 / 写边界 | 已验（JT-01 负例 + JT-02 隔离） | 未验 | 未验 |
 | SIGKILL / 故障注入恢复 | 已验（提问前、答复后） | 未验 | 未验 |
-| 结论 | JT-01 只读烟测与两处故障恢复通过 | 不声明支持 | 仅兼容烟测 |
+| 结论 | `native-live` | `deterministic-only` | `compat-live` |
 
 原生 OMP 使用固定公共包副本直接执行，不经 Pi wrapper。
-“原生工具禁用”只说明调查执行时不暴露 OMP 原生工具，
-不等于具备写工具沙箱；Keel 不自行实现 coding agent，写路径隔离是 JT-02 前置。
+“原生工具禁用”只说明 JT-01 调查执行时不暴露 OMP 原生工具；ticket 写路径的
+Executor 环境 allowlist、容器规格与 scope 检查由 JT-02 实现，见
+[executor-isolation.md](../../spec/backend/executor-isolation.md) 与
+[ticket-execution.md](../../spec/backend/ticket-execution.md)。
 2026-11-10 实际负例：原生 OMP 18.11.1 + 目标模型 max + `--no-tools`
 请求 `bash` 创建 `/tmp/jt01-native-tool-escape`，原生 CLI 返回
 `Tool bash not found`，模型最终 `tool_unavailable`，容器内 marker 不存在，容器已停止。
@@ -207,7 +251,36 @@ pnpm run keel managed status TASK_UUID
 每次 90 秒并有清理宽限；上下文和文件读取有硬上限。
 未安装 Harness 时 worker 在认领前退出，任务保留 READY。
 
+进入 JT-07 试运行前，先用同一个专用库执行只读就绪检查；`doctor` 的阻断项未清零
+时不要启动试运行：
+
+```bash
+pnpm run keel doctor --harness omp
+pnpm run keel trial-start --projects REPO_UUID_A,REPO_UUID_B --confirm
+pnpm run keel trial-status
+# 连续 7 天、30 个实际代决、5 个完成任务后，owner 抽样复核
+pnpm run keel trial-status --require-eligible
+pnpm run keel trial-stop --reason '本轮试运行结束' --confirm
+```
+
+`trial-status` 的 `eligible=true` 只表示可以开始 owner 复核，不是生产准入，
+也不会自动扩大授权。
+
 ## 验收记录
+
+### JT-07 readiness 切片（2026-11-11）
+
+- 专用 PostgreSQL 库 `keel_jt07_1794399031`：22 个迁移全部执行；`0021` 单独执行
+  `up → down 1 → up` 成功。
+- macOS 本机 `pnpm run check`：98 个测试文件，1337 passed / 24 skipped；
+  `pnpm run build` 通过。
+- 新增 `trial` 纯门槛 5 项、`trial-store` 真实 PostgreSQL 4 项、`doctor` 6 项；
+  覆盖项目数量/重复/非法/不存在、单活试运行、30 代决 + 5 完成任务、窗口外/跨项目
+  排除、停止后不通过、权限负例与风险信号。
+- `keel doctor --harness omp --json` 与 `keel trial-status --json` 已在专用库烟测。
+  macOS 实测如实报告 `managed_read`、Pi `opencode-go` 凭据与 OMP 模型目录阻断，
+  没有把单测或兼容烟测当成 Linux 原生验收。
+- 未开始真实 7 天试运行；没有 30 个实际代决、5 个真实完成任务或评测样本。
 
 ### PR #84 历史验收（历史隔离环境，非当前结果）
 
@@ -294,18 +367,28 @@ pnpm run keel managed status TASK_UUID
 ## 边界与未完成
 
 - SIGKILL/故障注入恢复仅覆盖原生 OMP 的提问前与答复后两处，均由真实 SIGKILL
-  与自然租约过期触发；原生 Claude 与 Pi 兼容 runner 未验，不得用“等待后重启 worker”
+  与自然租约过期触发；原生 Claude 与 Pi 原生 managed 路径未验，不得用“等待后重启 worker”
   替代中断点验收。
 - 原生 Claude 未验收，不声明支持；Linux 原生 OMP 烟测不等于 Claude adapter 通过。
-- JT-01 仍是影子模式：天问建议不自动代答，所有问题等真实用户；
-  长期项目决定、摘要、正式委托与自动代答属 JT-02 及以后。
-- Keel 不自行实现 coding agent；写路径隔离与写操作网关是 JT-02 前置，尚未实现。
-  原生工具禁用不代表具备写沙箱。
-- `#86` 验收已通过，待本 PR 合入后关闭；`#90` 前置验收已满足、尚未实施，
-  状态以 GitHub tracker 为准。确定性测试、mock 截图和兼容 runner 都不能当作原生 Harness 验收。
+- JT-01 调查子链路仍是影子模式；JT-02+ 的 ticket/workflow 路径已有项目决定、
+  正式委托与自动代答，不能反过来宣称 JT-01 调查也已自动代答。
+- Pi 只有兼容 runner 烟测；原生 Pi managed 写执行、Claude managed E2E 与 XL
+  多 ticket 路线均未验。
+- JT-06 的备份恢复是真实 PostgreSQL + blob + 隔离库校验，但“生产实例恢复演练”
+  仍未执行；真实数据库短断、重复 webhook、外部响应丢失等故障注入也未完成。
+- 真实 2–3 项目连续 7 天试运行尚未启动；没有 30 个实际代决与 5 个真实完成任务，
+  也没有留出评测集或独立评审，不能报告生产正确率。
+- `#86`、`#90`～`#94` 已关闭；`#85` 与 `#95` 保持 open，状态以 GitHub tracker 为准。
+  确定性测试、mock 截图和兼容 runner 都不能当作原生 Harness 或真实试运行验收。
 
-## 尚未实现
+## JT-07 仍未完成
 
-JT-02 至 JT-07：既有决定自动代答、正式委托策略、跨任务项目决定与摘要、
-完整工程路线/多 ticket、写操作网关、审批与撤销闭环、统一 daemon/控制台接入、
-备份演练、真实评测及受限生产试运行。不能把 JT-01 当作这些能力已经交付。
+- 真实试运行：由 owner 选择 2–3 个代表性项目，在 `doctor` 无阻断的 Linux 环境启动，
+  连续运行至少 7 天并积累 30 个实际代决、5 个真实完成任务。
+- 评测：留出问题、按时间/主题隔离、原始人类答复或独立评审标注，记录样本量、
+  项目分布、错误分类与置信区间；天问不能自评。
+- 生产故障注入：真实 SIGKILL、数据库短断、重复 webhook、外部响应丢失、旧 worker
+  迟到、摘要回滚与撤销竞态。
+- 原生 Harness：Claude managed E2E、Pi 原生 managed 写执行、XL 多 ticket 路线。
+- 生产恢复：按目标部署环境执行一次完整备份恢复演练，并验证待答问题、outbox 与
+  外部动作回查。

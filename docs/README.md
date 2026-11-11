@@ -30,7 +30,7 @@
 
 ### 下一版生产方案与实施进度
 
-[jstack 主工作流与天问代理决策](./plans/jstack-tianwen/README.md)：完整生产目标及接口、交付票与验收场景。[JT-01 只读影子链路](./plans/jstack-tianwen/implementation.md)的代码已合入 `main`（PR #84），真实模型端到端验收仍未完成；项目记忆、委托代批与完整工程工作流（JT-02～JT-07）待实现。
+[jstack 主工作流与天问代理决策](./plans/jstack-tianwen/README.md)：完整生产目标及接口、交付票与验收场景。JT-01 只读影子链路、项目记忆、委托代批、路线图/多 ticket、授权与 PR 网关、统一服务已合入 `main`（JT-01～JT-06）；JT-07 的 `doctor` 支持矩阵与试运行账本已实现，真实 7 天试运行、独立评测与生产准入仍未完成。
 
 当前路线的进度与原生依赖见 GitHub [#85](https://github.com/jionpz/keel/issues/85)：JT-01 剩余验收 [#86](https://github.com/jionpz/keel/issues/86)，JT-02～JT-07 为 [#90](https://github.com/jionpz/keel/issues/90)～[#95](https://github.com/jionpz/keel/issues/95)。历史 v0.1/阶段二结论属于 `legacy-v01`，不代表 JT 路线已完成。
 
@@ -76,7 +76,7 @@
 | `ADR-0005` Harness 分级 | ✅ **Accepted — Claude Code + OMP 首批**（2026-08-23 修订;OMP 接入时实测,其余 harness 未查证） |
 | 仓库骨架 | ✅ 完成 —— 四条架构约束已机械化，见下 |
 | v0.1 实现 | ✅ 历史阶段完成 —— 核心闭环 + 真实 GitHub PR/CI + durable timer + CLI 已落地（`GitHubProvider` 实现 PR 网关与 CI 网关，编排器经 `opts.ci` 消费）；这是 `legacy-v01` 结论，不是 JT 路线完成 |
-| JT 路线（jstack + 天问） | ⏳ JT-01 代码已合入 `main`，真实模型验收开放；JT-02～JT-07 未实施。见 [#85](https://github.com/jionpz/keel/issues/85) |
+| JT 路线（jstack + 天问） | ⏳ JT-01～JT-06 已合入 `main`；JT-07 readiness 工具已实现，真实 2–3 项目 7 天试运行与评测未完成。见 [#85](https://github.com/jionpz/keel/issues/85) 与 [#95](https://github.com/jionpz/keel/issues/95) |
 
 ### CLI 入口（2026-11-10 现状）
 
@@ -89,7 +89,11 @@ pnpm keel --help               # 完整命令清单以 src/cli/run.ts 的 HELP �
 
 | 命令 | 用途 |
 |---|---|
-| `managed <investigate\|status\|questions\|answer\|worker>` | jstack 只读调查与天问建议（JT-01 影子模式，Linux only） |
+| `serve` / `service-status` / `service-health` | 统一常驻服务、只读角色/队列快照与无副作用健康检查（JT-06） |
+| `managed <investigate\|ticket-*\|policy-*\|workflow-*\|action-*\|memory-*\|...>` | jstack 调查、ticket、授权、路线图、PR 网关与项目记忆（JT-01–05） |
+| `doctor [--harness omp\|claude\|pi] [--json]` | Harness/平台/数据库/试运行就绪矩阵（JT-07） |
+| `trial-start` / `trial-status` / `trial-stop` | 2–3 项目、7 天、30 代决、5 完成任务的试运行账本（JT-07） |
+| `backup` / `restore-verify` | 一致性备份与隔离恢复校验（JT-06） |
 | `console` | Web 控制台、人工裁决与澄清答复（默认绑定 `127.0.0.1:4321`，需口令登录；`KEEL_CONSOLE_HOST` 可改监听地址） |
 | `timer-worker [--interval <ms>]` | 到期 timer 收割；`--interval` 常驻 |
 | `run-task` / `run-issue` | 驱动已有 task / GitHub Issue 到终态 |

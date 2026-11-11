@@ -37,6 +37,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Workflow Routing](./workflow-routing.md) | jstack XS/S/M/L/XL route 包、依赖图校验、节点调度、scope、证据复用、archive 与双投影 | ✅ 已填（JT-04） |
 | [Action Gateway](./action-gateway.md) | action intent / ExecutionPermit / 持久 outbox、受控 push 与 PR、required checks 与准确 SHA 的 `pr_ready` | ✅ 已填（JT-02D/02E） |
 | [Service Runtime](./service-runtime.md) | 单一 `serve` 入口、角色健康、公平调度、SIGTERM 边界、一致性备份与隔离恢复校验 | ✅ 已填（JT-06） |
+| [Trial Readiness](./trial-readiness.md) | `doctor` 支持矩阵、单 owner 试运行账本、7 天/30 代决/5 完成任务门槛与证据边界 | ✅ 已填（JT-07 readiness） |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | ⏳ 暂缓 —— 尚无日志代码 |
 
 > **⏳ 暂缓的 logging 是刻意留空的**,不是遗漏。

@@ -1,6 +1,6 @@
 # 交付、生产准入与运维
 
-**状态**：JT-01 的只读影子协议与后台队列已合入 `main`（PR #84），原生 OMP 真实模型烟测与提问前/答复后两处 SIGKILL 故障恢复均已实测通过；JT-02、JT-03、JT-04、JT-05 已合入；JT-06 统一服务、故障恢复与备份恢复校验已实现并通过确定性回归，待提交/合入；XL 未单独跑；JT-01 仍为影子模式，原生 Claude 未验，JT-07 与 7 天真实试运行未完成。见[实施进度与可运行命令](./implementation.md)。尚未部署生产服务。
+**状态**：JT-01 的只读影子协议与后台队列已合入 `main`（PR #84），原生 OMP 真实模型烟测与提问前/答复后两处 SIGKILL 故障恢复均已实测通过；JT-02～JT-06 已合入（JT-06 为 PR #122，merge `1391dec`）；XL 未单独跑；JT-01 仍为影子模式，原生 Claude 未验。JT-07 的 `doctor` 支持矩阵与试运行账本已实现，但真实 2–3 项目连续 7 天试运行、30 个实际代决、5 个完成任务与独立评测未完成。见[实施进度与可运行命令](./implementation.md)。尚未部署生产服务。
 
 阅读顺序：[主方案](./README.md) → [契约](./contracts.md) → 本页 → [验收](./acceptance.md)。本页的命令和配置是待实现接口建议，不可复制为现有能力。
 
@@ -31,8 +31,8 @@
 | JT-03 | [#91](https://github.com/jionpz/keel/issues/91) | PR #117 已合并（merge `72d92b3`）；#91 已关闭 |
 | JT-04 | [#92](https://github.com/jionpz/keel/issues/92) | 依赖 JT-02；已合入（PR #119）；XL 未单独跑 |
 | JT-05 | [#93](https://github.com/jionpz/keel/issues/93) | 依赖 JT-03、JT-04；已合入（PR #120） |
-| JT-06 | [#94](https://github.com/jionpz/keel/issues/94) | 依赖 JT-04、JT-05；实现与确定性回归完成，待提交/合入 |
-| JT-07 | [#95](https://github.com/jionpz/keel/issues/95) | 依赖 JT-01～JT-06；未实施 |
+| JT-06 | [#94](https://github.com/jionpz/keel/issues/94) | 依赖 JT-04、JT-05；已合入（PR #122，merge `1391dec`），#94 已关闭 |
+| JT-07 | [#95](https://github.com/jionpz/keel/issues/95) | 依赖 JT-01～JT-06；readiness 工具已实现，真实 7 天试运行与独立评测未完成，#95 保持 open |
 
 ### JT-01：jstack 原生只读任务，经天问建议、人工答复后可恢复
 
@@ -119,6 +119,25 @@ outbox、checks；角色健康与原因码写入 `worker_health`，`service-stat
 
 **验收**：下列生产准入清单和 acceptance 全部满足；已知限制直接显示；没有把测试替身、历史回放或 shadow 答案当成真实生产完成。
 
+**已实现的就绪工具（不等同完成本票）**：
+
+- `keel doctor [--harness omp|claude|pi] [--json]`：只读探测 Harness 二进制、版本、
+  capability/tier、凭据可判定性、PostgreSQL schema、GitHub 凭据、`git` / `pg_dump`、
+  Linux `/proc/self/fd` managed 读取能力与试运行门槛；不调用模型、不访问 GitHub、
+  不认领队列、不输出 token。
+- `keel trial-start --projects <uuid,uuid> --confirm`、
+  `keel trial-status [--json] [--require-eligible]`、
+  `keel trial-stop --reason <text> --confirm`：记录单 owner 试运行窗口，并从真实
+  `managed_decision_resolution` / `managed_ticket_task` / outbox 统计样本。
+- 迁移 `migrations/1000000000021_trial-readiness.sql`：新增 `managed_trial` 与
+  `managed_trial_project`，数据库约束保证单用户同时只有一个进行中的试运行。
+- 试运行门槛固定为 2–3 个项目、连续 7 天、至少 30 个实际代决、至少 5 个完成任务；
+  达到门槛只输出 `eligible_for_owner_review`，不宣称生产正确率，也不自动扩大授权。
+
+**仍未完成**：真实试运行尚未启动；没有 7 天连续运行、30 个实际代决与 5 个真实完成
+任务样本；没有留出评测集与独立评审；原生 Claude managed E2E、XL 多 ticket、真实生产
+SIGKILL/数据库短断/重复 webhook/外部响应丢失故障注入、生产级备份恢复演练均未完成。
+
 ## 3. 项目接入与授权初始化
 
 一次接入完成：项目 ID/仓库映射 → 固定 jstack 包与配置 → 读取现有文档/ADR/明确用户答复 → 整理待确认的初始决定与授权 → 用户批量确认范围 → shadow/自动模式。
@@ -157,7 +176,9 @@ doctor 和审计导出；policy publish/revoke 与 ticket pause/cancel/resume/ov
 
 ### 4.1 硬性检查
 
-- [ ] Keel `pnpm run check` 与构建通过；新增 schema/迁移/数据库权限做主动违规测试。
+- [x] Keel `pnpm run check` 与构建通过；新增 schema/迁移/数据库权限做主动违规测试。
+      （2026-11-11：`pnpm run check` 1337 passed / 24 skipped，`pnpm run build` 通过，
+      `0021` 在专用库执行 `up → down 1 → up`，新增真实 PostgreSQL 集成测试。）
 - [ ] jstack `./jstack check` 通过；按其项目约定执行受影响的 eval/smoke 并记录原始证据，不以未安装 harness 的跳过代替支持验证。
 - [ ] 每个声明支持的 Harness 都真实验证：提问、must-stop、等待、恢复、工具边界、无 TTY 运行；缺能力的明确拒绝。
 - [ ] [acceptance](./acceptance.md) 全部具备实际结果和证据引用；确定性权限、隔离、竞态与恢复用例全部通过。

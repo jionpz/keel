@@ -10,8 +10,9 @@
 
 2026-11 起，当前产品主线是 **jstack 主工作流 + 天问代理决策**（[ADR-0011](./adr/0011-jstack-tianwen-runtime.md)）。交付票、真实状态与原生依赖见 GitHub [#85](https://github.com/jionpz/keel/issues/85)：
 
-- JT-01 只读影子链路的代码已合入 `main`（PR #84），真实模型端到端验收仍开放（[#86](https://github.com/jionpz/keel/issues/86)）；managed 安全读取仍只支持 Linux。
-- JT-02～JT-07 尚未实施，按 [#90](https://github.com/jionpz/keel/issues/90)～[#95](https://github.com/jionpz/keel/issues/95) 的依赖推进。
+- JT-01 只读影子链路已合入 `main`（PR #84），Linux 原生 OMP 真实模型与两处 SIGKILL 恢复已验；managed 安全读取仍只支持 Linux。
+- JT-02～JT-06 已合入 `main`：项目记忆、委托代批、路线图/多 ticket、授权与 PR 网关、统一服务均已落地（JT-06 为 PR #122）。
+- JT-07 的 `doctor` 支持矩阵与 `trial-*` 试运行账本已实现；真实 2–3 项目连续 7 天试运行、30 个实际代决、5 个完成任务和独立评测尚未完成（[#95](https://github.com/jionpz/keel/issues/95) 仍开放）。
 - 旧任务保留 `legacy-v01` 驱动，不自动迁移，也不与新的 jstack 任务并行跑两套主编排。
 
 ---
