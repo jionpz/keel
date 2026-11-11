@@ -110,12 +110,25 @@ async function requestBody(
   return (row.rows[0]?.body as DecisionRequest | undefined) ?? null
 }
 
+export async function getDecisionRequest(
+  id: string,
+  revision: number,
+  client?: PoolClient,
+): Promise<DecisionRequest | null> {
+  const run = (c: PoolClient): Promise<DecisionRequest | null> => requestBody(c, id, revision)
+  return client === undefined ? asRole('keel_control', run) : run(client)
+}
+
 async function decisionsForProject(c: PoolClient, projectId: string): Promise<ProjectDecision[]> {
   const rows = await c.query<{ body: unknown }>(
     `SELECT ${DECISION_JSON} WHERE d.project_id=$1 ORDER BY d.decision_key, d.version`,
     [projectId],
   )
   return rows.rows.map((row) => row.body as ProjectDecision)
+}
+
+export async function listProjectDecisions(projectId: string): Promise<ProjectDecision[]> {
+  return asRole('keel_control', (c) => decisionsForProject(c, projectId))
 }
 
 export async function listDelegationPoliciesInTx(
@@ -1050,6 +1063,7 @@ export interface ManagedTicketDecisionInput {
   readonly workflow_digest: string
   readonly constraints?: readonly string[]
   readonly missing_information?: readonly string[]
+  readonly initial_status?: 'PROCESSING' | 'WAITING_HUMAN'
 }
 
 export async function openDecisionRequestForTicket(
@@ -1089,7 +1103,7 @@ export async function openDecisionRequestForTicket(
       action_category: input.action_category,
       workflow_digest: input.workflow_digest,
       input_digest: '',
-      status: 'WAITING_HUMAN',
+      status: input.initial_status ?? 'WAITING_HUMAN',
       created_at: now,
     }
     request.input_digest = decisionRequestDigest(request)
@@ -1167,16 +1181,21 @@ export async function answerManagedTicketDecision(
     const option = request.options.find((entry) => entry.id === optionId)
     if (option === undefined) return err(makeError('SCHEMA_VIOLATION', '答案不在请求选项内'))
     const task = (
-      await c.query<{ status: string }>(
-        'SELECT status FROM managed_ticket_task WHERE id=$1 FOR UPDATE',
+      await c.query<{ status: string; last_error: string | null }>(
+        'SELECT status,last_error FROM managed_ticket_task WHERE id=$1 FOR UPDATE',
         [request.managed_ticket_task_id],
       )
     ).rows[0]
     if (task === undefined) return err(makeError('NOT_FOUND', '找不到 managed ticket task'))
     if (task.status !== 'WAITING_HUMAN')
       return err(makeError('CONFLICT', `ticket task 当前是 ${task.status}，不可答复`))
-    const resolution = await insertHumanResolution(c, request, option, option.text, now)
-    const shouldContinue = option.id === 'option-2'
+    const existing = await resolutionDisposition(c, request.id, request.revision)
+    const target = existing === null ? request : await supersedeRequest(c, request, now)
+    const resolution = await insertHumanResolution(c, target, option, option.text, now)
+    const mustStop = task.last_error === 'MUST_STOP' || task.last_error === 'UNAUTHORIZED_ACTION'
+    const shouldContinue = mustStop
+      ? option.id === 'option-2'
+      : option.text !== '停止并等待人工处理'
     const taskStatus = shouldContinue ? 'READY' : 'CANCELLED'
     await c.query(
       `UPDATE managed_ticket_task SET status=$2,pending_decision_id=NULL,pending_decision_revision=NULL,
@@ -1185,7 +1204,7 @@ export async function answerManagedTicketDecision(
     )
     await ticketEvent(c, request.managed_ticket_task_id, 'ManagedTicketDecisionAnswered', {
       requestId,
-      revision,
+      revision: target.revision,
       optionId,
       disposition: resolution.disposition,
       taskStatus,

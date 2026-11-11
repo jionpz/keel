@@ -23,13 +23,16 @@ import { answerManagedQuestion, getManagedTask } from '../control/managed/store.
 import {
   createManagedTicketTask,
   getManagedTicket,
+  type ManagedTicketWorker,
   tickManagedTicket,
 } from '../control/managed/ticket-runtime.js'
 import { listManagedTicketStages } from '../control/managed/ticket-store.js'
+import { runTicketTianwen, tickPendingTicketTianwen } from '../control/managed/ticket-tianwen.js'
 import { requireClaudeReady } from '../execution/adapters/claude-code.js'
 import { requirePiBinary } from '../execution/adapters/pi.js'
 import { managedInference } from '../execution/managed-inference.js'
 import { ticketWorkerFromAdapter } from '../execution/ticket-stage-runner.js'
+import { asRole } from '../fact/db.js'
 import { GitCliPushGateway } from '../fact/git-push.js'
 import { GitHubProvider } from '../fact/github-provider.js'
 import { createStopToken, interruptibleSleep } from '../ingress/poller.js'
@@ -119,6 +122,7 @@ ticket-stages TASK_UUID
 ticket-tick [--task TASK_UUID] [--harness omp|claude|pi] [--model ID]
 ticket-worker [--once] [--interval MS] [--task TASK_UUID] [--harness omp|claude|pi] [--model ID]
 ticket-answer REQUEST_UUID --revision N --option OPTION_ID
+ticket-tianwen REQUEST_UUID [--revision N] [--harness omp|claude|pi] [--model ID]
 action-list [--task TASK_UUID]
 action-gateway [--once] [--interval MS] [--reconcile] [--check-timeout-ms MS]
 action-reconcile [--id OUTBOX_UUID] [--once] [--interval MS]
@@ -200,6 +204,31 @@ ticket 模式按固定包完成 execute→verify→review→land；阶段执行�
       case 'ticket-worker':
         await runTicketWorker(rest)
         return
+      case 'ticket-tianwen': {
+        if (rest[0]?.startsWith('--'))
+          throw new Error('用法：managed ticket-tianwen <request UUID> [--revision N]')
+        const requestId = uuid(rest[0] ?? '', 'request ID')
+        const flags = parseFlags(rest.slice(1), ['revision', 'harness', 'model'])
+        const revisionRaw = optional(flags, 'revision')
+        const worker = await createTicketWorker(flags)
+        if (worker.decide === undefined) throw new Error('当前 harness 没有天问 runner')
+        const task = await asRole('keel_control', (c) =>
+          c.query<{ pending_decision_revision: number }>(
+            `SELECT pending_decision_revision FROM managed_ticket_task
+             WHERE pending_decision_id=$1`,
+            [requestId],
+          ),
+        )
+        const revision =
+          revisionRaw === undefined
+            ? task.rows[0]?.pending_decision_revision
+            : positiveInteger(revisionRaw, '--revision')
+        if (revision === undefined) throw new Error('找不到该请求对应的 ticket task')
+        const result = await runTicketTianwen(worker.decide, requestId, revision)
+        if (!result.ok) throw new Error(result.error.detail)
+        printJson(result.value)
+        return
+      }
       case 'ticket-answer': {
         if (rest[0]?.startsWith('--'))
           throw new Error('用法：managed ticket-answer <request UUID> --revision N --option OPTION')
@@ -347,9 +376,22 @@ async function runTicketTick(argv: readonly string[]): Promise<void> {
   const taskRaw = optional(flags, 'task')
   const taskId = taskRaw === undefined ? undefined : uuid(taskRaw, '--task')
   const worker = await createTicketWorker(flags)
+  if (await drainPendingDecision(worker, taskId)) return
   const result = await tickManagedTicket(worker, taskId)
   if (!result.ok) throw new Error(result.error.detail)
   printJson(result.value)
+}
+
+async function drainPendingDecision(
+  worker: ManagedTicketWorker,
+  taskId?: string,
+): Promise<boolean> {
+  if (worker.decide === undefined) return false
+  const pending = await tickPendingTicketTianwen(worker.decide, taskId)
+  if (!pending.ok) throw new Error(pending.error.detail)
+  if (pending.value === null) return false
+  printJson(pending.value)
+  return true
 }
 
 async function runTicketWorker(argv: readonly string[]): Promise<void> {
@@ -361,6 +403,7 @@ async function runTicketWorker(argv: readonly string[]): Promise<void> {
   const taskId = taskRaw === undefined ? undefined : uuid(taskRaw, '--task')
   const worker = await createTicketWorker(flags)
   if (once) {
+    if (await drainPendingDecision(worker, taskId)) return
     const result = await tickManagedTicket(worker, taskId)
     if (!result.ok) throw new Error(result.error.detail)
     printJson(result.value)
@@ -372,6 +415,7 @@ async function runTicketWorker(argv: readonly string[]): Promise<void> {
   process.on('SIGTERM', onSignal)
   try {
     while (!stop.requested) {
+      if (await drainPendingDecision(worker, taskId)) continue
       const result = await tickManagedTicket(worker, taskId)
       if (!result.ok) throw new Error(result.error.detail)
       if (result.value !== null) printJson(result.value)

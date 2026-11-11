@@ -81,11 +81,15 @@ request 状态。并发提交同一 revision 时一个成功，其余返回 `CON
   旧 request 标为 `SUPERSEDED`，新 revision 写入 `human_confirmed` 决议。
 - 已进入 `RUNNING` 的任务不做隐式改写；必须先暂停/取消，留给后续控制切片。
 
-## 尚未接线
+## 接线状态
 
+- managed 调查路径和 managed ticket 的 `blocked` + `decision` 路径都已接入天问：
+  worker 用当前 harness/model 产生 `TianwenProposal`，再由确定性接纳器裁决。
+- ticket 的 `must_stop` / `requested_action` 不调用天问，直接等待人工；人工答复在
+  已有决议时创建 `revision + 1`。
 - `recordProjectDecision()` 与 `recordDelegationPolicy()` 目前只允许受信控制入口调用；
   从认证会话核验 owner 身份的项目映射尚未接线。
-- `impact` 仍由调查模型声明；JT-02D 的执行网关必须重新核对动作、环境与资源，
-  `approval` 在本切片不会自动委派。
-- outbox/PR 属 JT-02D，required checks 属 JT-02E；决策接纳器仍按本切片规则拒绝
-  带这些要求的自动代答，而 action gateway 独立消费 `required_checks`。
+- `impact` 仍由调查或 ticket 模型声明；JT-02D 的执行网关必须重新核对动作、环境与
+  资源，`approval` 不会自动委派。
+- outbox/PR 属 JT-02D，required checks 属 JT-02E；action gateway 独立消费
+  `required_checks`，决策接纳器仍按本切片规则拒绝带这些要求的自动代答。

@@ -96,20 +96,27 @@ Keel 用当前 harness 的 `tool_inventory` 解析原生工具，只把解析结
 JT-02A 的环境 allowlist、容器规格门禁和 agent 级凭据负例仍是启动边界。
 GitHub 写凭据不进入执行器。
 
-## 6. must-stop 与未授权动作
+## 6. must-stop、未授权动作与天问决策
 
-任一阶段输出 `status=must_stop`、`status=blocked` 或 `requested_action` 时：
+任一阶段输出 `status=must_stop`、`status=blocked` 或 `requested_action` 时，阶段行
+标记 `MUST_STOP`，并在一个 `keel_control` 事务中创建统一
+`managed_decision_request`，绑定 `managed_ticket_task_id`、package digest、attempt
+与 input digest。
 
-1. 阶段行标记 `MUST_STOP`；
-2. 任务进入 `WAITING_HUMAN`；
-3. 在一个 `keel_control` 事务中创建统一 `managed_decision_request`，绑定
-   `managed_ticket_task_id`、package digest、attempt 与 input digest；
-4. 选项固定为“停止并等待人工处理（推荐）”与“批准本次继续（仅一次）”；
-5. 本切片不调用天问自动代批，也不自动选择继续。
+- `must_stop` 或 `requested_action`：任务直接进入 `WAITING_HUMAN`，选项固定为
+  “停止并等待人工处理（推荐）”与“批准本次继续（仅一次）”；即使配置了天问 runner
+  也不会自动处理。
+- `blocked` 且带 `decision`：保留模型提出的选项，追加一个“停止并等待人工处理”
+  选项；请求初始为 `PROCESSING`。worker 用与阶段相同的 harness/model 运行天问，
+  产出 `TianwenProposal` 并交给确定性接纳器。只有 E3 项目决定或 E1 可逆委托默认
+  支撑的 `delegated` 才把任务放回 `READY`；`owner_required`、`denied`、模型超时或
+  协议错误都会升级为 `WAITING_HUMAN`，不会自动继续。
 
 本机操作员可用 `managed ticket-answer <request-id> --revision N --option ...` 答复。
-选择 `option-2` 才把任务放回 `READY`；其他选项取消任务。人工决议写入现有
-`managed_decision_resolution` 台账。
+如果该 revision 已有 `owner_required` 等决议，store 会创建 `revision + 1`、把旧
+revision 标为 `SUPERSEDED`，再写入 `human_confirmed` 决议。`must_stop` 请求仍按
+`option-2` 才继续；模型决策请求选择非“停止并等待人工处理”的选项即继续。人工
+决议与天问提案都写入现有 `managed_decision_resolution` 台账。
 
 ## 7. CLI
 
@@ -120,6 +127,7 @@ pnpm keel managed ticket-stages <task-uuid>
 pnpm keel managed ticket-tick --harness pi
 pnpm keel managed ticket-worker --once --harness pi
 pnpm keel managed ticket-answer <request-uuid> --revision 1 --option option-2
+pnpm keel managed ticket-tianwen <request-uuid> --revision 1 --harness pi --model <id>
 ```
 
 ## 8. 未完成
@@ -130,5 +138,6 @@ pnpm keel managed ticket-answer <request-uuid> --revision 1 --option option-2
 - 自动 merge / 部署仍不在本路径内；`PR_READY` 不等于已合并。
 
 验证：`ticket-protocol.test.ts` 覆盖摘要与来源完整性；`ticket-runtime.test.ts`
-覆盖正常四阶段、verify 缺证据、review 旧证据、must-stop 决策、升级隔离、
-协议不兼容、tool profile 缺失与工作树绑定。
+覆盖正常四阶段、verify 缺证据、review 旧证据、must-stop 决策、天问按项目决定
+解决偏好问题、天问不可用时升级人工、人工 revision+1 覆盖、升级隔离、协议不兼容、
+tool profile 缺失与工作树绑定。
