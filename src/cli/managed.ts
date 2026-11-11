@@ -767,9 +767,17 @@ async function runWorker(argv: readonly string[]): Promise<void> {
   }
 }
 
-async function createTicketWorker(flags: Map<string, FlagValue>): Promise<ManagedTicketWorker> {
-  const harnessRaw = optional(flags, 'harness')
-  const modelRaw = optional(flags, 'model')
+export interface ManagedWorkerSelection {
+  readonly harness?: string
+  readonly model?: string
+}
+
+/** 构造 managed 执行器；供 managed CLI 与统一 serve 共用同一启动预检。 */
+export async function createManagedTicketWorker(
+  selection: ManagedWorkerSelection = {},
+): Promise<ManagedTicketWorker> {
+  const harnessRaw = selection.harness
+  const modelRaw = selection.model
   const harness = resolveHarness(harnessRaw, process.env.KEEL_HARNESS)
   if (!harness.ok) throw new Error(harness.error.detail)
   const model = resolveOptionalModel(modelRaw, process.env.KEEL_MODEL)
@@ -792,6 +800,15 @@ async function createTicketWorker(flags: Map<string, FlagValue>): Promise<Manage
     harness: harness.value,
     ...(model.value === undefined ? {} : { model: model.value }),
     descriptor: adapter.describe(),
+  })
+}
+
+async function createTicketWorker(flags: Map<string, FlagValue>): Promise<ManagedTicketWorker> {
+  const harness = optional(flags, 'harness')
+  const model = optional(flags, 'model')
+  return createManagedTicketWorker({
+    ...(harness === undefined ? {} : { harness }),
+    ...(model === undefined ? {} : { model }),
   })
 }
 

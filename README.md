@@ -26,7 +26,7 @@
 | [`docs/plans/jstack-tianwen/`](./docs/plans/jstack-tianwen/) | 当前 jstack + 天问路线（JT-01～JT-07）；进度见 [#85](https://github.com/jionpz/keel/issues/85) |
 | [`docs/archive/`](./docs/archive/) | 立项初稿（已归档，**请勿据其实现**） |
 
-**产品状态**：历史 v0.1 闭环与连续 5 个真实任务已完成并有归档证据；当前主线是 jstack 主工作流 + 天问。JT-01 只读影子链路代码已合入 `main`（PR #84）；原生 OMP 只读链路、等待与两处 SIGKILL 恢复已通过真实验收，验收入口随本 PR 提交（[#86](https://github.com/jionpz/keel/issues/86)）。JT-02～JT-07 尚未实现，完整生产交付未完成。JT-01 的 managed 安全读取目前只支持 Linux（`/proc/self/fd`），其他平台明确拒绝。进度与命令见 [`implementation.md`](./docs/plans/jstack-tianwen/implementation.md)。当前不部署生产服务。
+**产品状态**：历史 v0.1 闭环与连续 5 个真实任务已完成并有归档证据；当前主线是 jstack 主工作流 + 天问。JT-01 至 JT-05 已合入 `main`（最近为 JT-05 PR #120），JT-06 的统一后台服务、故障恢复、备份与隔离恢复校验已实现并通过确定性回归，待提交/合入；JT-07 的真实试运行与评测尚未完成，完整生产交付未完成。JT-01 的 managed 安全读取目前只支持 Linux（`/proc/self/fd`），其他平台明确拒绝。进度与命令见 [`implementation.md`](./docs/plans/jstack-tianwen/implementation.md)。当前不部署生产服务。
 
 ## 中心不变量
 
@@ -171,6 +171,31 @@ KEEL_GITHUB_TOKEN="$(gh auth token)" keel poller --interval 60000 --concurrency 
 - `SIGTERM` / `SIGINT` 后不再调度新 issue，**所有在途驱动结束后**才退出。
   正在执行的 run 没有外部取消接口，因此不会强杀（强杀会留下 `RUNNING` run）。
 - poller 只负责扫描与调度；到期收割仍归 `keel timer-worker`，两者不互相替代。
+
+## 统一后台服务（JT-06）
+
+生产常驻入口是 `keel serve`，它默认把接入、managed 决策/执行、摘要草稿、
+timer/巡检、outbox 和 required checks 放在同一进程中；每个角色独立心跳、
+独立退避重启，任一角色异常不会拖垮其他角色。
+
+```bash
+# 默认运行 ingress；需要明确只处理已持久化 managed 工作时才用 --no-ingress
+keel serve --harness pi --model opencode-go/deepseek-v4.1-flash
+
+# 只读观察
+keel service-status
+keel service-health --json
+
+# 一致性备份与隔离恢复校验
+keel backup --out /tmp/keel-backup
+keel restore-verify --backup /tmp/keel-backup
+```
+
+`SIGTERM` / `SIGINT` 会停止新认领，等待当前 tick 或 ingress 在途驱动收尾，
+不会在模型调用或外部动作中途强杀。`restore-verify` 只做数据恢复校验，不会
+自动 replay push/PR；存在 `UNCERTAIN` 外部动作时先回查，缺凭据时明确标记
+`BLOCKED_CREDENTIALS`。详细边界见
+[`service-runtime.md`](./docs/spec/backend/service-runtime.md)。
 
 ## 开发
 

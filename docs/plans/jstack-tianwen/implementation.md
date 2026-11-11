@@ -1,9 +1,34 @@
 # 实施进度：jstack 天问后台路线
 
 **日期**：2026-11-11。协议与后台队列已实现，Linux 原生 OMP 真实烟测通过，
-提问前与答复后两处 SIGKILL 故障恢复均已实测通过；JT-02、JT-03、JT-04 已合入；
-JT-05 授权生命周期已完成代码与确定性验收，待合入；XL 未单独跑；原生 Claude 与
-JT-06～07 尚未完成，JT-01 仍为影子模式，不能把 JT-01 当作完整交付。
+提问前与答复后两处 SIGKILL 故障恢复均已实测通过；JT-02、JT-03、JT-04、JT-05
+已合入；JT-06 统一服务、恢复和备份校验已实现并通过确定性回归，待提交/合入；
+XL 未单独跑；原生 Claude 与 JT-07 尚未完成，JT-01 仍为影子模式，不能把 JT-01
+当作完整交付。
+
+## JT-06 统一后台、故障恢复和备份（已实现，待合入）
+
+`ai/jt06-service` 已实现：
+
+- `keel serve` 默认统一运行 ingress、天问/managed、摘要草稿、timer/巡检、
+  outbox 与 required checks；`--no-ingress` 可显式只处理持久化 managed 工作；
+- `worker_health` 增量记录 `instance_id/pid/status/reason_code/detail/checkpoint/
+  started_at/last_success_at`；每个角色独立退避重启，`service` 自身周期心跳避免
+  长 tick 被误判过期；
+- ticket/workflow/outbox claim 按项目先取最久未推进的一条，再全局取最旧，
+  防止单项目垄断；既有租约/fencing 仍是提交前事实边界；
+- SIGTERM/SIGINT 停止新认领，等待当前 tick/在途驱动收尾，再写 `STOPPED`、释放锁；
+- `keel service-status` / `service-health` 为只读快照，输出必需角色、原因码、
+  队列、待答问题、dead-letter 与 uncertain/blocking 动作；
+- `keel backup` 在 REPEATABLE READ 导出的 PostgreSQL snapshot 上 `pg_dump`，
+  复制被引用 blob 并写内容摘要 manifest；
+- `keel restore-verify` 创建隔离库恢复，重新校验包摘要、队列、问题和 blob，
+  对 `EXECUTING/UNCERTAIN`、缺 GitHub 凭据、待人工分别给出阻塞结论，不自动重放。
+
+规范见 [service-runtime.md](../../spec/backend/service-runtime.md)。迁移
+`migrations/1000000000020_service-runtime.sql` 已在全新 PostgreSQL 库执行
+`up → down 1 → up`。确定性测试覆盖运行时故障隔离/退避/SIGTERM、健康只读、
+公平调度，以及真实备份/隔离恢复/篡改/缺凭据/uncertain 场景。
 
 ## JT-05 授权生命周期与人工控制（已实现，待合入）
 

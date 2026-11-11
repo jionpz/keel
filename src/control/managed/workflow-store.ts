@@ -112,31 +112,38 @@ export async function claimManagedWorkflow(
   return asRole('keel_control', async (c) => {
     const candidates = await c.query<ManagedWorkflow>(
       `SELECT w.* FROM managed_workflow w
-       WHERE ($1::uuid IS NULL OR w.id=$1)
-         AND (
-           w.status IN ('ROUTING','READY')
-           OR (w.status='RUNNING' AND w.lease_until <= clock_timestamp())
-           OR (w.status='WAITING_HUMAN' AND EXISTS (
-             SELECT 1 FROM managed_workflow_node n
-             JOIN managed_ticket_task t ON t.id=n.ticket_task_id
-             WHERE n.workflow_id=w.id AND n.graph_version=w.current_graph_version
-               AND t.status IN (
-                 'READY','RUNNING','PR_READY','DONE','PAUSED','PR_CHECKS_FAILED',
-                 'FAILED','CANCELLED'
-               )
-           ))
-           OR (w.status='WAITING_GATEWAY' AND EXISTS (
-             SELECT 1 FROM managed_workflow_node n
-             JOIN managed_ticket_task t ON t.id=n.ticket_task_id
-             WHERE n.workflow_id=w.id AND n.graph_version=w.current_graph_version
-               AND (
-                 t.status IN ('PR_READY','DONE','PAUSED','PR_CHECKS_FAILED','FAILED','CANCELLED')
-                 OR (w.completion_target='branch_ready' AND t.status='WAITING_GATEWAY')
-               )
-           ))
-         )
+       JOIN (
+         SELECT DISTINCT ON (candidate.repo_id) candidate.id
+         FROM managed_workflow candidate
+         WHERE ($1::uuid IS NULL OR candidate.id=$1)
+           AND (
+             candidate.status IN ('ROUTING','READY')
+             OR (candidate.status='RUNNING' AND candidate.lease_until <= clock_timestamp())
+             OR (candidate.status='WAITING_HUMAN' AND EXISTS (
+               SELECT 1 FROM managed_workflow_node n
+               JOIN managed_ticket_task t ON t.id=n.ticket_task_id
+               WHERE n.workflow_id=candidate.id
+                 AND n.graph_version=candidate.current_graph_version
+                 AND t.status IN (
+                   'READY','RUNNING','PR_READY','DONE','PAUSED','PR_CHECKS_FAILED',
+                   'FAILED','CANCELLED'
+                 )
+             ))
+             OR (candidate.status='WAITING_GATEWAY' AND EXISTS (
+               SELECT 1 FROM managed_workflow_node n
+               JOIN managed_ticket_task t ON t.id=n.ticket_task_id
+               WHERE n.workflow_id=candidate.id
+                 AND n.graph_version=candidate.current_graph_version
+                 AND (
+                   t.status IN ('PR_READY','DONE','PAUSED','PR_CHECKS_FAILED','FAILED','CANCELLED')
+                   OR (candidate.completion_target='branch_ready' AND t.status='WAITING_GATEWAY')
+                 )
+             ))
+           )
+         ORDER BY candidate.repo_id,candidate.updated_at,candidate.id
+       ) fair ON fair.id=w.id
        ORDER BY w.updated_at,w.id
-       FOR UPDATE SKIP LOCKED
+       FOR UPDATE OF w SKIP LOCKED
        LIMIT 1`,
       [workflowId ?? null],
     )
