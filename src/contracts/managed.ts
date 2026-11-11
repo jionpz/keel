@@ -4,6 +4,7 @@ import type {
   JstackTicketPackage,
   ManagedActionIntent,
   ManagedTicketStageResult,
+  TianwenDecision,
 } from '../generated/managed.js'
 import type { ResultWithUsage } from './errors.js'
 import type { Context, Usage } from './types.js'
@@ -166,6 +167,21 @@ export interface ManagedTicketStageInput {
 export type ManagedTicketStageRunner = (input: ManagedTicketStageInput) => Promise<
   ResultWithUsage<{
     readonly output: ManagedTicketStageResult
+    readonly usage: Usage
+  }>
+>
+
+export interface ManagedTicketDecisionRunInput {
+  readonly attempt_id: string
+  readonly task_id: string
+  readonly repo_id: string
+  readonly workspace_path: string
+  readonly context: Context
+}
+
+export type ManagedTicketDecisionRunner = (input: ManagedTicketDecisionRunInput) => Promise<
+  ResultWithUsage<{
+    readonly output: TianwenDecision
     readonly usage: Usage
   }>
 >

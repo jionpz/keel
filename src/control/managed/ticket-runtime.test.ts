@@ -5,12 +5,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+import { makeError } from '../../contracts/errors.js'
 import type { ManagedTicketStageRunner } from '../../contracts/managed.js'
 import { ZERO_USAGE } from '../../contracts/types.js'
 import { asOwner, asRole, closePool } from '../../fact/db.js'
 import type { ManagedTicketStageResult } from '../../generated/managed.js'
 import { sha256Text } from '../../shared/canonical-json.js'
-import { answerManagedTicketDecision } from './decision-store.js'
+import { answerManagedTicketDecision, recordProjectDecision } from './decision-store.js'
 import {
   createManagedTicketTask,
   getManagedTicket,
@@ -179,6 +180,111 @@ function happyWorker(root: string): ManagedTicketWorker {
 }
 
 describe('managed ticket runtime', () => {
+  it('天问按项目决定解决偏好问题后把 ticket 放回 READY', async () => {
+    const { repoId, taskId } = await seed()
+    const decisionId = randomUUID()
+    const recorded = await recordProjectDecision({
+      schema_version: '1.0',
+      id: decisionId,
+      project_id: repoId,
+      decision_key: 'ticket.e2e.style',
+      version: 1,
+      statement: 'E2E 文档使用中文',
+      selected_option_id: 'option-1',
+      options: [
+        { id: 'option-1', text: '使用中文' },
+        { id: 'option-2', text: '使用英文' },
+      ],
+      scope: {
+        decision_kinds: ['preference'],
+        actions: ['ticket_stage'],
+        resource_selectors: ['*'],
+        environments: ['local'],
+        reversibilities: ['reversible'],
+      },
+      source_type: 'owner_confirmed',
+      source_ref: 'e2e-fixture',
+      created_by: 'owner:test',
+      valid_from: new Date(Date.now() - 60_000).toISOString(),
+      created_at: new Date().toISOString(),
+    })
+    expect(recorded.ok).toBe(true)
+    if (!recorded.ok) throw new Error(recorded.error.detail)
+
+    const worker: ManagedTicketWorker = {
+      ...workerWith(async () => ({
+        schema_version: '1.0',
+        stage: 'execute',
+        status: 'blocked',
+        summary: '需要确认文档语言',
+        decision: {
+          decision_key: 'ticket.e2e.style',
+          kind: 'preference',
+          question: 'E2E 文档使用哪种语言？',
+          options: ['使用中文', '使用英文'],
+          action_category: 'ticket_stage',
+          impact: {
+            environment: 'local',
+            reversibility: 'reversible',
+            affected_resources: ['fixture'],
+          },
+        },
+      })),
+      decide: async () => ({
+        ok: true,
+        value: {
+          output: {
+            recommendation: 'answer',
+            answer_option_id: 'option-1',
+            rationale: '项目决定要求使用中文',
+            basis_refs: [{ kind: 'project_decision', id: decisionId, version: 1 }],
+            assumptions: [],
+            alternatives: [],
+            unresolved_conflicts: [],
+            missing_authority: [],
+          },
+          usage: ZERO_USAGE,
+        },
+      }),
+    }
+    const paused = await tickManagedTicket(worker, taskId)
+    if (!paused.ok) throw new Error(paused.error.detail)
+    expect(paused.ok).toBe(true)
+    expect(paused.value?.status).toBe('READY')
+    const task = await getManagedTicket(taskId)
+    if (!task.ok) throw new Error(task.error.detail)
+    expect(task.value.status).toBe('READY')
+    expect(task.value.pending_decision_id).toBeNull()
+    const request = (
+      await asRole('keel_control', (c) =>
+        c.query<{ id: string; status: string; options: unknown }>(
+          'SELECT id,status,options FROM managed_decision_request WHERE managed_ticket_task_id=$1',
+          [taskId],
+        ),
+      )
+    ).rows[0]
+    expect(request?.status).toBe('RESOLVED')
+    expect(request?.options).toMatchObject([
+      { id: 'option-1', text: '使用中文' },
+      { id: 'option-2', text: '使用英文' },
+      { id: 'option-3', text: '停止并等待人工处理' },
+    ])
+    const resolution = (
+      await asRole('keel_control', (c) =>
+        c.query<{ disposition: string; answer: string }>(
+          `SELECT disposition,answer FROM managed_decision_resolution
+           WHERE request_id=$1`,
+          [request?.id],
+        ),
+      )
+    ).rows[0]
+    expect(resolution?.disposition).toBe('delegated')
+    expect(resolution?.answer).toBe('使用中文')
+    const stages = await listManagedTicketStages(taskId)
+    expect(stages[0]?.status).toBe('MUST_STOP')
+    expect(stages[0]?.result).toMatchObject({ decision: { decision_key: 'ticket.e2e.style' } })
+  })
+
   it('按固定包执行 execute→verify→review→land，并持久化证据链', async () => {
     const { root, taskId } = await seed()
     const worker = happyWorker(root)
@@ -288,6 +394,96 @@ describe('managed ticket runtime', () => {
     expect(resumed.ok).toBe(true)
     if (!resumed.ok) throw new Error(resumed.error.detail)
     expect(resumed.value?.status).toBe('READY')
+  })
+
+  it('must-stop 即使提供了天问 runner 也不会自动处理', async () => {
+    const { taskId } = await seed()
+    let called = 0
+    const worker: ManagedTicketWorker = {
+      ...workerWith(async () =>
+        success('execute', {
+          status: 'must_stop',
+          requested_action: { action: 'sudo apt-get update', reason: 'fixture' },
+        }),
+      ),
+      decide: async () => {
+        called++
+        return { ok: false, error: makeError('RUN_TIMEOUT', 'must not run'), usage: ZERO_USAGE }
+      },
+    }
+    const paused = await tickManagedTicket(worker, taskId)
+    if (!paused.ok) throw new Error(paused.error.detail)
+    expect(paused.value?.status).toBe('WAITING_HUMAN')
+    expect(called).toBe(0)
+    const task = await getManagedTicket(taskId)
+    if (!task.ok) throw new Error(task.error.detail)
+    expect(task.value.last_error).toBe('MUST_STOP')
+  })
+
+  it('天问不可用时升级人工并保留 owner_required 决议', async () => {
+    const { taskId } = await seed()
+    const worker: ManagedTicketWorker = {
+      ...workerWith(async () => ({
+        schema_version: '1.0',
+        stage: 'execute',
+        status: 'blocked',
+        summary: '需要偏好决定',
+        decision: {
+          decision_key: 'ticket.e2e.unavailable',
+          kind: 'preference',
+          question: '选哪个？',
+          options: ['A', 'B'],
+          action_category: 'ticket_stage',
+          impact: {
+            environment: 'local',
+            reversibility: 'reversible',
+            affected_resources: ['fixture'],
+          },
+        },
+      })),
+      decide: async () => ({
+        ok: false,
+        error: makeError('RUN_TIMEOUT', 'fixture timeout'),
+        usage: ZERO_USAGE,
+      }),
+    }
+    const paused = await tickManagedTicket(worker, taskId)
+    if (!paused.ok) throw new Error(paused.error.detail)
+    expect(paused.value?.status).toBe('WAITING_HUMAN')
+    const task = await getManagedTicket(taskId)
+    if (!task.ok) throw new Error(task.error.detail)
+    expect(task.value.status).toBe('WAITING_HUMAN')
+    const request = (
+      await asRole('keel_control', (c) =>
+        c.query<{ id: string; revision: number; status: string }>(
+          'SELECT id,revision,status FROM managed_decision_request WHERE managed_ticket_task_id=$1',
+          [taskId],
+        ),
+      )
+    ).rows[0]
+    expect(request?.status).toBe('WAITING_HUMAN')
+    const resolution = (
+      await asRole('keel_control', (c) =>
+        c.query<{ disposition: string }>(
+          'SELECT disposition FROM managed_decision_resolution WHERE request_id=$1',
+          [request?.id],
+        ),
+      )
+    ).rows[0]
+    expect(resolution?.disposition).toBe('owner_required')
+    if (request === undefined) throw new Error('missing request')
+    const answered = await answerManagedTicketDecision(
+      request.id,
+      request.revision,
+      'option-2',
+      new Date().toISOString(),
+    )
+    if (!answered.ok) throw new Error(answered.error.detail)
+    expect(answered.value.taskStatus).toBe('READY')
+    expect(answered.value.resolution.request_revision).toBe(2)
+    const after = await getManagedTicket(taskId)
+    if (!after.ok) throw new Error(after.error.detail)
+    expect(after.value.status).toBe('READY')
   })
 
   it('工作流升级不影响已绑定任务，任务仍使用固定包摘要', async () => {

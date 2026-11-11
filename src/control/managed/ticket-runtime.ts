@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import type { PoolClient } from 'pg'
 import { err, makeError, ok, type Result } from '../../contracts/errors.js'
 import type {
+  ManagedTicketDecisionRunner,
   ManagedTicketStageInput,
   ManagedTicketStageName,
   ManagedTicketStageRecord,
@@ -21,7 +22,11 @@ import type { JstackTicketPackage, ManagedTicketStageResult } from '../../genera
 import { MANAGED_SCHEMAS } from '../../generated/managed.js'
 import { canonicalJson, sha256CanonicalJson, sha256Text } from '../../shared/canonical-json.js'
 import { enqueueActionIntent, getRepoBinding } from './action-store.js'
-import { openDecisionRequestForTicket } from './decision-store.js'
+import {
+  escalateDecisionRequest,
+  getDecisionRequest,
+  openDecisionRequestForTicket,
+} from './decision-store.js'
 import {
   TICKET_STAGE_ORDER,
   ticketPackageDigest,
@@ -39,6 +44,7 @@ import {
   ticketEvent,
   withManagedTicketClaim,
 } from './ticket-store.js'
+import { runTicketTianwen } from './ticket-tianwen.js'
 import {
   commitExists,
   diffDigest,
@@ -50,6 +56,7 @@ export interface ManagedTicketWorker {
   readonly harness: string
   readonly toolInventory: readonly string[]
   readonly run: ManagedTicketStageRunner
+  readonly decide?: ManagedTicketDecisionRunner
 }
 
 export interface CreateManagedTicketOptions {
@@ -501,8 +508,15 @@ async function pauseForDecision(
     (requestedAction === null
       ? `阶段 ${result.stage} 阻塞：${result.summary}`
       : `阶段 ${result.stage} 请求执行未授权动作：${requestedAction}`)
-  const options = ['停止并等待人工处理（推荐）', '批准本次继续（仅一次）']
-  const code = mustStop ? 'MUST_STOP' : 'UNAUTHORIZED_ACTION'
+  const options =
+    mustStop || requestedAction !== null || decision === undefined
+      ? ['停止并等待人工处理（推荐）', '批准本次继续（仅一次）']
+      : [...decision.options.slice(0, 11), '停止并等待人工处理']
+  const code = mustStop
+    ? 'MUST_STOP'
+    : requestedAction !== null
+      ? 'UNAUTHORIZED_ACTION'
+      : 'DECISION_REQUIRED'
   try {
     const paused = await withManagedTicketClaim(claim, async (c) => {
       const request = await openDecisionRequestForTicket(
@@ -524,6 +538,7 @@ async function pauseForDecision(
           workflow_digest: claim.task.package_digest,
           constraints: [],
           missing_information: [],
+          initial_status: mustStop || requestedAction !== null ? 'WAITING_HUMAN' : 'PROCESSING',
         },
         new Date().toISOString(),
         c,
@@ -570,6 +585,32 @@ async function pauseForDecision(
     )
   }
   return ok({ taskId: claim.task.id, status: 'WAITING_HUMAN', stage: claim.task.current_stage })
+}
+
+async function resumeAfterDecision(
+  worker: ManagedTicketWorker,
+  paused: Result<ManagedTicketTickResult>,
+  taskId: string,
+): Promise<Result<ManagedTicketTickResult>> {
+  if (!paused.ok || paused.value.status !== 'WAITING_HUMAN') return paused
+  const task = await getManagedTicketTask(taskId)
+  if (task === null || task.pending_decision_id === null || task.pending_decision_revision === null)
+    return paused
+  const request = await getDecisionRequest(task.pending_decision_id, task.pending_decision_revision)
+  if (request === null || request.status !== 'PROCESSING') return paused
+  if (worker.decide === undefined) {
+    const escalated = await escalateDecisionRequest(
+      request.id,
+      request.revision,
+      'worker 未提供天问 runner',
+      new Date().toISOString(),
+    )
+    if (!escalated.ok) return escalated
+    return paused
+  }
+  const decided = await runTicketTianwen(worker.decide, request.id, request.revision)
+  if (!decided.ok) return decided
+  return ok({ taskId, status: decided.value.status, stage: paused.value.stage })
 }
 
 export async function tickManagedTicket(
@@ -720,7 +761,7 @@ export async function tickManagedTicket(
   }
   const requestedAction = result.requested_action?.action ?? null
   if (result.status === 'must_stop' || result.status === 'blocked' || requestedAction !== null) {
-    return pauseForDecision(
+    const paused = await pauseForDecision(
       claim,
       ticketPackage,
       stageId,
@@ -730,6 +771,7 @@ export async function tickManagedTicket(
       result.status === 'must_stop' ? 'must_stop' : 'blocked',
       requestedAction,
     )
+    return resumeAfterDecision(worker, paused, claim.task.id)
   }
   if (!after.value.clean) return failStage(claim, stageId, 'WORKTREE_DIRTY', usage, true)
   if (!changedDiff.ok) return failStage(claim, stageId, 'WORKSPACE_ERROR', usage, true)
