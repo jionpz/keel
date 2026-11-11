@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { asOwner, asRole, closePool } from '../../fact/db.js'
+import { asOwner, asRole, closePool, getPool } from '../../fact/db.js'
 import type {
   DecisionRequest,
   DelegationPolicyVersion,
@@ -114,8 +114,11 @@ function decision(projectId: string, over: Partial<ProjectDecision> = {}): Proje
   }
 }
 
-function policy(projectId: string): DelegationPolicyVersion {
-  return {
+function policy(
+  projectId: string,
+  over: Partial<DelegationPolicyVersion> = {},
+): DelegationPolicyVersion {
+  const base: DelegationPolicyVersion = {
     schema_version: '1.0',
     id: randomUUID(),
     policy_id: 'reversible.defaults',
@@ -146,6 +149,7 @@ function policy(projectId: string): DelegationPolicyVersion {
     ],
     created_at: PAST,
   }
+  return { ...base, ...over }
 }
 
 function proposal(
@@ -272,6 +276,28 @@ describe('决策台账 store', () => {
     expect(resolved.value.delegation_policy_id).toBe(configured.id)
   })
 
+  it('未显式替代的旧策略仍参与最严规则，不能被新版本忽略', async () => {
+    const seed = await seedQuestion('报告使用哪种语言？', ['中文', '英文'])
+    const req = await openRequest(seed)
+    const relaxed = policy(seed.repoId)
+    expect((await recordDelegationPolicy(relaxed)).ok).toBe(true)
+    const [rule] = relaxed.rules
+    if (rule === undefined) throw new Error('测试策略缺少规则')
+    const stricter = policy(seed.repoId, {
+      version: 2,
+      rules: [{ ...rule, id: 'report-language-owner', mode: 'owner_required' }],
+    })
+    expect((await recordDelegationPolicy(stricter)).ok).toBe(true)
+
+    const resolved = await submitAndResolve(
+      req,
+      proposal(req, [{ kind: 'delegation_policy', id: relaxed.id, version: 1 }]),
+    )
+    expect(resolved.ok).toBe(true)
+    if (!resolved.ok) return
+    expect(resolved.value.disposition).toBe('owner_required')
+  })
+
   it('跨项目决定不会进入当前项目候选，自动代答失败为 owner_required', async () => {
     const a = await seedQuestion('项目 A 报告语言？', ['中文', '英文'])
     const b = await seedQuestion('项目 B 报告语言？', ['中文', '英文'])
@@ -339,6 +365,31 @@ describe('决策台账 store', () => {
       { id: first.id, superseded_by: second.id },
       { id: second.id, superseded_by: null },
     ])
+  })
+
+  it('撤销与接纳作用域锁串行化，不会在加锁后穿透', async () => {
+    const seed = await seedQuestion('报告使用哪种语言？', ['中文', '英文'])
+    const target = decision(seed.repoId)
+    expect((await recordProjectDecision(target)).ok).toBe(true)
+
+    const client = await getPool().connect()
+    let revokeSettled = false
+    try {
+      await client.query('BEGIN')
+      await client.query('SET LOCAL ROLE keel_control')
+      await client.query('SELECT managed_lock_decision_scope($1)', [seed.repoId])
+      const revoke = revokeProjectDecision(target.id, 'owner', '并发撤销', NOW).then((result) => {
+        revokeSettled = true
+        return result
+      })
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      expect(revokeSettled).toBe(false)
+      await client.query('COMMIT')
+      expect((await revoke).ok).toBe(true)
+    } finally {
+      await client.query('ROLLBACK').catch(() => undefined)
+      client.release()
+    }
   })
 
   it('提案 revision 或 digest 失配时只记录拒绝，不写提案', async () => {

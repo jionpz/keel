@@ -70,9 +70,15 @@ request 的 `attempt_id` 指向产生问题的 `managed_attempt`，把决策尝�
 ## 并发语义
 
 接纳在单个 `keel_control` 事务内重新读取当前项目决定与全部当前策略并调用纯函数。
-决议插入使用 `UNIQUE (request_id, request_revision)`；只有插入成功的事务能继续更新
-request 状态。并发提交同一 revision 时一个成功，其余返回 `CONFLICT`，不会产生第二条决议。
-人工答复与 worker 都先锁 task；同一问题只有一个事务能完成状态迁移。
+读取前先 `FOR UPDATE` 锁 request，并以 `FOR SHARE` 锁项目决定、所有未撤销/未替代的
+策略版本与任务行；撤销、替代和取消路径使用 `FOR UPDATE`。因此撤销/替代/取消与
+接纳串行化，不会出现「读取时仍有效、落决议时已被撤销」的窗口。
+
+所有未撤销、未被显式替代的策略版本都参与最严规则，不能只取同一 `policy_id` 的
+最高版本；旧版本只有在被新版本显式替代后才失效。决议插入使用
+`UNIQUE (request_id, request_revision)`；只有插入成功的事务能继续更新 request 状态。
+并发提交同一 revision 时一个成功，其余返回 `CONFLICT`，不会产生第二条决议。
+人工答复与 worker 都先锁 request 和 task；同一问题只有一个事务能完成状态迁移。
 
 ## 人工覆盖与纠正
 
