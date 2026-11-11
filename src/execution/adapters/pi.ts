@@ -41,6 +41,11 @@ export interface PiOptions {
   readonly trustedTools?: readonly string[]
   readonly autoSubagents?: boolean
   readonly spawnFn?: typeof spawn
+  /**
+   * 显式子进程环境。省略时沿用 Node 的默认继承行为，服务于本机普通 CLI；
+   * managed 写执行必须传入 allowlist 环境。
+   */
+  readonly env?: NodeJS.ProcessEnv
   readonly interruptKillTimeoutMs?: number
 }
 
@@ -283,6 +288,7 @@ export class PiAdapter implements HarnessAdapter {
       (chunk) => {
         for (const event of parser.push(chunk)) emitProgress(event)
       },
+      this.opts.env,
     )
 
     state.proc = null
@@ -581,12 +587,14 @@ function run(
   spawnFn: typeof spawn = spawn,
   onSpawn?: (p: ChildProcess) => void,
   onChunk?: (chunk: string) => void,
+  env?: NodeJS.ProcessEnv,
 ): Promise<ProcResult> {
   return new Promise((resolve) => {
     const p = spawnFn(bin, [...args], {
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: true,
+      ...(env === undefined ? {} : { env }),
     })
     onSpawn?.(p)
     let stdout = ''

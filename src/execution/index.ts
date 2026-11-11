@@ -22,4 +22,8 @@ export {
   type IsolationViolation,
   inspectWorkspaceIsolation,
   isForbiddenExecutorEnvKey,
+  type ManagedExecutorEnv,
+  type ManagedHarness,
+  type PrepareManagedEnvOptions,
+  prepareManagedExecutorEnv,
 } from './isolation/index.js'
