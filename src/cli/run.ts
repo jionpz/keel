@@ -36,7 +36,7 @@ export const HELP = `keel — AI Engineering Runtime CLI
   keel <command> [args]
 
 命令:
-  managed <investigate|status|questions|answer|worker|ticket-*>   jstack 调查与单 ticket 阶段执行（JT-01/02C）
+  managed <investigate|status|questions|answer|worker|ticket-*|action-*>   调查、ticket 阶段与受控动作网关（JT-01/02C/02D）
   console                          只读 Web 控制台(默认 http://127.0.0.1:4321)
   timer-worker [--interval <ms>]   到期收割 timer(默认单次;--interval 常驻)
   run-task <taskId> [--max-steps N] [--ci passed|failed|real] [--model <id>] [--harness omp|claude|pi] [--wall-clock <秒>]   驱动单 task 到终态

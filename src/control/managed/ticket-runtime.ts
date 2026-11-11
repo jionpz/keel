@@ -20,6 +20,7 @@ import { asRole } from '../../fact/db.js'
 import type { JstackTicketPackage, ManagedTicketStageResult } from '../../generated/managed.js'
 import { MANAGED_SCHEMAS } from '../../generated/managed.js'
 import { canonicalJson, sha256CanonicalJson, sha256Text } from '../../shared/canonical-json.js'
+import { enqueueActionIntent, getRepoBinding } from './action-store.js'
 import { openDecisionRequestForTicket } from './decision-store.js'
 import {
   TICKET_STAGE_ORDER,
@@ -130,6 +131,25 @@ function roleInstruction(stage: ManagedTicketStageName): string {
         ' push/PR 将由后续受控网关执行。'
       )
   }
+}
+
+function ticketPrBody(input: {
+  readonly ticketId: string
+  readonly baselineCommit: string
+  readonly headCommit: string
+  readonly diffDigest: string
+  readonly modelBody: string
+}): string {
+  const model = input.modelBody.slice(0, 12000)
+  const evidence = [
+    '',
+    '---',
+    `Keel ticket: ${input.ticketId}`,
+    `Baseline: ${input.baselineCommit}`,
+    `Head: ${input.headCommit}`,
+    `Diff: ${input.diffDigest}`,
+  ].join('\n')
+  return `${model}${evidence}`.slice(0, 16000)
 }
 
 function openFindings(result: unknown): readonly string[] {
@@ -679,6 +699,11 @@ export async function tickManagedTicket(
     claim.task.baseline_commit,
     after.value.head,
   )
+  let repoBinding: { readonly remote_url: string; readonly default_branch: string } | null = null
+  if (stage === 'land') {
+    repoBinding = await getRepoBinding(claim.task.repo_id)
+    if (repoBinding === null) return failStage(claim, stageId, 'WORKSPACE_ERROR', usage, true)
+  }
   const evidence = {
     git: {
       baseline_commit: claim.task.baseline_commit,
@@ -762,6 +787,14 @@ export async function tickManagedTicket(
     const landedCommit = await resolveCommit(claim.task.worktree_path, result.land.commit)
     if (landedCommit !== after.value.head || after.value.head !== inputCommit)
       return failStage(claim, stageId, 'STALE_EVIDENCE', usage, true)
+    if (result.land.branch !== after.value.branch)
+      return failStage(claim, stageId, 'STALE_EVIDENCE', usage, true)
+    if (!result.land.branch.startsWith('ai/'))
+      return failStage(claim, stageId, 'STAGE_GATE_FAILED', usage, true)
+    if (repoBinding === null || result.land.branch === repoBinding.default_branch)
+      return failStage(claim, stageId, 'STAGE_GATE_FAILED', usage, true)
+    if (result.land.action_intent.remote !== 'origin')
+      return failStage(claim, stageId, 'STAGE_GATE_FAILED', usage, true)
   }
 
   const nextStage = ticketStageAt(ticketStageIndex(stage) + 1)
@@ -799,12 +832,33 @@ export async function tickManagedTicket(
         })
         return 'READY'
       }
-      if (stage === 'land') {
-        await c.query(
-          `UPDATE managed_ticket_task SET status='DONE',handoff=$2::jsonb,lease_token=NULL,
-             lease_until=NULL,last_error=NULL,updated_at=now() WHERE id=$1`,
-          [claim.task.id, JSON.stringify(result.land)],
-        )
+      if (stage === 'land' && result.land !== undefined && repoBinding !== null) {
+        await enqueueActionIntent(c, {
+          task_id: claim.task.id,
+          project_id: claim.task.repo_id,
+          repo_id: claim.task.repo_id,
+          remote_url: repoBinding.remote_url,
+          base_branch: repoBinding.default_branch,
+          head_branch: result.land.branch,
+          head_sha: after.value.head,
+          diff_digest: changedDiff.value,
+          environment: 'production',
+          reversibility: 'reversible',
+          affected_resources: [
+            repoBinding.remote_url,
+            `branch:${result.land.branch}`,
+            `base:${repoBinding.default_branch}`,
+          ],
+          pr_title: result.land.action_intent.pr_title,
+          pr_body: ticketPrBody({
+            ticketId: claim.task.ticket_id,
+            baselineCommit: claim.task.baseline_commit,
+            headCommit: after.value.head,
+            diffDigest: changedDiff.value,
+            modelBody: result.land.action_intent.pr_body,
+          }),
+          created_at: new Date().toISOString(),
+        })
         await ticketEvent(c, claim.task.id, 'ManagedTicketCompleted', {
           stageId,
           stage,
@@ -812,7 +866,7 @@ export async function tickManagedTicket(
           handoff: result.land,
           completionTarget: ticketPackage.completion_target,
         })
-        return 'DONE'
+        return 'WAITING_GATEWAY'
       }
       await c.query(
         `UPDATE managed_ticket_task SET status='READY',current_stage=$2,lease_token=NULL,
@@ -830,7 +884,7 @@ export async function tickManagedTicket(
       return 'READY'
     })
     if (!persisted.ok) return persisted
-    const status = stage === 'land' ? 'DONE' : 'READY'
+    const status = persisted.value
     return ok({ taskId: claim.task.id, status, stage })
   } catch {
     return failStage(claim, stageId, 'PERSISTENCE_ERROR', usage, true)

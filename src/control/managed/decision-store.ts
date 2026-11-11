@@ -118,6 +118,23 @@ async function decisionsForProject(c: PoolClient, projectId: string): Promise<Pr
   return rows.rows.map((row) => row.body as ProjectDecision)
 }
 
+export async function listDelegationPoliciesInTx(
+  c: PoolClient,
+  projectId: string,
+): Promise<DelegationPolicyVersion[]> {
+  const rows = await c.query<{ body: unknown }>(
+    `SELECT ${POLICY_JSON} WHERE p.project_id=$1 ORDER BY p.policy_id, p.version`,
+    [projectId],
+  )
+  return rows.rows.map((row) => row.body as DelegationPolicyVersion)
+}
+
+export async function listDelegationPolicies(
+  projectId: string,
+): Promise<DelegationPolicyVersion[]> {
+  return asRole('keel_control', (c) => listDelegationPoliciesInTx(c, projectId))
+}
+
 async function currentPolicies(
   c: PoolClient,
   projectId: string,
