@@ -6,6 +6,26 @@ on:
   pull_request:
 
 jobs:
+  isolation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: docker version
+
+      - run: pnpm run check:isolation
+
   check:
     runs-on: ubuntu-latest
 
@@ -40,7 +60,7 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # CI 只跑这一条命令 —— 与本地完全一致。
+      # check job 只跑这一条聚合命令 —— 与本地完全一致。
       #
       # 这是刻意的：若 CI 与本地跑的是不同命令，迟早会出现「本地过了 CI 红」，
       # 而人们解决这种摩擦的方式通常是放宽 CI。

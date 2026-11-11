@@ -8,3 +8,18 @@
  * v0.1 将在此实现 SessionManager 与各 HarnessAdapter。
  */
 export const PLANE = 'execution' as const
+
+export {
+  buildExecutorEnv,
+  EXECUTOR_ENV_ALLOWLIST,
+  type ExecutorEnvOptions,
+  findExecutorEnvViolations,
+  findIsolationViolations,
+  type IsolatedContainerSpec,
+  type IsolationMount,
+  type IsolationPolicy,
+  type IsolationTmpfs,
+  type IsolationViolation,
+  inspectWorkspaceIsolation,
+  isForbiddenExecutorEnvKey,
+} from './isolation/index.js'
