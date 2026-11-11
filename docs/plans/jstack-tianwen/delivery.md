@@ -1,6 +1,6 @@
 # 交付、生产准入与运维
 
-**状态**：JT-01 的只读影子协议与后台队列已合入 `main`（PR #84），原生 OMP 真实模型烟测与提问前/答复后两处 SIGKILL 故障恢复均已实测通过；JT-02 已合入，JT-03 已实现并通过专用库验收；JT-01 仍为影子模式，原生 Claude 未验，JT-04 至 JT-07 与 7 天真实试运行未完成。见[实施进度与可运行命令](./implementation.md)。尚未部署生产服务。
+**状态**：JT-01 的只读影子协议与后台队列已合入 `main`（PR #84），原生 OMP 真实模型烟测与提问前/答复后两处 SIGKILL 故障恢复均已实测通过；JT-02、JT-03 已合入；JT-01 仍为影子模式，原生 Claude 未验，JT-04 至 JT-07 与 7 天真实试运行未完成。见[实施进度与可运行命令](./implementation.md)。尚未部署生产服务。
 
 阅读顺序：[主方案](./README.md) → [契约](./contracts.md) → 本页 → [验收](./acceptance.md)。本页的命令和配置是待实现接口建议，不可复制为现有能力。
 
@@ -28,7 +28,7 @@
 | 总览 | [#85](https://github.com/jionpz/keel/issues/85) | 进度与原生依赖总览 |
 | JT-01 | [#86](https://github.com/jionpz/keel/issues/86) | PR #84 已合入；原生 OMP 烟测与两处故障恢复已验；原生 Claude 未验 |
 | JT-02 | [#90](https://github.com/jionpz/keel/issues/90) | PR #116 已合入；原生 OMP 真实 E2E 已验证 |
-| JT-03 | [#91](https://github.com/jionpz/keel/issues/91) | 已实现并通过专用库验收；待 PR/合并 |
+| JT-03 | [#91](https://github.com/jionpz/keel/issues/91) | PR #117 已合并（merge `72d92b3`）；#91 已关闭 |
 | JT-04 | [#92](https://github.com/jionpz/keel/issues/92) | 依赖 JT-02；未实施 |
 | JT-05 | [#93](https://github.com/jionpz/keel/issues/93) | 依赖 JT-03、JT-04；未实施 |
 | JT-06 | [#94](https://github.com/jionpz/keel/issues/94) | 依赖 JT-04、JT-05；未实施 |
