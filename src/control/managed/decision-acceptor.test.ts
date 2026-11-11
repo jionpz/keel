@@ -591,7 +591,57 @@ describe('确定性决策接纳器', () => {
     expect(denied.ok && denied.value.disposition).toBe('denied')
   })
 
-  it('approval 类问题没有执行网关核对时必须人工决定', () => {
+  it('approval 类问题可由精确委托默认代批，实际执行仍交网关复核', () => {
+    const req = request({ kind: 'approval' })
+    const p = proposal(req, {
+      basis_refs: [{ kind: 'delegation_policy', id: POLICY_ID, version: 1 }],
+    })
+    const result = acceptDecision(
+      input({
+        request: req,
+        proposal: p,
+        policy: policy({
+          rules: [
+            {
+              ...policy().rules[0],
+              decision_kinds: ['approval'],
+              resource_selectors: ['docs/report.md'],
+            },
+          ],
+        }),
+      }),
+    )
+    expect(result.ok && result.value.disposition).toBe('delegated')
+    if (result.ok) {
+      expect(result.value.evidence_grade).toBe('E1')
+      expect(result.value.answer_option_id).toBe('zh')
+    }
+  })
+
+  it('approval 类问题不能使用通配资源授权', () => {
+    const req = request({ kind: 'approval' })
+    const p = proposal(req, {
+      basis_refs: [{ kind: 'delegation_policy', id: POLICY_ID, version: 1 }],
+    })
+    const result = acceptDecision(
+      input({
+        request: req,
+        proposal: p,
+        policy: policy({
+          rules: [
+            {
+              ...policy().rules[0],
+              decision_kinds: ['approval'],
+              resource_selectors: ['*'],
+            },
+          ],
+        }),
+      }),
+    )
+    expect(result.ok && result.value.disposition).toBe('owner_required')
+  })
+
+  it('approval 类问题连前缀通配资源也不能授权', () => {
     const req = request({ kind: 'approval' })
     const p = proposal(req, {
       basis_refs: [{ kind: 'delegation_policy', id: POLICY_ID, version: 1 }],

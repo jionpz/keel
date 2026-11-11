@@ -47,13 +47,18 @@ check gateway 只做 GitHub 读操作，不接收模型或阶段结果里的“c
 
 - `action_intent_id`、项目/repo、动作；
 - 授权来源（当前仅 `delegation_policy`）的 id、版本、规则 id 与摘要；
+- 签发时的项目授权 epoch（项目记忆 epoch）与任务 `control_generation`；
+- 预算快照；当前只实现可验证的 `max_attempts`，按 outbox 已认领次数校验；
+- 可选的决定绑定：request revision、resolution id 与决议 `context_digest`；
 - 准确 `expected_sha`、`diff_digest` 与完整目标摘要 `target_digest`；
 - 本次授权规则声明的 `required_checks` 快照；
 - 环境、单调递增的 `fencing_token`、幂等键、签发/过期时间。
 
 签发许可前，gateway 用 `FOR SHARE` 语义锁定授权策略并重新校验其项目、版本、
-有效期、撤销/替代状态。旧 worker 或旧 fence 无法写入成功结果；过期许可不能
-开始新动作。
+有效期、撤销/替代状态。实际动作开始前、`markActionExecuting`、permit 后以及 push
+后创建 PR 前，都调用同一个 `managed_execution_permit_available()` 复核 permit、
+策略、任务状态/控制代次、项目 epoch、决定 revision/决议与 authority refs。旧
+worker、旧 fence、人工暂停/取消或授权撤销都会让许可失效；过期许可不能开始新动作。
 
 ## 4. 授权
 
@@ -65,6 +70,11 @@ gateway 读取项目内当前有效的 `managed_delegation_policy`，只接受�
 - 规则模式为 `delegated`；
 - `required_evidence` 与预算上限仍属未实现门禁，命中时拒绝自动许可；
 - `required_checks` 不再拒绝，而是固化进 permit，并由 check gateway 执行。
+
+`max_cost_usd` / `max_tokens` 尚未实现可验证计量，命中即拒绝自动许可；
+`max_attempts` 使用 outbox 的真实认领次数校验。不可逆/部分可逆的高影响动作必须
+精确声明动作、环境与资源，任何包含 `*` 的 selector（包括 `foo*` 前缀通配）都不能
+自动许可。
 
 多个匹配 delegated 规则的 `required_checks` 取并集；任一匹配规则要求更严格模式时，
 仍按 `deny` > `owner_required` > `delegated` 阻断。
@@ -88,6 +98,8 @@ gateway 读取项目内当前有效的 `managed_delegation_policy`，只接受�
 2. `git push <sha>:refs/heads/<branch>`，绝不 force；
 3. `GitHubProvider.createPullRequest`，按 head 分支幂等复用已有 PR；
 4. 成功后 outbox `SUCCEEDED`、permit `CONSUMED`、task `PR_OPENED`，handoff 记录 PR；
+   若人工已在执行期间暂停/取消，task 保持原控制状态，只记录
+   `external_action_completed` 与 PR 事实，不自动恢复；
 5. 同一事务创建 `managed_check_target`，绑定 intent、permit、repo/PR、准确
    `head_sha`、`diff_digest`、授权版本、`required_checks` 截止时间与 PR 编号。
 
@@ -97,6 +109,19 @@ push 或 PR 结果不确定时：
 - `action-reconcile` 先查远端分支：不存在则确认无副作用并安全重排；同一 SHA
   则复用/创建 PR；不同 SHA 则失败；
 - 不盲目重放 push，也不把数据库提交当成 GitHub exactly-once。
+
+### 5.1 人工暂停、取消、覆盖与权限撤销
+
+`ticket-pause` / `ticket-cancel` 先锁任务与 outbox，把 `PENDING` / `LEASED`
+动作立即置为 `BLOCKED`，撤销该任务所有 `VALID` permit，递增 `control_generation`，
+并取消仍在等待的 decision request。已经 `EXECUTING` 的动作不会被谎报为已撤销；
+系统写入 `ManagedActionControlBoundary`，要求回查远端或执行补偿。
+
+`ticket-resume` 只接受 `PAUSED`，再次递增控制代次；旧 permit、旧 worker 和旧决定
+都不能恢复执行。`ticket-override` 在任务继续前创建 `revision + 1` 的人工决议，并
+先阻断未执行动作。`policy-revoke` 会暂停仍指向该策略且处于 `WAITING_GATEWAY` 的
+任务，撤销其 `VALID` permit；policy 发布/撤销只接受本机 CLI 显式 owner 身份与
+`--confirm`，并写审计事件。天问和执行 worker 没有 policy 写入口。
 
 ## 6. required checks 与 `PR_READY`
 
@@ -138,6 +163,13 @@ pnpm keel managed action-retry <outbox-uuid>
 pnpm keel managed action-check-gateway --once
 pnpm keel managed action-check-gateway --interval 10000
 pnpm keel managed action-checks --task <task-uuid>
+pnpm keel managed ticket-pause <task-uuid> --reason '...'
+pnpm keel managed ticket-cancel <task-uuid> --reason '...'
+pnpm keel managed ticket-resume <task-uuid>
+pnpm keel managed ticket-override <request-uuid> --revision N --option OPTION --reason '...'
+pnpm keel managed policy-list --project <repo-uuid>
+pnpm keel managed policy-publish <policy.json> --owner <owner> --confirm
+pnpm keel managed policy-revoke <policy-uuid> --owner <owner> --reason '...' --confirm
 ```
 
 `action-retry` 只允许对 `BLOCKED` / `FAILED` 使用；`UNCERTAIN` 必须先回查。

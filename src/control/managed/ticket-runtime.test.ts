@@ -11,7 +11,11 @@ import { ZERO_USAGE } from '../../contracts/types.js'
 import { asOwner, asRole, closePool } from '../../fact/db.js'
 import type { ManagedTicketStageResult } from '../../generated/managed.js'
 import { sha256Text } from '../../shared/canonical-json.js'
-import { answerManagedTicketDecision, recordProjectDecision } from './decision-store.js'
+import {
+  answerManagedTicketDecision,
+  recordDelegationPolicy,
+  recordProjectDecision,
+} from './decision-store.js'
 import {
   createManagedTicketTask,
   getManagedTicket,
@@ -408,7 +412,7 @@ describe('managed ticket runtime', () => {
     expect(resumed.value?.status).toBe('READY')
   })
 
-  it('must-stop 即使提供了天问 runner 也不会自动处理', async () => {
+  it('must-stop 先经过天问；没有匹配授权时升级人工', async () => {
     const { taskId } = await seed()
     let called = 0
     const worker: ManagedTicketWorker = {
@@ -426,10 +430,194 @@ describe('managed ticket runtime', () => {
     const paused = await tickManagedTicket(worker, taskId)
     if (!paused.ok) throw new Error(paused.error.detail)
     expect(paused.value?.status).toBe('WAITING_HUMAN')
-    expect(called).toBe(0)
+    expect(called).toBe(1)
     const task = await getManagedTicket(taskId)
     if (!task.ok) throw new Error(task.error.detail)
     expect(task.value.last_error).toBe('MUST_STOP')
+  })
+
+  it('must-stop 在精确委托默认范围内由天问代批并恢复 READY', async () => {
+    const { repoId, root, taskId } = await seed()
+    const policyId = randomUUID()
+    const now = new Date().toISOString()
+    const recorded = await recordDelegationPolicy({
+      schema_version: '1.0',
+      id: policyId,
+      policy_id: 'ticket-must-stop',
+      version: 1,
+      project_id: repoId,
+      approved_by_owner: 'owner',
+      approved_at: now,
+      valid_from: now,
+      rules: [
+        {
+          id: 'allow-sudo-once',
+          decision_kinds: ['approval'],
+          actions: ['sudo'],
+          resource_selectors: ['fixture'],
+          environments: ['local'],
+          reversibility: 'reversible',
+          impact_limits: {
+            environments: ['local'],
+            reversibilities: ['reversible'],
+            max_affected_resources: 1,
+          },
+          budget_limits: {},
+          required_evidence: [],
+          required_checks: [],
+          mode: 'delegated',
+          default_option_id: 'option-2',
+        },
+      ],
+      created_at: now,
+    })
+    if (!recorded.ok) throw new Error(recorded.error.detail)
+    const worker: ManagedTicketWorker = {
+      ...workerWith(async () => ({
+        schema_version: '1.0',
+        stage: 'execute',
+        status: 'must_stop',
+        summary: '需要 sudo',
+        decision: {
+          decision_key: 'ticket.sudo.delegated',
+          kind: 'approval',
+          question: '允许 sudo 吗？',
+          options: ['停止并等待人工处理（推荐）', '批准本次继续（仅一次）'],
+          action_category: 'sudo',
+          impact: {
+            environment: 'local',
+            reversibility: 'reversible',
+            affected_resources: ['fixture'],
+          },
+        },
+        requested_action: { action: 'sudo apt-get update', reason: 'fixture' },
+      })),
+      decide: async () => ({
+        ok: true,
+        value: {
+          output: {
+            recommendation: 'answer',
+            answer_option_id: 'option-2',
+            rationale: `命中 ${policyId}`,
+            basis_refs: [{ kind: 'delegation_policy', id: policyId, version: 1 }],
+            assumptions: [],
+            alternatives: [],
+            unresolved_conflicts: [],
+            missing_authority: [],
+          },
+          usage: ZERO_USAGE,
+        },
+      }),
+    }
+    const tick = await tickManagedTicket(worker, taskId)
+    if (!tick.ok) throw new Error(tick.error.detail)
+    expect(tick.value?.status).toBe('READY')
+    const task = await getManagedTicket(taskId)
+    if (!task.ok) throw new Error(task.error.detail)
+    expect(task.value.status).toBe('READY')
+    const request = (
+      await asRole('keel_control', (c) =>
+        c.query<{ id: string; status: string }>(
+          'SELECT id,status FROM managed_decision_request WHERE managed_ticket_task_id=$1',
+          [taskId],
+        ),
+      )
+    ).rows[0]
+    expect(request?.status).toBe('RESOLVED')
+    const resolution = (
+      await asRole('keel_control', (c) =>
+        c.query<{ disposition: string; delegation_policy_id: string }>(
+          'SELECT disposition,delegation_policy_id FROM managed_decision_resolution WHERE request_id=$1',
+          [request?.id],
+        ),
+      )
+    ).rows[0]
+    expect(resolution).toMatchObject({ disposition: 'delegated', delegation_policy_id: policyId })
+    const resumed = await tickManagedTicket(happyWorker(root), taskId)
+    expect(resumed.ok).toBe(true)
+    if (resumed.ok) expect(resumed.value?.status).toBe('READY')
+  })
+
+  it('must-stop 天问委派到停止选项时任务转为 CANCELLED，不能恢复执行', async () => {
+    const { repoId, taskId } = await seed()
+    const policyId = randomUUID()
+    const now = new Date().toISOString()
+    const recorded = await recordDelegationPolicy({
+      schema_version: '1.0',
+      id: policyId,
+      policy_id: 'ticket-must-stop-stop',
+      version: 1,
+      project_id: repoId,
+      approved_by_owner: 'owner',
+      approved_at: now,
+      valid_from: now,
+      rules: [
+        {
+          id: 'stop-sudo',
+          decision_kinds: ['approval'],
+          actions: ['sudo'],
+          resource_selectors: ['fixture'],
+          environments: ['local'],
+          reversibility: 'reversible',
+          impact_limits: {
+            environments: ['local'],
+            reversibilities: ['reversible'],
+            max_affected_resources: 1,
+          },
+          budget_limits: {},
+          required_evidence: [],
+          required_checks: [],
+          mode: 'delegated',
+          default_option_id: 'option-1',
+        },
+      ],
+      created_at: now,
+    })
+    if (!recorded.ok) throw new Error(recorded.error.detail)
+    const worker: ManagedTicketWorker = {
+      ...workerWith(async () => ({
+        schema_version: '1.0',
+        stage: 'execute',
+        status: 'must_stop',
+        summary: '需要 sudo',
+        decision: {
+          decision_key: 'ticket.sudo.stop',
+          kind: 'approval',
+          question: '允许 sudo 吗？',
+          options: ['停止并等待人工处理（推荐）', '批准本次继续（仅一次）'],
+          action_category: 'sudo',
+          impact: {
+            environment: 'local',
+            reversibility: 'reversible',
+            affected_resources: ['fixture'],
+          },
+        },
+        requested_action: { action: 'sudo apt-get update', reason: 'fixture' },
+      })),
+      decide: async () => ({
+        ok: true,
+        value: {
+          output: {
+            recommendation: 'answer',
+            answer_option_id: 'option-1',
+            rationale: `命中 ${policyId}`,
+            basis_refs: [{ kind: 'delegation_policy', id: policyId, version: 1 }],
+            assumptions: [],
+            alternatives: [],
+            unresolved_conflicts: [],
+            missing_authority: [],
+          },
+          usage: ZERO_USAGE,
+        },
+      }),
+    }
+    const tick = await tickManagedTicket(worker, taskId)
+    if (!tick.ok) throw new Error(tick.error.detail)
+    expect(tick.value?.status).toBe('CANCELLED')
+    const task = await getManagedTicket(taskId)
+    if (!task.ok) throw new Error(task.error.detail)
+    expect(task.value.status).toBe('CANCELLED')
+    expect(task.value.last_error).toBe('STOPPED_BY_DECISION')
   })
 
   it('天问不可用时升级人工并保留 owner_required 决议', async () => {

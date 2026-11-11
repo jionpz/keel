@@ -167,4 +167,74 @@ describe('managed action authorization', () => {
     expect(authorizeAction(request({ environment: 'staging' }), [policy()]).ok).toBe(false)
     expect(authorizeAction(request({ reversibility: 'irreversible' }), [policy()]).ok).toBe(false)
   })
+
+  it('不可逆动作即使匹配也不能靠通配授权自动许可', () => {
+    const irreversible = policy(
+      {},
+      {
+        reversibility: 'irreversible',
+        resource_selectors: ['*'],
+        impact_limits: {
+          environments: ['production'],
+          reversibilities: ['irreversible'],
+          max_affected_resources: 8,
+        },
+      },
+    )
+    expect(
+      authorizeAction(request({ reversibility: 'irreversible' }), [irreversible]),
+    ).toMatchObject({
+      ok: false,
+      restrictive: true,
+    })
+  })
+
+  it('高影响动作的前缀通配 selector 也不能自动许可', () => {
+    const prefix = policy(
+      {},
+      {
+        reversibility: 'partially_reversible',
+        resource_selectors: ['https://github.com/acme/*'],
+        impact_limits: {
+          environments: ['production'],
+          reversibilities: ['partially_reversible'],
+          max_affected_resources: 1,
+        },
+      },
+    )
+    expect(
+      authorizeAction(
+        request({
+          reversibility: 'partially_reversible',
+          affected_resources: ['https://github.com/acme/widget.git'],
+        }),
+        [prefix],
+      ),
+    ).toMatchObject({ ok: false, restrictive: true })
+  })
+
+  it('max_attempts 预算按已认领次数校验并固化进许可', () => {
+    const limited = policy({}, { budget_limits: { max_attempts: 2 } })
+    expect(authorizeAction(request({ attempts: 2 }), [limited])).toMatchObject({
+      ok: true,
+      budget: { max_attempts: 2 },
+    })
+    expect(authorizeAction(request({ attempts: 3 }), [limited])).toMatchObject({
+      ok: false,
+      restrictive: true,
+    })
+    expect(authorizeAction(request(), [limited])).toMatchObject({
+      ok: false,
+      restrictive: true,
+    })
+  })
+
+  it('尚未实现的 token/cost 预算仍然拒绝自动许可', () => {
+    expect(
+      authorizeAction(request(), [policy({}, { budget_limits: { max_tokens: 100 } })]).ok,
+    ).toBe(false)
+    expect(
+      authorizeAction(request(), [policy({}, { budget_limits: { max_cost_usd: 1 } })]).ok,
+    ).toBe(false)
+  })
 })

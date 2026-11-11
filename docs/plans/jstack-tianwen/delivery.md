@@ -1,6 +1,6 @@
 # 交付、生产准入与运维
 
-**状态**：JT-01 的只读影子协议与后台队列已合入 `main`（PR #84），原生 OMP 真实模型烟测与提问前/答复后两处 SIGKILL 故障恢复均已实测通过；JT-02、JT-03 已合入；JT-04 代码、确定性验收与真实 L 多 ticket E2E 已完成、待合入，XL 未单独跑；JT-01 仍为影子模式，原生 Claude 未验，JT-05 至 JT-07 与 7 天真实试运行未完成。见[实施进度与可运行命令](./implementation.md)。尚未部署生产服务。
+**状态**：JT-01 的只读影子协议与后台队列已合入 `main`（PR #84），原生 OMP 真实模型烟测与提问前/答复后两处 SIGKILL 故障恢复均已实测通过；JT-02、JT-03、JT-04 已合入；JT-05 授权生命周期、受控 permit、人工暂停/取消/恢复/覆盖与 policy CLI 已实现并通过确定性验收，待合入；XL 未单独跑；JT-01 仍为影子模式，原生 Claude 未验，JT-06 至 JT-07 与 7 天真实试运行未完成。见[实施进度与可运行命令](./implementation.md)。尚未部署生产服务。
 
 阅读顺序：[主方案](./README.md) → [契约](./contracts.md) → 本页 → [验收](./acceptance.md)。本页的命令和配置是待实现接口建议，不可复制为现有能力。
 
@@ -30,7 +30,7 @@
 | JT-02 | [#90](https://github.com/jionpz/keel/issues/90) | PR #116 已合入；原生 OMP 真实 E2E 已验证 |
 | JT-03 | [#91](https://github.com/jionpz/keel/issues/91) | PR #117 已合并（merge `72d92b3`）；#91 已关闭 |
 | JT-04 | [#92](https://github.com/jionpz/keel/issues/92) | 依赖 JT-02；代码、确定性验收与真实 L E2E 完成，待 PR；XL 未单独跑 |
-| JT-05 | [#93](https://github.com/jionpz/keel/issues/93) | 依赖 JT-03、JT-04；未实施 |
+| JT-05 | [#93](https://github.com/jionpz/keel/issues/93) | 依赖 JT-03、JT-04；代码与确定性验收完成，待合入 |
 | JT-06 | [#94](https://github.com/jionpz/keel/issues/94) | 依赖 JT-04、JT-05；未实施 |
 | JT-07 | [#95](https://github.com/jionpz/keel/issues/95) | 依赖 JT-01～JT-06；未实施 |
 
@@ -84,6 +84,14 @@
 
 **验收**：精确匹配的高影响授权可自动使用；越界/过期授权被拒；旧 worker、旧 SHA、授权撤销都不能生效；已经发往远端的动作进入回查/补偿，不能报作已撤销；天问不得修改自身授权。
 
+**实现进展**：permit 绑定策略版本、项目授权 epoch、任务控制代次、预算快照与可选
+决定 revision/决议；动作开始前、permit 后与 push 后创建 PR 前统一复核。新增
+`ticket-pause/cancel/resume/override` 与 `policy-list/publish/revoke`；暂停/取消
+会立即阻断未开始 outbox、撤销 `VALID` permit、递增控制代次并取消等待中的请求。
+must-stop 先进入天问，只有精确委托才能代批；停止选项转 `CANCELLED`。已经
+`EXECUTING` 的动作只记录外部边界，成功结算也不会把 `PAUSED` 自动改回 `PR_OPENED`。
+`max_attempts` 已按 outbox 认领次数校验；token/cost 预算仍明确拒绝自动许可。
+
 ### JT-06：统一后台服务、故障恢复和备份演练
 
 **阻塞**：JT-04、JT-05。
@@ -129,7 +137,10 @@ runtime:
   budget_policy: <用户确认的预算与上限>
 ```
 
-运行时 API/CLI 计划支持 project register、policy review/apply/revoke、serve、questions list/answer/override、task pause/takeover/resume、memory rebuild/rollback、doctor 和审计导出。名称在实现契约中统一定稿；不在当前 CLI 帮助里加入尚未实现的命令。
+运行时 API/CLI 计划支持 project register、serve、questions list、memory rebuild/rollback、
+doctor 和审计导出；policy publish/revoke 与 ticket pause/cancel/resume/override 已按
+本机单 owner 模型接线，HTTP/多租户认证入口仍未实现。名称在实现契约中统一定稿；
+不在当前 CLI 帮助里加入尚未实现的命令。
 
 授权更改有单独认证入口与审计，不通过修改工作区 YAML 生效。项目配置错误 fail-closed；jstack 现有交互式 hooks 的宽松降级不能沿用为后台安全策略。
 

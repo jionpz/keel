@@ -10,10 +10,12 @@ import type {
 import { decisionRequestDigest } from './decision-protocol.js'
 import {
   openDecisionRequestFromManagedQuestion,
+  publishDelegationPolicy,
   readDecisionResolution,
   recordDelegationPolicy,
   recordProjectDecision,
   resolveTianwenProposal,
+  revokeDelegationPolicy,
   revokeProjectDecision,
   submitTianwenProposal,
 } from './decision-store.js'
@@ -274,6 +276,59 @@ describe('决策台账 store', () => {
     expect(resolved.value.disposition).toBe('delegated')
     expect(resolved.value.evidence_grade).toBe('E1')
     expect(resolved.value.delegation_policy_id).toBe(configured.id)
+  })
+
+  it('owner CLI 发布/撤销策略时覆盖文件自报身份并写审计 epoch', async () => {
+    const seed = await seedQuestion('报告使用哪种语言？', ['中文', '英文'])
+    const body = policy(seed.repoId, {
+      approved_by_owner: 'model-forged-owner',
+      approved_at: PAST,
+      created_at: PAST,
+    })
+    const published = await publishDelegationPolicy(body, 'real-owner', NOW)
+    expect(published.ok).toBe(true)
+    if (!published.ok) return
+    const row = await asRole('keel_control', async (c) =>
+      c.query<{ approved_by_owner: string; approved_at: Date; created_at: Date }>(
+        `SELECT approved_by_owner,approved_at,created_at
+         FROM managed_delegation_policy WHERE id=$1`,
+        [body.id],
+      ),
+    )
+    expect(row.rows[0]?.approved_by_owner).toBe('real-owner')
+    expect(new Date(row.rows[0]?.approved_at ?? '').toISOString()).toBe(NOW)
+    expect(new Date(row.rows[0]?.created_at ?? '').toISOString()).toBe(NOW)
+    const publishedEvent = await asRole('keel_control', async (c) =>
+      c.query<{ actor: string; details: unknown }>(
+        `SELECT actor,details FROM managed_project_memory_event
+         WHERE project_id=$1 AND kind='epoch_bumped'
+         ORDER BY seq DESC LIMIT 1`,
+        [seed.repoId],
+      ),
+    )
+    expect(publishedEvent.rows[0]).toMatchObject({
+      actor: 'real-owner',
+      details: { policy_id: body.id, policy_key: body.policy_id, version: 1 },
+    })
+    const revoked = await revokeDelegationPolicy(
+      body.id,
+      'real-owner',
+      'owner revoke',
+      '2026-11-11T00:01:00.000Z',
+    )
+    expect(revoked.ok).toBe(true)
+    const revokedEvent = await asRole('keel_control', async (c) =>
+      c.query<{ actor: string; change_type: string; reason: string }>(
+        `SELECT actor,change_type,reason FROM managed_decision_change
+         WHERE entity_type='delegation_policy' AND entity_id=$1`,
+        [body.id],
+      ),
+    )
+    expect(revokedEvent.rows[0]).toMatchObject({
+      actor: 'real-owner',
+      change_type: 'revoked',
+      reason: 'owner revoke',
+    })
   })
 
   it('未显式替代的旧策略仍参与最严规则，不能被新版本忽略', async () => {

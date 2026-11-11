@@ -12,6 +12,7 @@ import { type ActionAuthorization, authorizeAction } from './action-authorizatio
 import {
   blockAction,
   claimActionOutbox,
+  executionPermitAvailable,
   expireExecutingActions,
   getActionIntent,
   getActionOutbox,
@@ -64,6 +65,8 @@ function result(
 
 async function revalidate(
   claim: ManagedActionOutboxClaim,
+  now: string,
+  permit?: ManagedExecutionPermit,
 ): Promise<
   Result<{ readonly baselineCommit: string; readonly head: string; readonly worktreePath: string }>
 > {
@@ -99,6 +102,8 @@ async function revalidate(
   if (!diff.ok) return diff
   if (diff.value !== claim.intent.diff_digest)
     return err(makeError('CONFLICT', 'baseline..HEAD diff 摘要与 intent 不一致'))
+  if (permit !== undefined && !(await executionPermitAvailable(permit.id, now)))
+    return err(makeError('CONFLICT', 'ExecutionPermit 的授权、决定或任务控制代次已失效'))
   return ok({
     baselineCommit: task.baseline_commit,
     head: worktree.value.head,
@@ -119,6 +124,7 @@ async function authorize(
         environment: claim.intent.environment,
         reversibility: claim.intent.reversibility,
         affected_resources: claim.intent.affected_resources,
+        attempts: claim.outbox.attempts,
         now,
       },
       policies,
@@ -139,7 +145,7 @@ async function executeClaim(
   deps: ManagedActionGatewayDeps,
   now: string,
 ): Promise<Result<ManagedActionGatewayResult>> {
-  const valid = await revalidate(claim)
+  const valid = await revalidate(claim, now)
   if (!valid.ok) {
     const blocked = await blockAction(claim, valid.error.detail, now)
     if (!blocked.ok) return blocked
@@ -162,9 +168,13 @@ async function executeClaim(
     )
   }
   const executing = await markActionExecuting(claim, permit, now)
-  if (!executing.ok) return executing
+  if (!executing.ok) {
+    const blocked = await blockAction(claim, executing.error.detail, now)
+    if (!blocked.ok) return blocked
+    return ok(result(claim, blocked.value.status, { error: executing.error.detail }))
+  }
 
-  const afterPermit = await revalidate(claim)
+  const afterPermit = await revalidate(claim, now, permit)
   if (!afterPermit.ok) {
     const settled = await settleActionFailure(
       claim,
@@ -192,6 +202,14 @@ async function executeClaim(
   if (push.value.headSha !== claim.intent.head_sha) {
     const detail = `push 返回 ${push.value.headSha}，与 intent ${claim.intent.head_sha} 不一致`
     const settled = await settleActionFailure(claim, permit, 'FAILED', detail, now)
+    if (!settled.ok) return settled
+    return ok(result(claim, settled.value.status, { error: detail }))
+  }
+
+  const beforePr = await revalidate(claim, now, permit)
+  if (!beforePr.ok) {
+    const detail = `push 后控制或授权变化：${beforePr.error.detail}`
+    const settled = await settleActionFailure(claim, permit, 'UNCERTAIN', detail, now)
     if (!settled.ok) return settled
     return ok(result(claim, settled.value.status, { error: detail }))
   }

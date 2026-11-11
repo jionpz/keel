@@ -111,6 +111,7 @@ export interface ManagedTicketTask {
   readonly attempts: number
   readonly max_attempts: number
   readonly rework_count: number
+  readonly control_generation: number
   readonly pending_decision_id: string | null
   readonly pending_decision_revision: number | null
   readonly last_error: string | null

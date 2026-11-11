@@ -11,6 +11,9 @@
     "repo_id",
     "action",
     "authorization",
+    "authorization_epoch",
+    "task_control_generation",
+    "budget",
     "expected_sha",
     "diff_digest",
     "target_digest",
@@ -71,6 +74,60 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 128
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "authorization_epoch": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "task_control_generation": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_attempts": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_cost_usd": {
+          "type": "number",
+          "minimum": 0
+        },
+        "max_tokens": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_id",
+        "request_revision",
+        "resolution_id",
+        "digest"
+      ],
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "request_revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "resolution_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
         },
         "digest": {
           "type": "string",

@@ -37,7 +37,9 @@
 - **E1**：只接受 owner 确认、仍有效且显式覆盖当前动作、环境、资源与可逆性的策略规则；
   提案必须采用该规则声明的默认选项。不可逆影响一律不能走 E1。
 - `approval` 类请求没有执行网关核对动作与环境时一律 `owner_required`；
-  作用域要求至少一个受影响资源，空资源列表不再匹配任意策略。
+  作用域要求至少一个受影响资源，空资源列表不再匹配任意策略；审批类委托必须精确
+  声明动作、环境与资源，任何包含 `*` 的 selector（包括 `foo*` 前缀通配）都不能
+  自动代批。
 - 策略要求 `required_checks`、`required_evidence` 或预算上限而本切片尚未实现核验时
   `owner_required`，不会静默忽略。
 - E2 语义复核、observed fact 引用核验不在本切片；出现时 `owner_required`。
@@ -79,6 +81,8 @@ request 的 `attempt_id` 指向产生问题的 `managed_attempt`，把决策尝�
 `UNIQUE (request_id, request_revision)`；只有插入成功的事务能继续更新 request 状态。
 并发提交同一 revision 时一个成功，其余返回 `CONFLICT`，不会产生第二条决议。
 人工答复与 worker 都先锁 request 和 task；同一问题只有一个事务能完成状态迁移。
+答复选项按文案语义判断：停止类选项转 `CANCELLED`；must-stop 只有明确批准/允许/
+继续的选项才回到 `READY`，未知文案 fail closed，不按固定选项 ID 放行。
 
 ## 人工覆盖与纠正
 
@@ -91,10 +95,12 @@ request 的 `attempt_id` 指向产生问题的 `managed_attempt`，把决策尝�
 
 - managed 调查路径和 managed ticket 的 `blocked` + `decision` 路径都已接入天问：
   worker 用当前 harness/model 产生 `TianwenProposal`，再由确定性接纳器裁决。
-- ticket 的 `must_stop` / `requested_action` 不调用天问，直接等待人工；人工答复在
-  已有决议时创建 `revision + 1`。
+- ticket 的 `must_stop` / `requested_action` 也先进入天问；只有精确委托覆盖当前
+  动作、环境与资源时才可代批，否则 `owner_required` 等待人工。人工答复在已有决议
+  时创建 `revision + 1`；`ticket-override` 可在任务继续前显式覆盖。
 - `recordProjectDecision()` 与 `recordDelegationPolicy()` 目前只允许受信控制入口调用；
-  从认证会话核验 owner 身份的项目映射尚未接线。
+  `policy-publish/policy-revoke` 的 owner 身份来自本机 CLI 显式参数并要求
+  `--confirm`，不接受策略文件自报身份；HTTP/多租户认证会话仍未接线。
 - `impact` 仍由调查或 ticket 模型声明；JT-02D 的执行网关必须重新核对动作、环境与
   资源，`approval` 不会自动委派。
 - outbox/PR 属 JT-02D，required checks 属 JT-02E；action gateway 独立消费

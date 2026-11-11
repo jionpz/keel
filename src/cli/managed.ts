@@ -14,7 +14,13 @@ import {
   runCheckGatewayOnce,
 } from '../control/managed/check-gateway.js'
 import { listCheckEvidence } from '../control/managed/check-store.js'
-import { answerManagedTicketDecision } from '../control/managed/decision-store.js'
+import {
+  answerManagedTicketDecision,
+  listDelegationPolicies,
+  overrideManagedTicketDecision,
+  publishDelegationPolicy,
+  revokeDelegationPolicy,
+} from '../control/managed/decision-store.js'
 import {
   createProjectMemorySummary,
   getProjectMemoryState,
@@ -31,6 +37,11 @@ import {
   tickManaged,
 } from '../control/managed/runtime.js'
 import { answerManagedQuestion, getManagedTask } from '../control/managed/store.js'
+import {
+  cancelManagedTicket,
+  pauseManagedTicket,
+  resumeManagedTicket,
+} from '../control/managed/ticket-control.js'
 import {
   createManagedTicketTask,
   getManagedTicket,
@@ -56,6 +67,7 @@ import {
 import { asRole } from '../fact/db.js'
 import { GitCliPushGateway } from '../fact/git-push.js'
 import { GitHubProvider } from '../fact/github-provider.js'
+import type { DelegationPolicyVersion } from '../generated/managed.js'
 import { createStopToken, interruptibleSleep } from '../ingress/poller.js'
 import { createHarnessAdapter, resolveHarness, resolveOptionalModel } from './run-task.js'
 
@@ -196,7 +208,14 @@ ticket-stages TASK_UUID
 ticket-tick [--task TASK_UUID] [--harness omp|claude|pi] [--model ID]
 ticket-worker [--once] [--interval MS] [--task TASK_UUID] [--harness omp|claude|pi] [--model ID]
 ticket-answer REQUEST_UUID --revision N --option OPTION_ID
+ticket-override REQUEST_UUID --revision N --option OPTION_ID --reason TEXT
+ticket-pause TASK_UUID --reason TEXT
+ticket-cancel TASK_UUID --reason TEXT
+ticket-resume TASK_UUID
 ticket-tianwen REQUEST_UUID [--revision N] [--harness omp|claude|pi] [--model ID]
+policy-list --project UUID
+policy-publish FILE --owner OWNER --confirm
+policy-revoke POLICY_UUID --owner OWNER --reason TEXT --confirm
 workflow-create --repo UUID --package FILE --worktree-root PATH --scope PATH[,PATH] --request TEXT [--issue REF] [--baseline SHA]
 workflow-plan --workflow UUID --plan FILE [--replan]
 workflow-status WORKFLOW_UUID
@@ -218,6 +237,7 @@ memory-rollback SUMMARY_UUID --project UUID --epoch N --reason TEXT
 memory-retrieve PROJECT_UUID --query TEXT [--key DECISION_KEY] [--request UUID] [--budget-entries N] [--budget-tokens N]
 memory-promote REQUEST_UUID --revision N --key DECISION_KEY [--statement TEXT] [--valid-from TIME] [--valid-until TIME] [--supersedes UUID]
 调查模式的天问只在 E3 明确决定或 E1 可逆默认范围内自动答复。
+policy-* 是本机 owner 的显式授权入口；天问和执行 worker 没有调用路径。
 workflow 模式由 jstack 规划 XS/S/M/L/XL 依赖图，每个节点仍按固定包完成
 execute→verify→review→land；阶段执行器不 push，
 受控 action gateway 创建 PR，check gateway 在准确 SHA 的必需检查通过后推进 pr_ready。`)
@@ -333,6 +353,102 @@ execute→verify→review→land；阶段执行器不 push，
         )
         if (!result.ok) throw new Error(result.error.detail)
         printJson(result.value)
+        return
+      }
+      case 'ticket-override': {
+        if (rest[0]?.startsWith('--'))
+          throw new Error(
+            '用法：managed ticket-override <request UUID> --revision N --option OPTION --reason TEXT',
+          )
+        const requestId = uuid(rest[0] ?? '', 'request ID')
+        const flags = parseFlags(rest.slice(1), ['revision', 'option', 'reason'])
+        const result = await overrideManagedTicketDecision(
+          requestId,
+          positiveInteger(required(flags, 'revision'), '--revision'),
+          required(flags, 'option'),
+          required(flags, 'reason'),
+          new Date().toISOString(),
+        )
+        if (!result.ok) throw new Error(result.error.detail)
+        printJson(result.value)
+        return
+      }
+      case 'ticket-pause': {
+        if (rest[0]?.startsWith('--'))
+          throw new Error('用法：managed ticket-pause <task UUID> --reason TEXT')
+        const taskId = uuid(rest[0] ?? '', 'task ID')
+        const flags = parseFlags(rest.slice(1), ['reason'])
+        const result = await pauseManagedTicket(
+          taskId,
+          required(flags, 'reason'),
+          new Date().toISOString(),
+        )
+        if (!result.ok) throw new Error(result.error.detail)
+        printJson(result.value)
+        return
+      }
+      case 'ticket-cancel': {
+        if (rest[0]?.startsWith('--'))
+          throw new Error('用法：managed ticket-cancel <task UUID> --reason TEXT')
+        const taskId = uuid(rest[0] ?? '', 'task ID')
+        const flags = parseFlags(rest.slice(1), ['reason'])
+        const result = await cancelManagedTicket(
+          taskId,
+          required(flags, 'reason'),
+          new Date().toISOString(),
+        )
+        if (!result.ok) throw new Error(result.error.detail)
+        printJson(result.value)
+        return
+      }
+      case 'ticket-resume': {
+        if (rest.length !== 1) throw new Error('用法：managed ticket-resume <task UUID>')
+        const result = await resumeManagedTicket(
+          uuid(rest[0] ?? '', 'task ID'),
+          new Date().toISOString(),
+        )
+        if (!result.ok) throw new Error(result.error.detail)
+        printJson(result.value)
+        return
+      }
+      case 'policy-list': {
+        const flags = parseFlags(rest, ['project'])
+        printJson(await listDelegationPolicies(uuid(required(flags, 'project'), '--project')))
+        return
+      }
+      case 'policy-publish': {
+        if (rest[0]?.startsWith('--'))
+          throw new Error('用法：managed policy-publish <policy JSON> --owner OWNER --confirm')
+        const flags = parseFlags(rest.slice(1), ['owner', 'confirm'], ['confirm'])
+        if (!flags.has('confirm')) throw new Error('policy-publish 需要显式 --confirm')
+        const body = readJsonFile(rest[0] ?? '', 'delegation policy')
+        if (typeof body !== 'object' || body === null || Array.isArray(body))
+          throw new Error('delegation policy 必须是 JSON 对象')
+        const result = await publishDelegationPolicy(
+          body as DelegationPolicyVersion,
+          required(flags, 'owner'),
+          new Date().toISOString(),
+        )
+        if (!result.ok) throw new Error(result.error.detail)
+        printJson(result.value)
+        return
+      }
+      case 'policy-revoke': {
+        if (rest[0]?.startsWith('--'))
+          throw new Error(
+            '用法：managed policy-revoke <policy UUID> --owner OWNER --reason TEXT --confirm',
+          )
+        const policyId = uuid(rest[0] ?? '', 'policy ID')
+        const flags = parseFlags(rest.slice(1), ['owner', 'reason', 'confirm'], ['confirm'])
+        if (!flags.has('confirm')) throw new Error('policy-revoke 需要显式 --confirm')
+        const result = await revokeDelegationPolicy(
+          policyId,
+          required(flags, 'owner'),
+          required(flags, 'reason'),
+          new Date().toISOString(),
+        )
+        if (!result.ok) throw new Error(result.error.detail)
+        printJson({ revoked: policyId })
         return
       }
       case 'workflow-create': {
