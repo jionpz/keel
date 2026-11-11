@@ -44,6 +44,10 @@ const p = spawnFn(bin, [...args], {
 **保留**：`ANTHROPIC_*`（凭据与网关地址）、`CLAUDE_CONFIG_DIR`、`PATH`、代理与证书类。
 用**显式黑名单**而不是白名单：白名单会顺手删掉用户合法的运行前提。
 
+> 这里的黑名单只解决本机 adapter 的宿主兼容问题，不是 managed 写执行器的安全边界。
+> JT-02A 的门禁用显式 allowlist，见 [Executor Isolation](./executor-isolation.md)；
+> 它尚未接入现有 adapter 或 managed runtime。
+
 实测对照（同一条命令、同一个 argv）：
 
 | 环境 | 结果 |

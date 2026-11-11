@@ -26,6 +26,7 @@
     "check:generated": "sh scripts/check-generated.sh",
     "check:transitions": "tsx scripts/check-transition-table.ts",
     "check:purity": "tsx scripts/check-purity.ts",
+    "check:isolation": "pnpm exec vitest run src/execution/isolation/container-spec.test.ts src/execution/isolation/executor-env.test.ts && pnpm exec tsx scripts/jt02a/isolation-probe.ts",
     "check": "pnpm run lint && pnpm run typecheck && pnpm run boundaries && pnpm run check:generated && pnpm run check:transitions && pnpm run check:purity && pnpm run test"
   },
   "devDependencies": {
