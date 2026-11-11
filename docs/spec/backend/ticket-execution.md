@@ -8,7 +8,7 @@
 
 事实来源是 jstack 的 `managed-export --ticket-id ...`。包包含：
 
-- `ticket`：稳定 ticket id 与标题；
+- `ticket`：稳定 ticket id、标题与可选正文（`description`，1..20000 字符）；
 - `route`：`XS`/`S` 与固定四阶段；
 - `stages`：每个阶段的 provider 引用、provider 源路径、门禁、tool profile、
   完整 provider 指令与阶段内容摘要；
@@ -37,7 +37,8 @@ Keel 在绑定时读取一次包并保存到 `managed_package`；运行期只按
 - baseline commit 存在且精确等于绑定时的 HEAD。
 
 任务永久保存 `package_digest`、`baseline_commit`、`worktree_path`、ticket id/title
-与 `completion_target`。数据库触发器禁止这些绑定字段被改写。
+与 `completion_target`；完整 ticket 正文随固定包保存在 `managed_package`。
+数据库触发器禁止任务绑定字段被改写。
 
 ## 3. 阶段状态机
 
