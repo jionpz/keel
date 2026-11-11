@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "JstackTicketPackage",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol_version",
+    "workflow_id",
+    "mode",
+    "source_commit",
+    "ticket",
+    "route",
+    "stages",
+    "instructions",
+    "tool_policy",
+    "must_stop",
+    "completion_target",
+    "sources",
+    "content_digest"
+  ],
+  "properties": {
+    "protocol_version": {"const": "1.0"},
+    "workflow_id": {"const": "jstack"},
+    "mode": {"const": "ticket"},
+    "source_commit": {"type": "string", "minLength": 1, "maxLength": 100},
+    "ticket": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "title": {"type": "string", "minLength": 1, "maxLength": 1000}
+      }
+    },
+    "route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["size", "stages"],
+      "properties": {
+        "size": {"enum": ["XS", "S"]},
+        "stages": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "items": {"enum": ["execute", "verify", "review", "land"]}
+        }
+      }
+    },
+    "stages": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "stage",
+          "provider",
+          "provider_path",
+          "gate",
+          "tool_profile",
+          "instructions",
+          "content_digest"
+        ],
+        "properties": {
+          "stage": {"enum": ["execute", "verify", "review", "land"]},
+          "provider": {"type": "string", "minLength": 1, "maxLength": 300},
+          "provider_path": {"type": "string", "minLength": 1, "maxLength": 500},
+          "gate": {"type": "string", "minLength": 1, "maxLength": 2000},
+          "tool_profile": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          },
+          "instructions": {"type": "string", "minLength": 1, "maxLength": 200000},
+          "content_digest": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        }
+      }
+    },
+    "instructions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["route", "stages", "must_stop"],
+      "properties": {
+        "route": {"type": "string", "minLength": 1, "maxLength": 200000},
+        "stages": {"type": "string", "minLength": 1, "maxLength": 100000},
+        "must_stop": {"type": "string", "minLength": 1, "maxLength": 100000}
+      }
+    },
+    "tool_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol_version",
+        "source_commit",
+        "stages",
+        "profiles",
+        "harnesses",
+        "content_digest"
+      ],
+      "properties": {
+        "protocol_version": {"const": "1.0"},
+        "source_commit": {"type": "string", "minLength": 1, "maxLength": 100},
+        "stages": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {"type": "string", "minLength": 1}
+        },
+        "profiles": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {"type": "object"}
+        },
+        "harnesses": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {"type": "object"}
+        },
+        "content_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "must_stop": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["content", "actions", "content_digest"],
+      "properties": {
+        "content": {"type": "string", "minLength": 1, "maxLength": 100000},
+        "actions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["action", "hook"],
+            "properties": {
+              "action": {"type": "string", "minLength": 1, "maxLength": 2000},
+              "hook": {"type": "string", "minLength": 1, "maxLength": 200}
+            }
+          }
+        },
+        "content_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "completion_target": {"enum": ["branch_ready"]},
+    "sources": {
+      "type": "array",
+      "minItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256", "bytes"],
+        "properties": {
+          "path": {"type": "string", "minLength": 1, "maxLength": 500},
+          "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+          "bytes": {"type": "integer", "minimum": 1}
+        }
+      }
+    },
+    "content_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  }
+}

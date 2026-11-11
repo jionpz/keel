@@ -20,6 +20,7 @@ import {
   validateProjectDecision,
   validateTianwenProposal,
 } from './decision-protocol.js'
+import { ticketEvent } from './ticket-store.js'
 
 const TIANWEN_ACTOR_ID = 'tianwen-service'
 
@@ -27,6 +28,7 @@ const REQUEST_JSON = `jsonb_strip_nulls(to_jsonb(r)) AS body
   FROM (
     SELECT id, revision, '1.0'::text AS schema_version, idempotency_key,
       project_id, repo_id, managed_task_id, managed_question_id, task_id,
+      managed_ticket_task_id,
       node_id, attempt_id, decision_key, kind, question, options,
       suggested_option_id, constraints, missing_information, impact,
       action_category, workflow_digest, observed_memory_epoch, input_digest,
@@ -532,6 +534,20 @@ async function controlForRequest(
   c: PoolClient,
   request: DecisionRequest,
 ): Promise<DecisionAcceptanceControl> {
+  if (request.managed_ticket_task_id !== undefined) {
+    const task = (
+      await c.query<{ status: string; attempts: number; max_attempts: number }>(
+        'SELECT status, attempts, max_attempts FROM managed_ticket_task WHERE id=$1',
+        [request.managed_ticket_task_id],
+      )
+    ).rows[0]
+    if (task === undefined) throw new Error('decision request 引用的 managed ticket task 不存在')
+    return {
+      state: task.status === 'CANCELLED' ? 'cancelled' : 'active',
+      task_active: !['DONE', 'FAILED', 'CANCELLED'].includes(task.status),
+      budget_available: task.attempts < task.max_attempts,
+    }
+  }
   if (request.managed_task_id === undefined)
     return { state: 'paused', task_active: false, budget_available: false }
   const task = (
@@ -997,6 +1013,168 @@ export async function answerManagedQuestionWithDecision(
     if (known !== null) return err(known)
     throw error
   }
+}
+
+export interface ManagedTicketDecisionInput {
+  readonly task_id: string
+  readonly repo_id: string
+  readonly stage: string
+  readonly attempt: number
+  readonly decision_key: string
+  readonly kind: DecisionRequest['kind']
+  readonly question: string
+  readonly options: readonly string[]
+  readonly action_category: string
+  readonly impact: {
+    readonly environment: DecisionRequest['impact']['environment']
+    readonly reversibility: DecisionRequest['impact']['reversibility']
+    readonly affected_resources: readonly string[]
+  }
+  readonly workflow_digest: string
+  readonly constraints?: readonly string[]
+  readonly missing_information?: readonly string[]
+}
+
+export async function openDecisionRequestForTicket(
+  input: ManagedTicketDecisionInput,
+  now: string,
+  client?: PoolClient,
+): Promise<Result<DecisionRequest>> {
+  if (timestamp(now) === null) return err(makeError('SCHEMA_VIOLATION', 'created_at 不是合法时间'))
+  if (input.options.length < 2 || input.options.length > 12)
+    return err(makeError('SCHEMA_VIOLATION', 'ticket decision 选项必须是 2..12 个'))
+  const run = async (c: PoolClient): Promise<Result<DecisionRequest>> => {
+    const existing = await c.query<{ body: unknown }>(
+      `SELECT ${REQUEST_JSON} WHERE r.managed_ticket_task_id=$1
+       AND r.status IN ('OPEN','PROCESSING','WAITING_HUMAN')
+       ORDER BY r.revision DESC LIMIT 1`,
+      [input.task_id],
+    )
+    if (existing.rows[0] !== undefined) return ok(existing.rows[0].body as DecisionRequest)
+    const options = optionList(input.options)
+    const request: DecisionRequest = {
+      schema_version: '1.0',
+      id: randomUUID(),
+      revision: 1,
+      idempotency_key: `managed-ticket:${input.task_id}:${input.stage}:${input.attempt}:${input.decision_key}`,
+      project_id: input.repo_id,
+      repo_id: input.repo_id,
+      managed_ticket_task_id: input.task_id,
+      node_id: `${input.task_id}:${input.stage}`,
+      attempt_id: String(input.attempt),
+      decision_key: input.decision_key,
+      kind: input.kind,
+      question: input.question,
+      options,
+      constraints: [...(input.constraints ?? [])],
+      missing_information: [...(input.missing_information ?? [])],
+      impact: input.impact as unknown as DecisionRequest['impact'],
+      action_category: input.action_category,
+      workflow_digest: input.workflow_digest,
+      input_digest: '',
+      status: 'WAITING_HUMAN',
+      created_at: now,
+    }
+    request.input_digest = decisionRequestDigest(request)
+    const checked = validateDecisionRequest(request)
+    if (!checked.ok) return checked
+    await c.query(
+      `INSERT INTO managed_decision_request(
+        id, revision, idempotency_key, project_id, repo_id, managed_ticket_task_id,
+        node_id, attempt_id, decision_key, kind, question, options,
+        constraints, missing_information, impact, action_category, workflow_digest,
+        input_digest, status, created_at, updated_at
+      ) VALUES(
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14::jsonb,
+        $15::jsonb,$16,$17,$18,$19,$20,$20
+      )`,
+      [
+        request.id,
+        request.revision,
+        request.idempotency_key,
+        request.project_id,
+        request.repo_id,
+        request.managed_ticket_task_id,
+        request.node_id,
+        request.attempt_id,
+        request.decision_key,
+        request.kind,
+        request.question,
+        JSON.stringify(request.options),
+        JSON.stringify(request.constraints),
+        JSON.stringify(request.missing_information),
+        JSON.stringify(request.impact),
+        request.action_category,
+        request.workflow_digest,
+        request.input_digest,
+        request.status,
+        request.created_at,
+      ],
+    )
+    const persisted = await c.query<{ body: unknown }>(
+      `SELECT ${REQUEST_JSON} WHERE r.managed_ticket_task_id=$1
+       ORDER BY r.revision DESC LIMIT 1`,
+      [input.task_id],
+    )
+    return ok(persisted.rows[0]?.body as DecisionRequest)
+  }
+  return client === undefined ? asRole('keel_control', run) : run(client)
+}
+
+export interface ManagedTicketDecisionAnswer {
+  readonly requestId: string
+  readonly optionId: string
+  readonly taskStatus: 'READY' | 'CANCELLED'
+  readonly resolution: DecisionResolution
+}
+
+export async function answerManagedTicketDecision(
+  requestId: string,
+  revision: number,
+  optionId: string,
+  now: string,
+): Promise<Result<ManagedTicketDecisionAnswer>> {
+  if (timestamp(now) === null) return err(makeError('SCHEMA_VIOLATION', '答复时间不是合法时间'))
+  return asRole('keel_control', async (c) => {
+    const locked = await c.query(
+      'SELECT id FROM managed_decision_request WHERE id=$1 AND revision=$2 FOR UPDATE',
+      [requestId, revision],
+    )
+    if (locked.rowCount !== 1) return err(makeError('NOT_FOUND', '找不到 decision request'))
+    const request = await requestBody(c, requestId, revision)
+    if (request === null) return err(makeError('NOT_FOUND', '找不到 decision request'))
+    if (request.managed_ticket_task_id === undefined)
+      return err(makeError('CONFLICT', '该请求不属于 managed ticket task'))
+    if (request.status !== 'WAITING_HUMAN')
+      return err(makeError('CONFLICT', `decision request 当前是 ${request.status}，不可人工答复`))
+    const option = request.options.find((entry) => entry.id === optionId)
+    if (option === undefined) return err(makeError('SCHEMA_VIOLATION', '答案不在请求选项内'))
+    const task = (
+      await c.query<{ status: string }>(
+        'SELECT status FROM managed_ticket_task WHERE id=$1 FOR UPDATE',
+        [request.managed_ticket_task_id],
+      )
+    ).rows[0]
+    if (task === undefined) return err(makeError('NOT_FOUND', '找不到 managed ticket task'))
+    if (task.status !== 'WAITING_HUMAN')
+      return err(makeError('CONFLICT', `ticket task 当前是 ${task.status}，不可答复`))
+    const resolution = await insertHumanResolution(c, request, option, option.text, now)
+    const shouldContinue = option.id === 'option-2'
+    const taskStatus = shouldContinue ? 'READY' : 'CANCELLED'
+    await c.query(
+      `UPDATE managed_ticket_task SET status=$2,pending_decision_id=NULL,pending_decision_revision=NULL,
+         lease_token=NULL,lease_until=NULL,updated_at=$3 WHERE id=$1`,
+      [request.managed_ticket_task_id, taskStatus, now],
+    )
+    await ticketEvent(c, request.managed_ticket_task_id, 'ManagedTicketDecisionAnswered', {
+      requestId,
+      revision,
+      optionId,
+      disposition: resolution.disposition,
+      taskStatus,
+    })
+    return ok({ requestId, optionId, taskStatus, resolution })
+  })
 }
 
 export async function escalateDecisionRequest(
