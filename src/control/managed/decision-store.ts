@@ -127,6 +127,10 @@ async function decisionsForProject(c: PoolClient, projectId: string): Promise<Pr
   return rows.rows.map((row) => row.body as ProjectDecision)
 }
 
+async function lockDecisionScope(c: PoolClient, projectId: string): Promise<void> {
+  await c.query('SELECT managed_lock_decision_scope($1)', [projectId])
+}
+
 export async function listProjectDecisions(projectId: string): Promise<ProjectDecision[]> {
   return asRole('keel_control', (c) => decisionsForProject(c, projectId))
 }
@@ -153,9 +157,9 @@ async function currentPolicies(
   projectId: string,
 ): Promise<DelegationPolicyVersion[]> {
   const rows = await c.query<{ body: unknown }>(
-    `SELECT DISTINCT ON (policy_key) ${POLICY_JSON}
+    `SELECT ${POLICY_JSON}
      WHERE p.project_id=$1 AND p.revoked_at IS NULL AND p.superseded_by IS NULL
-     ORDER BY policy_key, policy_version DESC`,
+     ORDER BY p.policy_id, p.version`,
     [projectId],
   )
   return rows.rows.map((row) => row.body as DelegationPolicyVersion)
@@ -567,7 +571,7 @@ async function controlForRequest(
   if (request.managed_ticket_task_id !== undefined) {
     const task = (
       await c.query<{ status: string; attempts: number; max_attempts: number }>(
-        'SELECT status, attempts, max_attempts FROM managed_ticket_task WHERE id=$1',
+        'SELECT status, attempts, max_attempts FROM managed_ticket_task WHERE id=$1 FOR SHARE',
         [request.managed_ticket_task_id],
       )
     ).rows[0]
@@ -582,7 +586,7 @@ async function controlForRequest(
     return { state: 'paused', task_active: false, budget_available: false }
   const task = (
     await c.query<{ status: string; attempts: number; max_attempts: number }>(
-      'SELECT status, attempts, max_attempts FROM managed_task WHERE id=$1',
+      'SELECT status, attempts, max_attempts FROM managed_task WHERE id=$1 FOR SHARE',
       [request.managed_task_id],
     )
   ).rows[0]
@@ -636,6 +640,11 @@ export async function resolveTianwenProposalInTx(
   now: string,
 ): Promise<Result<DecisionResolution>> {
   if (timestamp(now) === null) return err(makeError('SCHEMA_VIOLATION', '接纳时间不是合法时间'))
+  const lockedRequest = await c.query(
+    'SELECT id FROM managed_decision_request WHERE id=$1 AND revision=$2 FOR UPDATE',
+    [requestId, revision],
+  )
+  if (lockedRequest.rowCount !== 1) return err(makeError('NOT_FOUND', '找不到 decision request'))
   const request = await requestBody(c, requestId, revision)
   if (request === null) return err(makeError('NOT_FOUND', '找不到 decision request'))
   if (request.status !== 'OPEN' && request.status !== 'PROCESSING')
@@ -644,6 +653,7 @@ export async function resolveTianwenProposalInTx(
   if (proposal === null) return err(makeError('NOT_FOUND', '找不到天问提案'))
   const checkedProposal = validateTianwenProposal(proposal)
   if (!checkedProposal.ok) return checkedProposal
+  await lockDecisionScope(c, request.project_id)
   const decisions = await decisionsForProject(c, request.project_id)
   const policies = await currentPolicies(c, request.project_id)
   const control = await controlForRequest(c, request)
