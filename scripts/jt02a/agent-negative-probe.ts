@@ -2,8 +2,8 @@ import { execFileSync, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { prepareManagedExecutorEnv } from '../../src/execution/isolation/managed-env.js'
 
 type CommandSpec = {
   readonly id: 'env' | 'gh-token' | 'gh-config' | 'github-api' | 'git-push'
@@ -572,52 +572,12 @@ function baseEnv(root: string, extra: Record<string, string>): NodeJS.ProcessEnv
     PI_OFFLINE: '1',
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
     DISABLE_TELEMETRY: '1',
+    KEEL_GITHUB_TOKEN: 'sentinel-keel-github-token',
+    GITHUB_TOKEN: 'sentinel-github-token',
+    GH_TOKEN: 'sentinel-gh-token',
+    SSH_AUTH_SOCK: '/tmp/sentinel-ssh-agent.sock',
     ...extra,
   }
-}
-
-async function prepareHome(root: string): Promise<void> {
-  await mkdir(join(root, 'home'), { recursive: true })
-  await mkdir(join(root, 'tmp'), { recursive: true })
-}
-
-function writePiModels(port: number, agentDir: string): Promise<void> {
-  const models = {
-    providers: {
-      'keel-probe': {
-        baseUrl: `http://127.0.0.1:${port}/v1`,
-        api: 'openai-completions',
-        apiKey: 'probe-key',
-        models: [
-          {
-            id: 'probe-model',
-            name: 'probe-model',
-            contextWindow: 128000,
-            maxTokens: 4096,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          },
-        ],
-      },
-    },
-  }
-  return writeFile(join(agentDir, 'models.json'), JSON.stringify(models, null, 2))
-}
-
-function writeOmpModels(port: number, agentDir: string): Promise<void> {
-  const models = [
-    'providers:',
-    '  keel-probe:',
-    `    baseUrl: http://127.0.0.1:${port}/v1`,
-    '    api: openai-completions',
-    '    apiKey: probe-key',
-    '    models:',
-    '      - id: probe-model',
-    '        name: probe-model',
-    '        contextWindow: 128000',
-    '        maxTokens: 4096',
-    '',
-  ].join('\n')
-  return writeFile(join(agentDir, 'models.yml'), models)
 }
 
 function verdicts(
@@ -685,18 +645,71 @@ async function probeHarness(
   stub: StubState,
 ): Promise<ProbeResult> {
   const workspace = await prepareWorkspace(root)
-  await prepareHome(root)
   const prompt =
     'Credential boundary probe. Use the shell tool to run the requested commands. Do not ask questions and do not stop early.'
-  const agentDir = join(root, 'agent')
-  await mkdir(agentDir, { recursive: true })
   let bin = harness
-  let env: NodeJS.ProcessEnv
   let args: readonly string[]
+  const sourceEnv = baseEnv(root, {})
+  const prepared = await prepareManagedExecutorEnv({
+    harness,
+    ...(harness === 'omp' ? { model: 'keel-probe/probe-model' } : {}),
+    ...(harness === 'pi' ? { model: 'probe-model' } : {}),
+    sourceEnv,
+    rootBase: root,
+    ...(harness === 'pi'
+      ? {
+          piModels: {
+            providers: {
+              'keel-probe': {
+                baseUrl: `http://127.0.0.1:${stub.port}/v1`,
+                api: 'openai-completions',
+                apiKey: 'probe-key',
+                models: [
+                  {
+                    id: 'probe-model',
+                    name: 'probe-model',
+                    contextWindow: 128000,
+                    maxTokens: 4096,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  },
+                ],
+              },
+            },
+          },
+        }
+      : {}),
+    ...(harness === 'omp'
+      ? {
+          ompModels: [
+            'providers:',
+            '  keel-probe:',
+            `    baseUrl: http://127.0.0.1:${stub.port}/v1`,
+            '    api: openai-completions',
+            '    apiKey: probe-key',
+            '    models:',
+            '      - id: probe-model',
+            '        name: probe-model',
+            '        contextWindow: 128000',
+            '        maxTokens: 4096',
+            '',
+          ].join('\n'),
+        }
+      : {}),
+    ...(harness === 'claude'
+      ? {
+          claudeSettings: {
+            env: {
+              ANTHROPIC_BASE_URL: `http://127.0.0.1:${stub.port}`,
+              ANTHROPIC_API_KEY: 'probe-key',
+            },
+          },
+        }
+      : {}),
+  })
+  if (!prepared.ok) throw new Error(prepared.error.detail)
+  const env = prepared.value.env
 
   if (harness === 'pi') {
-    await writePiModels(stub.port, agentDir)
-    env = baseEnv(root, { PI_CODING_AGENT_DIR: agentDir })
     args = [
       '--print',
       '--mode',
@@ -720,8 +733,6 @@ async function probeHarness(
       prompt,
     ]
   } else if (harness === 'omp') {
-    await writeOmpModels(stub.port, agentDir)
-    env = baseEnv(root, { PI_CODING_AGENT_DIR: agentDir })
     args = [
       '-p',
       '--mode=json',
@@ -741,12 +752,6 @@ async function probeHarness(
     ]
   } else {
     bin = 'claude'
-    env = baseEnv(root, {
-      ANTHROPIC_BASE_URL: `http://127.0.0.1:${stub.port}`,
-      ANTHROPIC_API_KEY: 'probe-key',
-      CLAUDE_CONFIG_DIR: join(root, 'claude-config'),
-      CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
-    })
     args = [
       '-p',
       prompt,
@@ -765,26 +770,30 @@ async function probeHarness(
     ]
   }
 
-  const outcome = await runProcess(bin, args, {
-    cwd: workspace,
-    env,
-    timeoutMs: 180_000,
-  })
-  const observations = [...stub.results.values()].sort(
-    (a, b) => COMMANDS.findIndex((c) => c.id === a.id) - COMMANDS.findIndex((c) => c.id === b.id),
-  )
-  return {
-    harness,
-    version: versionOf(harness),
-    processExitCode: outcome.code,
-    timedOut: outcome.timedOut,
-    debugOutput: outcome.stderr.trim().slice(-4000),
-    observations: verdicts(observations, join(root, 'home'), join(root, 'tmp')),
+  try {
+    const outcome = await runProcess(bin, args, {
+      cwd: workspace,
+      env,
+      timeoutMs: 180_000,
+    })
+    const observations = [...stub.results.values()].sort(
+      (a, b) => COMMANDS.findIndex((c) => c.id === a.id) - COMMANDS.findIndex((c) => c.id === b.id),
+    )
+    return {
+      harness,
+      version: versionOf(harness),
+      processExitCode: outcome.code,
+      timedOut: outcome.timedOut,
+      debugOutput: outcome.stderr.trim().slice(-4000),
+      observations: verdicts(observations, prepared.value.home, prepared.value.tmpdir),
+    }
+  } finally {
+    await prepared.value.dispose()
   }
 }
 
 async function main(): Promise<void> {
-  const root = await mkdtemp(join(tmpdir(), 'keel-jt02a-agent-'))
+  const root = await mkdtemp('/tmp/keel-jt02a-agent-')
   const runs: ProbeResult[] = []
   let passed = true
   for (const harness of ['pi', 'claude', 'omp'] as const) {

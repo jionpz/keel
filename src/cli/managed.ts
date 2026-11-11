@@ -30,8 +30,10 @@ import { listManagedTicketStages } from '../control/managed/ticket-store.js'
 import { runTicketTianwen, tickPendingTicketTianwen } from '../control/managed/ticket-tianwen.js'
 import { requireClaudeReady } from '../execution/adapters/claude-code.js'
 import { requirePiBinary } from '../execution/adapters/pi.js'
-import { managedInference } from '../execution/managed-inference.js'
-import { ticketWorkerFromAdapter } from '../execution/ticket-stage-runner.js'
+import {
+  createIsolatedManagedInference,
+  createIsolatedTicketWorker,
+} from '../execution/isolated-ticket-worker.js'
 import { asRole } from '../fact/db.js'
 import { GitCliPushGateway } from '../fact/git-push.js'
 import { GitHubProvider } from '../fact/github-provider.js'
@@ -320,8 +322,7 @@ async function runWorker(argv: readonly string[]): Promise<void> {
     }
   }
 
-  const adapter = createHarnessAdapter(harness.value, model.value)
-  const infer = managedInference(adapter)
+  const infer = createIsolatedManagedInference(harness.value, model.value)
   if (once) {
     const result = await tickManaged(infer, taskId)
     if (!result.ok) throw new Error(result.error.detail)
@@ -346,9 +347,7 @@ async function runWorker(argv: readonly string[]): Promise<void> {
   }
 }
 
-async function createTicketWorker(
-  flags: Map<string, FlagValue>,
-): Promise<ReturnType<typeof ticketWorkerFromAdapter>> {
+async function createTicketWorker(flags: Map<string, FlagValue>): Promise<ManagedTicketWorker> {
   const harnessRaw = optional(flags, 'harness')
   const modelRaw = optional(flags, 'model')
   const harness = resolveHarness(harnessRaw, process.env.KEEL_HARNESS)
@@ -368,7 +367,12 @@ async function createTicketWorker(
       throw new Error('找不到可用的 omp CLI；ticket worker 未认领任务')
     }
   }
-  return ticketWorkerFromAdapter(createHarnessAdapter(harness.value, model.value))
+  const adapter = createHarnessAdapter(harness.value, model.value)
+  return createIsolatedTicketWorker({
+    harness: harness.value,
+    ...(model.value === undefined ? {} : { model: model.value }),
+    descriptor: adapter.describe(),
+  })
 }
 
 async function runTicketTick(argv: readonly string[]): Promise<void> {

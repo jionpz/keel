@@ -48,6 +48,11 @@ export interface ClaudeCodeOptions {
    */
   readonly model?: string
   readonly spawnFn?: typeof spawn
+  /**
+   * 显式子进程环境。省略时沿用本机普通 CLI 的兼容行为（process.env 经
+   * `sanitizeClaudeEnv` 去掉宿主运行时变量）；managed 写执行必须传入 allowlist 环境。
+   */
+  readonly env?: NodeJS.ProcessEnv
   readonly interruptKillTimeoutMs?: number
   readonly toolInventory?: readonly string[]
   readonly allowShellFallback?: boolean
@@ -238,9 +243,16 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
     }
     const argv = buildClaudeArgv(spec, argvOpts)
 
-    const proc = await run(this.bin, argv, spec.workspace.path, this.opts.spawnFn, (p) => {
-      state.proc = p
-    })
+    const proc = await run(
+      this.bin,
+      argv,
+      spec.workspace.path,
+      this.opts.spawnFn,
+      (p) => {
+        state.proc = p
+      },
+      this.opts.env,
+    )
 
     state.proc = null
 
@@ -661,13 +673,14 @@ function run(
   cwd: string,
   spawnFn: typeof spawn = spawn,
   onSpawn?: (p: ChildProcess) => void,
+  env?: NodeJS.ProcessEnv,
 ): Promise<ProcResult> {
   return new Promise((resolve) => {
     const p = spawnFn(bin, [...args], {
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: true,
-      env: sanitizeClaudeEnv(process.env),
+      env: sanitizeClaudeEnv(env ?? process.env),
     })
     onSpawn?.(p)
     let stdout = ''

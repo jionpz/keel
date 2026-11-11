@@ -50,6 +50,11 @@ export interface OmpOptions {
   readonly model?: string
   /** 覆盖 spawn，供测试注入 */
   readonly spawnFn?: typeof spawn
+  /**
+   * 显式子进程环境。省略时沿用 Node 的默认继承行为，服务于本机普通 CLI；
+   * managed 写执行必须传入 allowlist 环境。
+   */
+  readonly env?: NodeJS.ProcessEnv
   /** interrupt 后 SIGTERM 到 SIGKILL 的兜底毫秒；默认 2000。测试注入短值 */
   readonly interruptKillTimeoutMs?: number
 }
@@ -274,6 +279,7 @@ export class OmpAdapter implements HarnessAdapter {
       (chunk) => {
         for (const event of parser.push(chunk)) emitProgress(event)
       },
+      this.opts.env,
     )
 
     // 进程已结束 —— 引用不再有意义
@@ -402,6 +408,7 @@ function run(
   spawnFn: typeof spawn = spawn,
   onSpawn?: (p: ChildProcess) => void,
   onChunk?: (chunk: string) => void,
+  env?: NodeJS.ProcessEnv,
 ): Promise<ProcResult> {
   return new Promise((resolve) => {
     const p = spawnFn(bin, [...args], {
@@ -410,6 +417,7 @@ function run(
       // R7(issue #23):独立进程组 —— interrupt 可用 kill(-pid) 整组终止,
       // 防 omp 派生的子进程逃逸
       detached: true,
+      ...(env === undefined ? {} : { env }),
     })
     onSpawn?.(p)
     let stdout = ''

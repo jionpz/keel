@@ -14,3 +14,9 @@ export {
   findExecutorEnvViolations,
   isForbiddenExecutorEnvKey,
 } from './executor-env.js'
+export {
+  type ManagedExecutorEnv,
+  type ManagedHarness,
+  type PrepareManagedEnvOptions,
+  prepareManagedExecutorEnv,
+} from './managed-env.js'

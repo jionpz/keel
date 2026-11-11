@@ -1,15 +1,16 @@
 # Executor Isolation（执行器隔离门禁）
 
-> 状态：JT-02A 第一个可执行切片。已实现环境 allowlist、容器规格校验、真实 Docker
-> 负例探针，以及 Pi/Claude Code/OMP 的真实 agent 级凭据负例；**尚未接入 managed
-> runtime，也未开放任何写工具**。
+> 状态：环境 allowlist、容器规格校验、真实 Docker 负例探针、Pi/Claude Code/OMP
+> 的真实 agent 级凭据负例，以及 managed ticket worker 的逐次隔离 HOME/TMPDIR 已接入。
+> managed 写执行现在只允许本机模型网关；**宿主文件系统仍由运行进程的用户权限约束，
+> 容器执行器尚未接入 managed runtime**。
 
 本门禁检查 managed 写执行器的启动边界：环境是否只有 allowlist、容器是否只有
 一个只读 workspace 挂载、workspace 是否为独立 git 顶层、宿主 HOME/gh/SSH 是否
 不挂载、容器是否没有外部网络。它**不宣称**已经证明任意真实 agent 看不到其他项目
-目录；容器探针证明挂载与网络边界，agent 级探针证明隔离 HOME/配置下三种 CLI 拿不到
-GitHub/SSH 凭据。managed 代码修改、push、PR 动作继续关闭，直到后续 outbox / PR
-网关完成。
+目录：容器探针证明挂载与网络边界，agent 级探针证明隔离 HOME/配置下三种 CLI 拿不到
+GitHub/SSH 凭据。managed 写执行已经通过 outbox / PR 网关开放，但运行仍在宿主用户
+权限内，不能把本文件当作容器级或多租户级隔离证明。
 
 ## 1. 不变量
 
@@ -42,8 +43,19 @@ buildExecutorEnv(source, { home: '/tmp/home', tmpdir: '/tmp' })
 `GITHUB*`、`GH_*`、`SSH_*`、`*_ASKPASS` 等。即使未来误把某个凭据键加进
 allowlist，`findExecutorEnvViolations` 仍会拒绝。
 
-当前已有 adapter 的 `sanitizeClaudeEnv` 仍是“剔除宿主信号”的黑名单，服务于
-本机 adapter 兼容；本文件定义的 allowlist 是新 managed 隔离门禁，两者尚未合并。
+`src/execution/isolation/managed-env.ts` 负责把门禁接到实际执行：
+
+- `prepareManagedExecutorEnv` 每次调用创建独立的 `/tmp/keel-exec-*`、`home`、`tmp`；
+- 子进程环境只由 `buildExecutorEnv` 生成，`HOME`/`TMPDIR` 不继承宿主；
+- Pi 只写最小 `~/.pi/agent/models.json`（本机网关 provider + 单个模型），并复制
+  Pi 子代理扩展及其 npm 依赖到隔离 HOME；
+- Claude 只写最小 `~/.claude/settings.json`（本机网关 URL 与占位 token）；
+- OMP 只写选中的本机网关 provider 块与 `config.yml`，拒绝 keychain 命令；
+- 外部 `baseUrl`、真实 API key、keychain `!command` 都在启动前拒绝。
+
+Pi / Claude Code / OMP 的 adapter 现在都接受显式 `env`，并把该对象直接传给
+`spawn`；省略时才保留本机普通 CLI 的继承行为。`sanitizeClaudeEnv` 仍是兼容层，
+managed 路径传入的已经是 allowlist 环境，因此它不会再放大边界。
 
 ## 3. 容器规格门禁
 
@@ -144,8 +156,11 @@ pnpm run check:agents
 4. `curl ... https://api.github.com/user`
 5. `git push` 到真实 GitHub 仓库
 
-每个 harness 使用独立临时 `HOME`、`XDG_*`、`TMPDIR`、`PI_CODING_AGENT_DIR` 或
-`CLAUDE_CONFIG_DIR`；子进程环境只由显式 allowlist 构造，不继承宿主 `process.env`。
+探针现在调用与 managed worker 相同的 `prepareManagedExecutorEnv`：每个 harness 使用
+独立临时 `HOME`、`TMPDIR` 和最小模型配置；宿主侧显式注入
+`KEEL_GITHUB_TOKEN` / `GITHUB_TOKEN` / `GH_TOKEN` / `SSH_AUTH_SOCK` 作为 sentinel，
+再断言子进程 `env` 中不存在这些键。子进程环境只由显式 allowlist 构造，不继承宿主
+`process.env`。
 `git push` 前显式清空 credential helper，并禁用终端提示、askpass 和 SSH agent。
 
 判定要求：
@@ -158,16 +173,25 @@ pnpm run check:agents
 - GitHub API 只接受 `401` / `403` 或明确的网络失败；`git push` 必须非零退出。
 - 证据 JSON 只记录退出码、输出字节数、判定和原因，不保存原始输出或 token。
 
-2026-11-11 本地实测：Pi 1.5.1、Claude Code 2.1.314、OMP 18.11.1 全部 PASS。
+2026-11-11 本地实测：Pi 1.5.1、Claude Code 2.1.314、OMP 18.11.1 全部 PASS；
+宿主 sentinel 凭据没有进入任何一个 harness。adapter 层另有 `spawnFn` 单测，
+断言显式 `env` 原样传给子进程且不含 sentinel。
 
 边界：agent 级探针在宿主以隔离 HOME/配置运行，**不证明**绝对路径（如
-`/Users/<user>/.ssh`）不可读；文件系统挂载边界由第 4 节容器探针证明。生产多租户
-仍需更强的系统级沙箱。
+`/Users/<user>/.ssh`）不可读；第 4 节容器探针只证明容器规格可以做到挂载边界，
+managed runtime 尚未使用该容器。生产多租户仍需更强的系统级沙箱。
 
-## 6. 尚未覆盖
+## 6. 已接入与残余边界
 
-- 未把本门禁接入 `src/control/managed/` 或任何 managed runtime 写路径；写工具仍关闭。
-- 容器内没有模型推理凭据与外部网络，因此不能在其中调用模型；未来需要单独的受信
-  推理通道，不能把 GitHub 凭据或宿主 HOME 作为交换条件。
+- `managed ticket worker` 与 managed 只读推理已通过 `prepareManagedExecutorEnv`
+  接入本门禁；每个 stage attempt / 天问调用使用独立 HOME/TMPDIR，adapter 用显式
+  env 启动子进程。
+- managed 写执行只接受本机模型网关（`127.0.0.1` / `localhost` / `::1`）；外网
+  provider、真实 API key 与 keychain `!command` 会在认领后、spawn 前拒绝。
+- **未接入容器执行器**：agent 仍以宿主用户身份运行，绝对路径读取、宿主已授权文件
+  和网络出口没有被系统级沙箱封死。当前能证明的是“凭据不通过环境继承”，不是
+  “只能看到任务 worktree”。因此不能宣称满足容器/独立低权限运行用户这一条。
+- 容器内没有模型推理凭据与外部网络，因此不能直接在其中调用模型；未来需要单独的
+  受信推理通道，不能把 GitHub 凭据或宿主 HOME 作为交换条件。
 - Docker daemon、容器运行时和宿主机仍是信任根；本门禁不宣称虚拟机级隔离或
   生产级多租户隔离。
