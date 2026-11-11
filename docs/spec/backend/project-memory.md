@@ -109,8 +109,8 @@ epoch、候选数、是否扩展、扩展/升级原因、实际引用决定、�
 kind/action/resources/environment/reversibility。天问的 `delegated` 决议或伪造 actor
 会被拒绝。
 
-当前认证边界仍是本机单 owner：CLI 使用 `local-operator`。正式会话到 owner 的认证
-映射尚未接线，不能把该入口当作多租户身份认证。
+当前认证边界是本机单 owner：CLI 使用 `local-operator`。Keel 定位为个人单用户
+工具，不使用多租户身份认证；该入口只服务本机 owner。
 
 ## CLI
 

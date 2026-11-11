@@ -100,7 +100,8 @@ request 的 `attempt_id` 指向产生问题的 `managed_attempt`，把决策尝�
   时创建 `revision + 1`；`ticket-override` 可在任务继续前显式覆盖。
 - `recordProjectDecision()` 与 `recordDelegationPolicy()` 目前只允许受信控制入口调用；
   `policy-publish/policy-revoke` 的 owner 身份来自本机 CLI 显式参数并要求
-  `--confirm`，不接受策略文件自报身份；HTTP/多租户认证会话仍未接线。
+  `--confirm`，不接受策略文件自报身份。Keel 定位为个人单用户工具，不做多租户/
+  HTTP 多用户认证。
 - `impact` 仍由调查或 ticket 模型声明；JT-02D 的执行网关必须重新核对动作、环境与
   资源，`approval` 不会自动委派。
 - outbox/PR 属 JT-02D，required checks 属 JT-02E；action gateway 独立消费

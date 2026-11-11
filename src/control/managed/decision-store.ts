@@ -541,7 +541,7 @@ export async function recordDelegationPolicy(
 
 /**
  * 本机 owner 入口：approval 身份来自 CLI 的显式确认，不接受策略文件自报 owner。
- * 这只表示本机单 owner 模型；HTTP/多租户入口必须另行接认证会话。
+ * Keel 定位为个人单用户工具；该入口只服务本机 owner，不做 HTTP/多租户认证。
  */
 export async function publishDelegationPolicy(
   policy: DelegationPolicyVersion,

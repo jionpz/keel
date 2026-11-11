@@ -167,7 +167,7 @@ ExecutionPermit {
 
 原始事实和授权只由 Control Plane 通过受限角色写入；Execution 只接收 Context、提交 Proposal。投影可更新，原始事件/决定版本只增不改。新 GRANT 应按实际方法最小化，禁止为方便直接赋予 Execution 读写整个事实库的权限。
 
-权限制定者身份从认证会话取得，不接受 HTTP body 或模型输出传来的 `approved_by_owner`。首发单 owner 多项目也必须校验项目映射与作用域；后续多租户必须增加独立隔离设计，不能仅靠提示词。
+权限制定者身份从本机 owner 入口取得，不接受 HTTP body 或模型输出传来的 `approved_by_owner`。单 owner 多项目也必须校验项目映射与作用域；Keel 不做多租户，不预留共享租户入口。
 
 ## 5. 状态、去重与竞态
 
