@@ -300,9 +300,7 @@ export async function openDecisionRequestFromManagedQuestion(
   return client === undefined ? asRole('keel_control', run) : run(client)
 }
 
-export async function recordProjectDecision(
-  decision: ProjectDecision,
-): Promise<Result<ProjectDecision>> {
+function validateNewProjectDecision(decision: ProjectDecision): Result<ProjectDecision> {
   const checked = validateProjectDecision(decision)
   if (!checked.ok) return checked
   if (!decision.options.some((option) => option.id === decision.selected_option_id))
@@ -319,69 +317,82 @@ export async function recordProjectDecision(
     decision.revocation_reason !== undefined
   )
     return err(makeError('SCHEMA_VIOLATION', '新项目决定不能预填替代或撤销终态'))
-  try {
-    await asRole('keel_control', async (c) => {
-      if (decision.supersedes_id !== undefined) {
-        const old = (
-          await c.query<{
-            project_id: string
-            decision_key: string
-            superseded_by: string | null
-            revoked_at: string | null
-          }>(
-            `SELECT project_id, decision_key, superseded_by, revoked_at
-             FROM managed_project_decision WHERE id=$1`,
-            [decision.supersedes_id],
-          )
-        ).rows[0]
-        if (old === undefined) throw makeError('NOT_FOUND', '找不到被替代的项目决定')
-        if (
-          old.project_id !== decision.project_id ||
-          old.decision_key !== decision.decision_key ||
-          old.superseded_by !== null ||
-          old.revoked_at !== null
-        )
-          throw makeError('CONFLICT', '被替代的项目决定不属于同作用域或已失效')
-      }
-      await c.query(
-        `INSERT INTO managed_project_decision(
-          id, project_id, decision_key, version, statement, selected_option_id,
-          options, scope, source_type, source_ref, created_by, valid_from,
-          valid_until, supersedes_id, superseded_by, revoked_at, revoked_by,
-          revocation_reason, created_at
-        ) VALUES(
-          $1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9,$10,$11,$12,$13,$14,
-          $15,$16,$17,$18,$19
-        )`,
-        [
-          decision.id,
-          decision.project_id,
-          decision.decision_key,
-          decision.version,
-          decision.statement,
-          decision.selected_option_id,
-          JSON.stringify(decision.options),
-          JSON.stringify(decision.scope),
-          decision.source_type,
-          decision.source_ref,
-          decision.created_by,
-          decision.valid_from,
-          decision.valid_until ?? null,
-          decision.supersedes_id ?? null,
-          decision.superseded_by ?? null,
-          decision.revoked_at ?? null,
-          decision.revoked_by ?? null,
-          decision.revocation_reason ?? null,
-          decision.created_at,
-        ],
+  return ok(decision)
+}
+
+/** 在既有事务中校验并写入决定，供需要原子写多条记录的调用方复用。 */
+export async function recordProjectDecisionInTx(
+  c: PoolClient,
+  decision: ProjectDecision,
+): Promise<void> {
+  const checked = validateNewProjectDecision(decision)
+  if (!checked.ok) throw checked.error
+  if (decision.supersedes_id !== undefined) {
+    const old = (
+      await c.query<{
+        project_id: string
+        decision_key: string
+        superseded_by: string | null
+        revoked_at: string | null
+      }>(
+        `SELECT project_id, decision_key, superseded_by, revoked_at
+         FROM managed_project_decision WHERE id=$1`,
+        [decision.supersedes_id],
       )
-      if (decision.supersedes_id !== undefined) {
-        await c.query('SELECT managed_supersede_decision($1,$2)', [
-          decision.supersedes_id,
-          decision.id,
-        ])
-      }
-    })
+    ).rows[0]
+    if (old === undefined) throw makeError('NOT_FOUND', '找不到被替代的项目决定')
+    if (
+      old.project_id !== decision.project_id ||
+      old.decision_key !== decision.decision_key ||
+      old.superseded_by !== null ||
+      old.revoked_at !== null
+    )
+      throw makeError('CONFLICT', '被替代的项目决定不属于同作用域或已失效')
+  }
+  await c.query(
+    `INSERT INTO managed_project_decision(
+      id, project_id, decision_key, version, statement, selected_option_id,
+      options, scope, source_type, source_ref, created_by, valid_from,
+      valid_until, supersedes_id, superseded_by, revoked_at, revoked_by,
+      revocation_reason, created_at
+    ) VALUES(
+      $1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9,$10,$11,$12,$13,$14,
+      $15,$16,$17,$18,$19
+    )`,
+    [
+      decision.id,
+      decision.project_id,
+      decision.decision_key,
+      decision.version,
+      decision.statement,
+      decision.selected_option_id,
+      JSON.stringify(decision.options),
+      JSON.stringify(decision.scope),
+      decision.source_type,
+      decision.source_ref,
+      decision.created_by,
+      decision.valid_from,
+      decision.valid_until ?? null,
+      decision.supersedes_id ?? null,
+      decision.superseded_by ?? null,
+      decision.revoked_at ?? null,
+      decision.revoked_by ?? null,
+      decision.revocation_reason ?? null,
+      decision.created_at,
+    ],
+  )
+  if (decision.supersedes_id !== undefined) {
+    await c.query('SELECT managed_supersede_decision($1,$2)', [decision.supersedes_id, decision.id])
+  }
+}
+
+export async function recordProjectDecision(
+  decision: ProjectDecision,
+): Promise<Result<ProjectDecision>> {
+  const checked = validateNewProjectDecision(decision)
+  if (!checked.ok) return checked
+  try {
+    await asRole('keel_control', (c) => recordProjectDecisionInTx(c, decision))
     return ok(decision)
   } catch (error) {
     const expected = keelError(error)

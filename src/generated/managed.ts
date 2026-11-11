@@ -818,6 +818,293 @@ revocation_reason?: string
 created_at: string
 }
 
+export interface ProjectMemoryContent {
+/**
+ * @maxItems 512
+ */
+entries: {
+project_id: string
+decision_id: string
+decision_key: string
+decision_version: number
+statement: string
+selected_option_id: string
+/**
+ * @minItems 1
+ * @maxItems 12
+ */
+options: [{
+id: string
+text: string
+}]|[{
+id: string
+text: string
+}, {
+id: string
+text: string
+}]|[{
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}]|[{
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}]|[{
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}]|[{
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}]|[{
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}]|[{
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}]|[{
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}]|[{
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}]|[{
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}]|[{
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}, {
+id: string
+text: string
+}]
+scope: {
+/**
+ * @minItems 1
+ */
+decision_kinds: [("*" | "clarification" | "preference" | "design" | "approval" | "recovery" | "budget"), ...(("*" | "clarification" | "preference" | "design" | "approval" | "recovery" | "budget"))[]]
+/**
+ * @minItems 1
+ */
+actions: [string, ...(string)[]]
+/**
+ * @minItems 1
+ */
+resource_selectors: [string, ...(string)[]]
+/**
+ * @minItems 1
+ */
+environments: [("*" | "local" | "test" | "staging" | "production"), ...(("*" | "local" | "test" | "staging" | "production"))[]]
+/**
+ * @minItems 1
+ */
+reversibilities: [("*" | "reversible" | "partially_reversible" | "irreversible"), ...(("*" | "reversible" | "partially_reversible" | "irreversible"))[]]
+}
+source_type: ("owner_confirmed" | "imported_candidate" | "policy_default")
+source_ref: string
+valid_from: string
+valid_until?: string
+/**
+ * @maxItems 32
+ */
+conditions: string[]
+/**
+ * @maxItems 32
+ */
+conflicts: string[]
+}[]
+}
+
 export interface TianwenDecision {
 recommendation: ("answer" | "approve" | "reject" | "defer")
 answer_option_id?: string
@@ -1104,6 +1391,7 @@ export const MANAGED_SCHEMAS = {"action_intent": {"$schema":"https://json-schema
 "execution_permit": {"$schema":"https://json-schema.org/draft/2020-12/schema","title":"ManagedExecutionPermit","type":"object","additionalProperties":false,"required":["schema_version","id","action_intent_id","project_id","repo_id","action","authorization","expected_sha","diff_digest","target_digest","required_checks","environment","fencing_token","idempotency_key","issued_at","expires_at","status"],"properties":{"schema_version":{"const":"1.0"},"id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"action_intent_id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"project_id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"repo_id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"action":{"const":"push_and_pr"},"authorization":{"type":"object","additionalProperties":false,"required":["kind","id","version","rule_id","digest"],"properties":{"kind":{"const":"delegation_policy"},"id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"version":{"type":"integer","minimum":1},"rule_id":{"type":"string","minLength":1,"maxLength":128},"digest":{"type":"string","pattern":"^[a-f0-9]{64}$"}}},"expected_sha":{"type":"string","pattern":"^[a-f0-9]{40}$"},"diff_digest":{"type":"string","pattern":"^[a-f0-9]{64}$"},"target_digest":{"type":"string","pattern":"^[a-f0-9]{64}$"},"required_checks":{"type":"array","uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":200}},"environment":{"enum":["local","test","staging","production"]},"fencing_token":{"type":"integer","minimum":1},"idempotency_key":{"type":"string","minLength":1,"maxLength":256},"issued_at":{"type":"string","minLength":1,"maxLength":64},"expires_at":{"type":"string","minLength":1,"maxLength":64},"status":{"enum":["VALID","CONSUMED","REVOKED","EXPIRED"]}}},
 "investigation_result": {"$schema":"https://json-schema.org/draft/2020-12/schema","title":"ManagedInvestigationResult","oneOf":[{"type":"object","additionalProperties":false,"required":["outcome","paths"],"properties":{"outcome":{"const":"read_files"},"paths":{"type":"array","minItems":1,"maxItems":8,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":512}}}},{"type":"object","additionalProperties":false,"required":["outcome","question","options","decision_key","kind","action_category","impact"],"properties":{"outcome":{"const":"waiting_decision"},"question":{"type":"string","minLength":1,"maxLength":4000},"options":{"type":"array","minItems":2,"maxItems":6,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":1000}},"decision_key":{"type":"string","pattern":"^[a-z0-9][a-z0-9._-]{0,127}$"},"kind":{"enum":["clarification","preference","design","approval","recovery","budget"]},"action_category":{"type":"string","minLength":1,"maxLength":128},"impact":{"type":"object","additionalProperties":false,"required":["environment","reversibility","affected_resources"],"properties":{"environment":{"enum":["local","test","staging","production"]},"reversibility":{"enum":["reversible","partially_reversible","irreversible"]},"affected_resources":{"type":"array","minItems":1,"maxItems":64,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":512}}}}}},{"type":"object","additionalProperties":false,"required":["outcome","report","citations"],"properties":{"outcome":{"const":"completed"},"report":{"type":"string","minLength":1,"maxLength":16000},"citations":{"type":"array","minItems":1,"maxItems":32,"items":{"type":"object","additionalProperties":false,"required":["path","digest"],"properties":{"path":{"type":"string","minLength":1},"digest":{"type":"string","pattern":"^[a-f0-9]{64}$"}}}}}}]},
 "project_decision": {"$schema":"https://json-schema.org/draft/2020-12/schema","title":"ProjectDecision","type":"object","additionalProperties":false,"required":["schema_version","id","project_id","decision_key","version","statement","selected_option_id","options","scope","source_type","source_ref","created_by","valid_from","created_at"],"properties":{"schema_version":{"const":"1.0"},"id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"project_id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"decision_key":{"type":"string","pattern":"^[a-z0-9][a-z0-9._-]{0,127}$"},"version":{"type":"integer","minimum":1},"statement":{"type":"string","minLength":1,"maxLength":16000},"selected_option_id":{"type":"string","minLength":1,"maxLength":100},"options":{"type":"array","minItems":1,"maxItems":12,"items":{"type":"object","additionalProperties":false,"required":["id","text"],"properties":{"id":{"type":"string","minLength":1,"maxLength":100},"text":{"type":"string","minLength":1,"maxLength":4000}}}},"scope":{"type":"object","additionalProperties":false,"required":["decision_kinds","actions","resource_selectors","environments","reversibilities"],"properties":{"decision_kinds":{"type":"array","minItems":1,"uniqueItems":true,"items":{"enum":["*","clarification","preference","design","approval","recovery","budget"]}},"actions":{"type":"array","minItems":1,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":128}},"resource_selectors":{"type":"array","minItems":1,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":512}},"environments":{"type":"array","minItems":1,"uniqueItems":true,"items":{"enum":["*","local","test","staging","production"]}},"reversibilities":{"type":"array","minItems":1,"uniqueItems":true,"items":{"enum":["*","reversible","partially_reversible","irreversible"]}}}},"source_type":{"enum":["owner_confirmed","imported_candidate","policy_default"]},"source_ref":{"type":"string","minLength":1,"maxLength":1000},"created_by":{"type":"string","minLength":1,"maxLength":200},"valid_from":{"type":"string","minLength":1,"maxLength":64},"valid_until":{"type":"string","minLength":1,"maxLength":64},"supersedes_id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"superseded_by":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"revoked_at":{"type":"string","minLength":1,"maxLength":64},"revoked_by":{"type":"string","minLength":1,"maxLength":200},"revocation_reason":{"type":"string","minLength":1,"maxLength":2000},"created_at":{"type":"string","minLength":1,"maxLength":64}}},
+"project_memory_content": {"$schema":"https://json-schema.org/draft/2020-12/schema","title":"ProjectMemoryContent","type":"object","additionalProperties":false,"required":["entries"],"properties":{"entries":{"type":"array","maxItems":512,"items":{"type":"object","additionalProperties":false,"required":["project_id","decision_id","decision_key","decision_version","statement","selected_option_id","options","scope","source_type","source_ref","valid_from","conditions","conflicts"],"properties":{"project_id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"decision_id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"decision_key":{"type":"string","pattern":"^[a-z0-9][a-z0-9._-]{0,127}$"},"decision_version":{"type":"integer","minimum":1},"statement":{"type":"string","minLength":1,"maxLength":16000},"selected_option_id":{"type":"string","minLength":1,"maxLength":100},"options":{"type":"array","minItems":1,"maxItems":12,"items":{"type":"object","additionalProperties":false,"required":["id","text"],"properties":{"id":{"type":"string","minLength":1,"maxLength":100},"text":{"type":"string","minLength":1,"maxLength":4000}}}},"scope":{"type":"object","additionalProperties":false,"required":["decision_kinds","actions","resource_selectors","environments","reversibilities"],"properties":{"decision_kinds":{"type":"array","minItems":1,"uniqueItems":true,"items":{"enum":["*","clarification","preference","design","approval","recovery","budget"]}},"actions":{"type":"array","minItems":1,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":128}},"resource_selectors":{"type":"array","minItems":1,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":512}},"environments":{"type":"array","minItems":1,"uniqueItems":true,"items":{"enum":["*","local","test","staging","production"]}},"reversibilities":{"type":"array","minItems":1,"uniqueItems":true,"items":{"enum":["*","reversible","partially_reversible","irreversible"]}}}},"source_type":{"enum":["owner_confirmed","imported_candidate","policy_default"]},"source_ref":{"type":"string","minLength":1,"maxLength":1000},"valid_from":{"type":"string","minLength":1,"maxLength":64},"valid_until":{"type":"string","minLength":1,"maxLength":64},"conditions":{"type":"array","maxItems":32,"items":{"type":"string","minLength":1,"maxLength":2000}},"conflicts":{"type":"array","maxItems":32,"items":{"type":"string","minLength":1,"maxLength":2000}}}}}}},
 "tianwen_decision": {"$schema":"https://json-schema.org/draft/2020-12/schema","title":"TianwenDecision","type":"object","additionalProperties":false,"required":["recommendation","rationale","basis_refs","assumptions","alternatives","unresolved_conflicts","missing_authority"],"properties":{"recommendation":{"enum":["answer","approve","reject","defer"]},"answer_option_id":{"type":"string","minLength":1,"maxLength":100},"rationale":{"type":"string","minLength":1,"maxLength":16000},"basis_refs":{"type":"array","maxItems":64,"items":{"type":"object","additionalProperties":false,"required":["kind","id","version"],"properties":{"kind":{"enum":["project_decision","delegation_policy"]},"id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"version":{"type":"integer","minimum":1}}}},"assumptions":{"type":"array","maxItems":64,"items":{"type":"string","minLength":1,"maxLength":2000}},"alternatives":{"type":"array","maxItems":32,"items":{"type":"string","minLength":1,"maxLength":2000}},"unresolved_conflicts":{"type":"array","maxItems":32,"items":{"type":"string","minLength":1,"maxLength":2000}},"missing_authority":{"type":"array","maxItems":32,"items":{"type":"string","minLength":1,"maxLength":2000}}}},
 "tianwen_proposal": {"$schema":"https://json-schema.org/draft/2020-12/schema","title":"TianwenProposal","type":"object","additionalProperties":false,"required":["schema_version","request_id","request_revision","input_digest","recommendation","rationale","claimed_evidence_grade","basis_refs","observed_fact_refs","assumptions","alternatives","unresolved_conflicts","missing_authority"],"properties":{"schema_version":{"const":"1.0"},"request_id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"request_revision":{"type":"integer","minimum":1},"input_digest":{"type":"string","pattern":"^[a-f0-9]{64}$"},"recommendation":{"enum":["answer","approve","reject","defer"]},"answer_option_id":{"type":"string","minLength":1,"maxLength":100},"rationale":{"type":"string","minLength":1,"maxLength":16000},"claimed_evidence_grade":{"enum":["E0","E1","E2","E3"]},"basis_refs":{"type":"array","maxItems":64,"items":{"type":"object","additionalProperties":false,"required":["kind","id","version"],"properties":{"kind":{"enum":["project_decision","delegation_policy"]},"id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},"version":{"type":"integer","minimum":1}}}},"observed_fact_refs":{"type":"array","maxItems":64,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":1000}},"assumptions":{"type":"array","maxItems":64,"items":{"type":"string","minLength":1,"maxLength":2000}},"alternatives":{"type":"array","maxItems":32,"items":{"type":"string","minLength":1,"maxLength":2000}},"unresolved_conflicts":{"type":"array","maxItems":32,"items":{"type":"string","minLength":1,"maxLength":2000}},"missing_authority":{"type":"array","maxItems":32,"items":{"type":"string","minLength":1,"maxLength":2000}},"validation_plan":{"type":"string","minLength":1,"maxLength":8000},"rollback_plan":{"type":"string","minLength":1,"maxLength":8000},"model_profile_version":{"type":"string","minLength":1,"maxLength":300}}},
 "tianwen_suggestion": {"$schema":"https://json-schema.org/draft/2020-12/schema","title":"TianwenSuggestion","type":"object","additionalProperties":false,"required":["recommendation","rationale","missing_information"],"properties":{"recommendation":{"type":"string","minLength":1,"maxLength":4000},"rationale":{"type":"string","minLength":1,"maxLength":4000},"missing_information":{"type":"array","maxItems":12,"items":{"type":"string","minLength":1,"maxLength":1000}}}},

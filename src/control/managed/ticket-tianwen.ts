@@ -18,10 +18,10 @@ import {
   escalateDecisionRequestInTx,
   getDecisionRequest,
   type listDelegationPolicies,
-  type listProjectDecisions,
   resolveTianwenProposalInTx,
   submitTianwenProposalInTx,
 } from './decision-store.js'
+import { type ProjectMemoryRetrieval, retrieveProjectMemoryInTx } from './memory-store.js'
 import { validateTianwenDecision } from './protocol.js'
 import { validateTicketPackage } from './ticket-protocol.js'
 import { getManagedTicketTask, listManagedTicketStages, ticketEvent } from './ticket-store.js'
@@ -98,10 +98,27 @@ async function buildTianwenContext(
   task: ManagedTicketTask,
   ticketPackage: JstackTicketPackage,
   request: DecisionRequest,
-): Promise<Context> {
+): Promise<{ readonly context: Context; readonly memory: ProjectMemoryRetrieval }> {
   const stages = await listManagedTicketStages(task.id)
-  const decisions = await listProjectDecisionsInTx(c, task.repo_id)
   const policies = await listDelegationPoliciesInTx(c, task.repo_id)
+  const memory = await retrieveProjectMemoryInTx(c, {
+    project_id: task.repo_id,
+    request_id: request.id,
+    query: [
+      request.question,
+      request.decision_key,
+      request.action_category,
+      ...request.constraints,
+      ...request.missing_information,
+    ].join('\n'),
+    decision_key: request.decision_key,
+    kind: request.kind,
+    action_category: request.action_category,
+    impact: request.impact,
+    budget_entries: 8,
+    budget_tokens: 4000,
+  })
+  if (!memory.ok) throw memory.error
   const snapshot = JSON.stringify({
     ticket: ticketPackage.ticket,
     package_digest: task.package_digest,
@@ -109,7 +126,7 @@ async function buildTianwenContext(
     stage: task.current_stage,
     worktree: task.worktree_path,
     request,
-    project_decisions: decisions,
+    project_memory: memory.value,
     delegation_policies: policies,
     stage_history: stages.map((stage) => ({
       stage: stage.stage,
@@ -139,32 +156,16 @@ async function buildTianwenContext(
     ),
   ]
   return {
-    context_id: randomUUID(),
-    recipe_id: 'managed-ticket/tianwen',
-    recipe_version: '1',
-    sections,
-    total_tokens: sections.reduce((total, entry) => total + entry.tokens, 0),
-    dropped: [],
+    context: {
+      context_id: randomUUID(),
+      recipe_id: 'managed-ticket/tianwen',
+      recipe_version: '1',
+      sections,
+      total_tokens: sections.reduce((total, entry) => total + entry.tokens, 0),
+      dropped: [],
+    },
+    memory: memory.value,
   }
-}
-
-async function listProjectDecisionsInTx(
-  c: PoolClient,
-  projectId: string,
-): Promise<Awaited<ReturnType<typeof listProjectDecisions>>> {
-  const rows = await c.query<{ body: unknown }>(
-    `SELECT jsonb_strip_nulls(to_jsonb(d)) AS body
-     FROM (
-       SELECT id, '1.0'::text AS schema_version, project_id, decision_key, version,
-         statement, selected_option_id, options, scope, source_type, source_ref,
-         created_by, valid_from, valid_until, supersedes_id, superseded_by,
-         revoked_at, revoked_by, revocation_reason, created_at
-       FROM managed_project_decision WHERE project_id=$1
-       ORDER BY decision_key, version
-     ) d`,
-    [projectId],
-  )
-  return rows.rows.map((row) => row.body) as Awaited<ReturnType<typeof listProjectDecisions>>
 }
 
 async function listDelegationPoliciesInTx(
@@ -254,8 +255,8 @@ async function loadTianwenInput(requestId: string, revision: number) {
     if (task.last_error === 'MUST_STOP' || task.last_error === 'UNAUTHORIZED_ACTION')
       throw makeError('PERMISSION_DENIED', 'must-stop 请求不能由天问自动处理')
     const ticketPackage = await loadTicketPackage(c, task)
-    const context = await buildTianwenContext(c, task, ticketPackage, request)
-    return { task, request, context }
+    const built = await buildTianwenContext(c, task, ticketPackage, request)
+    return { task, request, context: built.context, memory: built.memory }
   })
 }
 
@@ -273,6 +274,30 @@ export async function runTicketTianwen(
   }
   if (loaded.context.total_tokens > 60000)
     return err(makeError('CONTEXT_BUDGET_EXCEEDED', 'ticket 天问上下文超预算'))
+  if (loaded.memory.escalation_reason !== null) {
+    return asRole('keel_control', async (c) => {
+      const escalated = await finalizeUnavailable(
+        c,
+        loaded.task,
+        loaded.request,
+        `项目记忆无法完整重建：${loaded.memory.escalation_reason}`,
+        ZERO_USAGE,
+        now,
+      )
+      if (escalated.ok) {
+        await ticketEvent(c, loaded.task.id, 'ManagedTicketTianwenMemoryEscalated', {
+          requestId,
+          requestRevision: revision,
+          memoryEpoch: loaded.memory.memory_epoch,
+          summaryId: loaded.memory.summary_id,
+          summaryVersion: loaded.memory.summary_version,
+          escalationReason: loaded.memory.escalation_reason,
+          referencedDecisionIds: loaded.memory.referenced_decision_ids,
+        })
+      }
+      return escalated
+    })
+  }
 
   const attemptId = randomUUID()
   await asRole('keel_control', (c) =>
