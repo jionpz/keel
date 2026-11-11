@@ -1,13 +1,15 @@
 # Executor Isolation（执行器隔离门禁）
 
-> 状态：JT-02A 第一个可执行切片。已实现环境 allowlist、容器规格校验和真实 Docker
-> 负例探针，并接入独立的 CI job；**尚未接入 managed runtime，也未开放任何写工具**。
+> 状态：JT-02A 第一个可执行切片。已实现环境 allowlist、容器规格校验、真实 Docker
+> 负例探针，以及 Pi/Claude Code/OMP 的真实 agent 级凭据负例；**尚未接入 managed
+> runtime，也未开放任何写工具**。
 
 本门禁检查 managed 写执行器的启动边界：环境是否只有 allowlist、容器是否只有
 一个只读 workspace 挂载、workspace 是否为独立 git 顶层、宿主 HOME/gh/SSH 是否
 不挂载、容器是否没有外部网络。它**不宣称**已经证明任意真实 agent 看不到其他项目
-目录；真实 Pi/Claude/OMP agent 级负例仍未完成，managed 代码修改、push、PR 动作
-继续关闭（issue #99）。
+目录；容器探针证明挂载与网络边界，agent 级探针证明隔离 HOME/配置下三种 CLI 拿不到
+GitHub/SSH 凭据。managed 代码修改、push、PR 动作继续关闭，直到后续 outbox / PR
+网关完成。
 
 ## 1. 不变量
 
@@ -127,11 +129,44 @@ Docker 不可用、镜像构建失败、任一宿主检查或容器负例失败�
 CI 的 `isolation` job 运行在 `ubuntu-latest`，先显式检查 `docker version`，再执行
 `pnpm run check:isolation`；它不依赖 `pnpm run check` 是否包含 Docker 探针。
 
-## 5. 尚未覆盖
+## 5. Agent 级负例
+
+```sh
+pnpm run check:agents
+```
+
+探针启动本地 OpenAI / Anthropic 兼容 stub，让真实 CLI 在不接触真实模型凭据和外部
+推理网络的情况下按固定顺序执行工具：
+
+1. `env`
+2. `gh auth token`
+3. `cat "$HOME/.config/gh/hosts.yml"`
+4. `curl ... https://api.github.com/user`
+5. `git push` 到真实 GitHub 仓库
+
+每个 harness 使用独立临时 `HOME`、`XDG_*`、`TMPDIR`、`PI_CODING_AGENT_DIR` 或
+`CLAUDE_CONFIG_DIR`；子进程环境只由显式 allowlist 构造，不继承宿主 `process.env`。
+`git push` 前显式清空 credential helper，并禁用终端提示、askpass 和 SSH agent。
+
+判定要求：
+
+- `env` 成功，但不得出现 `GITHUB_TOKEN`、`GH_TOKEN`、`KEEL_GITHUB_TOKEN`、
+  `GITHUB_ENTERPRISE_TOKEN`、`SSH_AUTH_SOCK`、`SSH_AGENT_PID`；`HOME`/`TMPDIR`
+  必须等于隔离目录。
+- 其余四项必须失败；失败文本必须匹配认证失败、配置文件不存在或推送拒绝，不能只
+  凭非零退出码通过，避免“命令不存在”被误判为隔离成功。
+- GitHub API 只接受 `401` / `403` 或明确的网络失败；`git push` 必须非零退出。
+- 证据 JSON 只记录退出码、输出字节数、判定和原因，不保存原始输出或 token。
+
+2026-11-11 本地实测：Pi 1.5.1、Claude Code 2.1.314、OMP 18.11.1 全部 PASS。
+
+边界：agent 级探针在宿主以隔离 HOME/配置运行，**不证明**绝对路径（如
+`/Users/<user>/.ssh`）不可读；文件系统挂载边界由第 4 节容器探针证明。生产多租户
+仍需更强的系统级沙箱。
+
+## 6. 尚未覆盖
 
 - 未把本门禁接入 `src/control/managed/` 或任何 managed runtime 写路径；写工具仍关闭。
-- 尚未对 Pi、Claude Code、OMP 各跑一次真实 agent 级负例；当前只验证可复用的环境、
-  独立 git workspace 与容器启动规格，不是三种 CLI 的最终 managed 验收。
 - 容器内没有模型推理凭据与外部网络，因此不能在其中调用模型；未来需要单独的受信
   推理通道，不能把 GitHub 凭据或宿主 HOME 作为交换条件。
 - Docker daemon、容器运行时和宿主机仍是信任根；本门禁不宣称虚拟机级隔离或
