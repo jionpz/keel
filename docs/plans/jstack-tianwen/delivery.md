@@ -139,10 +139,10 @@ runtime:
 
 运行时 API/CLI 计划支持 project register、serve、questions list、memory rebuild/rollback、
 doctor 和审计导出；policy publish/revoke 与 ticket pause/cancel/resume/override 已按
-本机单 owner 模型接线，HTTP/多租户认证入口仍未实现。名称在实现契约中统一定稿；
-不在当前 CLI 帮助里加入尚未实现的命令。
+本机单 owner 模型接线。Keel 定位为个人单用户工具，HTTP/多租户认证不是待办。
+名称在实现契约中统一定稿；不在当前 CLI 帮助里加入尚未实现的命令。
 
-授权更改有单独认证入口与审计，不通过修改工作区 YAML 生效。项目配置错误 fail-closed；jstack 现有交互式 hooks 的宽松降级不能沿用为后台安全策略。
+授权更改有独立控制入口与审计，不通过修改工作区 YAML 生效。项目配置错误 fail-closed；jstack 现有交互式 hooks 的宽松降级不能沿用为后台安全策略。
 
 ## 4. 生产准入
 
