@@ -10,6 +10,7 @@ import { ZERO_USAGE } from '../../contracts/types.js'
 import { asOwner, asRole, closePool } from '../../fact/db.js'
 import { readManagedFiles } from '../../fact/managed-files.js'
 import type { JstackInvestigationPackage } from '../../generated/managed.js'
+import { recordProjectDecision } from './decision-store.js'
 import { packageDigest } from './protocol.js'
 import { createManagedInvestigation, listManagedQuestions, tickManaged } from './runtime.js'
 import {
@@ -30,6 +31,31 @@ const workflow: JstackInvestigationPackage = {
     stages: 'execute',
     execute: '调查并引用实际观察',
   },
+}
+
+const decisionMeta = {
+  decision_key: 'report.language',
+  kind: 'preference' as const,
+  action_category: 'write_file',
+  impact: {
+    environment: 'local' as const,
+    reversibility: 'reversible' as const,
+    affected_resources: ['README.md'],
+  },
+}
+
+function tianwenDecision(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    recommendation: 'answer',
+    answer_option_id: 'option-1',
+    rationale: '当前问题没有项目明确决定或委托策略依据',
+    basis_refs: [],
+    assumptions: [],
+    alternatives: [],
+    unresolved_conflicts: [],
+    missing_authority: ['项目长期报告语言'],
+    ...over,
+  }
 }
 
 beforeEach(async () => {
@@ -75,6 +101,7 @@ async function events(taskId: string): Promise<string[]> {
 }
 
 const linux = process.platform === 'linux'
+const PAST = '2026-01-01T00:00:00.000Z'
 
 describe.skipIf(!linux)('managed investigation · 持久链路', () => {
   it('读文件→天问建议→人工答复→新worker完成，顺序和来源可审计', async () => {
@@ -87,6 +114,7 @@ describe.skipIf(!linux)('managed investigation · 持久链路', () => {
         outcome: 'waiting_decision',
         question: '报告用哪种语言？',
         options: ['中文', '英文'],
+        ...decisionMeta,
       }),
       taskId,
     )
@@ -102,11 +130,7 @@ describe.skipIf(!linux)('managed investigation · 持久链路', () => {
       return {
         ok: true as const,
         value: {
-          value: {
-            recommendation: '中文',
-            rationale: '当前任务使用中文，但缺明确项目偏好',
-            missing_information: ['项目长期报告语言'],
-          },
+          value: tianwenDecision(),
           usage: ZERO_USAGE,
         },
       }
@@ -157,6 +181,82 @@ describe.skipIf(!linux)('managed investigation · 持久链路', () => {
     expect(contexts.rows.every((r) => r.context.sections?.length > 0)).toBe(true)
   })
 
+  it('E3 明确决定自动唤醒，人工可在任务继续前纠正并留下新 revision', async () => {
+    const { taskId, repoId } = await seed()
+    const decisionId = randomUUID()
+    const recorded = await recordProjectDecision({
+      schema_version: '1.0',
+      id: decisionId,
+      project_id: repoId,
+      decision_key: 'report.language',
+      version: 1,
+      statement: '项目报告固定使用中文。',
+      selected_option_id: 'option-1',
+      options: [
+        { id: 'option-1', text: '中文' },
+        { id: 'option-2', text: '英文' },
+      ],
+      scope: {
+        decision_kinds: ['preference'],
+        actions: ['write_file'],
+        resource_selectors: ['README.md'],
+        environments: ['local'],
+        reversibilities: ['reversible'],
+      },
+      source_type: 'owner_confirmed',
+      source_ref: 'owner-message:test',
+      created_by: 'owner',
+      valid_from: PAST,
+      created_at: PAST,
+    })
+    if (!recorded.ok) throw new Error(recorded.error.detail)
+    await tickManaged(
+      fixed({
+        outcome: 'waiting_decision',
+        question: '报告用哪种语言？',
+        options: ['中文', '英文'],
+        ...decisionMeta,
+      }),
+      taskId,
+    )
+    await tickManaged(
+      fixed(
+        tianwenDecision({
+          basis_refs: [{ kind: 'project_decision', id: decisionId, version: 1 }],
+          missing_authority: [],
+        }),
+      ),
+      taskId,
+    )
+    const question = (await listManagedQuestions(taskId))[0]
+    if (question === undefined) throw new Error('missing question')
+    expect(question.status).toBe('RESOLVED')
+    expect(question.answer).toBe('中文')
+    expect((await getManagedTask(taskId))?.status).toBe('READY')
+    expect(await events(taskId)).toContain('ManagedDecisionDelegated')
+
+    expect((await answerManagedQuestion(question.id, '英文')).ok).toBe(true)
+    const corrected = (await listManagedQuestions(taskId))[0]
+    expect(corrected?.answer).toBe('英文')
+    const state = await getManagedTask(taskId)
+    expect(state?.answers).toHaveLength(1)
+    expect(state?.answers[0]?.actor).toBe('human')
+    const revisions = await asRole('keel_control', (c) =>
+      c.query<{ revision: number; status: string; disposition: string }>(
+        `SELECT r.revision, r.status, d.disposition
+         FROM managed_decision_request r
+         JOIN managed_decision_resolution d
+           ON d.request_id=r.id AND d.request_revision=r.revision
+         WHERE r.managed_question_id=$1 ORDER BY r.revision`,
+        [question.id],
+      ),
+    )
+    expect(revisions.rows).toEqual([
+      { revision: 1, status: 'SUPERSEDED', disposition: 'delegated' },
+      { revision: 2, status: 'RESOLVED', disposition: 'human_confirmed' },
+    ])
+  })
+
   it('新worker可回收过期租约，旧worker迟到结果被围栏拒绝', async () => {
     const { taskId } = await seed()
     const first = await claimManagedTask(new Date().toISOString(), taskId)
@@ -189,7 +289,12 @@ describe.skipIf(!linux)('managed investigation · 持久链路', () => {
   it('天问故障也留真实attempt再上报，不把故障写成人工决定', async () => {
     const { taskId } = await seed()
     await tickManaged(
-      fixed({ outcome: 'waiting_decision', question: '是否继续？', options: ['是', '否'] }),
+      fixed({
+        outcome: 'waiting_decision',
+        question: '是否继续？',
+        options: ['是', '否'],
+        ...decisionMeta,
+      }),
       taskId,
     )
     await tickManaged(fixed({ actor: 'human', answer: 'approve' }), taskId)
@@ -238,13 +343,11 @@ describe.skipIf(!linux)('managed investigation · 持久链路', () => {
       outcome: 'waiting_decision',
       question: '语言？',
       options: ['中文', '英文'],
+      ...decisionMeta,
     })
     await tickManaged(request, a.taskId)
     await tickManaged(request, b.taskId)
-    await tickManaged(
-      fixed({ recommendation: '中文', rationale: '当前输入语言', missing_information: [] }),
-      a.taskId,
-    )
+    await tickManaged(fixed(tianwenDecision()), a.taskId)
     const q = (await listManagedQuestions(a.taskId))[0]
     if (!q) throw new Error('missing question')
     await answerManagedQuestion(q.id, '中文')

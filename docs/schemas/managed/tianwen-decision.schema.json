@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TianwenDecision",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "recommendation",
+    "rationale",
+    "basis_refs",
+    "assumptions",
+    "alternatives",
+    "unresolved_conflicts",
+    "missing_authority"
+  ],
+  "properties": {
+    "recommendation": {"enum": ["answer", "approve", "reject", "defer"]},
+    "answer_option_id": {"type": "string", "minLength": 1, "maxLength": 100},
+    "rationale": {"type": "string", "minLength": 1, "maxLength": 16000},
+    "basis_refs": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "id", "version"],
+        "properties": {
+          "kind": {"enum": ["project_decision", "delegation_policy"]},
+          "id": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},
+          "version": {"type": "integer", "minimum": 1}
+        }
+      }
+    },
+    "assumptions": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {"type": "string", "minLength": 1, "maxLength": 2000}
+    },
+    "alternatives": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {"type": "string", "minLength": 1, "maxLength": 2000}
+    },
+    "unresolved_conflicts": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {"type": "string", "minLength": 1, "maxLength": 2000}
+    },
+    "missing_authority": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {"type": "string", "minLength": 1, "maxLength": 2000}
+    }
+  }
+}

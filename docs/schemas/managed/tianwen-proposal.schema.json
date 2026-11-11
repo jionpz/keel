@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TianwenProposal",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "request_id",
+    "request_revision",
+    "input_digest",
+    "recommendation",
+    "rationale",
+    "claimed_evidence_grade",
+    "basis_refs",
+    "observed_fact_refs",
+    "assumptions",
+    "alternatives",
+    "unresolved_conflicts",
+    "missing_authority"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "request_id": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},
+    "request_revision": {"type": "integer", "minimum": 1},
+    "input_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "recommendation": {"enum": ["answer", "approve", "reject", "defer"]},
+    "answer_option_id": {"type": "string", "minLength": 1, "maxLength": 100},
+    "rationale": {"type": "string", "minLength": 1, "maxLength": 16000},
+    "claimed_evidence_grade": {"enum": ["E0", "E1", "E2", "E3"]},
+    "basis_refs": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "id", "version"],
+        "properties": {
+          "kind": {"enum": ["project_decision", "delegation_policy"]},
+          "id": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},
+          "version": {"type": "integer", "minimum": 1}
+        }
+      }
+    },
+    "observed_fact_refs": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 1000}
+    },
+    "assumptions": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {"type": "string", "minLength": 1, "maxLength": 2000}
+    },
+    "alternatives": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {"type": "string", "minLength": 1, "maxLength": 2000}
+    },
+    "unresolved_conflicts": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {"type": "string", "minLength": 1, "maxLength": 2000}
+    },
+    "missing_authority": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {"type": "string", "minLength": 1, "maxLength": 2000}
+    },
+    "validation_plan": {"type": "string", "minLength": 1, "maxLength": 8000},
+    "rollback_plan": {"type": "string", "minLength": 1, "maxLength": 8000},
+    "model_profile_version": {"type": "string", "minLength": 1, "maxLength": 300}
+  }
+}

@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DecisionResolution",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "request_id",
+    "request_revision",
+    "input_digest",
+    "disposition",
+    "rationale",
+    "evidence_grade",
+    "basis_refs",
+    "actor",
+    "authority_refs",
+    "validity_conditions",
+    "context_digest",
+    "resolved_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "id": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},
+    "request_id": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},
+    "request_revision": {"type": "integer", "minimum": 1},
+    "input_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "disposition": {"enum": ["delegated", "human_confirmed", "owner_required", "denied"]},
+    "answer_option_id": {"type": "string", "minLength": 1, "maxLength": 100},
+    "answer": {"type": "string", "minLength": 1, "maxLength": 4000},
+    "rationale": {"type": "string", "minLength": 1, "maxLength": 16000},
+    "evidence_grade": {"enum": ["E0", "E1", "E2", "E3"]},
+    "basis_refs": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "id", "version"],
+        "properties": {
+          "kind": {"enum": ["project_decision", "delegation_policy"]},
+          "id": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},
+          "version": {"type": "integer", "minimum": 1}
+        }
+      }
+    },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "authenticated_id"],
+      "properties": {
+        "type": {"enum": ["tianwen", "human", "policy"]},
+        "authenticated_id": {"type": "string", "minLength": 1, "maxLength": 300}
+      }
+    },
+    "authority_refs": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "id", "version"],
+        "properties": {
+          "kind": {"enum": ["project_decision", "delegation_policy"]},
+          "id": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},
+          "version": {"type": "integer", "minimum": 1}
+        }
+      }
+    },
+    "validity_conditions": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {"type": "string", "minLength": 1, "maxLength": 2000}
+    },
+    "memory_epoch": {"type": "integer", "minimum": 0},
+    "delegation_policy_id": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},
+    "delegation_policy_version": {"type": "integer", "minimum": 1},
+    "context_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "resolved_at": {"type": "string", "minLength": 1, "maxLength": 64}
+  }
+}
