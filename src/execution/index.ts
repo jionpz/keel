@@ -11,6 +11,7 @@ export const PLANE = 'execution' as const
 
 export {
   buildExecutorEnv,
+  buildMacSandboxProfile,
   EXECUTOR_ENV_ALLOWLIST,
   type ExecutorEnvOptions,
   findExecutorEnvViolations,
@@ -22,8 +23,13 @@ export {
   type IsolationViolation,
   inspectWorkspaceIsolation,
   isForbiddenExecutorEnvKey,
+  type MacSandboxProfileOptions,
   type ManagedExecutorEnv,
   type ManagedHarness,
+  type ManagedOsSandbox,
+  type OsSandboxBackend,
   type PrepareManagedEnvOptions,
   prepareManagedExecutorEnv,
+  prepareManagedOsSandbox,
+  sandboxCommand,
 } from './isolation/index.js'

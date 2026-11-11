@@ -20,3 +20,11 @@ export {
   type PrepareManagedEnvOptions,
   prepareManagedExecutorEnv,
 } from './managed-env.js'
+export {
+  buildMacSandboxProfile,
+  type MacSandboxProfileOptions,
+  type ManagedOsSandbox,
+  type OsSandboxBackend,
+  prepareManagedOsSandbox,
+  sandboxCommand,
+} from './os-sandbox.js'

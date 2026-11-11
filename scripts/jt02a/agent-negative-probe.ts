@@ -2,11 +2,19 @@ import { execFileSync, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { prepareManagedExecutorEnv } from '../../src/execution/isolation/managed-env.js'
 
 type CommandSpec = {
-  readonly id: 'env' | 'gh-token' | 'gh-config' | 'github-api' | 'git-push'
+  readonly id:
+    | 'env'
+    | 'gh-token'
+    | 'gh-config'
+    | 'github-api'
+    | 'git-push'
+    | 'host-home'
+    | 'host-project'
   readonly command: string
 }
 
@@ -35,23 +43,32 @@ type ProbeResult = {
 type StubState = {
   readonly server: Server
   readonly port: number
+  readonly commands: readonly CommandSpec[]
   readonly issued: Map<string, number>
   readonly results: Map<number, Observation>
 }
 
-const COMMANDS: readonly CommandSpec[] = [
-  { id: 'env', command: 'env' },
-  { id: 'gh-token', command: 'gh auth token' },
-  { id: 'gh-config', command: 'cat "$HOME/.config/gh/hosts.yml"' },
-  {
-    id: 'github-api',
-    command: "curl -sS -o /dev/null -w '%{http_code}' https://api.github.com/user",
-  },
-  {
-    id: 'git-push',
-    command: 'git push origin HEAD:refs/heads/keel-jt02a-agent-probe',
-  },
-]
+function commandsFor(hostHome: string): readonly CommandSpec[] {
+  return [
+    { id: 'env', command: 'env' },
+    { id: 'gh-token', command: 'gh auth token' },
+    { id: 'gh-config', command: 'cat "$HOME/.config/gh/hosts.yml"' },
+    { id: 'host-home', command: `ls ${shellQuote(hostHome)}` },
+    { id: 'host-project', command: `cat ${shellQuote(join(process.cwd(), 'package.json'))}` },
+    {
+      id: 'github-api',
+      command: "curl -sS -o /dev/null -w '%{http_code}' https://api.github.com/user",
+    },
+    {
+      id: 'git-push',
+      command: 'git push origin HEAD:refs/heads/keel-jt02a-agent-probe',
+    },
+  ]
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`
+}
 
 const FORBIDDEN_ENV = [
   'GITHUB_TOKEN',
@@ -126,7 +143,7 @@ function openAiToolResult(body: Record<string, unknown>, state: StubState): void
     const index = state.issued.get(id)
     if (index === undefined || state.results.has(index)) continue
     const output = textOf(message.content)
-    const spec = COMMANDS[index]
+    const spec = state.commands[index]
     if (spec === undefined) continue
     state.results.set(index, {
       id: spec.id,
@@ -147,7 +164,7 @@ function anthropicToolResults(body: Record<string, unknown>, state: StubState): 
       const index = state.issued.get(id)
       if (index === undefined || state.results.has(index)) continue
       const output = textOf(block.content)
-      const spec = COMMANDS[index]
+      const spec = state.commands[index]
       if (spec === undefined) continue
       const fallback = block.is_error === true ? 1 : 0
       state.results.set(index, {
@@ -167,7 +184,7 @@ function openAiResponse(
 ): void {
   openAiToolResult(body, state)
   const next = state.results.size
-  const spec = COMMANDS[next]
+  const spec = state.commands[next]
   const stream = body.stream !== false
 
   if (spec === undefined) {
@@ -283,7 +300,7 @@ function anthropicResponse(
 ): void {
   anthropicToolResults(body, state)
   const next = state.results.size
-  const spec = COMMANDS[next]
+  const spec = state.commands[next]
   const stream = body.stream !== false
   const messageId = `msg_${randomUUID().replaceAll('-', '').slice(0, 16)}`
 
@@ -412,7 +429,7 @@ function anthropicResponse(
   ])
 }
 
-async function startStub(): Promise<StubState> {
+async function startStub(commands: readonly CommandSpec[]): Promise<StubState> {
   const issued = new Map<string, number>()
   const results = new Map<number, Observation>()
   const server = createServer((req, res) => {
@@ -432,7 +449,7 @@ async function startStub(): Promise<StubState> {
         }
         const body = await readJson(req)
         if (req.method === 'POST' && url.pathname === '/v1/chat/completions') {
-          openAiResponse(res, body, { server, port: 0, issued, results })
+          openAiResponse(res, body, { server, port: 0, commands, issued, results })
           return
         }
         if (req.method === 'POST' && url.pathname === '/v1/responses') {
@@ -440,7 +457,7 @@ async function startStub(): Promise<StubState> {
           return
         }
         if (req.method === 'POST' && url.pathname === '/v1/messages') {
-          anthropicResponse(res, body, { server, port: 0, issued, results })
+          anthropicResponse(res, body, { server, port: 0, commands, issued, results })
           return
         }
         writeJson(res, 404, { error: { message: `unhandled ${req.method} ${url.pathname}` } })
@@ -454,7 +471,7 @@ async function startStub(): Promise<StubState> {
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const address = server.address()
   if (address === null || typeof address === 'string') throw new Error('stub server has no port')
-  return { server, port: address.port, issued, results }
+  return { server, port: address.port, commands, issued, results }
 }
 
 async function stopStub(state: StubState): Promise<void> {
@@ -624,9 +641,13 @@ function verdicts(
         ? /not logged in|authentication|login|no oauth token|401/i.test(result.output)
         : result.id === 'gh-config'
           ? /no such file|cannot open|does not exist/i.test(result.output)
-          : /authentication|could not read username|permission denied|403|remote:.*denied|fatal: could not read/i.test(
-              result.output,
-            ))
+          : result.id === 'host-home' || result.id === 'host-project'
+            ? /operation not permitted|permission denied|no such file|cannot open/i.test(
+                result.output,
+              )
+            : /authentication|could not read username|permission denied|403|remote:.*denied|fatal: could not read|could not resolve host|network is unreachable|operation not permitted|connection refused|failed to connect|no route to host/i.test(
+                result.output,
+              ))
     return {
       id: result.id,
       exitCode: result.exitCode,
@@ -643,6 +664,7 @@ async function probeHarness(
   harness: 'pi' | 'claude' | 'omp',
   root: string,
   stub: StubState,
+  commands: readonly CommandSpec[],
 ): Promise<ProbeResult> {
   const workspace = await prepareWorkspace(root)
   const prompt =
@@ -652,6 +674,8 @@ async function probeHarness(
   const sourceEnv = baseEnv(root, {})
   const prepared = await prepareManagedExecutorEnv({
     harness,
+    workspace,
+    sandboxNetworkPorts: [stub.port],
     ...(harness === 'omp' ? { model: 'keel-probe/probe-model' } : {}),
     ...(harness === 'pi' ? { model: 'probe-model' } : {}),
     sourceEnv,
@@ -771,13 +795,18 @@ async function probeHarness(
   }
 
   try {
-    const outcome = await runProcess(bin, args, {
-      cwd: workspace,
-      env,
-      timeoutMs: 180_000,
-    })
+    const sandbox = prepared.value.sandbox
+    const outcome = await runProcess(
+      sandbox?.executable ?? bin,
+      sandbox === undefined ? args : [...sandbox.prefixArgs, bin, ...args],
+      {
+        cwd: workspace,
+        env,
+        timeoutMs: 180_000,
+      },
+    )
     const observations = [...stub.results.values()].sort(
-      (a, b) => COMMANDS.findIndex((c) => c.id === a.id) - COMMANDS.findIndex((c) => c.id === b.id),
+      (a, b) => commands.findIndex((c) => c.id === a.id) - commands.findIndex((c) => c.id === b.id),
     )
     return {
       harness,
@@ -796,16 +825,17 @@ async function main(): Promise<void> {
   const root = await mkdtemp('/tmp/keel-jt02a-agent-')
   const runs: ProbeResult[] = []
   let passed = true
+  const commands = commandsFor(homedir())
   for (const harness of ['pi', 'claude', 'omp'] as const) {
-    const stub = await startStub()
+    const stub = await startStub(commands)
     const harnessRoot = join(root, harness)
     await mkdir(harnessRoot, { recursive: true })
     try {
-      const result = await probeHarness(harness, harnessRoot, stub)
+      const result = await probeHarness(harness, harnessRoot, stub, commands)
       runs.push(result)
       const ok =
         !result.timedOut &&
-        result.observations.length === COMMANDS.length &&
+        result.observations.length === commands.length &&
         result.observations.every((observation) =>
           observation.id === 'env'
             ? observation.verdict === 'sanitized'

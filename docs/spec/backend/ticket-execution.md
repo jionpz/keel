@@ -94,8 +94,10 @@ Keel 用当前 harness 的 `tool_inventory` 解析原生工具，只把解析结
 缺失时任务进入 `PAUSED`，不会静默降级或按品牌猜测工具名。
 
 工作区标识为 `untrusted=true`，遵守 Adapter 的 `CAP-UNTRUSTED_WORKSPACE` 契约；
-JT-02A 的环境 allowlist、容器规格门禁和 agent 级凭据负例仍是启动边界。
-GitHub 写凭据不进入执行器。
+JT-02A 的环境 allowlist、macOS 操作系统沙箱、容器规格门禁和 agent 级凭据负例仍是
+启动边界。managed 写执行在 macOS 上必须经过 `sandbox-exec` 文件系统/网络/
+keychain 沙箱；没有等价沙箱的平台在启动期拒绝，不回退到宿主权限。GitHub 写凭据
+不进入执行器。
 
 ## 6. must-stop、未授权动作与天问决策
 
