@@ -1,11 +1,43 @@
 # 实施进度：jstack 天问后台路线
 
-**日期**：2026-11-10。协议与后台队列已实现，Linux 原生 OMP 真实烟测通过，
-提问前与答复后两处 SIGKILL 故障恢复均已实测通过；JT-02、JT-03 已合入，
-JT-04 代码、确定性验收与真实 L 多 ticket 模型 E2E 已完成，待合入；XL 未单独跑；
-原生 Claude 与 JT-05～07 尚未完成，JT-01 仍为影子模式，不能把 JT-01 当作完整交付。
+**日期**：2026-11-11。协议与后台队列已实现，Linux 原生 OMP 真实烟测通过，
+提问前与答复后两处 SIGKILL 故障恢复均已实测通过；JT-02、JT-03、JT-04 已合入；
+JT-05 授权生命周期已完成代码与确定性验收，待合入；XL 未单独跑；原生 Claude 与
+JT-06～07 尚未完成，JT-01 仍为影子模式，不能把 JT-01 当作完整交付。
 
-## JT-04 完整路线与多 ticket（已实现，待合入）
+## JT-05 授权生命周期与人工控制（已实现，待合入）
+
+`ai/jt05-authorization` 已实现：
+
+- `DelegationPolicyVersion` 发布/撤销只经本机 CLI 显式 owner + `--confirm`，写审计与
+  项目记忆 epoch；天问和 worker 没有写入口；
+- `ExecutionPermit` 绑定授权版本、项目授权 epoch、任务控制代次、预算快照与可选的
+  decision request/revision/resolution/digest；
+- `managed_execution_permit_available()` 统一校验 permit、策略、任务状态/代次、
+  epoch、决定 revision/决议与 authority refs；实际动作前、permit 后、push 后创建
+  PR 前都复核；
+- `ticket-pause/cancel/resume`：立即阻断 `PENDING`/`LEASED` outbox、撤销 `VALID`
+  permit、递增 `control_generation`、取消等待中的 decision request；对
+  `EXECUTING` 只记录外部动作已开始的回查/补偿边界；
+- `ticket-override`：先作废旧 revision、阻断未执行动作，再写 `human_confirmed`；
+- must-stop/审批请求先进入天问；无精确委托时 `owner_required`，有精确委托默认时
+  可 `delegated`；停止选项（含 must-stop 天问选择停止）一律转 `CANCELLED`；
+- 高影响动作禁止任何 `*` selector（包括 `foo*` 前缀通配）；`max_attempts` 按
+  outbox 真实认领次数校验，token/cost 预算仍拒绝自动许可；
+- 已 `EXECUTING` 后人工暂停，迟到的成功结算保持 `PAUSED`/`CANCELLED` 并记录
+  `external_action_completed`，不会自动改回 `PR_OPENED`。
+
+迁移为 `migrations/1000000000019_authorization-lifecycle.sql`，已在专用 PostgreSQL
+库执行 `up → down 1 → up`。规范见
+[action-gateway.md](../../spec/backend/action-gateway.md)、
+[decision-acceptance.md](../../spec/backend/decision-acceptance.md)、
+[ticket-execution.md](../../spec/backend/ticket-execution.md)。
+
+验证：全量 `pnpm run test` 为 90 个文件 / 1303 项通过、24 项跳过；
+`typecheck`、`build`、`boundaries`、`check:transitions`、`check:purity`、`lint`
+均通过；`src/generated/managed.ts` 可重复生成且与 schema 一致。
+
+## JT-04 完整路线与多 ticket（已合入）
 
 `ai/jt04-routing` 已实现：
 

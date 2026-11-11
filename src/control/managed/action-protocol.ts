@@ -28,7 +28,14 @@ export function validateExecutionPermit(value: unknown): Result<ManagedExecution
 export function actionTargetDigest(
   intent: Pick<
     ManagedActionIntent,
-    'remote_url' | 'base_branch' | 'head_branch' | 'pr_title' | 'pr_body'
+    | 'remote_url'
+    | 'base_branch'
+    | 'head_branch'
+    | 'pr_title'
+    | 'pr_body'
+    | 'environment'
+    | 'reversibility'
+    | 'affected_resources'
   >,
 ): string {
   return sha256CanonicalJson({
@@ -37,6 +44,9 @@ export function actionTargetDigest(
     head_branch: intent.head_branch,
     pr_title: intent.pr_title,
     pr_body: intent.pr_body,
+    environment: intent.environment,
+    reversibility: intent.reversibility,
+    affected_resources: [...intent.affected_resources].sort(),
   })
 }
 
@@ -50,6 +60,7 @@ export function actionAuthorizationDigest(input: {
   readonly policy_version: number
   readonly rule_id: string
   readonly required_checks: readonly string[]
+  readonly budget: Readonly<Record<string, number>>
 }): string {
   return sha256CanonicalJson({
     project_id: input.project_id,
@@ -61,5 +72,6 @@ export function actionAuthorizationDigest(input: {
     policy_version: input.policy_version,
     rule_id: input.rule_id,
     required_checks: [...input.required_checks].sort(),
+    budget: input.budget,
   })
 }

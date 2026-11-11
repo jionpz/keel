@@ -15,6 +15,7 @@ import type {
 } from '../../generated/managed.js'
 import { MANAGED_SCHEMAS } from '../../generated/managed.js'
 import {
+  decisionContinues,
   escalateDecisionRequestInTx,
   getDecisionRequest,
   type listDelegationPolicies,
@@ -30,7 +31,7 @@ export interface TicketTianwenResult {
   readonly taskId: string
   readonly requestId: string
   readonly revision: number
-  readonly status: 'READY' | 'WAITING_HUMAN'
+  readonly status: 'READY' | 'WAITING_HUMAN' | 'CANCELLED'
   readonly disposition: DecisionResolution['disposition'] | null
   readonly rationale: string | null
 }
@@ -252,8 +253,6 @@ async function loadTianwenInput(requestId: string, revision: number) {
     if (task === null) throw makeError('NOT_FOUND', '找不到 managed ticket task')
     if (task.status !== 'WAITING_HUMAN' || task.pending_decision_id !== request.id)
       throw makeError('CONFLICT', 'ticket task 不在等待该决策')
-    if (task.last_error === 'MUST_STOP' || task.last_error === 'UNAUTHORIZED_ACTION')
-      throw makeError('PERMISSION_DENIED', 'must-stop 请求不能由天问自动处理')
     const ticketPackage = await loadTicketPackage(c, task)
     const built = await buildTianwenContext(c, task, ticketPackage, request)
     return { task, request, context: built.context, memory: built.memory }
@@ -394,24 +393,47 @@ export async function runTicketTianwen(
       )
     const resolution = resolved.value
     if (resolution.disposition === 'delegated' || resolution.disposition === 'human_confirmed') {
+      const answerOption = request.options.find(
+        (option) => option.id === resolution.answer_option_id,
+      )
+      const mustStop =
+        loaded.task.last_error === 'MUST_STOP' || loaded.task.last_error === 'UNAUTHORIZED_ACTION'
+      const shouldContinue =
+        answerOption !== undefined && decisionContinues(answerOption.text, mustStop)
+      const taskStatus = shouldContinue ? 'READY' : 'CANCELLED'
       await c.query(
-        `UPDATE managed_ticket_task SET status='READY',pending_decision_id=NULL,
-           pending_decision_revision=NULL,lease_token=NULL,lease_until=NULL,
-           last_error=NULL,updated_at=$2 WHERE id=$1`,
-        [loaded.task.id, now],
+        `UPDATE managed_ticket_task SET status=$2,pending_decision_id=NULL,
+           pending_decision_revision=NULL,control_generation=control_generation+1,
+           lease_token=NULL,lease_until=NULL,last_error=$4,updated_at=$3,
+           handoff=COALESCE(handoff,'{}'::jsonb) || $5::jsonb WHERE id=$1`,
+        [
+          loaded.task.id,
+          taskStatus,
+          now,
+          shouldContinue ? null : 'STOPPED_BY_DECISION',
+          JSON.stringify({
+            last_decision: {
+              request_id: resolution.request_id,
+              request_revision: resolution.request_revision,
+              resolution_id: resolution.id,
+              digest: resolution.context_digest,
+            },
+          }),
+        ],
       )
       await ticketEvent(c, loaded.task.id, 'ManagedTicketDecisionDelegated', {
         requestId: request.id,
         requestRevision: request.revision,
         proposal,
         resolution,
+        taskStatus,
         usage: outcome.value.usage,
       })
       return ok({
         taskId: loaded.task.id,
         requestId: request.id,
         revision: request.revision,
-        status: 'READY',
+        status: taskStatus,
         disposition: resolution.disposition,
         rationale: resolution.rationale,
       })

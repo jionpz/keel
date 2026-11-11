@@ -7,6 +7,8 @@ export interface ActionAuthorizationRequest {
   readonly environment: 'local' | 'test' | 'staging' | 'production'
   readonly reversibility: 'reversible' | 'partially_reversible' | 'irreversible'
   readonly affected_resources: readonly string[]
+  /** 当前 outbox 已认领的尝试次数；用于校验 max_attempts 预算。 */
+  readonly attempts?: number
   readonly now: string
 }
 
@@ -19,6 +21,7 @@ export type ActionAuthorization =
       readonly rule_id: string
       readonly digest: string
       readonly required_checks: readonly string[]
+      readonly budget: Readonly<Record<string, number>>
     }
   | {
       readonly ok: false
@@ -76,6 +79,7 @@ function ruleMatches(
 ): boolean {
   const limits = rule.impact_limits
   return (
+    fieldMatches(rule.decision_kinds, 'approval') &&
     fieldMatches(rule.actions, request.action) &&
     fieldMatches(rule.environments, request.environment) &&
     rule.reversibility === request.reversibility &&
@@ -89,10 +93,35 @@ function ruleMatches(
 function ruleNeedsUnsupportedEnforcement(rule: DelegationPolicyVersion['rules'][number]): boolean {
   return (
     rule.required_evidence.length > 0 ||
-    rule.budget_limits.max_attempts !== undefined ||
     rule.budget_limits.max_cost_usd !== undefined ||
     rule.budget_limits.max_tokens !== undefined
   )
+}
+
+function hasWildcardSelector(values: readonly string[]): boolean {
+  return values.some((value) => value.includes('*'))
+}
+
+function highImpactRuleIsExact(
+  rule: DelegationPolicyVersion['rules'][number],
+  request: ActionAuthorizationRequest,
+): boolean {
+  if (request.reversibility === 'reversible') return true
+  return (
+    !hasWildcardSelector(rule.actions) &&
+    !hasWildcardSelector(rule.resource_selectors) &&
+    !hasWildcardSelector(rule.environments)
+  )
+}
+
+function budgetFor(
+  rule: DelegationPolicyVersion['rules'][number],
+): Readonly<Record<string, number>> {
+  return {
+    ...(rule.budget_limits.max_attempts === undefined
+      ? {}
+      : { max_attempts: rule.budget_limits.max_attempts }),
+  }
 }
 
 export function authorizeAction(
@@ -116,6 +145,20 @@ export function authorizeAction(
       reason: '匹配的委托规则要求本切片尚未执行的证据或预算门禁',
       restrictive: true,
     }
+  if (matching.some(({ rule }) => !highImpactRuleIsExact(rule, request)))
+    return {
+      ok: false,
+      reason: '高影响授权必须精确声明动作、环境与资源，不能使用通配符',
+      restrictive: true,
+    }
+  if (
+    matching.some(
+      ({ rule }) =>
+        rule.budget_limits.max_attempts !== undefined &&
+        (request.attempts === undefined || request.attempts > rule.budget_limits.max_attempts),
+    )
+  )
+    return { ok: false, reason: '动作尝试次数超过委托预算', restrictive: true }
 
   const strictest = matching.reduce<'delegated' | 'owner_required' | 'deny'>(
     (current, { rule }) =>
@@ -145,6 +188,7 @@ export function authorizeAction(
       reason: `required checks 并集 ${requiredChecks.length} 条超过 16 条上限`,
       restrictive: true,
     }
+  const budget = budgetFor(selected.rule)
 
   return {
     ok: true,
@@ -162,7 +206,9 @@ export function authorizeAction(
       policy_version: selected.policy.version,
       rule_id: selected.rule.id,
       required_checks: requiredChecks,
+      budget,
     }),
     required_checks: requiredChecks,
+    budget,
   }
 }

@@ -19,7 +19,11 @@ import { ZERO_USAGE } from '../../contracts/types.js'
 import { inspectWorkspaceIsolation } from '../../execution/isolation/container-spec.js'
 import { resolveToolPolicy, type ToolPolicyDocument } from '../../execution/tool-policy.js'
 import { asRole } from '../../fact/db.js'
-import type { JstackTicketPackage, ManagedTicketStageResult } from '../../generated/managed.js'
+import type {
+  JstackTicketPackage,
+  ManagedActionIntent,
+  ManagedTicketStageResult,
+} from '../../generated/managed.js'
 import { MANAGED_SCHEMAS } from '../../generated/managed.js'
 import { canonicalJson, sha256CanonicalJson, sha256Text } from '../../shared/canonical-json.js'
 import { enqueueActionIntent, getRepoBinding } from './action-store.js'
@@ -706,6 +710,28 @@ function isPushAndPullRequestAction(action: string): boolean {
   return /\bpush\b/.test(normalized) && /(pull request|\bpr\b)/.test(normalized)
 }
 
+function lastDecisionFromHandoff(handoff: unknown): ManagedActionIntent['decision'] | undefined {
+  if (typeof handoff !== 'object' || handoff === null || !('last_decision' in handoff))
+    return undefined
+  const value = (handoff as { last_decision?: unknown }).last_decision
+  if (typeof value !== 'object' || value === null) return undefined
+  const candidate = value as Record<string, unknown>
+  if (
+    typeof candidate.request_id !== 'string' ||
+    !Number.isSafeInteger(candidate.request_revision) ||
+    typeof candidate.resolution_id !== 'string' ||
+    typeof candidate.digest !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(candidate.digest)
+  )
+    return undefined
+  return {
+    request_id: candidate.request_id,
+    request_revision: Number(candidate.request_revision),
+    resolution_id: candidate.resolution_id,
+    digest: candidate.digest,
+  }
+}
+
 async function pauseTicketWithError(
   claim: ManagedTicketClaim,
   code: string,
@@ -801,7 +827,7 @@ async function pauseForDecision(
           workflow_digest: claim.task.package_digest,
           constraints: [],
           missing_information: [],
-          initial_status: mustStop || requestedAction !== null ? 'WAITING_HUMAN' : 'PROCESSING',
+          initial_status: 'PROCESSING',
         },
         new Date().toISOString(),
         c,
@@ -1219,6 +1245,7 @@ export async function tickManagedTicket(
             ],
           )
         } else {
+          const decision = lastDecisionFromHandoff(claim.task.handoff)
           await enqueueActionIntent(c, {
             task_id: claim.task.id,
             project_id: claim.task.repo_id,
@@ -1243,6 +1270,7 @@ export async function tickManagedTicket(
               diffDigest: changedDiff.value,
               modelBody: result.land.action_intent.pr_body,
             }),
+            ...(decision === undefined ? {} : { decision }),
             created_at: new Date().toISOString(),
           })
         }

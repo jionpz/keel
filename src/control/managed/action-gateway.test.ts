@@ -18,18 +18,30 @@ import type { ManagedActionGatewayResult } from '../../contracts/managed.js'
 import { asOwner, asRole, closePool } from '../../fact/db.js'
 import { GitCliPushGateway } from '../../fact/git-push.js'
 import type { DelegationPolicyVersion, ManagedExecutionPermit } from '../../generated/managed.js'
+import { type ActionAuthorization, authorizeAction } from './action-authorization.js'
 import {
   type ManagedActionGatewayDeps,
   reconcileAction,
   runActionGatewayOnce,
 } from './action-gateway.js'
 import {
+  claimActionOutbox,
   enqueueActionIntent,
   getActionIntent,
   getActionOutbox,
+  issuePermit,
+  markActionExecuting,
   settleActionSuccess,
 } from './action-store.js'
-import { recordDelegationPolicy, revokeDelegationPolicy } from './decision-store.js'
+import {
+  answerManagedTicketDecision,
+  listDelegationPolicies,
+  openDecisionRequestForTicket,
+  overrideManagedTicketDecision,
+  recordDelegationPolicy,
+  revokeDelegationPolicy,
+} from './decision-store.js'
+import { pauseManagedTicket } from './ticket-control.js'
 import { createManagedTicketTask, getManagedTicket } from './ticket-runtime.js'
 import { fixtureTicketPackage } from './ticket-test-utils.js'
 import { diffDigest } from './ticket-workspace.js'
@@ -87,12 +99,14 @@ class FlakyPush implements GitPushGateway {
 }
 
 interface Seeded {
+  readonly repoId: string
   readonly taskId: string
   readonly outboxId: string
   readonly root: string
   readonly remote: string
   readonly head: string
   readonly policyId: string
+  readonly decisionRequestId?: string
 }
 
 beforeEach(async () => {
@@ -101,7 +115,9 @@ beforeEach(async () => {
 
 afterAll(closePool)
 
-async function seedAction(options: { readonly stale?: boolean } = {}): Promise<Seeded> {
+async function seedAction(
+  options: { readonly stale?: boolean; readonly bindDecision?: boolean } = {},
+): Promise<Seeded> {
   const base = await mkdtemp(join(tmpdir(), 'keel-action-'))
   const remote = join(base, 'remote.git')
   const root = join(base, 'repo')
@@ -135,6 +151,61 @@ async function seedAction(options: { readonly stale?: boolean } = {}): Promise<S
   const policy = policyFor(repoId)
   const recorded = await recordDelegationPolicy(policy)
   if (!recorded.ok) throw new Error(recorded.error.detail)
+  let decision:
+    | {
+        request_id: string
+        request_revision: number
+        resolution_id: string
+        digest: string
+      }
+    | undefined
+  if (options.bindDecision === true) {
+    const ticket = await getManagedTicket(created.value)
+    if (!ticket.ok) throw new Error(ticket.error.detail)
+    const request = await openDecisionRequestForTicket(
+      {
+        task_id: created.value,
+        repo_id: repoId,
+        stage: 'execute',
+        attempt: 1,
+        decision_key: 'ticket.action.push',
+        kind: 'approval',
+        question: '允许 push_and_pr 吗？',
+        options: ['停止并等待人工处理（推荐）', '批准本次继续（仅一次）'],
+        action_category: 'push_and_pr',
+        impact: {
+          environment: 'production',
+          reversibility: 'reversible',
+          affected_resources: [`file://${remote}`, 'branch:ai/ticket-gateway', 'base:main'],
+        },
+        workflow_digest: ticket.value.package_digest,
+        initial_status: 'WAITING_HUMAN',
+      },
+      NOW,
+    )
+    if (!request.ok) throw new Error(request.error.detail)
+    await asOwner((c) =>
+      c.query(
+        `UPDATE managed_ticket_task
+         SET status='WAITING_HUMAN',pending_decision_id=$2,pending_decision_revision=$3
+         WHERE id=$1`,
+        [created.value, request.value.id, request.value.revision],
+      ),
+    )
+    const answer = await answerManagedTicketDecision(
+      request.value.id,
+      request.value.revision,
+      'option-2',
+      NOW,
+    )
+    if (!answer.ok) throw new Error(answer.error.detail)
+    decision = {
+      request_id: answer.value.resolution.request_id,
+      request_revision: answer.value.resolution.request_revision,
+      resolution_id: answer.value.resolution.id,
+      digest: answer.value.resolution.context_digest,
+    }
+  }
   const enqueued = await asRole('keel_control', (c) =>
     enqueueActionIntent(c, {
       task_id: created.value,
@@ -150,6 +221,7 @@ async function seedAction(options: { readonly stale?: boolean } = {}): Promise<S
       affected_resources: [`file://${remote}`, 'branch:ai/ticket-gateway', 'base:main'],
       pr_title: 'JT-02D fixture',
       pr_body: 'fixture body',
+      ...(decision === undefined ? {} : { decision }),
       created_at: NOW,
     }),
   )
@@ -160,12 +232,14 @@ async function seedAction(options: { readonly stale?: boolean } = {}): Promise<S
     await git(root, 'commit', '-m', 'next')
   }
   return {
+    repoId,
     taskId: created.value,
     outboxId: enqueued.outboxId,
     root,
     remote: `file://${remote}`,
     head,
     policyId: policy.id,
+    ...(decision === undefined ? {} : { decisionRequestId: decision.request_id }),
   }
 }
 
@@ -200,6 +274,17 @@ function policyFor(projectId: string): DelegationPolicyVersion {
     ],
     created_at: '2026-11-10T00:00:00.000Z',
   } as unknown as DelegationPolicyVersion
+}
+
+function actionRequestFor(seeded: Seeded) {
+  return {
+    project_id: seeded.repoId,
+    action: 'push_and_pr' as const,
+    environment: 'production' as const,
+    reversibility: 'reversible' as const,
+    affected_resources: [seeded.remote, 'branch:ai/ticket-gateway', 'base:main'],
+    now: NOW,
+  }
 }
 
 function deps(
@@ -283,6 +368,146 @@ describe('managed action gateway', () => {
     })
     expect(remote.ok).toBe(true)
     if (remote.ok) expect(remote.value.state).toBe('absent')
+  })
+
+  it('签发许可后撤销授权，迟到 gateway 不能开始动作', async () => {
+    const seeded = await seedAction()
+    const claim = await claimActionOutbox(NOW)
+    expect(claim).not.toBeNull()
+    if (claim === null) throw new Error('missing action claim')
+    const policies = await listDelegationPolicies(seeded.repoId)
+    const authorization = authorizeAction(actionRequestFor(seeded), policies)
+    expect(authorization.ok).toBe(true)
+    if (!authorization.ok) throw new Error(authorization.reason)
+    const permit = await issuePermit(
+      claim,
+      authorization as Extract<ActionAuthorization, { ok: true }>,
+      NOW,
+    )
+    const revoked = await revokeDelegationPolicy(
+      seeded.policyId,
+      'owner',
+      'fixture revoke after permit',
+      LATER,
+    )
+    expect(revoked.ok).toBe(true)
+    const mark = await markActionExecuting(claim, permit, LATER)
+    expect(mark.ok).toBe(false)
+    const outbox = await getActionOutbox(seeded.outboxId)
+    expect(outbox?.status).toBe('BLOCKED')
+  })
+
+  it('人工暂停立即阻断尚未执行的 outbox，留下控制代次与审计边界', async () => {
+    const seeded = await seedAction()
+    const paused = await pauseManagedTicket(seeded.taskId, 'owner pause', LATER)
+    expect(paused.ok).toBe(true)
+    if (!paused.ok) throw new Error(paused.error.detail)
+    expect(paused.value.blockedOutboxIds).toEqual([seeded.outboxId])
+    expect(paused.value.executingOutboxIds).toEqual([])
+    const task = await getManagedTicket(seeded.taskId)
+    expect(task.ok).toBe(true)
+    if (task.ok) {
+      expect(task.value.status).toBe('PAUSED')
+      expect(task.value.control_generation).toBe(1)
+    }
+    const outbox = await getActionOutbox(seeded.outboxId)
+    expect(outbox?.status).toBe('BLOCKED')
+    const pullRequests = new FakePullRequests()
+    const result = await runActionGatewayOnce(
+      deps(new GitCliPushGateway(null), pullRequests, LATER),
+    )
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value).toBeNull()
+    expect(pullRequests.calls).toBe(0)
+  })
+
+  it('已签发许可后人工暂停，迟到 gateway 不能开始动作', async () => {
+    const seeded = await seedAction()
+    const claim = await claimActionOutbox(NOW)
+    if (claim === null) throw new Error('missing action claim')
+    const policies = await listDelegationPolicies(seeded.repoId)
+    const authorization = authorizeAction(actionRequestFor(seeded), policies)
+    if (!authorization.ok) throw new Error(authorization.reason)
+    const permit = await issuePermit(
+      claim,
+      authorization as Extract<ActionAuthorization, { ok: true }>,
+      NOW,
+    )
+    const paused = await pauseManagedTicket(seeded.taskId, 'owner pause after permit', LATER)
+    expect(paused.ok).toBe(true)
+    const mark = await markActionExecuting(claim, permit, LATER)
+    expect(mark.ok).toBe(false)
+    const outbox = await getActionOutbox(seeded.outboxId)
+    expect(outbox?.status).toBe('BLOCKED')
+  })
+
+  it('已 EXECUTING 后人工暂停，成功结算保持 PAUSED 并记录外部动作完成边界', async () => {
+    const seeded = await seedAction()
+    const claim = await claimActionOutbox(NOW)
+    if (claim === null) throw new Error('missing action claim')
+    const policies = await listDelegationPolicies(seeded.repoId)
+    const authorization = authorizeAction(actionRequestFor(seeded), policies)
+    if (!authorization.ok) throw new Error(authorization.reason)
+    const permit = await issuePermit(
+      claim,
+      authorization as Extract<ActionAuthorization, { ok: true }>,
+      NOW,
+    )
+    const executing = await markActionExecuting(claim, permit, NOW)
+    expect(executing.ok).toBe(true)
+    const paused = await pauseManagedTicket(seeded.taskId, 'owner pause during execute', LATER)
+    expect(paused.ok).toBe(true)
+    if (!paused.ok) throw new Error(paused.error.detail)
+    expect(paused.value.executingOutboxIds).toEqual([seeded.outboxId])
+
+    const settled = await settleActionSuccess(
+      claim,
+      permit,
+      { number: 7, url: 'https://example.test/pull/7', created: true },
+      LATER,
+    )
+    expect(settled.ok).toBe(true)
+    const task = await getManagedTicket(seeded.taskId)
+    expect(task.ok).toBe(true)
+    if (task.ok) {
+      expect(task.value.status).toBe('PAUSED')
+      expect(task.value.last_error).toBe('PAUSED: owner pause during execute')
+      expect(task.value.handoff).toMatchObject({
+        pull_request: { number: 7 },
+        external_action_completed: true,
+      })
+    }
+  })
+
+  it('决定被人工覆盖后，已签发许可不能开始动作', async () => {
+    const seeded = await seedAction({ bindDecision: true })
+    const claim = await claimActionOutbox(NOW)
+    if (claim === null) throw new Error('missing action claim')
+    const policies = await listDelegationPolicies(seeded.repoId)
+    const authorization = authorizeAction(actionRequestFor(seeded), policies)
+    if (!authorization.ok) throw new Error(authorization.reason)
+    const permit = await issuePermit(
+      claim,
+      authorization as Extract<ActionAuthorization, { ok: true }>,
+      NOW,
+    )
+    expect(permit.decision).toMatchObject({
+      request_id: seeded.decisionRequestId,
+      request_revision: 1,
+    })
+    if (seeded.decisionRequestId === undefined) throw new Error('missing decision request')
+    const overridden = await overrideManagedTicketDecision(
+      seeded.decisionRequestId,
+      1,
+      'option-1',
+      'owner override',
+      LATER,
+    )
+    expect(overridden.ok).toBe(true)
+    const mark = await markActionExecuting(claim, permit, LATER)
+    expect(mark.ok).toBe(false)
+    const outbox = await getActionOutbox(seeded.outboxId)
+    expect(outbox?.status).toBe('BLOCKED')
   })
 
   it('worktree HEAD 变化后阻止旧 intent', async () => {

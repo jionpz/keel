@@ -175,6 +175,16 @@ function policyImpactLimitsMatch(
   )
 }
 
+function exactApprovalRule(rule: DelegationPolicyVersion['rules'][number]): boolean {
+  const exact = (values: readonly string[]) => values.every((value) => !value.includes('*'))
+  return (
+    exact(rule.decision_kinds) &&
+    exact(rule.actions) &&
+    exact(rule.resource_selectors) &&
+    exact(rule.environments)
+  )
+}
+
 function policyRequiresUnsupportedEvidence(
   rule: DelegationPolicyVersion['rules'][number],
 ): boolean {
@@ -561,9 +571,8 @@ export function acceptDecision(input: DecisionAcceptanceInput): Result<DecisionR
 
   if (!refs.value.policyReferenced || refs.value.policy === null)
     return ownerRequired(input, '没有可验证的 E3 决定或 E1 委托策略依据')
-  if (input.request.kind === 'approval')
-    return ownerRequired(input, 'approval 类请求必须先经执行网关核对动作与环境')
-  if (input.request.impact.reversibility !== 'reversible')
+  const approvalRequest = input.request.kind === 'approval'
+  if (!approvalRequest && input.request.impact.reversibility !== 'reversible')
     return ownerRequired(input, 'E1 只允许可逆默认，当前影响不可逆')
   const matching = refs.value.policy.rules.filter((rule) => policyRuleMatches(rule, input.request))
   if (matching.length === 0) return ownerRequired(input, '委托策略没有覆盖当前问题范围')
@@ -571,6 +580,8 @@ export function acceptDecision(input: DecisionAcceptanceInput): Result<DecisionR
   if (mode === 'deny') return denied(input, '当前委托策略明确拒绝该问题')
   if (mode === 'owner_required') return ownerRequired(input, '当前委托策略要求本次人工决定')
   const delegated = matching.filter((rule) => rule.mode === 'delegated')
+  if (approvalRequest && delegated.some((rule) => !exactApprovalRule(rule)))
+    return ownerRequired(input, '审批类委托必须使用精确的动作、环境与资源范围，不能使用通配符')
   const defaults = new Set(
     delegated
       .map((rule) => rule.default_option_id)

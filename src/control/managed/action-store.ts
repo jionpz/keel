@@ -18,7 +18,14 @@ const INTENT_JSON = `jsonb_strip_nulls(to_jsonb(i)) AS body
   FROM (
     SELECT id, '1.0'::text AS schema_version, project_id, repo_id, task_id, action,
       remote_url, base_branch, head_branch, head_sha, diff_digest, environment,
-      reversibility, affected_resources, pr_title, pr_body, idempotency_key, created_at
+      reversibility, affected_resources, pr_title, pr_body,
+      CASE WHEN decision_request_id IS NULL THEN NULL ELSE jsonb_build_object(
+        'request_id', decision_request_id,
+        'request_revision', decision_request_revision,
+        'resolution_id', decision_resolution_id,
+        'digest', decision_digest
+      ) END AS decision,
+      idempotency_key, created_at
     FROM managed_action_intent
   ) i`
 
@@ -52,6 +59,18 @@ function permitRow(row: Record<string, unknown>): ManagedExecutionPermit {
   const checks = row.required_checks
   if (!Array.isArray(checks) || !checks.every((item): item is string => typeof item === 'string'))
     throw makeError('PROTOCOL_ERROR', 'ExecutionPermit required_checks 不是字符串数组')
+  const budget = row.budget
+  if (typeof budget !== 'object' || budget === null || Array.isArray(budget))
+    throw makeError('PROTOCOL_ERROR', 'ExecutionPermit budget 不是对象')
+  const decision =
+    row.decision_request_id === null
+      ? undefined
+      : {
+          request_id: String(row.decision_request_id),
+          request_revision: Number(row.decision_request_revision),
+          resolution_id: String(row.decision_resolution_id),
+          digest: String(row.decision_digest),
+        }
   return {
     schema_version: '1.0',
     id: String(row.id),
@@ -66,6 +85,10 @@ function permitRow(row: Record<string, unknown>): ManagedExecutionPermit {
       rule_id: String(row.authorization_rule_id),
       digest: String(row.authorization_digest),
     },
+    authorization_epoch: Number(row.authorization_epoch),
+    task_control_generation: Number(row.task_control_generation),
+    budget: budget as ManagedExecutionPermit['budget'],
+    ...(decision === undefined ? {} : { decision }),
     expected_sha: String(row.expected_sha),
     diff_digest: String(row.diff_digest),
     target_digest: String(row.target_digest),
@@ -93,6 +116,7 @@ export interface EnqueueActionInput {
   readonly affected_resources: readonly string[]
   readonly pr_title: string
   readonly pr_body: string
+  readonly decision?: ManagedActionIntent['decision']
   readonly created_at: string
 }
 
@@ -112,8 +136,12 @@ export async function enqueueActionIntent(
     `INSERT INTO managed_action_intent(
       id,task_id,project_id,repo_id,action,remote_url,base_branch,head_branch,
       head_sha,diff_digest,environment,reversibility,affected_resources,
-      pr_title,pr_body,idempotency_key,created_at
-    ) VALUES($1,$2,$3,$4,'push_and_pr',$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14,$15,$16)`,
+      pr_title,pr_body,decision_request_id,decision_request_revision,
+      decision_resolution_id,decision_digest,idempotency_key,created_at
+    ) VALUES(
+      $1,$2,$3,$4,'push_and_pr',$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14,
+      $15,$16,$17,$18,$19,$20
+    )`,
     [
       intentId,
       input.task_id,
@@ -129,6 +157,10 @@ export async function enqueueActionIntent(
       JSON.stringify(input.affected_resources),
       input.pr_title,
       input.pr_body,
+      input.decision?.request_id ?? null,
+      input.decision?.request_revision ?? null,
+      input.decision?.resolution_id ?? null,
+      input.decision?.digest ?? null,
       idempotencyKey,
       input.created_at,
     ],
@@ -306,25 +338,42 @@ export async function issuePermit(
     )
     if (locked.rows[0]?.available !== true)
       throw makeError('CONFLICT', '授权策略在签发许可前已失效')
+    const memory = await c.query<{ epoch: string | number }>(
+      'SELECT managed_project_memory_lock($1,$2::timestamptz) AS epoch',
+      [claim.intent.project_id, now],
+    )
+    const authorizationEpoch = Number(memory.rows[0]?.epoch)
+    if (!Number.isSafeInteger(authorizationEpoch) || authorizationEpoch < 0)
+      throw makeError('CONFLICT', '项目授权 epoch 无效')
+    const task = await c.query<{ control_generation: string | number }>(
+      'SELECT control_generation FROM managed_ticket_task WHERE id=$1 FOR SHARE',
+      [claim.intent.task_id],
+    )
+    const taskControlGeneration = Number(task.rows[0]?.control_generation)
+    if (!Number.isSafeInteger(taskControlGeneration) || taskControlGeneration < 0)
+      throw makeError('CONFLICT', 'ticket task 不存在或控制代次无效')
     await c.query(
       `UPDATE managed_execution_permit SET status='REVOKED'
        WHERE action_intent_id=$1 AND status='VALID'`,
       [claim.intent.id],
     )
     const expiresAt = new Date(Date.parse(now) + 300_000).toISOString()
+    const permitId = randomUUID()
     const inserted = await c.query<Record<string, unknown>>(
       `INSERT INTO managed_execution_permit(
         id,action_intent_id,project_id,repo_id,action,authorization_kind,
         authorization_id,authorization_version,authorization_rule_id,authorization_digest,
-        expected_sha,diff_digest,target_digest,required_checks,environment,idempotency_key,
-        issued_at,expires_at
+        authorization_epoch,task_control_generation,budget,
+        decision_request_id,decision_request_revision,decision_resolution_id,decision_digest,
+        expected_sha,diff_digest,target_digest,required_checks,environment,
+        idempotency_key,issued_at,expires_at
       ) VALUES(
-        $1,$2,$3,$4,'push_and_pr','delegation_policy',$5,$6,$7,$8,$9,$10,$11,$12::jsonb,
-        $13,$14,$15,$16
+        $1,$2,$3,$4,'push_and_pr','delegation_policy',$5,$6,$7,$8,$9,$10,$11::jsonb,
+        $12,$13,$14,$15,$16,$17,$18,$19::jsonb,$20,$21,$22,$23
       )
       RETURNING *`,
       [
-        randomUUID(),
+        permitId,
         claim.intent.id,
         claim.intent.project_id,
         claim.intent.repo_id,
@@ -332,6 +381,13 @@ export async function issuePermit(
         authorization.policy_version,
         authorization.rule_id,
         authorization.digest,
+        authorizationEpoch,
+        taskControlGeneration,
+        JSON.stringify(authorization.budget),
+        claim.intent.decision?.request_id ?? null,
+        claim.intent.decision?.request_revision ?? null,
+        claim.intent.decision?.resolution_id ?? null,
+        claim.intent.decision?.digest ?? null,
         claim.intent.head_sha,
         claim.intent.diff_digest,
         actionTargetDigest(claim.intent),
@@ -344,8 +400,29 @@ export async function issuePermit(
     )
     const row = inserted.rows[0]
     if (row === undefined) throw makeError('CONFLICT', '执行许可写入失败')
+    const available = await c.query<{ available: boolean }>(
+      `SELECT managed_execution_permit_available($1,$2::timestamptz) AS available`,
+      [permitId, now],
+    )
+    if (available.rows[0]?.available !== true)
+      throw makeError('CONFLICT', '执行许可的决定、授权或任务控制状态已失效')
     return permitRow(row)
   })
+}
+
+export async function executionPermitAvailable(
+  permitId: string,
+  at: string,
+  client?: PoolClient,
+): Promise<boolean> {
+  const run = async (c: PoolClient): Promise<boolean> => {
+    const row = await c.query<{ available: boolean }>(
+      'SELECT managed_execution_permit_available($1,$2::timestamptz) AS available',
+      [permitId, at],
+    )
+    return row.rows[0]?.available === true
+  }
+  return client === undefined ? asRole('keel_control', run) : run(client)
 }
 
 export async function getExecutionPermit(
@@ -369,15 +446,17 @@ export async function markActionExecuting(
   now: string,
 ): Promise<Result<ManagedActionOutboxRecord>> {
   return asRole('keel_control', async (c) => {
+    const available = await c.query<{ available: boolean }>(
+      `SELECT managed_execution_permit_available($1,$2::timestamptz) AS available`,
+      [permit.id, now],
+    )
+    if (available.rows[0]?.available !== true)
+      return err(makeError('CONFLICT', '执行许可在开始动作前已失效'))
     const leaseUntil = new Date(Date.parse(now) + 300_000).toISOString()
     const updated = await c.query<Record<string, unknown>>(
       `UPDATE managed_action_outbox SET status='EXECUTING',permit_id=$2,fence=$3,
          lease_until=$4,updated_at=$1
        WHERE id=$5 AND status='LEASED' AND lease_token=$6 AND fence <= $3
-         AND EXISTS (
-           SELECT 1 FROM managed_execution_permit
-           WHERE id=$2 AND status='VALID' AND expires_at > $1::timestamptz
-         )
        RETURNING *`,
       [now, permit.id, permit.fencing_token, leaseUntil, claim.outbox.id, claim.outbox.lease_token],
     )
@@ -453,19 +532,53 @@ export async function settleActionSuccess(
       `UPDATE managed_execution_permit SET status='CONSUMED' WHERE id=$1 AND status='VALID'`,
       [permit.id],
     )
-    await c.query(
-      `UPDATE managed_ticket_task SET status='PR_OPENED',
-         handoff=COALESCE(handoff,'{}'::jsonb) || $2::jsonb,last_error=NULL,updated_at=$1
-       WHERE id=$3 AND status IN ('WAITING_GATEWAY','PAUSED')`,
-      [
-        now,
-        JSON.stringify({
-          pull_request: result.pull_request,
-          completion_target: 'pr_ready',
-        }),
-        claim.intent.task_id,
-      ],
-    )
+    const task = (
+      await c.query<{ status: string }>(
+        'SELECT status FROM managed_ticket_task WHERE id=$1 FOR UPDATE',
+        [claim.intent.task_id],
+      )
+    ).rows[0]
+    if (task === undefined) return err(makeError('NOT_FOUND', '找不到 managed ticket task'))
+    if (task.status === 'WAITING_GATEWAY') {
+      await c.query(
+        `UPDATE managed_ticket_task SET status='PR_OPENED',
+           handoff=COALESCE(handoff,'{}'::jsonb) || $2::jsonb,last_error=NULL,updated_at=$1
+         WHERE id=$3`,
+        [
+          now,
+          JSON.stringify({
+            pull_request: result.pull_request,
+            completion_target: 'pr_ready',
+          }),
+          claim.intent.task_id,
+        ],
+      )
+    } else if (task.status === 'PAUSED' || task.status === 'CANCELLED') {
+      await c.query(
+        `UPDATE managed_ticket_task
+         SET handoff=COALESCE(handoff,'{}'::jsonb) || $2::jsonb,updated_at=$1
+         WHERE id=$3`,
+        [
+          now,
+          JSON.stringify({
+            pull_request: result.pull_request,
+            completion_target: 'pr_ready',
+            external_action_completed: true,
+            external_action_completed_at: now,
+          }),
+          claim.intent.task_id,
+        ],
+      )
+      await ticketEvent(c, claim.intent.task_id, 'ManagedActionSucceededWhileControlled', {
+        outboxId: claim.outbox.id,
+        permitId: permit.id,
+        pullRequest: result.pull_request,
+        taskStatus: task.status,
+        boundary: 'remote action completed after human control; task remains controlled',
+      })
+    } else {
+      return err(makeError('CONFLICT', `ticket task 当前是 ${task.status}，不能写入成功结算`))
+    }
     await ticketEvent(c, claim.intent.task_id, 'ManagedActionSucceeded', {
       outboxId: claim.outbox.id,
       permitId: permit.id,

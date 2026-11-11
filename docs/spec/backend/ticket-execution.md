@@ -55,14 +55,14 @@ route 工作流还会把节点 `scope_paths` 与 `acceptance` 保存到
 | `RUNNING` | 已有 lease，worker 正在执行 |
 | `WAITING_HUMAN` | 已生成 `DecisionRequest`，等待本机操作员 |
 | `WAITING_GATEWAY` | `pr_ready` 的 land 已登记 action intent / outbox，等待受控 gateway |
-| `PAUSED` | 缺包、协议不兼容、tool profile 缺失、工作树漂移或门禁失败 |
+| `PAUSED` | 缺包、协议不兼容、tool profile 缺失、工作树漂移、门禁失败、人工暂停或授权撤销 |
 | `PR_OPENED` | gateway 已推送并创建/复用 PR，`handoff` 保存 PR 信息 |
 | `CHECKING` | check gateway 正在按准确 PR head SHA 观测 required checks |
 | `PR_READY` | PR 准确 head 的全部 required checks 显式成功，证据已持久化 |
 | `PR_CHECKS_FAILED` | check 缺失/失败/超时，或 PR/worktree/permit/policy 证据不一致 |
 | `DONE` | `branch_ready` 的 land 已写 branch/commit handoff；不创建 outbox |
 | `FAILED` | 尝试预算耗尽等不可继续状态 |
-| `CANCELLED` | 人工选择停止 |
+| `CANCELLED` | 人工取消或决策明确选择停止；终态不可恢复 |
 
 每次认领插入一条 `managed_ticket_stage`，保存 stage、attempt、package digest、
 baseline、输入 commit、输入摘要、输出摘要、证据摘要、结构化 result/evidence 与 usage。
@@ -115,9 +115,10 @@ keychain 沙箱；没有等价沙箱的平台在启动期拒绝，不回退到�
 `managed_decision_request`，绑定 `managed_ticket_task_id`、package digest、attempt
 与 input digest。
 
-- `must_stop` 或 `requested_action`：任务直接进入 `WAITING_HUMAN`，选项固定为
-  “停止并等待人工处理（推荐）”与“批准本次继续（仅一次）”；即使配置了天问 runner
-  也不会自动处理。
+- `must_stop` 或 `requested_action`：任务进入 `WAITING_HUMAN`，选项固定为
+  “停止并等待人工处理（推荐）”与“批准本次继续（仅一次）”。请求与普通决策一样
+  先进入天问；天问只有在精确委托范围内才能代批，否则返回 `owner_required` 并等待
+  本机操作员。
 - `blocked` 且带 `decision`：保留模型提出的选项，追加一个“停止并等待人工处理”
   选项；请求初始为 `PROCESSING`。worker 用与阶段相同的 harness/model 运行天问，
   产出 `TianwenProposal` 并交给确定性接纳器。只有 E3 项目决定或 E1 可逆委托默认
@@ -126,11 +127,30 @@ keychain 沙箱；没有等价沙箱的平台在启动期拒绝，不回退到�
 
 本机操作员可用 `managed ticket-answer <request-id> --revision N --option ...` 答复。
 如果该 revision 已有 `owner_required` 等决议，store 会创建 `revision + 1`、把旧
-revision 标为 `SUPERSEDED`，再写入 `human_confirmed` 决议。`must_stop` 请求仍按
-`option-2` 才继续；模型决策请求选择非“停止并等待人工处理”的选项即继续。人工
-决议与天问提案都写入现有 `managed_decision_resolution` 台账。
+revision 标为 `SUPERSEDED`，再写入 `human_confirmed` 决议。选项按文案语义判断：
+停止类选项一律转 `CANCELLED`；must-stop 只有明确的批准/允许/继续选项才回到
+`READY`，无法识别时 fail closed，不会因为选项 ID 恰好是 `option-2` 就放行。人工
+覆盖用 `managed ticket-override`，先阻断未开始动作再写新 revision。人工决议与天问
+提案都写入现有 `managed_decision_resolution` 台账。
 
-## 7. CLI
+## 7. 人工控制
+
+`managed ticket-pause/cancel` 在同一 `keel_control` 事务中：
+
+- 把 `PENDING` / `LEASED` outbox 立即置为 `BLOCKED`，撤销该任务所有 `VALID` permit；
+- 递增 `control_generation`，取消仍在 `OPEN` / `PROCESSING` / `WAITING_HUMAN` 的
+  decision request，并释放 task lease；
+- 对已经 `EXECUTING` 的动作只记录 `ManagedActionControlBoundary`，明确外部副作用
+  可能已经开始，必须先回查/补偿；不能谎报已撤销。
+
+`managed ticket-resume` 只接受 `PAUSED`，恢复时再次递增控制代次；旧 worker、旧
+permit 和旧决定都因代次或权限校验失败而无法继续。已经 `EXECUTING` 的动作即使随后
+成功结算，任务仍保持 `PAUSED`/`CANCELLED`，只在 handoff 记录
+`external_action_completed` 与 PR 事实，等待人工决定回查或补偿。`ticket-override`
+用于在任务继续前改写决定：先阻断未执行动作，再创建 `revision + 1` 的
+`human_confirmed` 决议。
+
+## 8. CLI
 
 ```bash
 pnpm keel managed ticket-create --repo <repo-uuid> --package <json> --worktree <path>
@@ -139,7 +159,14 @@ pnpm keel managed ticket-stages <task-uuid>
 pnpm keel managed ticket-tick --harness pi
 pnpm keel managed ticket-worker --once --harness pi
 pnpm keel managed ticket-answer <request-uuid> --revision 1 --option option-2
+pnpm keel managed ticket-override <request-uuid> --revision 1 --option option-2 --reason '...'
+pnpm keel managed ticket-pause <task-uuid> --reason '...'
+pnpm keel managed ticket-cancel <task-uuid> --reason '...'
+pnpm keel managed ticket-resume <task-uuid>
 pnpm keel managed ticket-tianwen <request-uuid> --revision 1 --harness pi --model <id>
+pnpm keel managed policy-list --project <repo-uuid>
+pnpm keel managed policy-publish <policy.json> --owner <owner> --confirm
+pnpm keel managed policy-revoke <policy-uuid> --owner <owner> --reason '...' --confirm
 pnpm keel managed workflow-create --repo <repo-uuid> --package <route.json> \
   --worktree-root <dir> --scope src,docs --request '...'
 pnpm keel managed workflow-plan --workflow <workflow-uuid> --plan <plan.json>
@@ -150,7 +177,7 @@ pnpm keel managed workflow-tick --harness pi --model <id>
 pnpm keel managed workflow-worker --harness pi --model <id>
 ```
 
-## 8. 未完成
+## 9. 未完成
 
 - push / PR 属 JT-02D；required checks 与 `pr_ready` 属 JT-02E；
 - archive、多 ticket 图与证据复用属 JT-04，见
@@ -160,5 +187,5 @@ pnpm keel managed workflow-worker --harness pi --model <id>
 
 验证：`ticket-protocol.test.ts` 覆盖摘要与来源完整性；`ticket-runtime.test.ts`
 覆盖正常四阶段、verify 缺证据、review 旧证据、must-stop 决策、天问按项目决定
-解决偏好问题、天问不可用时升级人工、人工 revision+1 覆盖、升级隔离、协议不兼容、
-tool profile 缺失与工作树绑定。
+解决偏好问题、天问委派到停止选项、天问不可用时升级人工、人工 revision+1 覆盖、
+升级隔离、协议不兼容、tool profile 缺失与工作树绑定。

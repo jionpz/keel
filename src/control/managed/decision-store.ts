@@ -20,9 +20,43 @@ import {
   validateProjectDecision,
   validateTianwenProposal,
 } from './decision-protocol.js'
+import { blockPendingActionsInTx } from './ticket-control.js'
 import { ticketEvent } from './ticket-store.js'
 
 const TIANWEN_ACTOR_ID = 'tianwen-service'
+
+/** 停止类选项必须显式识别；无法识别时按“不继续”处理，避免 must-stop 被默认放行。 */
+export function isStopDecisionOption(text: string): boolean {
+  const normalized = text.trim().toLowerCase()
+  return (
+    normalized.startsWith('停止并等待人工处理') ||
+    normalized.startsWith('停止') ||
+    normalized.startsWith('取消') ||
+    normalized.startsWith('放弃') ||
+    normalized.startsWith('stop') ||
+    normalized.startsWith('cancel') ||
+    normalized.startsWith('reject')
+  )
+}
+
+function isContinueDecisionOption(text: string): boolean {
+  const normalized = text.trim().toLowerCase()
+  if (/^(不|拒绝|deny|refuse|decline|no\b)/.test(normalized)) return false
+  return (
+    normalized.includes('批准') ||
+    normalized.includes('允许') ||
+    normalized.includes('继续') ||
+    normalized.includes('approve') ||
+    normalized.includes('allow') ||
+    normalized.includes('proceed')
+  )
+}
+
+/** must-stop 只有明确的批准选项才能继续；普通问题则只要不是停止选项即可。 */
+export function decisionContinues(text: string, mustStop: boolean): boolean {
+  if (isStopDecisionOption(text)) return false
+  return mustStop ? isContinueDecisionOption(text) : true
+}
 
 const REQUEST_JSON = `jsonb_strip_nulls(to_jsonb(r)) AS body
   FROM (
@@ -505,6 +539,27 @@ export async function recordDelegationPolicy(
   }
 }
 
+/**
+ * 本机 owner 入口：approval 身份来自 CLI 的显式确认，不接受策略文件自报 owner。
+ * 这只表示本机单 owner 模型；HTTP/多租户入口必须另行接认证会话。
+ */
+export async function publishDelegationPolicy(
+  policy: DelegationPolicyVersion,
+  owner: string,
+  now: string,
+): Promise<Result<DelegationPolicyVersion>> {
+  const authenticatedOwner = owner.trim()
+  if (!authenticatedOwner || authenticatedOwner.length > 200)
+    return err(makeError('SCHEMA_VIOLATION', 'owner 身份必须为 1..200 字符'))
+  if (timestamp(now) === null) return err(makeError('SCHEMA_VIOLATION', '发布时间不是合法时间'))
+  return recordDelegationPolicy({
+    ...policy,
+    approved_by_owner: authenticatedOwner,
+    approved_at: now,
+    created_at: now,
+  })
+}
+
 export async function revokeDelegationPolicy(
   id: string,
   revokedBy: string,
@@ -515,7 +570,37 @@ export async function revokeDelegationPolicy(
     return err(makeError('SCHEMA_VIOLATION', '撤销来源、理由和时间必须有效'))
   try {
     await asRole('keel_control', async (c) => {
+      const affected = await c.query<{ task_id: string }>(
+        `SELECT DISTINCT i.task_id
+         FROM managed_execution_permit p
+         JOIN managed_action_intent i ON i.id=p.action_intent_id
+         WHERE p.authorization_id=$1 AND p.status='VALID'
+         ORDER BY i.task_id`,
+        [id],
+      )
       await c.query('SELECT managed_revoke_policy($1,$2,$3,$4)', [id, revokedBy, reason, now])
+      for (const row of affected.rows) {
+        const boundary = await blockPendingActionsInTx(
+          c,
+          row.task_id,
+          `授权 ${id} 已撤销：${reason}`,
+          now,
+        )
+        await c.query(
+          `UPDATE managed_ticket_task
+           SET status='PAUSED',control_generation=control_generation+1,
+               lease_token=NULL,lease_until=NULL,
+               last_error=$2,updated_at=$1
+           WHERE id=$3 AND status='WAITING_GATEWAY'`,
+          [now, `AUTHORIZATION_REVOKED: ${reason}`, row.task_id],
+        )
+        await ticketEvent(c, row.task_id, 'ManagedAuthorizationRevoked', {
+          policyId: id,
+          revokedBy,
+          reason,
+          ...boundary,
+        })
+      }
     })
     return ok(undefined)
   } catch (error) {
@@ -789,6 +874,7 @@ async function insertHumanResolution(
   option: DecisionRequest['options'][number],
   answer: string,
   now: string,
+  rationale = '本机操作员以精确选项答复并覆盖自动决定',
 ): Promise<DecisionResolution> {
   const resolution: DecisionResolution = {
     schema_version: '1.0',
@@ -799,7 +885,7 @@ async function insertHumanResolution(
     disposition: 'human_confirmed',
     answer_option_id: option.id,
     answer,
-    rationale: '本机操作员以精确选项答复并覆盖自动决定',
+    rationale,
     evidence_grade: 'E3',
     basis_refs: [],
     actor: { type: 'human', authenticated_id: 'local-operator' },
@@ -882,13 +968,14 @@ async function supersedeRequest(
   await c.query(
     `INSERT INTO managed_decision_request(
       id, revision, idempotency_key, project_id, repo_id, managed_task_id,
-      managed_question_id, node_id, decision_key, kind, question, options,
+      managed_question_id, managed_ticket_task_id, node_id, attempt_id,
+      decision_key, kind, question, options,
       suggested_option_id, constraints, missing_information, impact,
       action_category, workflow_digest, observed_memory_epoch, input_digest,
       status, expires_at, created_at, updated_at
     ) VALUES(
-      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14::jsonb,$15::jsonb,
-      $16::jsonb,$17,$18,$19,$20,$21,$22,$23,$23
+      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15,$16::jsonb,
+      $17::jsonb,$18::jsonb,$19,$20,$21,$22,$23,$24,$25,$25
     )`,
     [
       next.id,
@@ -898,7 +985,9 @@ async function supersedeRequest(
       next.repo_id,
       next.managed_task_id ?? null,
       next.managed_question_id ?? null,
+      next.managed_ticket_task_id ?? null,
       next.node_id ?? null,
+      next.attempt_id ?? null,
       next.decision_key,
       next.kind,
       next.question,
@@ -1201,6 +1290,20 @@ export async function answerManagedTicketDecision(
       return err(makeError('CONFLICT', `decision request 当前是 ${request.status}，不可人工答复`))
     const option = request.options.find((entry) => entry.id === optionId)
     if (option === undefined) return err(makeError('SCHEMA_VIOLATION', '答案不在请求选项内'))
+    const preview = (
+      await c.query<{ status: string }>('SELECT status FROM managed_ticket_task WHERE id=$1', [
+        request.managed_ticket_task_id,
+      ])
+    ).rows[0]
+    if (preview === undefined) return err(makeError('NOT_FOUND', '找不到 managed ticket task'))
+    if (preview.status !== 'WAITING_HUMAN')
+      return err(makeError('CONFLICT', `ticket task 当前是 ${preview.status}，不可答复`))
+    const boundary = await blockPendingActionsInTx(
+      c,
+      request.managed_ticket_task_id,
+      `人工答复 ${request.id}`,
+      now,
+    )
     const task = (
       await c.query<{ status: string; last_error: string | null }>(
         'SELECT status,last_error FROM managed_ticket_task WHERE id=$1 FOR UPDATE',
@@ -1214,14 +1317,25 @@ export async function answerManagedTicketDecision(
     const target = existing === null ? request : await supersedeRequest(c, request, now)
     const resolution = await insertHumanResolution(c, target, option, option.text, now)
     const mustStop = task.last_error === 'MUST_STOP' || task.last_error === 'UNAUTHORIZED_ACTION'
-    const shouldContinue = mustStop
-      ? option.id === 'option-2'
-      : option.text !== '停止并等待人工处理'
+    const shouldContinue = decisionContinues(option.text, mustStop)
     const taskStatus = shouldContinue ? 'READY' : 'CANCELLED'
     await c.query(
       `UPDATE managed_ticket_task SET status=$2,pending_decision_id=NULL,pending_decision_revision=NULL,
-         lease_token=NULL,lease_until=NULL,updated_at=$3 WHERE id=$1`,
-      [request.managed_ticket_task_id, taskStatus, now],
+         control_generation=control_generation+1,lease_token=NULL,lease_until=NULL,
+         handoff=COALESCE(handoff,'{}'::jsonb) || $4::jsonb,updated_at=$3 WHERE id=$1`,
+      [
+        request.managed_ticket_task_id,
+        taskStatus,
+        now,
+        JSON.stringify({
+          last_decision: {
+            request_id: resolution.request_id,
+            request_revision: resolution.request_revision,
+            resolution_id: resolution.id,
+            digest: resolution.context_digest,
+          },
+        }),
+      ],
     )
     await ticketEvent(c, request.managed_ticket_task_id, 'ManagedTicketDecisionAnswered', {
       requestId,
@@ -1229,6 +1343,111 @@ export async function answerManagedTicketDecision(
       optionId,
       disposition: resolution.disposition,
       taskStatus,
+      ...boundary,
+    })
+    return ok({ requestId, optionId, taskStatus, resolution })
+  })
+}
+
+/**
+ * 人工覆盖是控制输入，不等待天问。旧 revision 保留并 SUPERSEDED，新 revision
+ * 写入 human_confirmed；任何尚未开始的动作先被 BLOCKED，已开始的只记录外部边界。
+ */
+export async function overrideManagedTicketDecision(
+  requestId: string,
+  revision: number,
+  optionId: string,
+  reason: string,
+  now: string,
+): Promise<Result<ManagedTicketDecisionAnswer>> {
+  if (!reason.trim()) return err(makeError('SCHEMA_VIOLATION', '覆盖理由不能为空'))
+  if (timestamp(now) === null) return err(makeError('SCHEMA_VIOLATION', '覆盖时间不是合法时间'))
+  return asRole('keel_control', async (c) => {
+    const locked = await c.query(
+      'SELECT id FROM managed_decision_request WHERE id=$1 AND revision=$2 FOR UPDATE',
+      [requestId, revision],
+    )
+    if (locked.rowCount !== 1) return err(makeError('NOT_FOUND', '找不到 decision request'))
+    const request = await requestBody(c, requestId, revision)
+    if (request === null) return err(makeError('NOT_FOUND', '找不到 decision request'))
+    if (request.managed_ticket_task_id === undefined)
+      return err(makeError('CONFLICT', '该请求不属于 managed ticket task'))
+    if (!['OPEN', 'PROCESSING', 'WAITING_HUMAN', 'RESOLVED'].includes(request.status))
+      return err(makeError('CONFLICT', `decision request 当前是 ${request.status}，不可覆盖`))
+    const option = request.options.find((entry) => entry.id === optionId)
+    if (option === undefined) return err(makeError('SCHEMA_VIOLATION', '答案不在请求选项内'))
+    const preview = (
+      await c.query<{ status: string }>('SELECT status FROM managed_ticket_task WHERE id=$1', [
+        request.managed_ticket_task_id,
+      ])
+    ).rows[0]
+    if (preview === undefined) return err(makeError('NOT_FOUND', '找不到 managed ticket task'))
+    if (['DONE', 'FAILED', 'CANCELLED'].includes(preview.status))
+      return err(makeError('CONFLICT', `ticket task 当前是 ${preview.status}，不可覆盖`))
+
+    const boundary = await blockPendingActionsInTx(
+      c,
+      request.managed_ticket_task_id,
+      `人工覆盖 ${request.id}@${request.revision}：${reason.trim()}`,
+      now,
+    )
+    const task = (
+      await c.query<{ status: string; last_error: string | null }>(
+        'SELECT status,last_error FROM managed_ticket_task WHERE id=$1 FOR UPDATE',
+        [request.managed_ticket_task_id],
+      )
+    ).rows[0]
+    if (task === undefined) return err(makeError('NOT_FOUND', '找不到 managed ticket task'))
+    if (['DONE', 'FAILED', 'CANCELLED'].includes(task.status))
+      return err(makeError('CONFLICT', `ticket task 当前是 ${task.status}，不可覆盖`))
+    await c.query(
+      `UPDATE managed_ticket_stage
+       SET status='FAILED',error='HUMAN_OVERRIDE',ended_at=$2
+       WHERE task_id=$1 AND status='RUNNING'`,
+      [request.managed_ticket_task_id, now],
+    )
+    const target = await supersedeRequest(c, request, now)
+    const resolution = await insertHumanResolution(
+      c,
+      target,
+      option,
+      option.text,
+      now,
+      `本机操作员人工覆盖原决定：${reason.trim()}`,
+    )
+    const mustStop = task.last_error === 'MUST_STOP' || task.last_error === 'UNAUTHORIZED_ACTION'
+    const shouldContinue = decisionContinues(option.text, mustStop)
+    const taskStatus = shouldContinue ? 'READY' : 'CANCELLED'
+    await c.query(
+      `UPDATE managed_ticket_task
+       SET status=$2,control_generation=control_generation+1,
+           pending_decision_id=NULL,pending_decision_revision=NULL,
+           lease_token=NULL,lease_until=NULL,last_error=NULL,updated_at=$3,
+           handoff=COALESCE(handoff,'{}'::jsonb) || $4::jsonb
+       WHERE id=$1`,
+      [
+        request.managed_ticket_task_id,
+        taskStatus,
+        now,
+        JSON.stringify({
+          last_decision: {
+            request_id: resolution.request_id,
+            request_revision: resolution.request_revision,
+            resolution_id: resolution.id,
+            digest: resolution.context_digest,
+          },
+        }),
+      ],
+    )
+    await ticketEvent(c, request.managed_ticket_task_id, 'ManagedTicketDecisionOverridden', {
+      requestId,
+      priorRevision: revision,
+      newRevision: target.revision,
+      optionId,
+      reason: reason.trim(),
+      disposition: resolution.disposition,
+      taskStatus,
+      ...boundary,
     })
     return ok({ requestId, optionId, taskStatus, resolution })
   })
