@@ -280,7 +280,7 @@ export async function createManagedTicketTask(
         `INSERT INTO managed_ticket_task(
           id,repo_id,package_digest,ticket_id,ticket_title,baseline_commit,
           worktree_path,current_stage,completion_target
-        ) VALUES($1,$2,$3,$4,$5,$6,$7,'execute','branch_ready')`,
+        ) VALUES($1,$2,$3,$4,$5,$6,$7,'execute',$8)`,
         [
           id,
           repoId,
@@ -289,6 +289,7 @@ export async function createManagedTicketTask(
           worksheetPackage.ticket.title,
           baseline,
           worktree.value.path,
+          worksheetPackage.completion_target,
         ],
       )
       await ticketEvent(c, id, 'ManagedTicketBound', {

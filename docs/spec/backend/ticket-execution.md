@@ -1,8 +1,8 @@
 # jstack 单 ticket 工程包与阶段执行器
 
 > 范围：JT-02C。Keel 消费 jstack 导出的固定 XS/S 单 ticket 包，按
-> `execute → verify → review → land` 执行；完成目标是 `branch_ready`。
-> 本切片不 push、不创建 PR、不执行 GitHub 写操作，那些动作属于 JT-02D。
+> `execute → verify → review → land` 执行；阶段执行器本身不 push、不创建 PR。
+> 外部动作与 `pr_ready` 由 JT-02D/02E 的独立网关完成。
 
 ## 1. 固定包
 
@@ -15,7 +15,7 @@
 - `instructions`：route、阶段表、must-stop 全文；
 - `tool_policy`：jstack 导出的阶段/能力/harness 映射与自身摘要；
 - `must_stop`：动作表、hook 名与全文摘要；
-- `completion_target`：本切片固定为 `branch_ready`；
+- `completion_target`：`branch_ready` 或 `pr_ready`；后者必须继续经过受控网关；
 - `sources`：所有固定来源的路径、SHA256 与字节数；
 - `content_digest`：对整个包（排除该字段本身）做 canonical JSON SHA256。
 
@@ -51,6 +51,9 @@ Keel 在绑定时读取一次包并保存到 `managed_package`；运行期只按
 | `WAITING_GATEWAY` | land 已登记 action intent / outbox，等待受控 gateway |
 | `PAUSED` | 缺包、协议不兼容、tool profile 缺失、工作树漂移或门禁失败 |
 | `PR_OPENED` | gateway 已推送并创建/复用 PR，`handoff` 保存 PR 信息 |
+| `CHECKING` | check gateway 正在按准确 PR head SHA 观测 required checks |
+| `PR_READY` | PR 准确 head 的全部 required checks 显式成功，证据已持久化 |
+| `PR_CHECKS_FAILED` | check 缺失/失败/超时，或 PR/worktree/permit/policy 证据不一致 |
 | `DONE` | 兼容旧状态；新 managed 路径在 land 后进入 `WAITING_GATEWAY` |
 | `FAILED` | 尝试预算耗尽等不可继续状态 |
 | `CANCELLED` | 人工选择停止 |
@@ -121,10 +124,10 @@ pnpm keel managed ticket-answer <request-uuid> --revision 1 --option option-2
 
 ## 8. 未完成
 
-- push / PR / merge / required checks 属 JT-02D、JT-02E；
+- push / PR 属 JT-02D；required checks 与 `pr_ready` 属 JT-02E；
 - archive、多 ticket、项目记忆增量检索属 JT-04、JT-03；
 - 真实模型端到端验收属 JT-02F；
-- 不把 `branch_ready` 声称为 `pr_ready`。
+- 自动 merge / 部署仍不在本路径内；`PR_READY` 不等于已合并。
 
 验证：`ticket-protocol.test.ts` 覆盖摘要与来源完整性；`ticket-runtime.test.ts`
 覆盖正常四阶段、verify 缺证据、review 旧证据、must-stop 决策、升级隔离、

@@ -476,6 +476,175 @@ describe('waitForCi 四态归并', () => {
   })
 })
 
+describe('observeRequiredChecks', () => {
+  const SHA = '1111111111111111111111111111111111111111'
+  const OTHER = '2222222222222222222222222222222222222222'
+  const PR_PATH = '/repos/acme/widget/pulls/7'
+  const CHECKS_PATH = `/repos/acme/widget/commits/${SHA}/check-runs`
+  const STATUSES_PATH = `/repos/acme/widget/commits/${SHA}/statuses`
+
+  function pr(sha = SHA, state = 'open'): unknown {
+    return {
+      number: 7,
+      html_url: 'https://github.com/acme/widget/pull/7',
+      state,
+      head: { ref: 'ai/task-7', sha },
+      base: { ref: 'main' },
+    }
+  }
+
+  function setup(
+    options: { readonly runs?: readonly unknown[]; readonly statuses?: readonly unknown[] } = {},
+  ): void {
+    routes.set(routeKey('GET', PR_PATH), () => ({ status: 200, json: pr() }))
+    routes.set(routeKey('GET', CHECKS_PATH), () => ({
+      status: 200,
+      json: { total_count: options.runs?.length ?? 0, check_runs: options.runs ?? [] },
+    }))
+    routes.set(routeKey('GET', STATUSES_PATH), () => ({
+      status: 200,
+      json: options.statuses ?? [],
+    }))
+  }
+
+  it('返回准确 PR head SHA 上匹配 required check 的显式结论', async () => {
+    setup({
+      runs: [
+        {
+          id: 12,
+          name: 'test',
+          head_sha: SHA,
+          status: 'completed',
+          conclusion: 'success',
+          details_url: 'https://example.test/check/12',
+        },
+        {
+          id: 13,
+          name: 'unrelated',
+          head_sha: SHA,
+          status: 'completed',
+          conclusion: 'failure',
+        },
+      ],
+    })
+    const result = await provider().observeRequiredChecks({
+      repoId: 'r1',
+      remoteUrl: REMOTE,
+      prNumber: 7,
+      requiredChecks: ['test'],
+      observedAt: '2026-11-11T00:00:00.000Z',
+    })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value).toMatchObject({
+      repo: 'acme/widget',
+      prNumber: 7,
+      prState: 'open',
+      headBranch: 'ai/task-7',
+      baseBranch: 'main',
+      headSha: SHA,
+    })
+    expect(result.value.checks).toEqual([
+      {
+        name: 'test',
+        source: 'check_run',
+        conclusion: 'success',
+        externalId: '12',
+        detailsUrl: 'https://example.test/check/12',
+      },
+    ])
+  })
+
+  it('required check 未上报时返回空事实，不伪造 conclusion', async () => {
+    setup()
+    const result = await provider().observeRequiredChecks({
+      repoId: 'r1',
+      remoteUrl: REMOTE,
+      prNumber: 7,
+      requiredChecks: ['test'],
+      observedAt: '2026-11-11T00:00:00.000Z',
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value.checks).toEqual([])
+  })
+
+  it('check-run 返回不同 head_sha 时拒绝，SHA-A 不能冒充 SHA-B', async () => {
+    setup({
+      runs: [
+        {
+          id: 14,
+          name: 'test',
+          head_sha: OTHER,
+          status: 'completed',
+          conclusion: 'success',
+        },
+      ],
+    })
+    const result = await provider().observeRequiredChecks({
+      repoId: 'r1',
+      remoteUrl: REMOTE,
+      prNumber: 7,
+      requiredChecks: ['test'],
+      observedAt: '2026-11-11T00:00:00.000Z',
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error.kind).toBe('PROTOCOL_ERROR')
+  })
+
+  it('PR head 在两次读取之间变化时整次证据作废', async () => {
+    let reads = 0
+    routes.set(routeKey('GET', PR_PATH), () => {
+      reads++
+      return { status: 200, json: pr(reads === 1 ? SHA : OTHER) }
+    })
+    routes.set(routeKey('GET', CHECKS_PATH), () => ({
+      status: 200,
+      json: { total_count: 0, check_runs: [] },
+    }))
+    routes.set(routeKey('GET', STATUSES_PATH), () => ({ status: 200, json: [] }))
+    const result = await provider().observeRequiredChecks({
+      repoId: 'r1',
+      remoteUrl: REMOTE,
+      prNumber: 7,
+      requiredChecks: ['test'],
+      observedAt: '2026-11-11T00:00:00.000Z',
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error.kind).toBe('CONFLICT')
+  })
+
+  it('Commit Status 的 required context 也作为独立事实源返回', async () => {
+    setup({
+      statuses: [
+        {
+          id: 21,
+          context: 'ci/legacy',
+          state: 'success',
+          target_url: 'https://example.test/status/21',
+        },
+      ],
+    })
+    const result = await provider().observeRequiredChecks({
+      repoId: 'r1',
+      remoteUrl: REMOTE,
+      prNumber: 7,
+      requiredChecks: ['ci/legacy'],
+      observedAt: '2026-11-11T00:00:00.000Z',
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok)
+      expect(result.value.checks).toEqual([
+        {
+          name: 'ci/legacy',
+          source: 'commit_status',
+          conclusion: 'success',
+          externalId: '21',
+          detailsUrl: 'https://example.test/status/21',
+        },
+      ])
+  })
+})
+
 // ──────────────────── #1-11 · ownerRepo 解析(验收 cleanup 复用)────────────────────
 
 describe('ownerRepo —— 从远程 URL 解析 owner/repo(#1-11)', () => {

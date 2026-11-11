@@ -21,6 +21,12 @@ import type {
   PullRequestInfo,
   PullRequestInput,
 } from '../contracts/git-provider.js'
+import type {
+  RequiredCheckFact,
+  RequiredCheckGateway,
+  RequiredCheckObservationInput,
+  RequiredCheckSnapshot,
+} from '../contracts/required-checks.js'
 import { readTokenFromEnv, resolveGitHubToken, type TokenResolver } from './github-auth.js'
 import { isGitHubHost, type ParsedRemote, parseRemoteUrl } from './github-remote.js'
 
@@ -164,7 +170,68 @@ export function parseIssueUrl(url: string): Result<ParsedIssueUrl> {
   return ok({ remoteUrl: `https://${host}/${owner}/${repo}.git`, number })
 }
 
-export class GitHubProvider implements PullRequestGateway, CiGateway {
+interface RawPullRequest {
+  readonly number: number
+  readonly html_url?: string
+  readonly state?: string
+  readonly merged?: boolean
+  readonly head?: { readonly ref?: string; readonly sha?: string }
+  readonly base?: { readonly ref?: string }
+}
+
+interface RawCheckRun {
+  readonly id: number
+  readonly name: string
+  readonly head_sha?: string
+  readonly status: string
+  readonly conclusion: string | null
+  readonly details_url?: string
+  readonly started_at?: string
+  readonly completed_at?: string
+}
+
+interface RawCommitStatus {
+  readonly id?: number
+  readonly context: string
+  readonly state: string | null
+  readonly target_url?: string
+  readonly created_at?: string
+}
+
+interface PullRequestObservation {
+  readonly number: number
+  readonly url: string
+  readonly state: 'open' | 'closed'
+  readonly headBranch: string
+  readonly baseBranch: string
+  readonly headSha: string
+}
+
+function isOpenState(value: string | undefined): 'open' | 'closed' | null {
+  return value === 'open' || value === 'closed' ? value : null
+}
+
+function validHeadSha(value: string | undefined): value is string {
+  return value !== undefined && /^[a-f0-9]{40}$/.test(value)
+}
+
+function checkRunNewer(left: RawCheckRun, right: RawCheckRun): boolean {
+  const leftAt = Date.parse(left.started_at ?? left.completed_at ?? '')
+  const rightAt = Date.parse(right.started_at ?? right.completed_at ?? '')
+  if (Number.isFinite(leftAt) && Number.isFinite(rightAt) && leftAt !== rightAt)
+    return leftAt > rightAt
+  return left.id > right.id
+}
+
+function statusNewer(left: RawCommitStatus, right: RawCommitStatus): boolean {
+  const leftAt = Date.parse(left.created_at ?? '')
+  const rightAt = Date.parse(right.created_at ?? '')
+  if (Number.isFinite(leftAt) && Number.isFinite(rightAt) && leftAt !== rightAt)
+    return leftAt > rightAt
+  return (left.id ?? 0) > (right.id ?? 0)
+}
+
+export class GitHubProvider implements PullRequestGateway, CiGateway, RequiredCheckGateway {
   private readonly apiRootOverride: string | undefined
   private readonly apiRootEnv: string | undefined
   /**
@@ -459,6 +526,203 @@ export class GitHubProvider implements PullRequestGateway, CiGateway {
     // Commit Status 给不出结论,只剩 Checks 可依据:
     // 有 check 且已全绿 → passed(上面的循环已经放过 failed/未完成);一条都没有 → 无人上报。
     return ok(checkRuns.length > 0 ? 'passed' : 'unreported')
+  }
+
+  private async pullRequestObservation(
+    host: string,
+    slug: string,
+    prNumber: number,
+  ): Promise<Result<PullRequestObservation>> {
+    const response = await this.request(host, `/repos/${slug}/pulls/${prNumber}`)
+    if (!response.ok) return response
+    if (response.value.status !== 200)
+      return err(
+        makeError('WORKSPACE_ERROR', `读取 PR 返回非预期状态 HTTP ${response.value.status}`),
+      )
+    const raw = response.value.json as RawPullRequest | null
+    if (raw === null || typeof raw !== 'object' || raw.number !== prNumber)
+      return err(makeError('PROTOCOL_ERROR', `PR ${prNumber} 响应缺少准确编号`))
+    const state = isOpenState(raw.state)
+    if (state === null) return err(makeError('PROTOCOL_ERROR', `PR ${prNumber} 状态无效`))
+    if (typeof raw.head?.ref !== 'string' || raw.head.ref.trim() === '')
+      return err(makeError('PROTOCOL_ERROR', `PR ${prNumber} 缺少 head branch`))
+    if (typeof raw.base?.ref !== 'string' || raw.base.ref.trim() === '')
+      return err(makeError('PROTOCOL_ERROR', `PR ${prNumber} 缺少 base branch`))
+    if (!validHeadSha(raw.head.sha))
+      return err(makeError('PROTOCOL_ERROR', `PR ${prNumber} 缺少完整 head SHA`))
+    const url =
+      typeof raw.html_url === 'string' && raw.html_url.trim() !== ''
+        ? raw.html_url
+        : `https://${host}/${slug}/pull/${prNumber}`
+    return ok({
+      number: raw.number,
+      url,
+      state,
+      headBranch: raw.head.ref,
+      baseBranch: raw.base.ref,
+      headSha: raw.head.sha,
+    })
+  }
+
+  private async checkRuns(
+    host: string,
+    slug: string,
+    sha: string,
+  ): Promise<Result<readonly RawCheckRun[]>> {
+    const runs: RawCheckRun[] = []
+    for (let page = 1; page <= 10; page++) {
+      const response = await this.request(
+        host,
+        `/repos/${slug}/commits/${sha}/check-runs?per_page=100&page=${page}`,
+      )
+      if (!response.ok) return response
+      if (response.value.status !== 200)
+        return err(
+          makeError(
+            'WORKSPACE_ERROR',
+            `读取 check-runs 返回非预期状态 HTTP ${response.value.status}`,
+          ),
+        )
+      const raw = response.value.json as {
+        readonly total_count?: number
+        readonly check_runs?: unknown
+      } | null
+      if (raw === null || !Array.isArray(raw.check_runs))
+        return err(makeError('PROTOCOL_ERROR', 'check-runs 响应缺少数组'))
+      runs.push(...(raw.check_runs as RawCheckRun[]))
+      if (raw.check_runs.length < 100) return ok(runs)
+      if (page === 10)
+        return err(makeError('PROTOCOL_ERROR', 'check-runs 超过 1000 条，拒绝静默截断'))
+    }
+    return err(makeError('PROTOCOL_ERROR', 'check-runs 分页异常'))
+  }
+
+  private async commitStatuses(
+    host: string,
+    slug: string,
+    sha: string,
+  ): Promise<Result<readonly RawCommitStatus[]>> {
+    const statuses: RawCommitStatus[] = []
+    for (let page = 1; page <= 10; page++) {
+      const response = await this.request(
+        host,
+        `/repos/${slug}/commits/${sha}/statuses?per_page=100&page=${page}`,
+      )
+      if (!response.ok) return response
+      if (response.value.status !== 200)
+        return err(
+          makeError(
+            'WORKSPACE_ERROR',
+            `读取 commit statuses 返回非预期状态 HTTP ${response.value.status}`,
+          ),
+        )
+      if (!Array.isArray(response.value.json))
+        return err(makeError('PROTOCOL_ERROR', 'commit statuses 响应不是数组'))
+      statuses.push(...(response.value.json as RawCommitStatus[]))
+      if (response.value.json.length < 100) return ok(statuses)
+      if (page === 10)
+        return err(makeError('PROTOCOL_ERROR', 'commit statuses 超过 1000 条，拒绝静默截断'))
+    }
+    return err(makeError('PROTOCOL_ERROR', 'commit statuses 分页异常'))
+  }
+
+  async observeRequiredChecks(
+    input: RequiredCheckObservationInput,
+  ): Promise<Result<RequiredCheckSnapshot>> {
+    const parsed = parseRemoteUrl(input.remoteUrl)
+    if (!parsed.ok) return parsed
+    const { host, owner, repo } = parsed.value
+    const slug = `${owner}/${repo}`
+    if (!Number.isSafeInteger(input.prNumber) || input.prNumber <= 0)
+      return err(makeError('SCHEMA_VIOLATION', `PR 编号无效：${input.prNumber}`))
+
+    const before = await this.pullRequestObservation(host, slug, input.prNumber)
+    if (!before.ok) return before
+
+    const facts: RequiredCheckFact[] = []
+    const required = [...new Set(input.requiredChecks)]
+    if (required.length > 0) {
+      const runs = await this.checkRuns(host, slug, before.value.headSha)
+      if (!runs.ok) return runs
+      const latestRuns = new Map<string, RawCheckRun>()
+      for (const run of runs.value) {
+        if (!required.includes(run.name)) continue
+        if (run.head_sha !== undefined && run.head_sha !== before.value.headSha)
+          return err(
+            makeError(
+              'PROTOCOL_ERROR',
+              `check ${run.name} 指向 ${run.head_sha}，不是 PR head ${before.value.headSha}`,
+            ),
+          )
+        const existing = latestRuns.get(run.name)
+        if (existing === undefined || checkRunNewer(run, existing)) latestRuns.set(run.name, run)
+      }
+
+      const statuses = await this.commitStatuses(host, slug, before.value.headSha)
+      if (!statuses.ok) return statuses
+      const latestStatuses = new Map<string, RawCommitStatus>()
+      for (const status of statuses.value) {
+        if (!required.includes(status.context)) continue
+        const existing = latestStatuses.get(status.context)
+        if (existing === undefined || statusNewer(status, existing))
+          latestStatuses.set(status.context, status)
+      }
+
+      for (const name of required) {
+        const run = latestRuns.get(name)
+        if (run !== undefined) {
+          facts.push({
+            name,
+            source: 'check_run',
+            conclusion: run.status === 'completed' ? (run.conclusion ?? 'unknown') : 'pending',
+            externalId: String(run.id),
+            detailsUrl: run.details_url ?? null,
+          })
+        }
+        const status = latestStatuses.get(name)
+        if (status !== undefined) {
+          facts.push({
+            name,
+            source: 'commit_status',
+            conclusion:
+              status.state === null
+                ? 'pending'
+                : status.state === 'pending'
+                  ? 'pending'
+                  : status.state,
+            externalId:
+              status.id === undefined
+                ? `${status.context}:${status.created_at ?? 'unknown'}`
+                : String(status.id),
+            detailsUrl: status.target_url ?? null,
+          })
+        }
+      }
+    }
+
+    const after = await this.pullRequestObservation(host, slug, input.prNumber)
+    if (!after.ok) return after
+    if (
+      after.value.headSha !== before.value.headSha ||
+      after.value.headBranch !== before.value.headBranch ||
+      after.value.baseBranch !== before.value.baseBranch ||
+      after.value.state !== before.value.state
+    )
+      return err(makeError('CONFLICT', 'PR 在观测期间发生变化；本次 check 证据作废'))
+
+    return ok({
+      repoId: input.repoId,
+      repo: slug,
+      remoteUrl: input.remoteUrl,
+      prNumber: before.value.number,
+      prUrl: before.value.url,
+      prState: before.value.state,
+      headBranch: before.value.headBranch,
+      baseBranch: before.value.baseBranch,
+      headSha: before.value.headSha,
+      observedAt: input.observedAt,
+      checks: facts,
+    })
   }
 
   /**

@@ -149,7 +149,7 @@
         }
       }
     },
-    "completion_target": {"enum": ["branch_ready"]},
+    "completion_target": {"enum": ["branch_ready", "pr_ready"]},
     "sources": {
       "type": "array",
       "minItems": 4,

@@ -156,6 +156,22 @@ if (!root.ok) return root
 
 ---
 
+## required checks 观察（JT-02E）
+
+`GitHubProvider.observeRequiredChecks()` 是 managed `pr_ready` 的只读事实入口：
+
+1. `GET /repos/{owner}/{repo}/pulls/{number}` 读取当前 head SHA 与 head/base ref；
+2. 按该**完整 SHA** 分页读取 `check-runs` 与 `commit statuses`；
+3. 同一 required 名称只保留最新一次 check-run / status 观察；
+4. 再读一次 PR；head SHA、head/base ref 或状态在观察期间变化则返回 `CONFLICT`，
+   不产生可复用证据。
+
+required 名称未出现在响应中时返回空事实，由控制层记录 `missing` 并等待；
+provider 不把“无人上报”解释成 success。check-run 的 `head_sha` 与 PR head 不一致时
+返回 `PROTOCOL_ERROR`，防止 SHA-A 的绿色结果挂到 SHA-B。
+
+---
+
 ## Scenario: GitHub token 来源与启动期校验（11-05-github-token-source）
 
 ### 1. Scope / Trigger

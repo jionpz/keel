@@ -3,6 +3,9 @@
 > CI 是 Keel 的**外部事实源**（`docs/09-roadmap.md` §3），系统本身不产生它。
 > 本接口把「等待 / 读取 GitHub Checks + Commit Status」包装成 Control Plane
 > 可依赖的薄边界。v0.1 的 GitHub 实现：`src/fact/github-provider.ts`。
+>
+> **managed 路径不使用本接口的“无人上报即通过”兜底。** required checks 使用
+> `RequiredCheckGateway`，见 §6。
 
 ---
 
@@ -78,3 +81,27 @@ Actions 的仓库 —— Actions 走 check-runs，不写 commit status），
 - **不创建 PR** —— 那是 `PullRequestGateway`（`git-provider.md`）。
 - 实现 = `src/contracts/ci-gateway.ts`；单测用 stub HTTP server
   （`github-provider.test.ts`）；真实路径 = `test:acceptance`。
+
+## 6. managed `RequiredCheckGateway`
+
+`src/contracts/required-checks.ts` 定义只读事实接口：
+
+```ts
+interface RequiredCheckObservationInput {
+  repoId: string
+  remoteUrl: string
+  prNumber: number
+  requiredChecks: string[]
+  observedAt: string
+}
+
+interface RequiredCheckGateway {
+  observeRequiredChecks(input: RequiredCheckObservationInput):
+    Promise<Result<RequiredCheckSnapshot>>
+}
+```
+
+实现先读取 PR 当前 head，再按该完整 SHA 读取 check-runs 与 commit statuses，
+最后复读 PR head；期间变化则整次观察作废。required 名称没有上报时返回空事实，
+控制层记录为 `missing` 并保持等待，到期失败；只有显式 `success` 才能完成。
+这与 §2 的 legacy 四态归并刻意分离。
