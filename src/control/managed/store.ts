@@ -4,6 +4,7 @@ import type { PoolClient } from 'pg'
 import { err, makeError, ok, type Result } from '../../contracts/errors.js'
 import type { ManagedQuestion, ManagedTask } from '../../contracts/managed.js'
 import { asRole } from '../../fact/db.js'
+import { answerManagedQuestionWithDecision } from './decision-store.js'
 
 export async function managedEvent(
   c: PoolClient,
@@ -27,7 +28,18 @@ export async function getManagedTask(id: string): Promise<ManagedTask | null> {
 
 export async function getManagedQuestion(id: string): Promise<ManagedQuestion | null> {
   const result = await asRole('keel_control', (c) =>
-    c.query<ManagedQuestion>('SELECT * FROM managed_question WHERE id=$1', [id]),
+    c.query<ManagedQuestion>(
+      `SELECT q.id,q.task_id,q.question,q.options,
+         CASE WHEN correction.answer IS NULL THEN q.status ELSE 'RESOLVED' END AS status,
+         q.suggestion,COALESCE(correction.answer,q.answer) AS answer
+       FROM managed_question q
+       LEFT JOIN LATERAL (
+         SELECT answer FROM managed_question_correction
+         WHERE question_id=q.id ORDER BY created_at DESC LIMIT 1
+       ) correction ON true
+       WHERE q.id=$1`,
+      [id],
+    ),
   )
   return result.rows[0] ?? null
 }
@@ -107,45 +119,5 @@ export async function withManagedClaim<T>(
 
 /** CLI 是本轮唯一可信本机操作者入口；不允许调用者自填 actor/source。 */
 export async function answerManagedQuestion(id: string, text: string): Promise<Result<string>> {
-  const answer = text.trim()
-  if (!answer || answer.length > 16000)
-    return err(makeError('SCHEMA_VIOLATION', '答复必须为 1..16000 字符'))
-  return asRole('keel_control', async (c) => {
-    // 与 worker 一样先锁 task，避免 question→task 与 task→question 的锁序死锁。
-    const lookup = await c.query<{ task_id: string }>(
-      'SELECT task_id FROM managed_question WHERE id=$1',
-      [id],
-    )
-    const taskId = lookup.rows[0]?.task_id
-    if (taskId === undefined) return err(makeError('NOT_FOUND', '找不到 managed question'))
-    const task = (
-      await c.query<ManagedTask>('SELECT * FROM managed_task WHERE id=$1 FOR UPDATE', [taskId])
-    ).rows[0]
-    const q = (
-      await c.query<ManagedQuestion>('SELECT * FROM managed_question WHERE id=$1 FOR UPDATE', [id])
-    ).rows[0]
-    if (q?.status === 'RESOLVED')
-      return q.answer === answer ? ok(taskId) : err(makeError('CONFLICT', '该问题已有不同答复'))
-    if (
-      q?.status !== 'WAITING_HUMAN' ||
-      task?.status !== 'WAITING_HUMAN' ||
-      task.pending_question_id !== id
-    )
-      return err(makeError('CONFLICT', '问题尚未经天问处理，或当前任务已不等待该问题'))
-    await c.query(
-      `UPDATE managed_question SET status='RESOLVED',answer=$2,answered_by='local-operator',answered_at=now() WHERE id=$1`,
-      [id, answer],
-    )
-    await c.query(
-      `UPDATE managed_task SET status='READY',phase='investigate',pending_question_id=NULL,answers=answers || $2::jsonb,updated_at=now() WHERE id=$1`,
-      [taskId, JSON.stringify([{ question: q.question, answer, actor: 'human' }])],
-    )
-    await managedEvent(c, taskId, 'ManagedHumanAnswered', {
-      questionId: id,
-      answer,
-      actor: 'local-operator',
-    })
-    await managedEvent(c, taskId, 'ManagedTaskReady', { source: 'human-answer', questionId: id })
-    return ok(taskId)
-  })
+  return answerManagedQuestionWithDecision(id, text)
 }

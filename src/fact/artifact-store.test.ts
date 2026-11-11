@@ -298,8 +298,11 @@ describe('schema 与代码的一致性', () => {
          FROM pg_constraint con
          JOIN pg_class rel ON rel.oid = con.conrelid
          JOIN pg_attribute att ON att.attrelid = rel.oid AND att.attnum = ANY(con.conkey)
-         WHERE rel.relname = $1 AND att.attname = $2 AND con.contype = 'c'`,
-        [table, column],
+         WHERE rel.relname = $1
+           AND att.attname = $2
+           AND con.contype = 'c'
+           AND con.conname = $3`,
+        [table, column, `${table}_${column}_check`],
       ),
     )
     const def = r.rows[0]?.def
@@ -358,7 +361,7 @@ describe('schema 与代码的一致性', () => {
     expect(dbValues).toHaveLength(3)
   })
 
-  it('业务表完整存在(含 managed 调查表)—— 防假绿：读到 0 张表即失败', async () => {
+  it('业务表完整存在(含 managed 调查与决策表)—— 防假绿：读到 0 张表即失败', async () => {
     const r = await asOwner((c) =>
       c.query<{ tablename: string }>(
         `SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename <> 'pgmigrations'`,
@@ -372,10 +375,17 @@ describe('schema 与代码的一致性', () => {
         'event',
         'feedback',
         'managed_attempt',
+        'managed_decision_change',
+        'managed_decision_request',
+        'managed_decision_resolution',
+        'managed_delegation_policy',
         'managed_event',
         'managed_package',
+        'managed_project_decision',
         'managed_question',
+        'managed_question_correction',
         'managed_task',
+        'managed_tianwen_proposal',
         'repo',
         'run',
         'run_liveness',

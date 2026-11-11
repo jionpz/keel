@@ -4,6 +4,7 @@ import { err, makeError, ok, type Result } from '../../contracts/errors.js'
 import type {
   JstackInvestigationPackage,
   ManagedInvestigationResult,
+  TianwenDecision,
   TianwenSuggestion,
 } from '../../generated/managed.js'
 import { MANAGED_SCHEMAS } from '../../generated/managed.js'
@@ -14,6 +15,7 @@ const validators = {
   package: ajv.compile<JstackInvestigationPackage>(MANAGED_SCHEMAS.workflow_package),
   investigation: ajv.compile<ManagedInvestigationResult>(MANAGED_SCHEMAS.investigation_result),
   tianwen: ajv.compile<TianwenSuggestion>(MANAGED_SCHEMAS.tianwen_suggestion),
+  tianwenDecision: ajv.compile<TianwenDecision>(MANAGED_SCHEMAS.tianwen_decision),
 }
 
 export function validatePackage(value: unknown): Result<JstackInvestigationPackage> {
@@ -32,6 +34,13 @@ export function validateInvestigation(value: unknown): Result<ManagedInvestigati
 
 export function validateTianwen(value: unknown): Result<TianwenSuggestion> {
   const validate = validators.tianwen
+  return validate(value)
+    ? ok(value)
+    : err(makeError('SCHEMA_VIOLATION', ajv.errorsText(validate.errors)))
+}
+
+export function validateTianwenDecision(value: unknown): Result<TianwenDecision> {
+  const validate = validators.tianwenDecision
   return validate(value)
     ? ok(value)
     : err(makeError('SCHEMA_VIOLATION', ajv.errorsText(validate.errors)))

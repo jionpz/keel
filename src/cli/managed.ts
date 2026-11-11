@@ -85,13 +85,13 @@ export async function managedMain(argv: readonly string[]): Promise<void> {
   try {
     const [command, ...rest] = argv
     if (command === '--help' || command === '-h' || command === undefined) {
-      console.log(`JT-01 jstack managed 只读调查（影子模式）
+      console.log(`JT-02 jstack managed 只读调查
 investigate --repo UUID --question TEXT --package FILE
 status TASK_UUID
 questions [--task TASK_UUID]
-answer QUESTION_UUID --text TEXT
+answer QUESTION_UUID --text TEXT（必须精确匹配请求选项）
 worker [--once] [--interval MS] [--task TASK_UUID] [--harness omp|claude|pi] [--model ID]
-所有问题先经天问建议再等人工；尚未开放自动授权或代码修改。`)
+天问只在 E3 明确决定或 E1 可逆默认范围内自动答复；其余等待人工。尚未开放代码修改或 PR。`)
       return
     }
     switch (command) {
