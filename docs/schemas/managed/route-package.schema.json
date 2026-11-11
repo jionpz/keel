@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "JstackRoutePackage",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol_version",
+    "workflow_id",
+    "mode",
+    "source_commit",
+    "completion_target",
+    "route_rules",
+    "stage_templates",
+    "instructions",
+    "tool_policy",
+    "must_stop",
+    "archive_gate",
+    "sources",
+    "content_digest"
+  ],
+  "properties": {
+    "protocol_version": {"const": "1.0"},
+    "workflow_id": {"const": "jstack"},
+    "mode": {"const": "route"},
+    "source_commit": {"type": "string", "minLength": 1, "maxLength": 100},
+    "completion_target": {"enum": ["branch_ready", "pr_ready"]},
+    "route_rules": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["size", "stage_path", "min_tickets", "max_tickets", "description"],
+        "properties": {
+          "size": {"enum": ["XS", "S", "M", "L", "XL"]},
+          "stage_path": {
+            "type": "array",
+            "minItems": 4,
+            "maxItems": 4,
+            "items": {"enum": ["execute", "verify", "review", "land"]}
+          },
+          "min_tickets": {"type": "integer", "minimum": 1, "maximum": 20},
+          "max_tickets": {"type": "integer", "minimum": 1, "maximum": 20},
+          "description": {"type": "string", "minLength": 1, "maxLength": 2000}
+        }
+      }
+    },
+    "stage_templates": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "stage",
+          "provider",
+          "provider_path",
+          "gate",
+          "tool_profile",
+          "instructions",
+          "content_digest"
+        ],
+        "properties": {
+          "stage": {"enum": ["execute", "verify", "review", "land"]},
+          "provider": {"type": "string", "minLength": 1, "maxLength": 300},
+          "provider_path": {"type": "string", "minLength": 1, "maxLength": 500},
+          "gate": {"type": "string", "minLength": 1, "maxLength": 2000},
+          "tool_profile": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          },
+          "instructions": {"type": "string", "minLength": 1, "maxLength": 200000},
+          "content_digest": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        }
+      }
+    },
+    "instructions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["route", "stages", "plan", "must_stop"],
+      "properties": {
+        "route": {"type": "string", "minLength": 1, "maxLength": 200000},
+        "stages": {"type": "string", "minLength": 1, "maxLength": 100000},
+        "plan": {"type": "string", "minLength": 1, "maxLength": 100000},
+        "must_stop": {"type": "string", "minLength": 1, "maxLength": 100000}
+      }
+    },
+    "tool_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol_version",
+        "source_commit",
+        "stages",
+        "profiles",
+        "harnesses",
+        "content_digest"
+      ],
+      "properties": {
+        "protocol_version": {"const": "1.0"},
+        "source_commit": {"type": "string", "minLength": 1, "maxLength": 100},
+        "stages": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {"type": "string", "minLength": 1}
+        },
+        "profiles": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {"type": "object"}
+        },
+        "harnesses": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {"type": "object"}
+        },
+        "content_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "must_stop": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["content", "actions", "content_digest"],
+      "properties": {
+        "content": {"type": "string", "minLength": 1, "maxLength": 100000},
+        "actions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["action", "hook"],
+            "properties": {
+              "action": {"type": "string", "minLength": 1, "maxLength": 2000},
+              "hook": {"type": "string", "minLength": 1, "maxLength": 200}
+            }
+          }
+        },
+        "content_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "archive_gate": {"type": "string", "minLength": 1, "maxLength": 4000},
+    "sources": {
+      "type": "array",
+      "minItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256", "bytes"],
+        "properties": {
+          "path": {"type": "string", "minLength": 1, "maxLength": 500},
+          "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+          "bytes": {"type": "integer", "minimum": 1}
+        }
+      }
+    },
+    "content_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  }
+}

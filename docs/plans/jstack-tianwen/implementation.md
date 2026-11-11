@@ -1,8 +1,55 @@
-# 实施进度：JT-01 只读影子链路
+# 实施进度：jstack 天问后台路线
 
 **日期**：2026-11-10。协议与后台队列已实现，Linux 原生 OMP 真实烟测通过，
-提问前与答复后两处 SIGKILL 故障恢复均已实测通过；原生 Claude 与 JT-04～07
-尚未完成，JT-01 仍为影子模式，不能把 JT-01 当作完整交付。
+提问前与答复后两处 SIGKILL 故障恢复均已实测通过；JT-02、JT-03 已合入，
+JT-04 代码、确定性验收与真实 L 多 ticket 模型 E2E 已完成，待合入；XL 未单独跑；
+原生 Claude 与 JT-05～07 尚未完成，JT-01 仍为影子模式，不能把 JT-01 当作完整交付。
+
+## JT-04 完整路线与多 ticket（已实现，待合入）
+
+`ai/jt04-routing` 已实现：
+
+- jstack `managed-export --route` 导出 XS/S/M/L/XL 五档、固定四阶段、9 个来源摘要
+  与 archive gate；route planner 规则在 `src/managed/plan.md`；
+- Keel route/ticket schema、`managed_workflow*` 迁移、图版本与 supersede；
+- 计划校验覆盖规模/数量、依赖存在与循环、根节点、scope 越界、重复
+  key/ticket/issue、provider profile 与来源摘要；
+- 节点独立 worktree、依赖前沿调度、多个依赖的祖先一致性检查；
+- ticket 执行绑定节点 scope/acceptance；execute 后按实际 changed files 拒绝越权改动；
+- verify/review 证据按 stage、gate、节点 binding、输入 commit、diff、branch 复用；
+  rework 使后续证据失效；
+- branch_ready 与 pr_ready 的 archive 门、准确 head SHA、check gate 和阶段证据；
+- managed issue claim 阻止同一 repo 的 issue 被多个 managed owner 重复占用；
+- CLI `workflow-create/plan/status/list/tick/worker`；
+- 控制台 `GET /api/workflows`、`GET /api/workflows/:id` 与
+  `projection: jstack-managed-v1`；legacy `/api/tasks` 标 `legacy-v01`。
+
+规范见 `docs/spec/backend/workflow-routing.md`。jstack 侧 PR #51 已开；
+Keel 侧确定性验收：
+
+- 新建专用 PostgreSQL 库完成迁移 `up → down 1 → up`；
+- `route-protocol.test.ts` 9 项：五档、数量、依赖/循环/根节点、重复、scope、
+  伪造摘要、ticket 包构建；
+- `workflow-runtime.test.ts` 9 项：两 ticket 依赖链完成且 branch_ready 不产生
+  outbox、等待人工不阻塞独立节点、人工答复后工作流自动恢复、verify 证据复用、
+  暂停节点受控重试、图版本/supersede、同 issue 冲突、archive 缺证据拒绝、
+  execute scope 越权拒绝；
+- `ticket-runtime` 与 `ticket-protocol` 既有 17 项继续通过；
+- `managed` CLI 创建/导入/查询/列出 workflow 通过；控制台 workflow API 通过。
+
+真实 L 多 ticket E2E（2026-11-11，临时 PostgreSQL + 临时 git 仓库）：
+
+- harness `pi`，模型 `opencode-go/deepseek-v4.1-flash`；
+- jstack route planner 实际产出 `route_size=L`、2 个依赖 ticket；
+- 两个 ticket 都真实执行 `execute → verify → review → land`，`node --test` 在
+  worktree 内真实通过，最终 workflow `DONE`；
+- 两个节点均 `ARCHIVED`，共 10 条 workflow 证据（每节点 5 阶段），
+  `branch_ready` 不产生 push/PR action intent 或 outbox；
+- E2E 暴露并修复了等待态不自动恢复、失败节点不可重试、模型自算证据摘要、
+  `branch_ready` land 误请求 push/PR 四个问题。
+
+**未完成**：XL 只做了规则与确定性测试，未单独跑真实模型 E2E；archive 只记录本地
+关闭门，不自动关闭远程 GitHub Issue。
 
 ## JT-03 项目记忆（已实现）
 

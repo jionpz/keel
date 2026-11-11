@@ -33,7 +33,8 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [CLI Lifecycle](./cli-lifecycle.md) | 分发层统一关池（`finally`）、常驻循环 SIGTERM 必跳出、监听不叠加、关池失败不改退出码、常驻角色单实例 advisory lock | ✅ 已填（11-04 生命周期收口；`11-05-poller-single-instance` 补单实例锁） |
 | [Decision Acceptance](./decision-acceptance.md) | 项目决定/委托版本、E3/E1 确定性接纳、request revision CAS、唯一决议与角色权限 | ✅ 已填（JT-02B；未接 runtime 自动唤醒） |
 | [Project Memory](./project-memory.md) | 项目记忆事实源、版本化摘要、epoch/水位增量、检索预算、回滚与人工规则提升 | ✅ 已填（JT-03） |
-| [Ticket Execution](./ticket-execution.md) | jstack 单 ticket 固定包、阶段门禁、verify/review 证据绑定、must-stop DecisionRequest、branch_ready 边界 | ✅ 已填（JT-02C） |
+| [Ticket Execution](./ticket-execution.md) | jstack 单 ticket 固定包、阶段门禁、verify/review 证据绑定、must-stop DecisionRequest、scope 检查与 branch_ready 边界 | ✅ 已填（JT-02C；JT-04 补 scope） |
+| [Workflow Routing](./workflow-routing.md) | jstack XS/S/M/L/XL route 包、依赖图校验、节点调度、scope、证据复用、archive 与双投影 | ✅ 已填（JT-04） |
 | [Action Gateway](./action-gateway.md) | action intent / ExecutionPermit / 持久 outbox、受控 push 与 PR、required checks 与准确 SHA 的 `pr_ready` | ✅ 已填（JT-02D/02E） |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | ⏳ 暂缓 —— 尚无日志代码 |
 
