@@ -61,6 +61,12 @@ managed 路径传入的已经是 allowlist 环境，因此它不会再放大边�
 
 ### 2.1 macOS 操作系统沙箱
 
+HTTP 集成测试可在本次执行的隔离 `TMPDIR` 内使用 Unix socket；
+`network-bind/inbound/outbound` 的 Unix 路径规则只放行该目录。
+目录外 socket、指向目录外 socket 的符号链接与 TCP 监听仍拒绝，
+TCP 出站仍只允许既有模型网关端口。真实负例测试同时覆盖这些边界；
+不能通过放开 `localhost:*` 让测试通过。
+
 实现位于 `src/execution/isolation/os-sandbox.ts`。`prepareManagedExecutorEnv`
 收到 `workspace` 时，为每次执行生成 `sandbox.sb`（`0400`，放在隔离根目录而不是
 可写 HOME 中），并返回 `ManagedOsSandbox`。managed ticket worker 与只读推理通过

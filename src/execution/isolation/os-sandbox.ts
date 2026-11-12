@@ -36,7 +36,7 @@ export interface MacSandboxProfileOptions {
   readonly networkPorts: readonly number[]
 }
 
-const DEFAULT_SANDBOX_EXEC = '/usr/bin/sandbox-exec'
+export const DEFAULT_SANDBOX_EXEC = '/usr/bin/sandbox-exec'
 const DEFAULT_MODEL_GATEWAY_PORT = 3425
 
 const SYSTEM_READ_PATHS = [
@@ -173,6 +173,10 @@ export function buildMacSandboxProfile(options: MacSandboxProfileOptions): strin
     '(deny process-exec (literal "/usr/bin/security"))',
     '(deny file-read* (literal "/usr/bin/security"))',
     '(deny network*)',
+    '(allow system-socket (socket-domain AF_UNIX))',
+    `(allow network-bind (local unix-socket (subpath ${sbplString(options.tmpdir)})))`,
+    `(allow network-inbound (local unix-socket (subpath ${sbplString(options.tmpdir)})))`,
+    `(allow network-outbound (remote unix-socket (subpath ${sbplString(options.tmpdir)})))`,
     ...ports.map(
       (port) => `(allow network-outbound (remote ip ${sbplString(`localhost:${port}`)}))`,
     ),

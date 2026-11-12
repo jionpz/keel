@@ -3,6 +3,7 @@ import type { PoolClient } from 'pg'
 import { err, makeError, ok, type Result } from '../../contracts/errors.js'
 import type { ManagedTicketStageRecord, ManagedTicketTask } from '../../contracts/managed.js'
 import { asRole } from '../../fact/db.js'
+import { MANAGED_EXECUTION_LEASE_SECONDS } from '../../shared/managed-limits.js'
 
 export interface ManagedTicketClaim {
   readonly task: ManagedTicketTask
@@ -83,9 +84,9 @@ export async function claimManagedTicketTask(
     const attempt = task.attempts + 1
     await c.query(
       `UPDATE managed_ticket_task SET status='RUNNING',lease_token=$2,
-         lease_until=clock_timestamp() + interval '300 seconds',
+         lease_until=clock_timestamp() + $4 * interval '1 second',
          attempts=attempts+1,last_error=NULL,updated_at=$3 WHERE id=$1`,
-      [task.id, token, now],
+      [task.id, token, now, MANAGED_EXECUTION_LEASE_SECONDS],
     )
     await ticketEvent(c, task.id, 'ManagedTicketAttemptStarted', {
       attempt,

@@ -1,5 +1,5 @@
-import { makeError, type ResultWithUsage } from '../contracts/errors.js'
-import type { HarnessAdapter } from '../contracts/harness-adapter.js'
+import { makeError, type Result, type ResultWithUsage } from '../contracts/errors.js'
+import type { HarnessAdapter, RunHandle, RunResult } from '../contracts/harness-adapter.js'
 import type {
   ManagedTicketDecisionRunner,
   ManagedTicketStageInput,
@@ -14,6 +14,7 @@ import type {
   TianwenDecision,
 } from '../generated/managed.js'
 import type { RoleId } from '../shared/ids.js'
+import { MANAGED_STAGE_CLEANUP_MS, MANAGED_STAGE_TIMEOUT_MS } from '../shared/managed-limits.js'
 import { extractJson } from './session/extract.js'
 import { parseToolPolicy, resolveToolPolicy } from './tool-policy.js'
 
@@ -39,20 +40,24 @@ export interface ManagedTicketWorkerAdapter {
   readonly plan: ManagedWorkflowPlanRunner
 }
 
-function timeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve(null), ms)
-    void promise.then(
-      (value) => {
-        clearTimeout(timer)
-        resolve(value)
-      },
-      () => {
-        clearTimeout(timer)
-        resolve(null)
-      },
-    )
+export async function awaitTicketResult(
+  adapter: Pick<HarnessAdapter, 'awaitResult' | 'interrupt'>,
+  handle: RunHandle,
+): Promise<Result<RunResult> | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let cleanupTimer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => {
+      void adapter.interrupt(handle, 'timeout').catch(() => undefined)
+      cleanupTimer = setTimeout(() => resolve(null), MANAGED_STAGE_CLEANUP_MS)
+    }, MANAGED_STAGE_TIMEOUT_MS)
   })
+  try {
+    return await Promise.race([adapter.awaitResult(handle), timeout])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+    if (cleanupTimer !== undefined) clearTimeout(cleanupTimer)
+  }
 }
 
 export function ticketWorkerFromAdapter(adapter: HarnessAdapter): ManagedTicketWorkerAdapter {
@@ -83,11 +88,11 @@ export function ticketWorkerFromAdapter(adapter: HarnessAdapter): ManagedTicketW
         allowed_tools: input.tool_plan.native_tools,
         mode: 'deny_unlisted',
       },
-      limits: { wall_clock_s: 300, budget_usd: null, max_turns: 40 },
+      limits: { wall_clock_s: MANAGED_STAGE_TIMEOUT_MS / 1000, budget_usd: null, max_turns: 40 },
     })
     if (!started.ok) return { ok: false, error: started.error, usage: ZERO }
     try {
-      const result = await timeout(adapter.awaitResult(started.value), 300000)
+      const result = await awaitTicketResult(adapter, started.value)
       if (result === null)
         return {
           ok: false,
@@ -144,11 +149,11 @@ export function ticketWorkerFromAdapter(adapter: HarnessAdapter): ManagedTicketW
         allowed_tools: [],
         mode: 'deny_unlisted',
       },
-      limits: { wall_clock_s: 300, budget_usd: null, max_turns: 20 },
+      limits: { wall_clock_s: MANAGED_STAGE_TIMEOUT_MS / 1000, budget_usd: null, max_turns: 20 },
     })
     if (!started.ok) return { ok: false, error: started.error, usage: ZERO }
     try {
-      const result = await timeout(adapter.awaitResult(started.value), 300000)
+      const result = await awaitTicketResult(adapter, started.value)
       if (result === null)
         return {
           ok: false,
@@ -214,11 +219,11 @@ export function ticketWorkerFromAdapter(adapter: HarnessAdapter): ManagedTicketW
         allowed_tools: resolved.value.native_tools,
         mode: 'deny_unlisted',
       },
-      limits: { wall_clock_s: 300, budget_usd: null, max_turns: 40 },
+      limits: { wall_clock_s: MANAGED_STAGE_TIMEOUT_MS / 1000, budget_usd: null, max_turns: 40 },
     })
     if (!started.ok) return { ok: false, error: started.error, usage: ZERO }
     try {
-      const result = await timeout(adapter.awaitResult(started.value), 300000)
+      const result = await awaitTicketResult(adapter, started.value)
       if (result === null)
         return {
           ok: false,

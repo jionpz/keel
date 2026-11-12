@@ -241,7 +241,7 @@ async function metricsFor(
     `SELECT repo_id AS project_id,count(*)::int AS count
      FROM managed_ticket_task
      WHERE repo_id = ANY($1::uuid[])
-       AND status='DONE'
+       AND status IN ('DONE','PR_READY')
        AND updated_at >= $2 AND updated_at <= $3
      GROUP BY repo_id
      ORDER BY repo_id`,

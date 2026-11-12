@@ -91,7 +91,7 @@ pnpm keel --help               # 完整命令清单以 src/cli/run.ts 的 HELP �
 |---|---|
 | `serve` / `service-status` / `service-health` | 统一常驻服务、只读角色/队列快照与无副作用健康检查（JT-06） |
 | `managed <investigate\|ticket-*\|policy-*\|workflow-*\|action-*\|memory-*\|...>` | jstack 调查、ticket、授权、路线图、PR 网关与项目记忆（JT-01–05） |
-| `doctor [--harness omp\|claude\|pi] [--json]` | Harness/平台/数据库/试运行就绪矩阵（JT-07） |
+| `doctor [--harness omp\|claude\|pi] [--scope full\|ticket] [--json]` | Harness/平台/数据库/写沙箱/试运行就绪矩阵（JT-07） |
 | `trial-start` / `trial-status` / `trial-stop` | 2–3 项目、7 天、30 代决、5 完成任务的试运行账本（JT-07） |
 | `backup` / `restore-verify` | 一致性备份与隔离恢复校验（JT-06） |
 | `console` | Web 控制台、人工裁决与澄清答复（默认绑定 `127.0.0.1:4321`，需口令登录；`KEEL_CONSOLE_HOST` 可改监听地址） |

@@ -74,6 +74,23 @@ async function seedDoneTask(repoId: string, updatedAt: string, label: string): P
   )
 }
 
+async function seedTask(
+  repoId: string,
+  updatedAt: string,
+  label: string,
+  status: 'DONE' | 'PR_READY' | 'PR_OPENED',
+): Promise<void> {
+  await asOwner((c) =>
+    c.query(
+      `INSERT INTO managed_ticket_task(
+        id,repo_id,package_digest,ticket_id,ticket_title,baseline_commit,worktree_path,
+        current_stage,status,completion_target,updated_at
+      ) VALUES($1,$2,$3,$4,$4,$5,'/tmp/trial-worktree','land',$6,'pr_ready',$7)`,
+      [randomUUID(), repoId, PACKAGE, label, 'c'.repeat(40), status, updatedAt],
+    ),
+  )
+}
+
 async function seedOpenQuestion(repoId: string): Promise<void> {
   const requestId = randomUUID()
   await asOwner((c) =>
@@ -183,7 +200,7 @@ describe('JT-07 试运行账本（真实 PostgreSQL）', () => {
     expect(b).toBeTruthy()
   })
 
-  it('只允许一个进行中的试运行，停止后样本充足也不能通过', async () => {
+  it('只允许单活试运行，PR_READY 计入完成而 PR_OPENED 不计，停止后不能通过', async () => {
     const [a, b] = await seedProjects()
     const started = await startTrial({
       projectIds: [a, b],
@@ -198,8 +215,11 @@ describe('JT-07 试运行账本（真实 PostgreSQL）', () => {
 
     for (let index = 0; index < 18; index += 1) await seedDecision(a, SEVEN_DAYS)
     for (let index = 0; index < 12; index += 1) await seedDecision(b, SEVEN_DAYS)
-    for (let index = 0; index < 3; index += 1) await seedDoneTask(a, SEVEN_DAYS, `a-${index}`)
-    for (let index = 0; index < 2; index += 1) await seedDoneTask(b, SEVEN_DAYS, `b-${index}`)
+    for (let index = 0; index < 2; index += 1) await seedDoneTask(a, SEVEN_DAYS, `a-${index}`)
+    await seedTask(a, SEVEN_DAYS, 'a-pr-ready', 'PR_READY')
+    await seedTask(b, SEVEN_DAYS, 'b-pr-ready-1', 'PR_READY')
+    await seedTask(b, SEVEN_DAYS, 'b-pr-ready-2', 'PR_READY')
+    await seedTask(b, SEVEN_DAYS, 'b-pr-opened', 'PR_OPENED')
 
     const running = await readTrialStatus(SEVEN_DAYS)
     expect(running.ok).toBe(true)

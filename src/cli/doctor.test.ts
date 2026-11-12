@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { ok } from '../contracts/errors.js'
 import { evaluateTrial } from '../control/trial.js'
+import { DEFAULT_SANDBOX_EXEC } from '../execution/isolation/os-sandbox.js'
 import { collectDoctorReport, type DoctorDeps } from './doctor.js'
 
 const NOW = '2026-11-11T00:00:00.000Z'
@@ -10,6 +11,14 @@ function deps(over: Partial<DoctorDeps> = {}): DoctorDeps {
   return {
     now: () => NOW,
     env: { KEEL_MODEL: MODEL },
+    piModels: () => ({
+      providers: {
+        magpie: {
+          baseUrl: 'http://127.0.0.1:3425/v1',
+          models: [{ id: MODEL }],
+        },
+      },
+    }),
     platform: 'linux',
     arch: 'arm64',
     nodeVersion: 'v24.14.1',
@@ -61,10 +70,55 @@ function deps(over: Partial<DoctorDeps> = {}): DoctorDeps {
 }
 
 describe('JT-07 doctor', () => {
-  it('Linux + OMP 给出可运行矩阵，但不把未知 OMP 凭据冒充已验证', async () => {
-    const report = await collectDoctorReport('omp', deps())
+  it('Pi 按注册模型选择本机 provider，模型 ID 中的斜杠不被误拆', async () => {
+    const base = deps({ platform: 'darwin' })
+    const authCalls: string[][] = []
+    const report = await collectDoctorReport(
+      'pi',
+      {
+        ...base,
+        run: (bin, args) => {
+          if (bin === 'pi' && args[0] === 'auth') {
+            authCalls.push([...args])
+            return {
+              ok: args[3] === 'magpie',
+              output: JSON.stringify({ status: args[3] === 'magpie' ? 'ready' : 'not_ready' }),
+            }
+          }
+          return base.run?.(bin, args) ?? { ok: false, output: '' }
+        },
+      },
+      'ticket',
+    )
     expect(report.ok).toBe(true)
+    expect(authCalls).toEqual([
+      ['auth', 'check', '--provider', 'magpie', '--model', MODEL, '--json', '--no-refresh'],
+    ])
+    expect(report.harnesses.find((entry) => entry.id === 'pi')?.credentials.status).toBe('ready')
+  })
+
+  it('Pi 未注册模型或只有外网 provider 时阻断，不探测猜测出的凭据', async () => {
+    for (const models of [
+      { providers: {} },
+      { providers: { external: { baseUrl: 'https://example.invalid', models: [{ id: MODEL }] } } },
+    ]) {
+      const report = await collectDoctorReport(
+        'pi',
+        deps({ platform: 'darwin', piModels: () => models }),
+        'ticket',
+      )
+      expect(report.ok).toBe(false)
+      expect(report.blockers.join('\n')).toContain('Pi managed 模型配置不可用')
+    }
+  })
+
+  it('Linux full 因缺少写执行沙箱被阻断，但仍分别报告读取与凭据状态', async () => {
+    const report = await collectDoctorReport('omp', deps())
+    expect(report.ok).toBe(false)
+    expect(report.scope).toBe('full')
     expect(report.managed_read.supported).toBe(true)
+    expect(report.managed_write.supported).toBe(false)
+    expect(report.blockers.join('\n')).toContain('managed_write')
     expect(report.github.credential).toBe('available')
     const omp = report.harnesses.find((harness) => harness.id === 'omp')
     expect(omp?.verification).toBe('native-live')
@@ -77,6 +131,41 @@ describe('JT-07 doctor', () => {
     const report = await collectDoctorReport('omp', deps({ platform: 'darwin', arch: 'arm64' }))
     expect(report.ok).toBe(false)
     expect(report.blockers.join('\n')).toContain('/proc/self/fd')
+    expect(report.managed_write.supported).toBe(true)
+  })
+
+  it('macOS ticket 范围只要求写沙箱，不把调查读取伪装成受支持', async () => {
+    const report = await collectDoctorReport(
+      'omp',
+      deps({ platform: 'darwin', arch: 'arm64' }),
+      'ticket',
+    )
+    expect(report.ok).toBe(true)
+    expect(report.scope).toBe('ticket')
+    expect(report.managed_read.supported).toBe(false)
+    expect(report.managed_write).toMatchObject({
+      supported: true,
+      backend: 'macos-sandbox-exec',
+    })
+    expect(report.blockers).toEqual([])
+  })
+
+  it('sandbox-exec 无法启动时 macOS ticket 范围也阻断', async () => {
+    const base = deps({ platform: 'darwin', arch: 'arm64' })
+    const report = await collectDoctorReport(
+      'omp',
+      {
+        ...base,
+        run: (bin, args) => {
+          if (bin === DEFAULT_SANDBOX_EXEC) return { ok: false, output: '' }
+          return base.run?.(bin, args) ?? { ok: false, output: '' }
+        },
+      },
+      'ticket',
+    )
+    expect(report.ok).toBe(false)
+    expect(report.managed_write.supported).toBe(false)
+    expect(report.blockers.join('\n')).toContain('sandbox-exec')
   })
 
   it('Claude 没有原生 live 证据时保持 blocked', async () => {

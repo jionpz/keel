@@ -96,6 +96,11 @@ keel backup --out /path/to/backup \
 备份目录不允许覆盖。manifest、DB dump、blob 任一摘要不一致即 fail-closed。
 凭据不进入备份正文；连接串只拆成 libpq 环境变量，不放进子进程 argv。
 
+工作流包的 `digest` 按其协议计算：ticket/route 排除自身 `content_digest` 字段，
+调查包使用整包摘要。manifest 另存完整正文的 `body_sha256`，两者不能混用。
+ticket/route 同时校验 schema、来源和内嵌内容摘要；正文或内嵌摘要被篡改时拒绝备份，
+不能退回整包摘要绕过协议校验。
+
 ## 7. 隔离恢复校验
 
 ```bash

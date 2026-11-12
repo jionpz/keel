@@ -1,5 +1,5 @@
 import { execFile, execFileSync } from 'node:child_process'
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -34,6 +34,9 @@ describe('buildMacSandboxProfile', () => {
 
     expect(profile).toContain('(deny network*)')
     expect(profile).toContain('(allow network-outbound (remote ip "localhost:3425"))')
+    expect(profile).toContain(
+      '(allow network-bind (local unix-socket (subpath "/private/tmp/keel/root/tmp")))',
+    )
     expect(profile).toContain('(deny file-read* file-write* (subpath "/Users"))')
     expect(profile).toContain('(subpath "/private/tmp/keel/workspace")')
     expect(profile).toContain('(subpath "/Users/operator/mycode/repo/.git")')
@@ -44,6 +47,88 @@ describe('buildMacSandboxProfile', () => {
 })
 
 describe('prepareManagedOsSandbox', () => {
+  it.skipIf(process.platform !== 'darwin')(
+    '真实 HTTP 可走隔离 TMPDIR 的 Unix socket，目录外、符号链接与 TCP 监听仍拒绝',
+    async () => {
+      const base = await tempDir()
+      const root = join(base, 'root')
+      const home = join(root, 'home')
+      const tmpdir = join(root, 'tmp')
+      const workspace = join(base, 'workspace')
+      const outside = join(base, 'outside')
+      await Promise.all(
+        [home, tmpdir, workspace, outside].map((path) => mkdir(path, { recursive: true })),
+      )
+      execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: workspace, stdio: 'pipe' })
+      const outsideSocket = join(await realpath(outside), 'sentinel.sock')
+      const server = createServer((_request, response) => response.end('HOST_SENTINEL'))
+      await new Promise<void>((resolve) => server.listen(outsideSocket, resolve))
+      cleanups.push(
+        () =>
+          new Promise<void>((resolve) => {
+            server.close(() => resolve())
+          }),
+      )
+      const realTmpdir = await realpath(tmpdir)
+      const linkedSocket = join(realTmpdir, 'linked.sock')
+      await symlink(outsideSocket, linkedSocket)
+      const prepared = await prepareManagedOsSandbox({ root, home, tmpdir, workspace })
+      expect(prepared.ok).toBe(true)
+      if (!prepared.ok) return
+      const script = `
+        const http = require('node:http');
+        const socket = ${JSON.stringify(join(realTmpdir, 'inside.sock'))};
+        function request(path) {
+          return new Promise(resolve => {
+            const pending = http.request({ socketPath: path, path: '/' }, response => {
+              let body = '';
+              response.on('data', chunk => body += chunk);
+              response.on('end', () => resolve({ ok: true, body }));
+            });
+            pending.on('error', error => resolve({ ok: false, code: error.code }));
+            pending.end();
+          });
+        }
+        (async () => {
+          const server = http.createServer((_request, response) => response.end('HTTP_OK'));
+          await new Promise((resolve, reject) => {
+            server.on('error', reject);
+            server.listen(socket, resolve);
+          });
+          const inside = await request(socket);
+          const outside = await request(${JSON.stringify(outsideSocket)});
+          const symlink = await request(${JSON.stringify(linkedSocket)});
+          const tcp = await new Promise(resolve => {
+            const listener = http.createServer();
+            listener.on('error', error => resolve({ ok: false, code: error.code }));
+            listener.listen(0, '127.0.0.1', () => listener.close(() => resolve({ ok: true })));
+          });
+          server.close();
+          console.log(JSON.stringify({ inside, outside, symlink, tcp }));
+        })().catch(error => { console.error(error.message); process.exitCode = 1; });
+      `
+      const result = await execFileAsync(
+        prepared.value.executable,
+        [...prepared.value.prefixArgs, process.execPath, '-e', script],
+        {
+          cwd: workspace,
+          env: {
+            PATH: process.env.PATH ?? '/usr/bin:/bin',
+            HOME: await realpath(home),
+            TMPDIR: realTmpdir,
+          },
+          timeout: 5000,
+        },
+      )
+      expect(JSON.parse(result.stdout)).toEqual({
+        inside: { ok: true, body: 'HTTP_OK' },
+        outside: { ok: false, code: 'EPERM' },
+        symlink: { ok: false, code: 'EPERM' },
+        tcp: { ok: false, code: 'EPERM' },
+      })
+    },
+  )
+
   it('非 macOS 平台明确拒绝，不降级执行', async () => {
     const prepared = await prepareManagedOsSandbox({
       root: '/tmp/keel',

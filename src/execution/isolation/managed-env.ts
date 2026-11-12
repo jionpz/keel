@@ -191,21 +191,7 @@ async function preparePiConfig(
     throw new Error('Pi managed 执行需要显式模型，或宿主 settings.json 的 defaultModel')
   }
 
-  const providers = objectField(models, 'providers')
-  if (providers === undefined) throw new Error('Pi models.json 缺少 providers')
-  const candidates = Object.entries(providers).flatMap(([name, provider]) => {
-    const model = findModel(provider, modelId)
-    return model === undefined ? [] : [{ name, provider, model }]
-  })
-  if (candidates.length === 0) {
-    throw new Error(`Pi models.json 中找不到模型 ${modelId}`)
-  }
-  const candidate = candidates.find((entry) =>
-    isLoopbackUrl(stringField(entry.provider, 'baseUrl')),
-  )
-  if (candidate === undefined) {
-    throw new Error(`模型 ${modelId} 没有配置本机网关 baseUrl；managed 写执行拒绝外网模型凭据`)
-  }
+  const candidate = selectManagedPiModel(models, modelId)
   const baseUrl = stringField(candidate.provider, 'baseUrl')
   if (baseUrl === undefined) throw new Error(`Pi provider ${candidate.name} 缺少 baseUrl`)
   const apiKey = stringField(candidate.provider, 'apiKey')
@@ -232,6 +218,28 @@ async function preparePiConfig(
   await writeJson(join(agentDir, 'settings.json'), minimalSettings)
 
   return copyPiSubagents(hostAgentDir, agentDir)
+}
+
+export function selectManagedPiModel(
+  models: unknown,
+  modelId: string,
+): { readonly name: string; readonly provider: unknown; readonly model: unknown } {
+  const providers = objectField(models, 'providers')
+  if (providers === undefined) throw new Error('Pi models.json 缺少 providers')
+  const candidates = Object.entries(providers).flatMap(([name, provider]) => {
+    const model = findModel(provider, modelId)
+    return model === undefined ? [] : [{ name, provider, model }]
+  })
+  if (candidates.length === 0) {
+    throw new Error(`Pi models.json 中找不到模型 ${modelId}`)
+  }
+  const candidate = candidates.find((entry) =>
+    isLoopbackUrl(stringField(entry.provider, 'baseUrl')),
+  )
+  if (candidate === undefined) {
+    throw new Error(`模型 ${modelId} 没有配置本机网关 baseUrl；managed 写执行拒绝外网模型凭据`)
+  }
+  return candidate
 }
 
 async function copyPiSubagents(hostAgentDir: string, agentDir: string): Promise<readonly string[]> {

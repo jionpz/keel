@@ -43,7 +43,7 @@ export const HELP = `keel — AI Engineering Runtime CLI
   serve [--harness omp|claude|pi] [--no-ingress]   统一常驻服务（JT-06）
   service-status [--stale-ms <ms>]             只读角色、队列与恢复状态
   service-health [--json]                      无副作用健康检查（非健康时退出 1）
-  doctor [--harness omp|claude|pi] [--json]    Harness/平台/数据库/试运行就绪矩阵
+  doctor [--harness omp|claude|pi] [--scope full|ticket] [--json]    Harness/平台/数据库/试运行就绪矩阵
   trial-start --projects <uuid,uuid> --confirm   开始 2–3 个项目的 7 天试运行
   trial-status [--json] [--require-eligible]     只读试运行门槛与样本状态
   trial-stop --reason <text> --confirm           停止当前试运行

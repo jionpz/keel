@@ -6,6 +6,8 @@ import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { hashOf } from '../../fact/blob.js'
 import { asOwner, closePool, connectionString } from '../../fact/db.js'
 import { sha256CanonicalJson } from '../../shared/canonical-json.js'
+import { fixtureRoutePackage } from '../managed/route-test-utils.js'
+import { fixtureTicketPackage } from '../managed/ticket-test-utils.js'
 import { createBackup, restoreVerify, verifyBackupDirectory } from './backup.js'
 
 const HASH = 'a'.repeat(64)
@@ -130,6 +132,70 @@ beforeEach(clean)
 afterAll(closePool)
 
 describe('JT-06 backup / restore-verify', () => {
+  it('真实 ticket/route 包的内容摘要与整包摘要分别校验并完整恢复', async () => {
+    const fixture = await seed()
+    const packages = [fixtureTicketPackage(), fixtureRoutePackage()]
+    for (const body of packages) {
+      expect(sha256CanonicalJson(body)).not.toBe(body.content_digest)
+      await asOwner((client) =>
+        client.query('INSERT INTO managed_package(digest,body) VALUES($1,$2::jsonb)', [
+          body.content_digest,
+          JSON.stringify(body),
+        ]),
+      )
+    }
+    const backupDir = join(await tempDir('protocol-packages'), 'package')
+    const manifest = await createBackup({
+      outputDir: backupDir,
+      blobDir: fixture.blobDir,
+      databaseUrl: connectionString(),
+    })
+    for (const body of packages) {
+      expect(manifest.summary.packages).toContainEqual({
+        digest: body.content_digest,
+        body_sha256: sha256CanonicalJson(body),
+      })
+    }
+    const report = await restoreVerify({ backupDir, databaseUrl: connectionString() })
+    expect(report.status).toBe('VERIFIED')
+    expect(report.checks.every((check) => check.ok)).toBe(true)
+  })
+
+  it('拒绝真实 ticket/route 包正文或内嵌摘要篡改，不退回整包摘要放行', async () => {
+    const fixture = await seed()
+    for (const body of [fixtureTicketPackage(), fixtureRoutePackage()]) {
+      await asOwner((client) =>
+        client.query('INSERT INTO managed_package(digest,body) VALUES($1,$2::jsonb)', [
+          body.content_digest,
+          JSON.stringify({ ...body, content_digest: '0'.repeat(64) }),
+        ]),
+      )
+      await expect(
+        createBackup({
+          outputDir: join(await tempDir('tampered-protocol'), 'package'),
+          blobDir: fixture.blobDir,
+          databaseUrl: connectionString(),
+        }),
+      ).rejects.toThrow(/内容摘要不一致/)
+      await asOwner((client) =>
+        client.query('UPDATE managed_package SET body=$2::jsonb WHERE digest=$1', [
+          body.content_digest,
+          JSON.stringify({ ...body, source_commit: 'b'.repeat(40) }),
+        ]),
+      )
+      await expect(
+        createBackup({
+          outputDir: join(await tempDir('tampered-protocol-body'), 'package'),
+          blobDir: fixture.blobDir,
+          databaseUrl: connectionString(),
+        }),
+      ).rejects.toThrow(/内容摘要不一致/)
+      await asOwner((client) =>
+        client.query('DELETE FROM managed_package WHERE digest=$1', [body.content_digest]),
+      )
+    }
+  })
+
   it('真实备份后能在隔离库恢复，校验摘要并恢复同一待答问题', async () => {
     const fixture = await seed()
     const backupDir = join(await tempDir('backup'), 'package')

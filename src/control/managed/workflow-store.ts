@@ -11,6 +11,7 @@ import type {
   ManagedWorkflowStatus,
 } from '../../contracts/managed.js'
 import { asRole } from '../../fact/db.js'
+import { MANAGED_EXECUTION_LEASE_SECONDS } from '../../shared/managed-limits.js'
 
 export interface ManagedWorkflowClaim {
   readonly workflow: ManagedWorkflow
@@ -168,9 +169,9 @@ export async function claimManagedWorkflow(
     const attempt = resumed ? workflow.attempts : workflow.attempts + 1
     await c.query(
       `UPDATE managed_workflow SET status='RUNNING',lease_token=$2,
-         lease_until=clock_timestamp() + interval '300 seconds',
+         lease_until=clock_timestamp() + $5 * interval '1 second',
          attempts=$4,last_error=NULL,updated_at=$3 WHERE id=$1`,
-      [workflow.id, token, now, attempt],
+      [workflow.id, token, now, attempt, MANAGED_EXECUTION_LEASE_SECONDS],
     )
     await workflowEvent(
       c,

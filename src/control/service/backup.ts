@@ -18,6 +18,8 @@ import { blobRoot, hashOf } from '../../fact/blob.js'
 import { connectionString } from '../../fact/db.js'
 import { resolveGitHubToken } from '../../fact/github-auth.js'
 import { sha256CanonicalJson } from '../../shared/canonical-json.js'
+import { routePackageDigest, validateRoutePackage } from '../managed/route-protocol.js'
+import { ticketPackageDigest, validateTicketPackage } from '../managed/ticket-protocol.js'
 
 const HASH = /^[a-f0-9]{64}$/
 const DATABASE_FILE = 'database.dump'
@@ -315,7 +317,21 @@ export async function readBackupSummary(client: Client): Promise<BackupDatabaseS
   )
   const packages = packageRows.rows.map((row) => {
     const bodySha = sha256CanonicalJson(row.body)
-    if (bodySha !== row.digest) throw new Error(`managed_package ${row.digest} 内容摘要不一致`)
+    const mode =
+      typeof row.body === 'object' && row.body !== null && 'mode' in row.body
+        ? row.body.mode
+        : undefined
+    let digest = bodySha
+    if (mode === 'ticket') {
+      const validated = validateTicketPackage(row.body)
+      if (!validated.ok) throw new Error(`managed_package ${row.digest} 内容摘要不一致`)
+      digest = ticketPackageDigest(validated.value.package)
+    } else if (mode === 'route') {
+      const validated = validateRoutePackage(row.body)
+      if (!validated.ok) throw new Error(`managed_package ${row.digest} 内容摘要不一致`)
+      digest = routePackageDigest(validated.value.package)
+    }
+    if (digest !== row.digest) throw new Error(`managed_package ${row.digest} 内容摘要不一致`)
     return { digest: row.digest, body_sha256: bodySha }
   })
 

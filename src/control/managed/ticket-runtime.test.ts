@@ -11,6 +11,7 @@ import { ZERO_USAGE } from '../../contracts/types.js'
 import { asOwner, asRole, closePool } from '../../fact/db.js'
 import type { ManagedTicketStageResult } from '../../generated/managed.js'
 import { sha256Text } from '../../shared/canonical-json.js'
+import { MANAGED_STAGE_CLEANUP_MS, MANAGED_STAGE_TIMEOUT_MS } from '../../shared/managed-limits.js'
 import {
   answerManagedTicketDecision,
   recordDelegationPolicy,
@@ -184,6 +185,39 @@ function happyWorker(root: string): ManagedTicketWorker {
 }
 
 describe('managed ticket runtime', () => {
+  it('租约覆盖阶段超时及清理，失去租约时不谎报失败状态已落库', async () => {
+    const { taskId } = await seed()
+    const worker: ManagedTicketWorker = {
+      harness: 'pi',
+      toolInventory: workerTools,
+      run: async () => {
+        await asRole('keel_control', async (client) => {
+          const remaining = await client.query<{ seconds: number }>(
+            `SELECT EXTRACT(EPOCH FROM (lease_until-clock_timestamp()))::float8 AS seconds
+             FROM managed_ticket_task WHERE id=$1`,
+            [taskId],
+          )
+          expect(remaining.rows[0]?.seconds).toBeGreaterThan(
+            (MANAGED_STAGE_TIMEOUT_MS + MANAGED_STAGE_CLEANUP_MS) / 1000,
+          )
+          await client.query(
+            `UPDATE managed_ticket_task SET lease_until=clock_timestamp()-interval '1 second'
+             WHERE id=$1`,
+            [taskId],
+          )
+        })
+        return { ok: false, error: makeError('RUN_TIMEOUT', 'expired claim'), usage: ZERO_USAGE }
+      },
+    }
+    const result = await tickManagedTicket(worker, taskId)
+    expect(result.ok).toBe(false)
+    if (result.ok) throw new Error('过期租约不应报告成功')
+    expect(result.error.kind).toBe('CONFLICT')
+    const task = await getManagedTicket(taskId)
+    if (!task.ok) throw new Error(task.error.detail)
+    expect(task.value.status).toBe('RUNNING')
+  })
+
   it('天问按项目决定解决偏好问题后把 ticket 放回 READY', async () => {
     const { repoId, taskId } = await seed()
     const decisionId = randomUUID()
@@ -338,6 +372,46 @@ describe('managed ticket runtime', () => {
     const stages = await listManagedTicketStages(taskId)
     const failed = stages.find((stage) => stage.stage === 'verify' && stage.status === 'FAILED')
     expect(failed?.error).toBe('VERIFICATION_EVIDENCE_MISSING')
+    expect(failed?.result).toMatchObject({ stage: 'verify', status: 'completed' })
+  })
+
+  it('验证失败保留命令与输出，失败证据不成为成功证明', async () => {
+    const { root, taskId } = await seed()
+    await tickManagedTicket(happyWorker(root), taskId)
+    const verify = workerWith(async () =>
+      success('verify', {
+        worktree_head: await head(root),
+        checks: [
+          {
+            command: 'node --test',
+            exit_code: 1,
+            passed: false,
+            output_digest: '0'.repeat(64),
+            output_excerpt: 'listen EPERM',
+          },
+        ],
+      }),
+    )
+    const tick = await tickManagedTicket(verify, taskId)
+    expect(tick.ok && tick.value?.status).toBe('PAUSED')
+    const stages = await listManagedTicketStages(taskId)
+    const failed = stages.find((stage) => stage.stage === 'verify' && stage.status === 'FAILED')
+    expect(failed?.error).toBe('VERIFICATION_FAILED')
+    expect(failed?.result).toMatchObject({
+      checks: [
+        {
+          command: 'node --test',
+          passed: false,
+          exit_code: 1,
+          output_digest: sha256Text('listen EPERM'),
+        },
+      ],
+    })
+    expect(failed?.evidence).toMatchObject({
+      checks: [{ output_excerpt: 'listen EPERM' }],
+    })
+    expect(failed?.output_digest).toBeNull()
+    expect(failed?.evidence_digest).toBeNull()
   })
 
   it('review 复用旧 diff 摘要时拒绝', async () => {

@@ -7,6 +7,9 @@
  */
 
 import { execFileSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import type { Result } from '../contracts/errors.js'
 import type { TrialEvaluation } from '../control/trial.js'
 import { readTrialStatus } from '../control/trial-store.js'
@@ -14,6 +17,8 @@ import { CLAUDE_CAPABILITIES } from '../execution/adapters/claude-code.js'
 import { DEFAULT_OMP_MODEL, OMP_CAPABILITIES } from '../execution/adapters/omp.js'
 import { PI_CAPABILITIES } from '../execution/adapters/pi.js'
 import { tierOf } from '../execution/adapters/tier.js'
+import { selectManagedPiModel } from '../execution/isolation/managed-env.js'
+import { DEFAULT_SANDBOX_EXEC, type OsSandboxBackend } from '../execution/isolation/os-sandbox.js'
 import { asRole } from '../fact/db.js'
 import { resolveGitHubToken } from '../fact/github-auth.js'
 import type { CapabilityId, HarnessTier } from '../shared/ids.js'
@@ -23,6 +28,7 @@ import { type HarnessId, resolveHarness } from './run-task.js'
 type CommandOutcome = { readonly ok: boolean; readonly output: string }
 type CredentialStatus = 'ready' | 'missing' | 'unknown'
 type Verification = 'native-live' | 'compat-live' | 'deterministic-only'
+export type DoctorScope = 'full' | 'ticket'
 
 export interface HarnessReadiness {
   readonly id: HarnessId
@@ -50,6 +56,7 @@ export interface DoctorDatabase {
 export interface DoctorReport {
   readonly format: 'keel-doctor/v1'
   readonly observed_at: string
+  readonly scope: DoctorScope
   readonly environment: {
     readonly platform: NodeJS.Platform
     readonly arch: string
@@ -70,6 +77,11 @@ export interface DoctorReport {
     readonly supported: boolean
     readonly detail: string
   }
+  readonly managed_write: {
+    readonly supported: boolean
+    readonly backend: OsSandboxBackend | null
+    readonly detail: string
+  }
   readonly harnesses: readonly HarnessReadiness[]
   readonly trial: TrialEvaluation | null
 }
@@ -84,6 +96,7 @@ export interface DoctorDeps {
   readonly nodeVersion?: string
   readonly env?: NodeJS.ProcessEnv
   readonly now?: () => string
+  readonly piModels?: () => unknown
 }
 
 interface HarnessSpec {
@@ -198,9 +211,17 @@ function claudeCredentials(
 function piCredentials(
   run: (bin: string, args: readonly string[]) => CommandOutcome,
   model: string,
+  deps: DoctorDeps,
 ): HarnessReadiness['credentials'] {
-  const provider = model.includes('/') ? model.slice(0, model.lastIndexOf('/')) : ''
-  if (provider === '') return { status: 'unknown', method: '没有 provider/model，未探测 Pi 凭据' }
+  let provider: string
+  try {
+    const models =
+      deps.piModels?.() ??
+      JSON.parse(readFileSync(join(homedir(), '.pi', 'agent', 'models.json'), 'utf8'))
+    provider = selectManagedPiModel(models, model).name
+  } catch {
+    return { status: 'missing', method: 'Pi managed 模型配置不可用；未探测凭据' }
+  }
   const result = run('pi', [
     'auth',
     'check',
@@ -252,7 +273,7 @@ function probeHarness(spec: HarnessSpec, deps: DoctorDeps, model: string): Harne
     : spec.id === 'claude'
       ? claudeCredentials(deps, run)
       : spec.id === 'pi'
-        ? piCredentials(run, model)
+        ? piCredentials(run, model, deps)
         : ompCredentials(run, model)
   return {
     id: spec.id,
@@ -271,6 +292,32 @@ function probeHarness(spec: HarnessSpec, deps: DoctorDeps, model: string): Harne
 function safeDetail(error: unknown): string {
   const text = error instanceof Error ? error.message : String(error)
   return text.replace(/postgres(?:ql)?:\/\/[^\s"'`]+/gi, 'postgres://***').slice(0, 1000)
+}
+
+function managedWriteReadiness(
+  platform: NodeJS.Platform,
+  run: (bin: string, args: readonly string[]) => CommandOutcome,
+): DoctorReport['managed_write'] {
+  if (platform !== 'darwin') {
+    return {
+      supported: false,
+      backend: null,
+      detail: `managed 写执行需要 macOS sandbox-exec；当前 ${platform} 尚未接入`,
+    }
+  }
+  const probe = run(DEFAULT_SANDBOX_EXEC, ['-p', '(version 1)(allow default)', '/usr/bin/true'])
+  if (!probe.ok) {
+    return {
+      supported: false,
+      backend: null,
+      detail: `无法启动 ${DEFAULT_SANDBOX_EXEC}；managed 写执行拒绝无沙箱运行`,
+    }
+  }
+  return {
+    supported: true,
+    backend: 'macos-sandbox-exec',
+    detail: 'macOS sandbox-exec 可启动；实际文件、网络与凭据边界仍需真实负例验证',
+  }
 }
 
 async function defaultDatabase(): Promise<DoctorDatabase> {
@@ -317,6 +364,7 @@ function trialSummary(trial: TrialEvaluation | null, warnings: string[]): TrialE
 export async function collectDoctorReport(
   selectedHarness: HarnessId,
   deps: DoctorDeps = {},
+  scope: DoctorScope = 'full',
 ): Promise<DoctorReport> {
   const run = deps.run ?? defaultRun
   const now = deps.now ?? (() => new Date().toISOString())
@@ -339,6 +387,7 @@ export async function collectDoctorReport(
           supported: false,
           detail: `managed 受控读取需要 Linux /proc/self/fd；当前 ${platform}`,
         }
+  const managedWrite = managedWriteReadiness(platform, run)
   const blockers: string[] = []
   const warnings: string[] = []
 
@@ -352,9 +401,15 @@ export async function collectDoctorReport(
     )
   if (selected.verification === 'deterministic-only')
     blockers.push(`选定 Harness（${HARNESS_LABEL[selected.id]}）尚未完成原生 live 验收`)
-  if (!managedRead.supported) blockers.push(`managed_read：${managedRead.detail}`)
+  if (scope === 'full' && !managedRead.supported)
+    blockers.push(`managed_read：${managedRead.detail}`)
+  if (!managedWrite.supported) blockers.push(`managed_write：${managedWrite.detail}`)
   if (platform !== 'linux')
-    warnings.push('当前平台只能做适配器/服务层开发；完整 managed E2E 必须在 Linux 执行。')
+    warnings.push(
+      scope === 'full'
+        ? '调查读取只支持 Linux，写沙箱只支持 macOS；当前没有完整范围就绪的平台。'
+        : 'ticket 范围不覆盖 Linux-only 调查读取；调查能力仍报告不支持。',
+    )
   if (githubToken === undefined) blockers.push('GitHub 凭据不可用，ingress 与 PR 网关会阻断')
   if (selected.credentials.status === 'unknown')
     warnings.push(`选定 Harness 凭据未验证：${selected.credentials.method}`)
@@ -374,6 +429,7 @@ export async function collectDoctorReport(
   return {
     format: 'keel-doctor/v1',
     observed_at: observedAt,
+    scope,
     environment: {
       platform,
       arch: deps.arch ?? process.arch,
@@ -391,6 +447,7 @@ export async function collectDoctorReport(
       credential: githubToken === undefined ? 'missing' : 'available',
     },
     managed_read: managedRead,
+    managed_write: managedWrite,
     harnesses,
     trial,
   }
@@ -399,8 +456,9 @@ export async function collectDoctorReport(
 function printHuman(report: DoctorReport): void {
   console.log(
     `keel doctor: ${report.ok ? 'READY' : 'BLOCKED'} harness=${report.selected_harness} ` +
-      `platform=${report.environment.platform}/${report.environment.arch} ` +
-      `database=${report.database.status} managed_read=${report.managed_read.supported}`,
+      `scope=${report.scope} platform=${report.environment.platform}/${report.environment.arch} ` +
+      `database=${report.database.status} managed_read=${report.managed_read.supported} ` +
+      `managed_write=${report.managed_write.supported}`,
   )
   for (const harness of report.harnesses) {
     console.log(
@@ -418,21 +476,25 @@ export async function doctorMain(argv: readonly string[], deps: DoctorDeps = {})
     const { positionals, flags } = parseArgs(argv)
     if (positionals.length > 0) throw new Error(`不接受位置参数：${positionals.join(' ')}`)
     if (flags.help === true) {
-      console.log(`用法: keel doctor [--harness omp|claude|pi] [--json]
+      console.log(`用法: keel doctor [--harness omp|claude|pi] [--scope full|ticket] [--json]
 
 只读探测数据库 schema、Harness 二进制/凭据、GitHub 凭据、备份工具、
-managed 平台能力与试运行门槛。不会调用模型、访问 GitHub 或认领队列。`)
+managed 平台能力与试运行门槛。--scope full（默认）同时要求调查读取与
+ticket 写执行；--scope ticket 只要求写执行。不会调用模型、访问 GitHub 或认领队列。`)
       return
     }
     for (const key of Object.keys(flags)) {
-      if (!['harness', 'json'].includes(key)) throw new Error(`未知选项：--${key}`)
+      if (!['harness', 'scope', 'json'].includes(key)) throw new Error(`未知选项：--${key}`)
     }
     const harnessRaw = flags.harness
     if (harnessRaw !== undefined && typeof harnessRaw !== 'string')
       throw new Error('--harness 需要 omp|claude|pi')
     const selected = resolveHarness(harnessRaw, (deps.env ?? process.env).KEEL_HARNESS)
     if (!selected.ok) throw new Error(selected.error.detail)
-    const report = await collectDoctorReport(selected.value, deps)
+    const scopeRaw = flags.scope
+    if (scopeRaw !== undefined && scopeRaw !== 'full' && scopeRaw !== 'ticket')
+      throw new Error('--scope 需要 full|ticket')
+    const report = await collectDoctorReport(selected.value, deps, scopeRaw ?? 'full')
     if (flags.json === true) console.log(JSON.stringify(report, null, 2))
     else printHuman(report)
     if (!report.ok) process.exitCode = 1

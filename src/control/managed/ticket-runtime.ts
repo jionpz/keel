@@ -135,6 +135,8 @@ function roleInstruction(stage: ManagedTicketStageName): string {
       return (
         common +
         ' 在现有提交上运行真实验证命令，逐条记录 command、exit_code、passed、output_digest、output_excerpt。' +
+        ' checks 的每一项都是硬门禁，只列本阶段必需的验收检查；必需检查失败必须如实保留，不能省略。' +
+        ' 探索性环境诊断写入 summary。预期拒绝的安全负例须由断言预期结果的脚本检查，脚本成功才可 passed=true。' +
         ' 没有真实命令和结果证据不得输出 completed；不得修改提交。'
       )
     case 'review':
@@ -737,7 +739,7 @@ async function pauseTicketWithError(
   code: string,
   detail: string,
 ): Promise<Result<ManagedTicketTickResult>> {
-  await withManagedTicketClaim(claim, async (c) => {
+  const persisted = await withManagedTicketClaim(claim, async (c) => {
     await c.query(
       `UPDATE managed_ticket_task SET status='PAUSED',last_error=$2,
          lease_token=NULL,lease_until=NULL,updated_at=now() WHERE id=$1`,
@@ -745,6 +747,7 @@ async function pauseTicketWithError(
     )
     await ticketEvent(c, claim.task.id, 'ManagedTicketPaused', { code, detail })
   })
+  if (!persisted.ok) return persisted
   return ok({ taskId: claim.task.id, status: 'PAUSED', stage: claim.task.current_stage })
 }
 
@@ -756,7 +759,7 @@ async function failStage(
   pause: boolean,
 ): Promise<Result<ManagedTicketTickResult>> {
   const status = pause ? 'PAUSED' : 'READY'
-  await withManagedTicketClaim(claim, async (c) => {
+  const persisted = await withManagedTicketClaim(claim, async (c) => {
     await c.query(
       `UPDATE managed_ticket_stage SET status='FAILED',error=$2,usage=$3::jsonb,ended_at=now()
        WHERE id=$1`,
@@ -775,6 +778,7 @@ async function failStage(
       usage,
     })
   })
+  if (!persisted.ok) return persisted
   return ok({ taskId: claim.task.id, status, stage: claim.task.current_stage })
 }
 
@@ -1093,6 +1097,14 @@ export async function tickManagedTicket(
     )
     return resumeAfterDecision(worker, paused, claim.task.id)
   }
+  const captured = await withManagedTicketClaim(claim, async (client) => {
+    await client.query(
+      `UPDATE managed_ticket_stage SET result=$2::jsonb,evidence=$3::jsonb
+       WHERE id=$1 AND status='RUNNING'`,
+      [stageId, JSON.stringify(result), JSON.stringify(evidence)],
+    )
+  })
+  if (!captured.ok) return captured
   if (!after.value.clean) return failStage(claim, stageId, 'WORKTREE_DIRTY', usage, true)
   if (!changedDiff.ok) return failStage(claim, stageId, 'WORKSPACE_ERROR', usage, true)
 

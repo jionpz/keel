@@ -121,10 +121,12 @@ outbox、checks；角色健康与原因码写入 `worker_health`，`service-stat
 
 **已实现的就绪工具（不等同完成本票）**：
 
-- `keel doctor [--harness omp|claude|pi] [--json]`：只读探测 Harness 二进制、版本、
-  capability/tier、凭据可判定性、PostgreSQL schema、GitHub 凭据、`git` / `pg_dump`、
-  Linux `/proc/self/fd` managed 读取能力与试运行门槛；不调用模型、不访问 GitHub、
-  不认领队列、不输出 token。
+- `keel doctor [--harness omp|claude|pi] [--scope full|ticket] [--json]`：
+  只读探测 Harness 二进制、版本、capability/tier、凭据可判定性、PostgreSQL schema、
+  GitHub 凭据、`git` / `pg_dump`、
+  Linux `/proc/self/fd` managed 读取能力、macOS `sandbox-exec` 写执行能力与试运行
+  门槛；full 同时要求读写，ticket 只要求写执行且不把调查读取伪装成可用。不调用模型、
+  不访问 GitHub、不认领队列、不输出 token。
 - `keel trial-start --projects <uuid,uuid> --confirm`、
   `keel trial-status [--json] [--require-eligible]`、
   `keel trial-stop --reason <text> --confirm`：记录单 owner 试运行窗口，并从真实
@@ -132,9 +134,12 @@ outbox、checks；角色健康与原因码写入 `worker_health`，`service-stat
 - 迁移 `migrations/1000000000021_trial-readiness.sql`：新增 `managed_trial` 与
   `managed_trial_project`，数据库约束保证单用户同时只有一个进行中的试运行。
 - 试运行门槛固定为 2–3 个项目、连续 7 天、至少 30 个实际代决、至少 5 个完成任务；
-  达到门槛只输出 `eligible_for_owner_review`，不宣称生产正确率，也不自动扩大授权。
+  完成任务只统计 `DONE` 与已过准确 SHA 必需 CI 的 `PR_READY`，不把仅创建 PR 或仍在
+  检查的任务计入。达到门槛只输出 `eligible_for_owner_review`，不宣称生产正确率，
+  也不自动扩大授权。
 
-**仍未完成**：真实试运行尚未启动；没有 7 天连续运行、30 个实际代决与 5 个真实完成
+**仍未完成**：两个 demo 的 macOS ticket/workflow 受限试运行已于 2026-11-11 登记；
+没有 7 天连续运行、30 个实际代决与 5 个真实完成
 任务样本；没有留出评测集与独立评审；原生 Claude managed E2E、XL 多 ticket、真实生产
 SIGKILL/数据库短断/重复 webhook/外部响应丢失故障注入、生产级备份恢复演练均未完成。
 
