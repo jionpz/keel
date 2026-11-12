@@ -22,6 +22,7 @@ import { commitArtifactOn } from '../../fact/artifact-store.js'
 import { branchFor, type GitWorkspace, type PreparedProject } from '../../fact/git-workspace.js'
 import type { Stage } from '../../shared/ids.js'
 import { TIMER_DURATIONS } from '../../shared/timers.js'
+import { prBodyWithIssueReferences } from '../pr-body.js'
 import type { SideEffect, TransitionEvent } from '../transition/types.js'
 import { loadPolicyFacts } from './facts.js'
 
@@ -576,13 +577,28 @@ async function createPullRequest(c: PoolClient, ctx: EffectContext): Promise<App
   const push = await git.push(project, ctx.taskId, row.remote_url)
   if (!push.ok) throw new Error(`push 失败：${push.error.detail}`)
 
+  const feedback = await c.query<{ external_ref: string }>(
+    `SELECT DISTINCT f.external_ref
+     FROM task_feedback tf
+     JOIN feedback f ON f.id = tf.feedback_id
+     WHERE tf.task_id = $1 AND f.source = 'github'
+     ORDER BY f.external_ref`,
+    [ctx.taskId],
+  )
+  const body = prBodyWithIssueReferences({
+    body: `Keel Task ${ctx.taskId}\n\nAutomated PR.`,
+    taskId: ctx.taskId,
+    remoteUrl: row.remote_url,
+    externalRefs: feedback.rows.map((entry) => entry.external_ref),
+  })
+
   const pr = await ctx.github.createPullRequest({
     repoId,
     remoteUrl: row.remote_url,
     baseBranch: project.baseBranch || row.default_branch,
     headBranch,
     title: row.title,
-    body: `Keel Task ${ctx.taskId}\n\nAutomated PR.`,
+    body,
   })
   if (!pr.ok) throw new Error(`创建 PR 失败：${pr.error.detail}`)
 

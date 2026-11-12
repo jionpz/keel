@@ -100,6 +100,24 @@ async function defaultBranchOf(remoteUrl: string): Promise<string> {
 }
 
 describe('首次注册与绑定', () => {
+  it('Issue 回写默认 off，显式更新并在不传参数时保留，非法值零写入', async () => {
+    const url = remote('writeback')
+    await run([url])
+    const mode = () =>
+      asOwner(
+        async (client) =>
+          (await client.query('SELECT issue_writeback FROM repo WHERE remote_url=$1', [url]))
+            .rows[0]?.issue_writeback,
+      )
+    expect(await mode()).toBe('off')
+    await run([url, '--issue-writeback', 'comment_and_close'])
+    await run([url, '--issue-label', 'ready'])
+    expect(await mode()).toBe('comment_and_close')
+    const invalid = await run([url, '--issue-writeback', 'yes'])
+    expect(invalid.exitCode).toBe(1)
+    expect(await mode()).toBe('comment_and_close')
+    expect(await repoCount()).toBe(1)
+  })
   it('合法目录 + 匹配 origin → 写入规范化后的绝对路径', async () => {
     const dir = gitRepo('widgets', 'https://github.com/acme/widgets')
     const r = await run([remote('widgets'), '--local-path', `${dir}/`])

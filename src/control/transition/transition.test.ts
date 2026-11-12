@@ -207,6 +207,14 @@ describe('端到端：docs/07-flows.md 流程一（Excel 日期筛选）', () =>
     expect(status).toBe('S-PR_OPEN')
 
     step({ type: 'CIPassed', source: 'simulated' })
+    expect(status).toBe('S-PR_OPEN')
+
+    step({
+      type: 'PRMerged',
+      source: 'simulated',
+      mergedAt: '2026-08-24T00:00:00Z',
+      mergeSha: 'a'.repeat(40),
+    })
     expect(status).toBe('S-DONE')
 
     expect(path.map((p) => p.id)).toEqual([
@@ -218,6 +226,7 @@ describe('端到端：docs/07-flows.md 流程一（Excel 日期筛选）', () =>
       'T-017',
       'T-018',
       'T-021',
+      'T-042',
       'T-024',
     ])
   })
@@ -227,13 +236,24 @@ describe('端到端：docs/07-flows.md 流程一（Excel 日期筛选）', () =>
     expect(rejected.matched && rejected.id).toBe('T-015')
     expect(rejected.matched && rejected.effects).toContainEqual({ kind: 'CleanWorkspace' })
 
-    const done = transition('S-PR_OPEN', 'auto', { type: 'CIPassed', source: 'simulated' }, facts())
+    const done = transition(
+      'S-PR_OPEN',
+      'auto',
+      {
+        type: 'PRMerged',
+        source: 'simulated',
+        mergedAt: '2026-08-24T00:00:00Z',
+        mergeSha: 'a'.repeat(40),
+      },
+      facts(),
+    )
     expect(done.matched && done.id).toBe('T-024')
-    // 先 merge、后清理；顺序有意义
-    expect(done.matched && done.effects).toEqual([
-      { kind: 'MaybeAutoMerge' },
-      { kind: 'CleanWorkspace' },
-    ])
+    expect(done.matched && done.effects).toEqual([{ kind: 'CleanWorkspace' }])
+
+    const ci = transition('S-PR_OPEN', 'auto', { type: 'CIPassed', source: 'simulated' }, facts())
+    expect(ci.matched && ci.id).toBe('T-042')
+    expect(ci.matched && ci.next_status).toBe('S-PR_OPEN')
+    expect(ci.matched && ci.effects).toEqual([])
 
     const failed = transition('S-DEVELOPING', 'auto', { type: 'UnrecoverableError' }, facts())
     expect(failed.matched && failed.id).toBe('T-041')

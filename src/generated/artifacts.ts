@@ -138,7 +138,7 @@ schema_version: "1.0"
 seq: number
 task_id: string
 run_id?: (string | null)
-type: ("FeedbackReceived" | "TaskCreated" | "TaskStatusChanged" | "ControlModeChanged" | "RunCreated" | "RunStatusChanged" | "ProposalSubmitted" | "ProposalAccepted" | "ProposalRejected" | "ArtifactCommitted" | "PolicyEvaluated" | "CapabilityRequested" | "CapabilityGranted" | "CapabilityDenied" | "SideEffectSkipped" | "BudgetExceeded" | "HumanAction" | "NoTransition" | "SideEffectApplied" | "SideEffectIntent" | "ContextBuilt")
+type: ("FeedbackReceived" | "TaskCreated" | "TaskStatusChanged" | "ControlModeChanged" | "RunCreated" | "RunStatusChanged" | "ProposalSubmitted" | "ProposalAccepted" | "ProposalRejected" | "ArtifactCommitted" | "PolicyEvaluated" | "CapabilityRequested" | "CapabilityGranted" | "CapabilityDenied" | "SideEffectSkipped" | "BudgetExceeded" | "HumanAction" | "NoTransition" | "SideEffectApplied" | "SideEffectIntent" | "SideEffectFailed" | "ContextBuilt")
 /**
  * 状态转移类事件应在 payload 中记录 transition ID（如 T-012），使事件流可直接对照转移表核验
  */
@@ -242,7 +242,7 @@ security_related: boolean
 /**
  * 某阶段的结构化结论。状态机转移守卫的唯一输入源 —— 守卫必须读枚举，不能解析自由文本。建模为按 stage 判别的联合，使守卫在类型层面就能被收窄。
  */
-export type AStageOutcome = (PmOutcome | BrainstormOutcome | RfcDraftOutcome | CriticOutcome | DevelopOutcome | VerificationOutcome)
+export type AStageOutcome = (PmOutcome | PmActionableOutcome | PmClarificationOutcome | PmEvidenceRejectionOutcome | PmRejectionOutcome | BrainstormOutcome | RfcDraftOutcome | CriticOutcome | DevelopOutcome | VerificationOutcome)
 
 export interface PmOutcome {
 schema_version: "1.0"
@@ -256,6 +256,49 @@ details?: {
  */
 needs_design?: boolean
 }
+}
+export interface PmActionableOutcome {
+schema_version: "1.1"
+run_id: string
+stage: "pm"
+verdict: "actionable"
+reason: string
+details?: {
+needs_design?: boolean
+}
+}
+export interface PmClarificationOutcome {
+schema_version: "1.1"
+run_id: string
+stage: "pm"
+verdict: "unclear"
+reason: string
+/**
+ * @minItems 1
+ * @maxItems 5
+ */
+questions: [string]|[string, string]|[string, string, string]|[string, string, string, string]|[string, string, string, string, string]
+}
+export interface PmEvidenceRejectionOutcome {
+schema_version: "1.1"
+run_id: string
+stage: "pm"
+verdict: "reject"
+reason: string
+reject_kind: ("duplicate" | "already_fixed")
+/**
+ * @minItems 1
+ */
+evidence: [string, ...(string)[]]
+}
+export interface PmRejectionOutcome {
+schema_version: "1.1"
+run_id: string
+stage: "pm"
+verdict: "reject"
+reason: string
+reject_kind: ("not_actionable" | "out_of_scope")
+evidence: string[]
 }
 export interface BrainstormOutcome {
 schema_version: "1.0"

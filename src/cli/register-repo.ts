@@ -57,7 +57,7 @@ export async function registerRepoMain(argv: readonly string[]): Promise<void> {
   const { positionals, flags } = parseArgs(argv)
   if (flags.help === true) {
     console.log(`用法: keel register-repo <remoteUrl> [--default-branch <name>] [--local-path <dir>]
-                          [--issue-label <name>]
+                          [--issue-label <name>] [--issue-writeback off|comment|comment_and_close]
 
 按 remote_url 幂等注册 repo。remoteUrl 示例:
   https://github.com/owner/repo.git
@@ -67,6 +67,8 @@ export async function registerRepoMain(argv: readonly string[]): Promise<void> {
   --local-path <dir>       绑定已存在的本地 git 工作树；不传则保持 Keel 托管模式。
                            重复执行时不传该参数会保留原有绑定。
   --issue-label <name>     poller 扫描用的 Issue label(默认 keel)。
+                           重复执行时不传该参数会保留原值。
+  --issue-writeback <mode> Issue 回写：off / comment / comment_and_close（默认 off）。
                            重复执行时不传该参数会保留原值。`)
     return
   }
@@ -83,6 +85,15 @@ export async function registerRepoMain(argv: readonly string[]): Promise<void> {
     return
   }
   const defaultBranch = defaultBranchFlag.value
+  const issueWriteback = flags['issue-writeback']
+  if (
+    issueWriteback !== undefined &&
+    !['off', 'comment', 'comment_and_close'].includes(String(issueWriteback))
+  ) {
+    console.error('register-repo: --issue-writeback 只接受 off / comment / comment_and_close')
+    process.exitCode = 1
+    return
+  }
   const localPathFlag = typeof flags['local-path'] === 'string' ? flags['local-path'] : undefined
 
   // 空白 label 会让 poller 列出该仓库全部 open issue，跨过 label 闸门。
@@ -137,9 +148,16 @@ export async function registerRepoMain(argv: readonly string[]): Promise<void> {
       if (row === undefined) {
         const id = randomUUID()
         await c.query(
-          `INSERT INTO repo (id, provider, remote_url, default_branch, local_path, issue_label)
-           VALUES ($1, 'github', $2, $3, $4, $5)`,
-          [id, remoteUrl, defaultBranch, canonicalPath ?? null, issueLabel ?? 'keel'],
+          `INSERT INTO repo (id, provider, remote_url, default_branch, local_path, issue_label, issue_writeback)
+           VALUES ($1, 'github', $2, $3, $4, $5, $6)`,
+          [
+            id,
+            remoteUrl,
+            defaultBranch,
+            canonicalPath ?? null,
+            issueLabel ?? 'keel',
+            issueWriteback ?? 'off',
+          ],
         )
         return id
       }
@@ -148,7 +166,7 @@ export async function registerRepoMain(argv: readonly string[]): Promise<void> {
       // 只改 label 的调用不能被 local_path 的缺省值顺带覆盖，反之亦然。
       const nextPath = canonicalPath !== undefined && row.local_path !== canonicalPath
       const nextLabel = issueLabel !== undefined && row.issue_label !== issueLabel
-      if (!nextPath && !nextLabel) return row.id
+      if (!nextPath && !nextLabel && issueWriteback === undefined) return row.id
 
       updatingRepoId = row.id
       if (nextPath) {
@@ -156,6 +174,9 @@ export async function registerRepoMain(argv: readonly string[]): Promise<void> {
       }
       if (nextLabel) {
         await c.query(`UPDATE repo SET issue_label = $1 WHERE id = $2`, [issueLabel, row.id])
+      }
+      if (issueWriteback !== undefined) {
+        await c.query('UPDATE repo SET issue_writeback=$1 WHERE id=$2', [issueWriteback, row.id])
       }
       return row.id
     })

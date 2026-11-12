@@ -20,6 +20,7 @@ import { asRole } from '../../fact/db.js'
 import { branchFor } from '../../fact/git-workspace.js'
 import { ensureTraceId } from '../../fact/trace.js'
 import type { ControlMode, TaskStatus } from '../../shared/ids.js'
+import { enqueueIssueWriteback } from '../issue-writeback.js'
 import { transition } from '../transition/index.js'
 import { TASK_TRANSITIONS } from '../transition/table.js'
 import type { TransitionEvent } from '../transition/types.js'
@@ -55,6 +56,22 @@ export interface IntakeInput {
   readonly title: string
   readonly repoId: string
   readonly baseBranch: string
+}
+
+/**
+ * 重驱动前序 Task 的审计信息。
+ *
+ * `redriveFeedbackId` 是 dedupe 的事实源：同一个前序 Task 只能对应一个新 Task。
+ */
+export interface IntakeRedrive {
+  readonly previousTaskId: string
+  readonly redriveFeedbackId: string
+  readonly prUrl: string
+  readonly closedAt: string | null
+}
+
+export interface IntakeOptions {
+  readonly redrive?: IntakeRedrive
 }
 
 export interface IntakeOutcome {
@@ -113,14 +130,87 @@ export class WorkflowDriver {
    * 不走 transition()（from:null 刻意不参与已有 task 的转移）也不走 advance()（要求 task 已存在）。
    * 单事务内完成 CreateTask + LinkFeedback + TaskStatusChanged(I4)。
    */
-  async intake(input: IntakeInput, now: string): Promise<Result<IntakeOutcome>> {
+  async intake(
+    input: IntakeInput,
+    now: string,
+    opts: IntakeOptions = {},
+  ): Promise<Result<IntakeOutcome>> {
     return asRole('keel_control', async (c) => {
-      const existing = await c.query<{ task_id: string }>(
-        'SELECT task_id FROM task_feedback WHERE feedback_id = $1',
-        [input.feedbackId],
-      )
-      const linked = existing.rows[0]
+      const redrive = opts.redrive
+      let linked: { task_id: string } | undefined
+
+      if (redrive === undefined) {
+        const existing = await c.query<{ task_id: string }>(
+          `SELECT tf.task_id
+           FROM task_feedback tf
+           JOIN task t ON t.id = tf.task_id
+           WHERE tf.feedback_id = $1
+           ORDER BY t.created_at DESC, t.id DESC
+           LIMIT 1`,
+          [input.feedbackId],
+        )
+        linked = existing.rows[0]
+      } else {
+        // 锁住前序 Task：并发的两次 redrive 必须串行，否则会各建一个新 Task。
+        const prior = await c.query<{ status: TaskStatus; repo_id: string; linked: boolean }>(
+          `SELECT t.status,t.repo_id,EXISTS(
+             SELECT 1 FROM task_feedback tf WHERE tf.task_id=t.id AND tf.feedback_id=$2
+           ) AS linked FROM task t WHERE t.id=$1 FOR UPDATE`,
+          [redrive.previousTaskId, input.feedbackId],
+        )
+        const previous = prior.rows[0]
+        if (previous === undefined) {
+          return err<IntakeOutcome>(
+            makeError('NOT_FOUND', `找不到准备重驱动的前序 Task ${redrive.previousTaskId}`),
+          )
+        }
+        if (previous.status !== 'S-ABANDONED') {
+          return err<IntakeOutcome>(
+            makeError(
+              'CONFLICT',
+              `Task ${redrive.previousTaskId} 当前是 ${previous.status}，只有 S-ABANDONED 可重驱动`,
+            ),
+          )
+        }
+        if (!previous.linked || previous.repo_id !== input.repoId) {
+          return err<IntakeOutcome>(
+            makeError('CONFLICT', '重驱动与前序任务的仓库或 Feedback 不匹配'),
+          )
+        }
+        const note = await c.query(
+          `SELECT 1 FROM feedback WHERE id=$1 AND source='manual' AND external_ref=$2`,
+          [redrive.redriveFeedbackId, `redrive:${redrive.previousTaskId}`],
+        )
+        if (note.rows.length === 0) {
+          return err<IntakeOutcome>(makeError('CONFLICT', '重驱动说明不属于该前序任务'))
+        }
+        const closed = await c.query(
+          `SELECT 1 FROM event
+           WHERE task_id=$1 AND type='TaskStatusChanged'
+             AND payload->>'event'='PRClosed'
+             AND payload->>'reason'='pr_closed_unmerged'
+           ORDER BY seq DESC LIMIT 1`,
+          [redrive.previousTaskId],
+        )
+        if (closed.rows[0] === undefined) {
+          return err<IntakeOutcome>(
+            makeError(
+              'CONFLICT',
+              `Task ${redrive.previousTaskId} 不是因 PR 未合并关闭而放弃，拒绝重驱动`,
+            ),
+          )
+        }
+
+        // 同一个前序 Task 的 redrive 说明只能对应一个新 Task。
+        const already = await c.query<{ task_id: string }>(
+          'SELECT task_id FROM task_feedback WHERE feedback_id = $1',
+          [redrive.redriveFeedbackId],
+        )
+        linked = already.rows[0]
+      }
+
       if (linked !== undefined) {
+        const dedupeKey = redrive?.redriveFeedbackId ?? input.feedbackId
         // O2：幂等跳过也写同一条 trace —— 否则 ingress 重放段永久无 trace
         const traceId = await ensureTraceId(c, linked.task_id, now)
         await c.query(
@@ -128,7 +218,7 @@ export class WorkflowDriver {
            VALUES ($1,'SideEffectSkipped',$2::jsonb,$3,$4)`,
           [
             linked.task_id,
-            JSON.stringify({ kind: 'CreateTask', dedupe_key: input.feedbackId }),
+            JSON.stringify({ kind: 'CreateTask', dedupe_key: dedupeKey }),
             traceId,
             now,
           ],
@@ -136,7 +226,7 @@ export class WorkflowDriver {
         return ok<IntakeOutcome>({
           taskId: linked.task_id,
           created: false,
-          effects: [{ kind: 'CreateTask', outcome: 'skipped', detail: input.feedbackId }],
+          effects: [{ kind: 'CreateTask', outcome: 'skipped', detail: dedupeKey }],
         })
       }
 
@@ -151,15 +241,27 @@ export class WorkflowDriver {
         [taskId, title, input.repoId, input.baseBranch, workBranch],
       )
 
-      await c.query(
-        `INSERT INTO task_feedback (task_id, feedback_id) VALUES ($1, $2)
-         ON CONFLICT DO NOTHING`,
-        [taskId, input.feedbackId],
-      )
+      const feedbackIds = [
+        input.feedbackId,
+        ...(redrive === undefined ? [] : [redrive.redriveFeedbackId]),
+      ]
+      for (const feedbackId of feedbackIds) {
+        await c.query(
+          `INSERT INTO task_feedback (task_id, feedback_id) VALUES ($1, $2)
+           ON CONFLICT DO NOTHING`,
+          [taskId, feedbackId],
+        )
+      }
 
       const effects: AppliedEffect[] = [
         { kind: 'CreateTask', outcome: 'applied', detail: taskId },
-        { kind: 'LinkFeedback', outcome: 'applied', detail: input.feedbackId },
+        ...feedbackIds.map(
+          (feedbackId): AppliedEffect => ({
+            kind: 'LinkFeedback',
+            outcome: 'applied',
+            detail: feedbackId,
+          }),
+        ),
       ]
 
       // O2：T-001 即是 trace 起点。ensureTraceId 会落一条 TaskCreated 宿主事件，
@@ -173,28 +275,31 @@ export class WorkflowDriver {
           taskId,
           JSON.stringify({
             kind: 'CreateTask',
-            dedupe_key: input.feedbackId,
+            dedupe_key: redrive?.redriveFeedbackId ?? input.feedbackId,
             task_id: taskId,
             work_branch: workBranch,
+            ...(redrive === undefined ? {} : { redrive_of: redrive.previousTaskId }),
           }),
           traceId,
           now,
         ],
       )
-      await c.query(
-        `INSERT INTO event (task_id, type, payload, trace_id, occurred_at)
-         VALUES ($1,'SideEffectApplied',$2::jsonb,$3,$4)`,
-        [
-          taskId,
-          JSON.stringify({
-            kind: 'LinkFeedback',
-            dedupe_key: input.feedbackId,
-            feedback_id: input.feedbackId,
-          }),
-          traceId,
-          now,
-        ],
-      )
+      for (const feedbackId of feedbackIds) {
+        await c.query(
+          `INSERT INTO event (task_id, type, payload, trace_id, occurred_at)
+           VALUES ($1,'SideEffectApplied',$2::jsonb,$3,$4)`,
+          [
+            taskId,
+            JSON.stringify({
+              kind: 'LinkFeedback',
+              dedupe_key: feedbackId,
+              feedback_id: feedbackId,
+            }),
+            traceId,
+            now,
+          ],
+        )
+      }
       await c.query(
         `INSERT INTO event (task_id, type, payload, trace_id, occurred_at)
          VALUES ($1,'TaskStatusChanged',$2::jsonb,$3,$4)`,
@@ -205,11 +310,31 @@ export class WorkflowDriver {
             to: 'S-NEW',
             transition: 'T-001',
             event: 'FeedbackTriaged',
+            ...(redrive === undefined ? {} : { redrive_of: redrive.previousTaskId }),
           }),
           traceId,
           now,
         ],
       )
+      if (redrive !== undefined) {
+        await c.query(
+          `INSERT INTO event (task_id, type, payload, trace_id, occurred_at)
+           VALUES ($1,'SideEffectApplied',$2::jsonb,$3,$4)`,
+          [
+            taskId,
+            JSON.stringify({
+              kind: 'Redrive',
+              dedupe_key: redrive.redriveFeedbackId,
+              previous_task_id: redrive.previousTaskId,
+              pr_url: redrive.prUrl,
+              closed_at: redrive.closedAt,
+              reason: 'pr_closed_unmerged',
+            }),
+            traceId,
+            now,
+          ],
+        )
+      }
 
       return ok<IntakeOutcome>({ taskId, created: true, effects })
     })
@@ -360,9 +485,9 @@ export class WorkflowDriver {
 
       // 放在最后，让它记录最终的 to 状态。
       // payload 含 transition ID —— 使事件流可直接对照转移表核验
-      await c.query(
+      const changed = await c.query<{ seq: string }>(
         `INSERT INTO event (task_id, type, payload, trace_id, occurred_at)
-         VALUES ($1,'TaskStatusChanged',$2::jsonb,$3,$4)`,
+         VALUES ($1,'TaskStatusChanged',$2::jsonb,$3,$4) RETURNING seq`,
         [
           taskId,
           JSON.stringify({
@@ -372,7 +497,18 @@ export class WorkflowDriver {
             event: event.type,
             // CI 结果必须能区分模拟与真实；其它事件不多出这个键
             ...(event.type === 'CIPassed' || event.type === 'CIFailed'
-              ? { source: event.source }
+              ? {
+                  source: event.source,
+                  ...(event.headSha === undefined ? {} : { head_sha: event.headSha }),
+                }
+              : {}),
+            // 合并是 S-DONE 的事实依据：时间与 merge SHA 必须能从事件流直接查到。
+            ...(event.type === 'PRMerged'
+              ? { source: event.source, merged_at: event.mergedAt, merge_sha: event.mergeSha }
+              : {}),
+            // PR 未合并关闭的理由属于对外可查的弃单证据。
+            ...(event.type === 'PRClosed'
+              ? { source: event.source, reason: event.reason, closed_at: event.closedAt }
               : {}),
             // 自动对账的取消要把「为什么」留在事实里：
             // 事后审计据此区分「人没来决策」与「issue 已被关闭」（issue #82）。
@@ -384,6 +520,18 @@ export class WorkflowDriver {
           now,
         ],
       )
+      if (
+        !['CIPassed', 'PRMerged', 'PRClosed'].includes(event.type) ||
+        ('source' in event && event.source === 'github')
+      ) {
+        await enqueueIssueWriteback(c, {
+          taskId,
+          state: result.next_status,
+          transition: result.id,
+          seq: Number(changed.rows[0]?.seq),
+          now,
+        })
+      }
 
       // 人工理由：与转移同事务落库，避免「状态变了、理由丢了」的中间态。
       // 单独一条事件而不是塞进 TaskStatusChanged —— 时间线要能单独渲染它，

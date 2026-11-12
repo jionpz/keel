@@ -24,6 +24,11 @@ import type {
   HarnessDescriptor,
   WorkspaceDiff,
 } from '../../contracts/harness-adapter.js'
+import type {
+  PullRequestState,
+  PullRequestStateGateway,
+} from '../../contracts/pull-request-state.js'
+import type { RepoSignalsSource } from '../../contracts/repo-signals.js'
 import type { Usage } from '../../contracts/types.js'
 import { type ModelProfile, resolveStageModel } from '../../execution/model-routing.js'
 import type { HarnessSessionManager } from '../../execution/session/manager.js'
@@ -112,6 +117,12 @@ export interface OrchestratorDeps {
   readonly toolPolicy?: ToolPolicyDocument
   /** 显式允许只读 profile 通过 Bash 回退搜索；缺省 false */
   readonly toolPolicyAllowShellFallback?: boolean
+  /** PM 的只读仓库信号来源；缺省不取。失败会降级为空并记 ContextBuilt 诊断。 */
+  readonly repoSignals?: RepoSignalsSource
+  /** 默认分支回看窗口；缺省 14 天 */
+  readonly repoSignalsSinceDays?: number
+  /** repo_signals 的 token 上限；缺省 1200 */
+  readonly repoSignalsMaxTokens?: number
 }
 
 export interface StepRecord {
@@ -137,6 +148,8 @@ export type StopReason =
   | 'awaiting-clarification'
   /** `S-PR_OPEN` 且没有注入 CI 回调：等外部 CI 事实 */
   | 'awaiting-external-ci'
+  /** `S-PR_OPEN` 且 CI 已通过：等 PR 合并或关闭 */
+  | 'awaiting-pr-merge'
   /** `S-HUMAN_REVIEW`：等人工批准 / 驳回 / 回炉 */
   | 'awaiting-human'
   /** 能力请求被守卫拒绝（R4）：需要人工或外部介入 */
@@ -168,7 +181,22 @@ export interface RunOptions {
    * 真实 CI 网关。传入时优先于 `externalCi`，用于读取 GitHub Checks / Status。
    */
   readonly ci?: CiGateway
+  /**
+   * 真实 PR 状态网关。CI 通过后用它确认 PR 是 merged 还是 closed。
+   * 缺省时只能等外部回调或停在 `awaiting-pr-merge`。
+   */
+  readonly pullRequests?: PullRequestStateGateway
+  /**
+   * 模拟 PR 状态（确定性测试 / 本地闭环）。
+   * 给了 `externalCi` 却没给本回调时，沿用旧测试语义把模拟 PR 视作已合并。
+   */
+  readonly externalPr?: (taskId: string) => Promise<ExternalPrObservation>
 }
+
+export type ExternalPrObservation =
+  | { readonly state: 'open' }
+  | { readonly state: 'merged'; readonly mergedAt: string; readonly mergeSha: string | null }
+  | { readonly state: 'closed'; readonly closedAt: string | null }
 
 export async function runTaskToCompletion(
   taskId: string,
@@ -177,7 +205,12 @@ export async function runTaskToCompletion(
 ): Promise<Result<RunToCompletionResult>> {
   const maxSteps = opts.maxSteps ?? 20
   const steps: StepRecord[] = []
-  const ctxBuilder = new FactPlaneContextBuilder(ROLE_INSTRUCTIONS)
+  const ctxBuilder = new FactPlaneContextBuilder(ROLE_INSTRUCTIONS, {
+    now: deps.now,
+    ...(deps.repoSignals === undefined ? {} : { source: deps.repoSignals }),
+    ...(deps.repoSignalsSinceDays === undefined ? {} : { sinceDays: deps.repoSignalsSinceDays }),
+    ...(deps.repoSignalsMaxTokens === undefined ? {} : { maxTokens: deps.repoSignalsMaxTokens }),
+  })
 
   for (let i = 0; i < maxSteps; i++) {
     const state = await readState(taskId)
@@ -271,43 +304,124 @@ export async function runTaskToCompletion(
       return ok({ finalStatus: state.status, steps, stopReason: 'awaiting-human' })
     }
 
-    // ── S-PR_OPEN：等外部 CI ──
+    // ── S-PR_OPEN：先观察 PR 终态，仍 open 才等待 CI ──
     if (state.status === 'S-PR_OPEN') {
-      if (opts.ci !== undefined) {
+      let headSha: string | undefined
+      let repoId: string | undefined
+      let remoteUrl: string | undefined
+
+      if (opts.ci !== undefined || opts.pullRequests !== undefined) {
         if (deps.workspace.mode !== 'worktree') {
-          return err(makeError('WORKSPACE_ERROR', '真实 CI 需要 worktree 模式才能读取 head SHA'))
+          return err(
+            makeError('WORKSPACE_ERROR', '读取真实 CI / PR 状态需要 worktree 模式才能定位仓库'),
+          )
         }
         const sha = await deps.workspace.git.headSha(deps.workspace.project, taskId)
         if (!sha.ok) return err(sha.error)
+        headSha = sha.value
+        repoId = deps.workspace.repoId
         const remote = await readRemoteUrl(deps.workspace.repoId)
         if (!remote.ok) return err(remote.error)
-        const ciResult = await opts.ci.waitForCi({
-          repoId: deps.workspace.repoId,
-          remoteUrl: remote.value,
-          headSha: sha.value,
-        })
-        if (!ciResult.ok) return err(ciResult.error)
+        remoteUrl = remote.value
+      }
+
+      const knownCi = await readLatestCiResult(taskId, headSha)
+      const observation =
+        opts.pullRequests !== undefined ||
+        opts.externalPr !== undefined ||
+        knownCi?.result === 'passed'
+          ? await observePullRequest(taskId, deps, opts, repoId, remoteUrl)
+          : ok(null)
+      if (!observation.ok) return observation
+      const prSource =
+        opts.pullRequests !== undefined && opts.externalPr === undefined
+          ? ('github' as const)
+          : ('simulated' as const)
+      if (observation.value?.state === 'merged') {
+        const advanced = await deps.driver.advance(
+          taskId,
+          {
+            type: 'PRMerged',
+            source: prSource,
+            mergedAt: observation.value.mergedAt,
+            mergeSha: observation.value.mergeSha,
+          },
+          deps.now(),
+        )
+        if (!advanced.ok) return err(advanced.error)
+        steps.push(record(state.status, advanced, null, `PR 已合并（${prSource}）`))
+        continue
+      }
+      if (observation.value?.state === 'closed') {
+        const advanced = await deps.driver.advance(
+          taskId,
+          {
+            type: 'PRClosed',
+            source: prSource,
+            closedAt: observation.value.closedAt,
+            reason: 'pr_closed_unmerged',
+          },
+          deps.now(),
+        )
+        if (!advanced.ok) return err(advanced.error)
+        steps.push(record(state.status, advanced, null, `PR 未合并关闭（${prSource}）`))
+        continue
+      }
+      if (knownCi === null) {
+        let ci: 'passed' | 'failed'
+        let source: 'github' | 'simulated'
+        if (opts.ci !== undefined) {
+          const ciResult = await opts.ci.waitForCi({
+            repoId: repoId as string,
+            remoteUrl: remoteUrl as string,
+            headSha: headSha as string,
+          })
+          if (!ciResult.ok) return err(ciResult.error)
+          ci = ciResult.value
+          source = 'github'
+        } else if (opts.externalCi !== undefined) {
+          ci = await opts.externalCi(taskId)
+          source = 'simulated'
+        } else {
+          return ok({ finalStatus: state.status, steps, stopReason: 'awaiting-external-ci' })
+        }
+
+        const ciEvent =
+          ci === 'passed'
+            ? ({
+                type: 'CIPassed',
+                source,
+                ...(headSha === undefined ? {} : { headSha }),
+              } as const)
+            : ({
+                type: 'CIFailed',
+                source,
+                ...(headSha === undefined ? {} : { headSha }),
+              } as const)
+        const adv = await deps.driver.advance(taskId, ciEvent, deps.now())
+        if (!adv.ok) return err(adv.error)
+        const sourceLabel = source === 'github' ? 'GitHub' : '模拟'
+        steps.push(record(state.status, adv, null, `外部 CI（${sourceLabel}）：${ci}`))
+        continue
+      }
+
+      if (knownCi.result === 'failed') {
         const adv = await deps.driver.advance(
           taskId,
-          { type: ciResult.value === 'passed' ? 'CIPassed' : 'CIFailed', source: 'github' },
+          {
+            type: 'CIFailed',
+            source: knownCi.source,
+            ...(headSha === undefined ? {} : { headSha }),
+          },
           deps.now(),
         )
         if (!adv.ok) return err(adv.error)
-        steps.push(record(state.status, adv, null, `外部 CI（GitHub）：${ciResult.value}`))
+        const sourceLabel = knownCi.source === 'github' ? 'GitHub' : '模拟'
+        steps.push(record(state.status, adv, null, `外部 CI（${sourceLabel}）：failed`))
         continue
       }
-      if (opts.externalCi === undefined) {
-        return ok({ finalStatus: state.status, steps, stopReason: 'awaiting-external-ci' })
-      }
-      const ci = await opts.externalCi(taskId)
-      const adv = await deps.driver.advance(
-        taskId,
-        { type: ci === 'passed' ? 'CIPassed' : 'CIFailed', source: 'simulated' },
-        deps.now(),
-      )
-      if (!adv.ok) return err(adv.error)
-      steps.push(record(state.status, adv, null, `外部 CI（模拟）：${ci}`))
-      continue
+
+      return ok({ finalStatus: state.status, steps, stopReason: 'awaiting-pr-merge' })
     }
 
     // ── 阶段态：找 PENDING run 执行 ──
@@ -902,6 +1016,132 @@ async function readRemoteUrl(repoId: string): Promise<Result<string>> {
   const row = r.rows[0]
   if (row === undefined) return err(makeError('NOT_FOUND', `找不到 repo ${repoId}`))
   return ok(row.remote_url)
+}
+
+/**
+ * 读取当前 head SHA 上已记录的 CI 结论。
+ *
+ * `S-PR_OPEN` 可能被 poller 反复驱动：CI 已经通过时不能每轮重新等一遍，
+ * 但返工后 head SHA 变了就必须重新等。因此按 head SHA 过滤；
+ * 模拟模式没有 workspace SHA，退化为「最近一条 CI 事实」。
+ */
+async function readLatestCiResult(
+  taskId: string,
+  headSha: string | undefined,
+): Promise<{
+  readonly result: 'passed' | 'failed'
+  readonly source: 'github' | 'simulated'
+} | null> {
+  const r = await asRole('keel_control', (c) =>
+    c.query<{ event: string; source: string | null }>(
+      `SELECT payload->>'event' AS event, payload->>'source' AS source
+       FROM event
+       WHERE task_id=$1 AND type='TaskStatusChanged'
+         AND payload->>'event' IN ('CIPassed','CIFailed')
+         AND ($2::text IS NULL OR payload->>'head_sha'=$2)
+       ORDER BY seq DESC LIMIT 1`,
+      [taskId, headSha ?? null],
+    ),
+  )
+  const row = r.rows[0]
+  if (row === undefined || (row.event !== 'CIPassed' && row.event !== 'CIFailed')) return null
+  return {
+    result: row.event === 'CIPassed' ? 'passed' : 'failed',
+    source:
+      row.source === 'github' || row.source === 'simulated'
+        ? row.source
+        : headSha === undefined
+          ? 'simulated'
+          : 'github',
+  }
+}
+
+/**
+ * 从事件流读取 T-021 / CreatePullRequest 留下的 PR 引用。
+ *
+ * PR 编号是观察合并状态的唯一定位符；URL 只用于日志与重驱动上下文。
+ */
+async function readPullRequestRef(
+  taskId: string,
+): Promise<{ readonly number: number; readonly url: string } | null> {
+  const r = await asRole('keel_control', (c) =>
+    c.query<{ pr_number: string | null; pr_url: string | null }>(
+      `SELECT payload->>'pr_number' AS pr_number, payload->>'pr_url' AS pr_url
+       FROM event
+       WHERE task_id=$1
+         AND type IN ('SideEffectApplied','SideEffectSkipped')
+         AND payload->>'kind'='CreatePullRequest'
+       ORDER BY seq DESC LIMIT 1`,
+      [taskId],
+    ),
+  )
+  const row = r.rows[0]
+  if (row === undefined) return null
+  const number = Number(row.pr_number)
+  if (!Number.isSafeInteger(number) || number <= 0) return null
+  return { number, url: row.pr_url ?? '' }
+}
+
+/**
+ * 观察 PR 最终状态。
+ *
+ * 三种来源互斥：注入回调（测试）、真实网关（生产）、无（只能停在等合并）。
+ * 模拟 CI 的历史语义是「跑完即闭环」，没有注入 PR 回调时合成 merged，
+ * 让本地/验收测试仍能走到 S-DONE；真实路径绝不这样做。
+ */
+async function observePullRequest(
+  taskId: string,
+  deps: OrchestratorDeps,
+  opts: RunOptions,
+  repoId: string | undefined,
+  remoteUrl: string | undefined,
+): Promise<Result<ExternalPrObservation | null>> {
+  if (opts.externalPr !== undefined) return ok(await opts.externalPr(taskId))
+  if (opts.pullRequests === undefined) {
+    if (opts.ci === undefined && opts.externalCi !== undefined) {
+      return ok({ state: 'merged', mergedAt: deps.now(), mergeSha: null })
+    }
+    return ok(null)
+  }
+  if (repoId === undefined || remoteUrl === undefined) {
+    return err(makeError('WORKSPACE_ERROR', '观察 PR 需要 worktree 模式才能读取仓库信息'))
+  }
+
+  const ref = await readPullRequestRef(taskId)
+  if (ref === null) {
+    return err(
+      makeError('NOT_FOUND', `task ${taskId} 在 S-PR_OPEN，但事件流里没有可观察的 PR 编号`),
+    )
+  }
+
+  const observed = await opts.pullRequests.getPullRequest({
+    repoId,
+    remoteUrl,
+    number: ref.number,
+  })
+  if (!observed.ok) return observed
+  return toExternalPrObservation(observed.value)
+}
+
+function toExternalPrObservation(state: PullRequestState): Result<ExternalPrObservation> {
+  if (state.merged) {
+    if (state.state !== 'closed') {
+      return err(
+        makeError('PROTOCOL_ERROR', `PR #${state.number} 声称已合并但 state=${state.state}`),
+      )
+    }
+    if (state.mergedAt === null) {
+      return err(
+        makeError(
+          'PROTOCOL_ERROR',
+          `PR #${state.number} 声称已合并但缺少 merged_at —— 拒绝编造合并时间`,
+        ),
+      )
+    }
+    return ok({ state: 'merged', mergedAt: state.mergedAt, mergeSha: state.mergeSha })
+  }
+  if (state.state === 'closed') return ok({ state: 'closed', closedAt: state.closedAt })
+  return ok({ state: 'open' })
 }
 
 async function readState(

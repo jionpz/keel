@@ -10,6 +10,7 @@
 
 import { err, makeError, ok, type Result } from '../contracts/errors.js'
 import type { HarnessAdapter } from '../contracts/harness-adapter.js'
+import { resolveRepoSignalsConfig } from '../control/context/repo-signals-config.js'
 import { WorkflowDriver } from '../control/driver/driver.js'
 import { type LivenessMode, livenessMode } from '../control/liveness/policy.js'
 import { LivenessStore } from '../control/liveness/store.js'
@@ -43,6 +44,7 @@ import { asRole } from '../fact/db.js'
 import { resolveGitHubToken, type TokenResolver } from '../fact/github-auth.js'
 import { GitHubProvider } from '../fact/github-provider.js'
 import { parseRemoteUrl } from '../fact/github-remote.js'
+import { GitHubRepoSignals } from '../fact/github-repo-signals.js'
 import type { TaskStatus } from '../shared/ids.js'
 import { parseArgs } from './argv.js'
 import { resolveHumanReviewTtlMs } from './human-review-ttl.js'
@@ -435,6 +437,9 @@ export async function runTask(
       : ok<number | null>(opts.humanReviewTtlMs)
   if (!humanReviewTtl.ok) return humanReviewTtl
 
+  const repoSignalsConfig = resolveRepoSignalsConfig()
+  if (!repoSignalsConfig.ok) return repoSignalsConfig
+
   const gateway = await resolveTaskCiGateway(ci, taskId, opts.tokenResolver)
   if (!gateway.ok) return gateway
 
@@ -508,12 +513,17 @@ export async function runTask(
         ...(override.value === undefined ? {} : { modelOverride: override.value }),
         ...(livenessStore === undefined ? {} : { livenessStore }),
         ...(opts.wallClockS === undefined ? {} : { wallClockS: opts.wallClockS }),
+        repoSignals: new GitHubRepoSignals(
+          opts.tokenResolver === undefined ? {} : { tokenResolver: opts.tokenResolver },
+        ),
+        repoSignalsSinceDays: repoSignalsConfig.value.sinceDays,
+        repoSignalsMaxTokens: repoSignalsConfig.value.maxTokens,
       },
       {
         maxSteps,
         ...(gateway.value === undefined
           ? { externalCi: async () => (ci === 'failed' ? 'failed' : 'passed') }
-          : { ci: gateway.value }),
+          : { ci: gateway.value, pullRequests: gateway.value }),
       },
     )
     if (!result.ok) return result
@@ -561,6 +571,7 @@ const STOP_REASON_TEXT: Readonly<Record<StopReason, string>> = {
   paused: '控制模式不是 auto（预算熔断或人工接管），恢复后可从这里继续',
   'awaiting-clarification': '等人工回答澄清问题',
   'awaiting-external-ci': '等外部 CI 结果',
+  'awaiting-pr-merge': 'CI 已通过，等 PR 合并或关闭',
   'awaiting-human': '等人工审批（批准 / 驳回 / 回炉）',
   'capability-denied': '能力请求被拒，需要人工或外部介入',
   cancelled: '最近一次 run 被人工撤回，等恢复',
@@ -615,7 +626,8 @@ KEEL_MODEL_PROFILE 可选 default|enterprise（缺省 default）：enterprise �
 非法值启动即报错。KEEL_MODEL_ALLOWLIST 可选逗号分隔的允许模型；必须覆盖 profile 下所有阶段
 可能 spawn 的模型，否则启动即拒绝（不会等 run 认领后才失败）。
 --wall-clock 显式覆盖 stage 墙钟硬上限（秒）；缺省按 stage 策略（develop 12h）；只接受正整数，非法值拒绝。
-KEEL_HUMAN_REVIEW_TTL_H 控制 S-HUMAN_REVIEW 的超时自动弃单（小时，缺省 24；0 = 关闭；非法值启动即报错）。`)
+KEEL_HUMAN_REVIEW_TTL_H 控制 S-HUMAN_REVIEW 的超时自动弃单（小时，缺省 24；0 = 关闭；非法值启动即报错）。
+KEEL_REPO_SIGNALS_DAYS PM 仓库信号回看天数（缺省 14）；KEEL_REPO_SIGNALS_MAX_TOKENS 该 section 的 token 上限（缺省 1200）。`)
     return
   }
   const mode = readLivenessMode('run-task')

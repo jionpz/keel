@@ -18,12 +18,14 @@ import {
   type PollerSignalSource,
   type PollIssueInput,
   type PollIssueOutcome,
+  type PrOpenTask,
   pollOnce,
   type RepoRow,
   runPollerForever,
   scanOnce,
 } from './poller.js'
 import type { CancelOutcome, IngestedTask, IssueState } from './reconcile.js'
+import type { RedriveCandidate } from './redrive.js'
 
 const REPO_A: RepoRow = {
   id: 'repo-a',
@@ -408,6 +410,92 @@ describe('对账 · 已关闭 issue 的任务（issue #82）', () => {
     expect(h.logs.find((l) => l.event === 'poll')).toMatchObject({
       reconcile: { checked: 0, cancelled: 0, skipped: 0, errors: 0 },
     })
+  })
+})
+
+describe('PR 生命周期观察与重驱动', () => {
+  const prTask: PrOpenTask = {
+    taskId: 'task-9',
+    externalRef: 'acme/alpha#9',
+    repoId: 'repo-a',
+    remoteUrl: 'https://github.com/acme/alpha.git',
+  }
+
+  const redrive: RedriveCandidate = {
+    previousTaskId: 'task-old',
+    externalRef: 'acme/alpha#9',
+    prUrl: 'https://github.com/acme/alpha/pull/11',
+    prNumber: 11,
+    closedAt: '2026-11-12T02:00:00Z',
+  }
+
+  it('issue 已关闭但 Task 仍 S-PR_OPEN → 仍纳入观察，不依赖 open issue 列表', async () => {
+    const h = harness({
+      listRepos: async () => [REPO_A],
+      listIssues: async () => issueList([]),
+      listPrOpenTasks: async () => [prTask],
+    })
+
+    const round = await pollOnce(h.deps)
+
+    expect(h.runCalls).toEqual([
+      {
+        issueUrl: 'https://github.com/acme/alpha/issues/9',
+        repoId: 'repo-a',
+        label: '',
+      },
+    ])
+    expect(round.stats.prOpen).toBe(1)
+    expect(round.stats.driven).toBe(1)
+  })
+
+  it('open issue 已在本轮认领 → S-PR_OPEN 列表不重复驱动同一 issue', async () => {
+    const h = harness({
+      listRepos: async () => [REPO_A],
+      listIssues: async () => issueList([listed(9)]),
+      listPrOpenTasks: async () => [prTask],
+    })
+
+    const round = await pollOnce(h.deps)
+
+    expect(h.runCalls).toHaveLength(1)
+    expect(h.runCalls[0]?.label).toBe('keel')
+    expect(round.stats.prOpen).toBe(1)
+  })
+
+  it('S-ABANDONED + pr_closed_unmerged 候选 → 带 redrive 驱动同一 open issue', async () => {
+    const h = harness({
+      listRepos: async () => [REPO_A],
+      listIssues: async () => issueList([listed(9)]),
+      taskStatus: async () => 'S-ABANDONED',
+      redriveCandidate: async (ref) => (ref === 'acme/alpha#9' ? redrive : undefined),
+    })
+
+    const round = await pollOnce(h.deps)
+
+    expect(h.runCalls).toEqual([
+      {
+        issueUrl: 'https://github.com/acme/alpha/issues/9',
+        repoId: 'repo-a',
+        label: 'keel',
+        redrive,
+      },
+    ])
+    expect(round.stats.driven).toBe(1)
+  })
+
+  it('S-ABANDONED 但无合格候选 → 跳过，不无限重开终态任务', async () => {
+    const h = harness({
+      listRepos: async () => [REPO_A],
+      listIssues: async () => issueList([listed(9)]),
+      taskStatus: async () => 'S-ABANDONED',
+      redriveCandidate: async () => undefined,
+    })
+
+    const round = await pollOnce(h.deps)
+
+    expect(h.runCalls).toEqual([])
+    expect(round.stats.skipped).toBe(1)
   })
 })
 

@@ -45,7 +45,8 @@
 | 24 | 派发评审 | `T-018` | `[写]` `run(review, 1)` → `S-REVIEW` |
 | 25 | 评审通过 | — | `[写]` `A-StageOutcome(review, pass)` |
 | 26 | **创建 PR（幂等：先按 head 分支查已有 PR）** | `T-021` | → `S-PR_OPEN` |
-| 27 | CI 通过 | `T-024` | → `S-DONE` ★ |
+| 27 | CI 通过（记录事实，继续等合并） | `T-042` | → `S-PR_OPEN` ⟲ |
+| 28 | PR 已合并 | `T-024` | → `S-DONE` ★ |
 
 **桥接检查**：第 4、12、19 步的所有读取均经 Context；
 第 6、8、13、15、20、23、25 步的所有写入均经 Proposal。**无旁路。** ✅
@@ -90,7 +91,7 @@
 | 12 | 人工交还前提交事实（`C-006` 前置条件） | — | `[写]` `A-State@n`（`decided_by = "human:jionpz"`）、`A-StageOutcome(develop, implemented)` |
 | 13 | 交还 | `C-006` | `control_mode: human → auto`；`run(develop,2)` → `SUCCEEDED` |
 | 14 | AI 接手做 QA | `T-017` | `[写]` `run(qa, 1)` → `S-QA` |
-| 15–17 | QA → 评审 → PR → CI | `T-018` `T-021` `T-024` | → `S-DONE` ★ |
+| 15–17 | QA → 评审 → PR → CI → 合并 | `T-018` `T-021` `T-042` `T-024` | → `S-DONE` ★ |
 
 ### 2.1 这条流程验证了什么
 

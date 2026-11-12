@@ -15,6 +15,7 @@
 | `paused` | `control_mode ≠ auto`（预算熔断 C-002 / 人工接管），恢复 C-005 可续 |
 | `awaiting-clarification` | 澄清态、TTL 未到期 |
 | `awaiting-external-ci` | `S-PR_OPEN` 且未注入 CI |
+| `awaiting-pr-merge` | `S-PR_OPEN` 且 CI 已通过，PR 仍未 merged / closed |
 | `awaiting-human` | `S-HUMAN_REVIEW` 等人审批 |
 | `capability-denied` | 能力请求被守卫拒（R4） |
 | `cancelled` | 最近一次 run 被人工撤回（R-010） |
@@ -23,7 +24,7 @@
 CLI 把 `finalStatus`（走到哪）与 `stopReason`（为什么停）分行打印：
 只有前者时，「卡住」和「等人」在输出里长得一模一样。
 
-## S-PR_OPEN 的两条 CI 路径
+## S-PR_OPEN 的 CI 与 PR 状态路径
 
 | 路径 | 条件 | 事件 `source` | step note |
 |---|---|---|---|
@@ -37,6 +38,22 @@ CLI 把 `finalStatus`（走到哪）与 `stopReason`（为什么停）分行打�
 两条路径都把 `source` 交给 driver，最终落到 `TaskStatusChanged.payload.source`。
 **不要**在 loop 里省掉这个字段或统一写成同一个值 —— 事件流必须能区分
 「真跑的 CI」与「注入的模拟结果」，否则回看历史时无法判断一次 S-DONE 有多可信。
+
+`CIPassed` 走 `T-042` 自环，只记录事实并留在 `S-PR_OPEN`；完成必须等 PR
+合并事实：
+
+| PR 观察结果 | 事件 | 转移 |
+|---|---|---|
+| `merged=true` 且有 `merged_at` | `PRMerged` | `T-024` → `S-DONE` |
+| `state=closed ∧ merged=false` | `PRClosed(reason=pr_closed_unmerged)` | `T-027` → `S-ABANDONED` |
+| `state=open` | 不推进 | 停 `awaiting-pr-merge` |
+
+真实路径通过 `PullRequestStateGateway` 读取 PR；模拟路径在只给 `externalCi`、
+没给 `externalPr` 时把 PR 视为已合并，仅用于无远程依赖的本地闭环测试。
+真实 `--ci real` 不允许合成合并事实。`merged=true` 但缺少 `merged_at` 是
+`PROTOCOL_ERROR`，不是可自动放行的终态。
+每轮先读取真实 PR 终态；即使 CI 失败或未结束，已合并/未合并关闭也先收口，
+避免对已关闭 PR 继续返工。CI 结论按当前 head SHA 复用。
 
 ## 阶段态没有待执行 run：先判证据，再判故障
 

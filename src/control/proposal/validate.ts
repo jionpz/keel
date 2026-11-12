@@ -16,6 +16,7 @@ import type { DecisionPoint, PolicyEngine } from '../../contracts/policy-engine.
 import type { Proposal, ProposalVerdict, SchemaViolation } from '../../contracts/types.js'
 import { SCHEMAS } from '../../generated/schemas.js'
 import { loadPolicyFacts } from '../driver/facts.js'
+import { loadTaskFeedback } from '../feedback.js'
 import {
   type DeclaredPolicyFacts,
   parseDeclaredPolicyFacts,
@@ -150,15 +151,10 @@ export async function loadDeclaredPolicyFacts(
   client: PoolClient,
   taskId: string,
 ): Promise<DeclaredPolicyFacts> {
-  const r = await client.query<{ body: string }>(
-    `SELECT f.body FROM feedback f
-     JOIN task_feedback tf ON tf.feedback_id = f.id
-     WHERE tf.task_id = $1 ORDER BY f.received_at LIMIT 3`,
-    [taskId],
-  )
-  if (r.rows.length === 0) return {}
+  const feedback = await loadTaskFeedback(client, taskId)
+  if (feedback.length === 0) return {}
 
-  return parseDeclaredPolicyFacts(r.rows.map((x) => x.body).join('\n'))
+  return parseDeclaredPolicyFacts(feedback.map((item) => item.body).join('\n'))
 }
 
 /**

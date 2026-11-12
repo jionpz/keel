@@ -106,6 +106,7 @@ estimate(request: ContextRequest) -> { total_tokens, by_section } | Error
 | 当前 `A-State` | `artifact` | `required` |
 | 产品规则 / 架构规范 | `fixed` | `high` |
 | 最近的 `A-CriticReview` | `artifact` | `high` |
+| 仓库信号（最近提交 / 相关 issue / PR / 编号引用） | `retrieval` | `high` |
 | 历史类似 Task 摘要 | `retrieval` | `normal` |
 | Checkpoint `working_summary` | `artifact` | `high`（仅 `rematerialize`） |
 
@@ -188,6 +189,8 @@ required → high → normal → low
     context_id, recipe_id, recipe_version,
     sections: [{ id, source_ref, tokens, priority }],
     dropped:  [{ id, reason, tokens_would_have_been }],
+    // 可选：非阻塞取材的降级/截断证据（如 repo_signals 的 403、超 token 上限）
+    diagnostics: [{ id, status, reason?, detail?, counts?, tokens_before?, max_tokens? }],
     total_tokens, budget_tokens
   }
 }

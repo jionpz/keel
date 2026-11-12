@@ -51,6 +51,7 @@
         "NoTransition",
         "SideEffectApplied",
         "SideEffectIntent",
+        "SideEffectFailed",
         "ContextBuilt"
       ]
     },

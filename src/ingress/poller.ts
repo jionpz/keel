@@ -17,7 +17,13 @@ import type { Result } from '../contracts/errors.js'
 import { gitAuthSecrets, readTokenFromEnv, redactSecrets } from '../fact/github-auth.js'
 import { type IssueList, issueUrlFor, parseRemoteUrl } from '../fact/github-provider.js'
 import { isTerminal, type TaskStatus } from '../shared/ids.js'
-import { type ReconcileDeps, type ReconcileStats, reconcileClosedIssues } from './reconcile.js'
+import {
+  parseIssueNumber,
+  type ReconcileDeps,
+  type ReconcileStats,
+  reconcileClosedIssues,
+} from './reconcile.js'
+import type { RedriveCandidate } from './redrive.js'
 
 export const DEFAULT_INTERVAL_MS = 60_000
 
@@ -43,6 +49,8 @@ export interface PollIssueInput {
   readonly repoId: string
   /** 该仓库自己的 label —— 必须透传，ingest 的 label 闸门用它 */
   readonly label: string
+  /** 已确认可重驱动的前序候选；只在前序 Task 因 PR 未合并关闭时出现 */
+  readonly redrive?: RedriveCandidate
 }
 
 export interface PollIssueOutcome {
@@ -51,6 +59,7 @@ export interface PollIssueOutcome {
 }
 
 export interface PollerDeps {
+  readonly maintain?: () => Promise<void>
   readonly listRepos: () => Promise<readonly RepoRow[]>
   readonly listIssues: (repo: RepoRow) => Promise<Result<IssueList>>
   /**
@@ -59,6 +68,13 @@ export interface PollerDeps {
    */
   readonly taskStatus: (externalRef: string) => Promise<TaskStatus | undefined>
   readonly runIssue: (input: PollIssueInput) => Promise<Result<PollIssueOutcome>>
+  /**
+   * S-PR_OPEN 任务列表：即使 issue 已因合并关闭、不在 open issue 扫描结果里，
+   * 也必须继续观察 PR 的最终状态。
+   */
+  readonly listPrOpenTasks?: () => Promise<readonly PrOpenTask[]>
+  /** 最新 Task 是否满足「PR 未合并关闭」的重驱动条件 */
+  readonly redriveCandidate?: (externalRef: string) => Promise<RedriveCandidate | undefined>
   /**
    * issue 关闭对账（issue #82）：每轮把已 ingest、非终态的任务与 issue 现状对齐。
    * issue 已被关闭时发 `Cancelled`（T-040），不让任务停在原状态等 TTL。
@@ -76,10 +92,19 @@ export interface ScanStats {
   readonly scanned: number
   /** 已终态、直接跳过的数 */
   readonly skipped: number
+  /** 本轮纳入观察的 S-PR_OPEN 任务数 */
+  readonly prOpen: number
   /** repo 级可预期失败数 */
   readonly errors: number
   /** 任一仓库触到分页上限 */
   readonly truncated: boolean
+}
+
+export interface PrOpenTask {
+  readonly taskId: string
+  readonly externalRef: string
+  readonly repoId: string
+  readonly remoteUrl: string
 }
 
 export interface PollStats extends ScanStats {
@@ -139,12 +164,14 @@ export async function scanOnce(
     repos: 0,
     scanned: 0,
     skipped: 0,
+    prOpen: 0,
     errors: 0,
     truncated: false,
   }
   const drives: DriveRequest[] = []
   let stopped = false
 
+  if (!shouldStop()) await deps.maintain?.()
   const repos = await deps.listRepos()
   stats.repos = repos.length
 
@@ -219,6 +246,21 @@ export async function scanOnce(
       // 终态 task 跳过；没有 task 或非终态都要驱动（PRD R5）。
       const status = await deps.taskStatus(externalRef)
       if (status !== undefined && isTerminal(status)) {
+        if (status === 'S-ABANDONED' && deps.redriveCandidate !== undefined) {
+          const candidate = await deps.redriveCandidate(externalRef)
+          if (candidate !== undefined) {
+            drives.push({
+              externalRef,
+              input: {
+                issueUrl: issueUrlFor(parsed.value, issue.number),
+                repoId: repo.id,
+                label: repo.issue_label,
+                redrive: candidate,
+              },
+            })
+            continue
+          }
+        }
         stats.skipped += 1
         continue
       }
@@ -234,6 +276,44 @@ export async function scanOnce(
     }
 
     if (stopped) break
+  }
+
+  // S-PR_OPEN 是唯一在 issue 关闭后仍需继续驱动的状态：交付物在 PR 上，
+  // issue 因 `Closes #n` 自动关闭正是合并成功的常态。
+  if (!stopped && deps.listPrOpenTasks !== undefined) {
+    for (const task of await deps.listPrOpenTasks()) {
+      if (shouldStop()) {
+        stopped = true
+        break
+      }
+      stats.prOpen += 1
+      if (claimed.has(task.externalRef)) continue
+      claimed.add(task.externalRef)
+
+      const parsed = parseRemoteUrl(task.remoteUrl)
+      const issueNumber = parseIssueNumber(task.externalRef)
+      if (!parsed.ok || issueNumber === undefined) {
+        stats.errors += 1
+        deps.log({
+          ts: deps.now(),
+          event: 'pr_task_error',
+          ref: safeDetail(task.externalRef),
+          repo: safeDetail(task.remoteUrl),
+          kind: parsed.ok ? 'PROTOCOL_ERROR' : parsed.error.kind,
+          detail: parsed.ok ? 'external_ref 缺少 issue 编号' : safeDetail(parsed.error.detail),
+        })
+        continue
+      }
+
+      drives.push({
+        externalRef: task.externalRef,
+        input: {
+          issueUrl: issueUrlFor(parsed.value, issueNumber),
+          repoId: task.repoId,
+          label: '',
+        },
+      })
+    }
   }
 
   return { stats, drives, openRefs: claimed, stopped }

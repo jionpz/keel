@@ -39,7 +39,7 @@ framing 成「一个事务」是错的；代价是中途失败会留一条未被
 
 ## 终态清理：事实先成立，副作用如实记账
 
-`T-015`（`→ S-REJECTED`）与 `T-024`（`→ S-DONE`）都带 `CleanWorkspace`；
+`T-015`（`→ S-REJECTED`）与 `T-024`（PR merged → `S-DONE`）都带 `CleanWorkspace`；
 `T-027` / `T-040` 的清理语义不变；`T-041`（`→ S-FAILED`）**仍然只保留现场**。
 清理只移除 worktree 目录，分支与提交历史留在 git 目录里。
 
@@ -57,7 +57,7 @@ framing 成「一个事务」是错的；代价是中途失败会留一条未被
 2. **失败不回滚终态**。S-DONE / S-REJECTED 是已经成立的事实，清理只是副作用；
    `cleanWorkspace` 不抛异常，`TaskStatusChanged` 照常写入。
 
-## CI 事件必须带来源
+## CI 与 PR 事件必须带外部事实
 
 `CIPassed` / `CIFailed` 的 `source` 是**必填**字段：`simulated`（注入回调 / CLI 缺省）
 或 `github`（`CiGateway` 读真实 Checks / Status）。值落到
@@ -65,8 +65,15 @@ framing 成「一个事务」是错的；代价是中途失败会留一条未被
 「这次 CI 是真跑的，还是模拟的」。
 
 - 用必填字段而不是默认值：默认值会让「忘了传」悄悄变成「真 CI」。
-- 非 CI 事件**不多出** `source` 键（`driver.test.ts` 钉住）。
+- CI 与 PR 事件都必须带 `source`；其它事件不多出该键（`driver.test.ts` 钉住）。
 - CLI 缺省仍是 `--ci passed`；是否改成 `real` 是产品决策，不在副作用层解决。
+
+`CIPassed` 只走 `T-042` 自环，payload 另带 `head_sha`（真实路径），任务留在
+`S-PR_OPEN`。完成事件是 `PRMerged`（`T-024` → `S-DONE`），payload 必须带
+GitHub 返回的 `merged_at` 与 `merge_sha`；未合并关闭是 `PRClosed`
+（`T-027` → `S-ABANDONED`），payload 带 `reason='pr_closed_unmerged'` 与
+`closed_at`。`MaybeAutoMerge` 不再挂在完成转移上。
+PR 事件的 `source` 同样区分 `github` 与 `simulated`，后者不会外发 Issue 评论。
 
 ## 裁决理由：`advance` 的第 4 参
 

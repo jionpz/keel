@@ -84,6 +84,89 @@ function provider(opts: ConstructorParameters<typeof GitHubProvider>[0] = {}): G
   return new GitHubProvider({ apiRoot: baseUrl, token: 'test-token', ...opts })
 }
 
+describe('IssueGateway', () => {
+  it('PR 的 merged 字段缺失时拒绝推断为未合并关闭', async () => {
+    routes.set(routeKey('GET', '/repos/acme/widget/pulls/7'), () => ({
+      status: 200,
+      json: { number: 7, state: 'closed' },
+    }))
+    const result = await provider().getPullRequest({ repoId: 'r1', remoteUrl: REMOTE, number: 7 })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error.kind).toBe('PROTOCOL_ERROR')
+  })
+  it('响应体读取超时与非 JSON 均降级为 Result，不向上抛异常或泄露错误内容', async () => {
+    const response = new Response('not-json', { status: 200 })
+    const read = vi.spyOn(response, 'text').mockRejectedValueOnce(new Error('secret-query'))
+    const api = provider({ fetchFn: async () => response })
+    const timeout = await api.issueActor(REMOTE)
+    expect(timeout.ok).toBe(false)
+    if (!timeout.ok) {
+      expect(timeout.error.kind).toBe('HARNESS_UNAVAILABLE')
+      expect(timeout.error.detail).not.toContain('secret-query')
+    }
+    read.mockRestore()
+    const invalid = await api.issueActor(REMOTE)
+    expect(invalid.ok).toBe(false)
+    if (!invalid.ok) expect(invalid.error.kind).toBe('PROTOCOL_ERROR')
+  })
+  it('GHES 评论读取、创建与关闭共用 host/token 请求路径', async () => {
+    const comment = {
+      id: 12,
+      body: '请补充预期',
+      created_at: '2026-11-12T10:00:00Z',
+      user: { login: 'keel-bot' },
+    }
+    routes.set(routeKey('GET', '/user'), () => ({ status: 200, json: { login: 'keel-bot' } }))
+    routes.set(routeKey('GET', '/repos/acme/widget/issues/7/comments'), (request) => {
+      expect(request.url).toContain('since=2026-11-12')
+      expect(request.headers.authorization).toBe('Bearer test-token')
+      return { status: 200, json: [comment] }
+    })
+    routes.set(routeKey('POST', '/repos/acme/widget/issues/7/comments'), (_request, body) => {
+      expect(body).toEqual({ body: '请补充预期' })
+      return { status: 201, json: comment }
+    })
+    routes.set(routeKey('PATCH', '/repos/acme/widget/issues/7'), (_request, body) => {
+      expect(body).toEqual({ state: 'closed', state_reason: 'not_planned' })
+      return { status: 200, json: {} }
+    })
+    const github = provider()
+    const remote = 'https://github.example.com/acme/widget.git'
+    expect(await github.issueActor(remote)).toEqual({ ok: true, value: 'keel-bot' })
+    expect(await github.listIssueComments(remote, 7, '2026-11-12T10:00:00Z')).toMatchObject({
+      ok: true,
+      value: { truncated: false, comments: [{ id: 12, author: 'keel-bot' }] },
+    })
+    expect(await github.createIssueComment(remote, 7, '请补充预期')).toMatchObject({
+      ok: true,
+      value: { id: 12 },
+    })
+    expect(await github.closeIssue(remote, 7, 'not_planned')).toEqual({
+      ok: true,
+      value: undefined,
+    })
+  })
+
+  it('写失败保留 HTTP 错误，形状损坏不冒充成功', async () => {
+    routes.set(routeKey('POST', '/repos/acme/widget/issues/7/comments'), () => ({
+      status: 503,
+      json: {},
+    }))
+    expect(await provider().createIssueComment(REMOTE, 7, 'body')).toMatchObject({
+      ok: false,
+      error: { kind: 'HARNESS_UNAVAILABLE' },
+    })
+    routes.set(routeKey('GET', '/repos/acme/widget/issues/7/comments'), () => ({
+      status: 200,
+      json: [{ id: 1 }],
+    }))
+    expect(await provider().listIssueComments(REMOTE, 7)).toMatchObject({
+      ok: false,
+      error: { kind: 'PROTOCOL_ERROR' },
+    })
+  })
+})
+
 describe('createPullRequest 幂等', () => {
   it('无已有 PR → 创建,created=true,payload 只含标题与分支', async () => {
     let createBody: unknown
@@ -473,6 +556,128 @@ describe('waitForCi 四态归并', () => {
     // 期满前至少轮询过两次 —— 证明没有第一次就早退
     expect(polls).toBeGreaterThanOrEqual(2)
     expect(r.ok && r.value).toBe('passed')
+  })
+})
+
+describe('getPullRequest', () => {
+  const SHA = '1111111111111111111111111111111111111111'
+  const PR_PATH = '/repos/acme/widget/pulls/7'
+
+  it('open PR 原样返回 open / merged=false / 缺失时间为 null', async () => {
+    routes.set(routeKey('GET', PR_PATH), () => ({
+      status: 200,
+      json: {
+        number: 7,
+        html_url: 'https://github.com/acme/widget/pull/7',
+        state: 'open',
+        merged: false,
+        head: { sha: SHA },
+      },
+    }))
+
+    const r = await provider().getPullRequest({ repoId: 'r1', remoteUrl: REMOTE, number: 7 })
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value).toEqual({
+      number: 7,
+      url: 'https://github.com/acme/widget/pull/7',
+      state: 'open',
+      merged: false,
+      mergedAt: null,
+      mergeSha: null,
+      closedAt: null,
+      headSha: SHA,
+    })
+  })
+
+  it('merged PR 带出 merged_at / merge_commit_sha / closed_at', async () => {
+    routes.set(routeKey('GET', PR_PATH), () => ({
+      status: 200,
+      json: {
+        number: 7,
+        html_url: 'https://github.com/acme/widget/pull/7',
+        state: 'closed',
+        merged: true,
+        merged_at: '2026-11-12T01:02:03Z',
+        merge_commit_sha: 'b'.repeat(40),
+        closed_at: '2026-11-12T01:02:03Z',
+        head: { sha: SHA },
+      },
+    }))
+
+    const r = await provider().getPullRequest({ repoId: 'r1', remoteUrl: REMOTE, number: 7 })
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value).toMatchObject({
+      state: 'closed',
+      merged: true,
+      mergedAt: '2026-11-12T01:02:03Z',
+      mergeSha: 'b'.repeat(40),
+      closedAt: '2026-11-12T01:02:03Z',
+    })
+  })
+
+  it('closed 未合并 → merged=false，完成语义不靠 state=closed 推断', async () => {
+    routes.set(routeKey('GET', PR_PATH), () => ({
+      status: 200,
+      json: {
+        number: 7,
+        html_url: 'https://github.com/acme/widget/pull/7',
+        state: 'closed',
+        merged: false,
+        closed_at: '2026-11-12T02:00:00Z',
+        head: { sha: SHA },
+      },
+    }))
+
+    const r = await provider().getPullRequest({ repoId: 'r1', remoteUrl: REMOTE, number: 7 })
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value).toMatchObject({ state: 'closed', merged: false })
+    expect(r.value.mergedAt).toBeNull()
+  })
+
+  it('404 → NOT_FOUND', async () => {
+    routes.set(routeKey('GET', PR_PATH), () => ({ status: 404, json: { message: 'Not Found' } }))
+
+    const r = await provider().getPullRequest({ repoId: 'r1', remoteUrl: REMOTE, number: 7 })
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('NOT_FOUND')
+    expect(r.error.retryable).toBe(false)
+  })
+
+  it('编号不一致或 merged=true 但 state=open → PROTOCOL_ERROR', async () => {
+    routes.set(routeKey('GET', PR_PATH), () => ({
+      status: 200,
+      json: {
+        number: 8,
+        state: 'closed',
+        merged: true,
+        merged_at: '2026-11-12T01:02:03Z',
+      },
+    }))
+    const wrongNumber = await provider().getPullRequest({
+      repoId: 'r1',
+      remoteUrl: REMOTE,
+      number: 7,
+    })
+    expect(wrongNumber.ok).toBe(false)
+    if (wrongNumber.ok) return
+    expect(wrongNumber.error.kind).toBe('PROTOCOL_ERROR')
+
+    routes.set(routeKey('GET', PR_PATH), () => ({
+      status: 200,
+      json: { number: 7, state: 'open', merged: true },
+    }))
+    const impossible = await provider().getPullRequest({
+      repoId: 'r1',
+      remoteUrl: REMOTE,
+      number: 7,
+    })
+    expect(impossible.ok).toBe(false)
+    if (impossible.ok) return
+    expect(impossible.error.kind).toBe('PROTOCOL_ERROR')
   })
 })
 

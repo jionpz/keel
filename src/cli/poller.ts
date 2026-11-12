@@ -10,6 +10,8 @@
 
 import { err, makeError, ok, type Result } from '../contracts/errors.js'
 import { DEFAULT_MAX_RUNNING_RUNS } from '../control/concurrency/limits.js'
+import { collectIssueClarifications } from '../control/issue-clarification.js'
+import { drainIssueWriteback } from '../control/issue-writeback.js'
 import { preflightModelRouting } from '../execution/model-routing.js'
 import { asRole, closePool } from '../fact/db.js'
 import { resolveGitHubToken, type TokenResolver } from '../fact/github-auth.js'
@@ -22,11 +24,13 @@ import {
   type PollerSignalSource,
   type PollIssueInput,
   type PollIssueOutcome,
+  type PrOpenTask,
   type RepoRow,
   runPollerForever,
   type StopToken,
 } from '../ingress/poller.js'
 import type { CancelOutcome, IngestedTask, IssueState } from '../ingress/reconcile.js'
+import { findRedriveCandidate, type RedriveCandidate } from '../ingress/redrive.js'
 import { type TaskStatus, TERMINAL_STATUSES } from '../shared/ids.js'
 import { parseArgs } from './argv.js'
 import { runIssue } from './run-issue.js'
@@ -119,12 +123,51 @@ export async function findTaskStatusByExternalRef(
        JOIN task_feedback tf ON tf.feedback_id = f.id
        JOIN task t ON t.id = tf.task_id
        WHERE f.source = 'github' AND f.external_ref = $1
-       ORDER BY t.created_at DESC
+       ORDER BY t.created_at DESC, t.id DESC
        LIMIT 1`,
       [externalRef],
     )
     return r.rows[0]?.status
   })
+}
+
+/**
+ * 所有仍在 S-PR_OPEN 的 GitHub 任务。
+ *
+ * 这些任务不能只靠 open issue 扫描推进：`Closes #n` 生效后 issue 会自动关闭，
+ * 而 PR 的 merged 事实仍需要被观察。
+ */
+export async function loadPrOpenGithubTasks(): Promise<readonly PrOpenTask[]> {
+  return asRole('keel_control', async (c) => {
+    const r = await c.query<{
+      task_id: string
+      external_ref: string
+      repo_id: string
+      remote_url: string
+    }>(
+      `SELECT DISTINCT ON (t.id)
+              t.id AS task_id, f.external_ref, r.id AS repo_id, r.remote_url
+       FROM task t
+       JOIN task_feedback tf ON tf.task_id=t.id
+       JOIN feedback f ON f.id=tf.feedback_id
+       JOIN repo r ON r.id=t.repo_id
+       WHERE t.status='S-PR_OPEN'
+         AND f.source='github'
+         AND f.external_ref ~ '^[^#]+#[1-9][0-9]*$'
+         AND r.provider='github'
+       ORDER BY t.id, f.received_at`,
+    )
+    return r.rows.map((row) => ({
+      taskId: row.task_id,
+      externalRef: row.external_ref,
+      repoId: row.repo_id,
+      remoteUrl: row.remote_url,
+    }))
+  })
+}
+
+export function redriveCandidateFor(externalRef: string): Promise<RedriveCandidate | undefined> {
+  return findRedriveCandidate(externalRef)
 }
 
 /**
@@ -148,6 +191,7 @@ export async function loadIngestedGithubTasks(): Promise<readonly IngestedTask[]
        JOIN feedback f ON f.id = tf.feedback_id
        JOIN repo r ON r.id = t.repo_id
        WHERE f.source = 'github'
+         AND f.external_ref ~ '^[^#]+#[1-9][0-9]*$'
          AND r.provider = 'github'
          AND NOT (t.status = ANY($1::text[]))
        ORDER BY t.id`,
@@ -197,6 +241,8 @@ export interface PollerMainDeps {
   readonly listIssues?: (repo: RepoRow) => Promise<Result<IssueList>>
   readonly taskStatus?: (externalRef: string) => Promise<TaskStatus | undefined>
   readonly runIssue?: (input: PollIssueInput) => Promise<Result<PollIssueOutcome>>
+  readonly listPrOpenTasks?: () => Promise<readonly PrOpenTask[]>
+  readonly redriveCandidate?: (externalRef: string) => Promise<RedriveCandidate | undefined>
   readonly now?: () => string
   readonly log?: (line: Record<string, unknown>) => void
   readonly signals?: PollerSignalSource
@@ -341,6 +387,10 @@ export async function buildPollerRuntime(
   const now = options.now ?? deps.now ?? (() => new Date().toISOString())
   const log = options.log ?? deps.log ?? ((line) => console.log(JSON.stringify(line)))
   const pollerDeps: PollerDeps = {
+    maintain: async () => {
+      await drainIssueWriteback(provider, now())
+      await collectIssueClarifications(provider, now())
+    },
     listRepos,
     listIssues:
       deps.listIssues ?? ((repo) => provider.listOpenIssues(repo.remote_url, repo.issue_label)),
@@ -354,9 +404,12 @@ export async function buildPollerRuntime(
           repoId: input.repoId,
           ci: options.ci,
           harness: options.harness,
+          ...(input.redrive === undefined ? {} : { redrive: true }),
           ...(options.model === undefined ? {} : { model: options.model }),
           ...(options.wallClockS === undefined ? {} : { wallClockS: options.wallClockS }),
         })),
+    listPrOpenTasks: deps.listPrOpenTasks ?? loadPrOpenGithubTasks,
+    redriveCandidate: deps.redriveCandidate ?? redriveCandidateFor,
     now,
     log,
     reconcile: {

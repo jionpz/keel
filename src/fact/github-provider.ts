@@ -21,6 +21,12 @@ import type {
   PullRequestInfo,
   PullRequestInput,
 } from '../contracts/git-provider.js'
+import type { IssueComment, IssueCommentPage, IssueGateway } from '../contracts/issue-gateway.js'
+import type {
+  PullRequestState,
+  PullRequestStateGateway,
+  PullRequestStateInput,
+} from '../contracts/pull-request-state.js'
 import type {
   RequiredCheckFact,
   RequiredCheckGateway,
@@ -78,6 +84,7 @@ export interface GitHubProviderOptions {
   readonly pollTimeoutMs?: number
   /** 覆盖「无人上报」静默期 —— 测试用毫秒级 */
   readonly emptySettleMs?: number
+  readonly fetchFn?: typeof fetch
 }
 
 /**
@@ -175,6 +182,9 @@ interface RawPullRequest {
   readonly html_url?: string
   readonly state?: string
   readonly merged?: boolean
+  readonly merged_at?: string | null
+  readonly merge_commit_sha?: string | null
+  readonly closed_at?: string | null
   readonly head?: { readonly ref?: string; readonly sha?: string }
   readonly base?: { readonly ref?: string }
 }
@@ -231,7 +241,14 @@ function statusNewer(left: RawCommitStatus, right: RawCommitStatus): boolean {
   return (left.id ?? 0) > (right.id ?? 0)
 }
 
-export class GitHubProvider implements PullRequestGateway, CiGateway, RequiredCheckGateway {
+export class GitHubProvider
+  implements
+    PullRequestGateway,
+    PullRequestStateGateway,
+    CiGateway,
+    RequiredCheckGateway,
+    IssueGateway
+{
   private readonly apiRootOverride: string | undefined
   private readonly apiRootEnv: string | undefined
   /**
@@ -242,6 +259,7 @@ export class GitHubProvider implements PullRequestGateway, CiGateway, RequiredCh
    */
   private readonly explicitToken: { readonly value: string | undefined } | undefined
   private readonly tokenResolver: TokenResolver
+  private readonly fetchFn: typeof fetch
   /** 按 host 缓存解析结果 —— 一次进程生命周期内不重复调 `gh` */
   private readonly tokenCache = new Map<string, string>()
 
@@ -251,6 +269,7 @@ export class GitHubProvider implements PullRequestGateway, CiGateway, RequiredCh
     this.apiRootEnv = process.env.KEEL_GITHUB_API_ROOT
     this.explicitToken = opts.token === undefined ? undefined : { value: opts.token ?? undefined }
     this.tokenResolver = opts.tokenResolver ?? resolveGitHubToken
+    this.fetchFn = opts.fetchFn ?? fetch
     this.pollIntervalMs = opts.pollIntervalMs ?? POLL_INTERVAL_MS
     this.pollTimeoutMs = opts.pollTimeoutMs ?? POLL_TIMEOUT_MS
     this.emptySettleMs = opts.emptySettleMs ?? EMPTY_SETTLE_MS
@@ -347,17 +366,19 @@ export class GitHubProvider implements PullRequestGateway, CiGateway, RequiredCh
     if (!root.ok) return root
     let res: Response
     try {
-      res = await fetch(
+      res = await this.fetchFn(
         `${root.value}${path}`,
         init.body === undefined
           ? {
               method: init.method ?? 'GET',
               headers: this.headers(token),
+              signal: AbortSignal.timeout(30_000),
             }
           : {
               method: init.method ?? 'GET',
               headers: { ...this.headers(token), 'Content-Type': 'application/json' },
               body: JSON.stringify(init.body),
+              signal: AbortSignal.timeout(30_000),
             },
       )
     } catch {
@@ -375,9 +396,22 @@ export class GitHubProvider implements PullRequestGateway, CiGateway, RequiredCh
       return err(makeError('HARNESS_UNAVAILABLE', `GitHub API 暂不可用(HTTP ${res.status})`))
     }
 
-    const text = await res.text()
-    const json: unknown = text === '' ? null : JSON.parse(text)
-    return ok({ status: res.status, json })
+    let text: string
+    try {
+      text = await res.text()
+    } catch {
+      return err(makeError('HARNESS_UNAVAILABLE', 'GitHub API 响应读取失败'))
+    }
+    try {
+      const json: unknown = text === '' ? null : JSON.parse(text)
+      return ok({ status: res.status, json })
+    } catch {
+      return err(makeError('PROTOCOL_ERROR', 'GitHub API 响应不是 JSON'))
+    }
+  }
+
+  async readJson(host: string, path: string): Promise<Result<{ status: number; json: unknown }>> {
+    return this.request(host, path)
   }
 
   /**
@@ -436,6 +470,63 @@ export class GitHubProvider implements PullRequestGateway, CiGateway, RequiredCh
     }
     const pr = created.value.json as { number: number; html_url: string }
     return ok({ number: pr.number, url: pr.html_url, created: true })
+  }
+
+  /**
+   * 读取 PR 当前状态 —— 只读外部事实，不推断合并结果。
+   *
+   * GitHub 的 `merged` 是布尔事实；`merged_at` / `merge_commit_sha`
+   * 原样返回，缺失时给 null，不在本地补时间或 SHA。
+   */
+  async getPullRequest(input: PullRequestStateInput): Promise<Result<PullRequestState>> {
+    if (!Number.isSafeInteger(input.number) || input.number <= 0) {
+      return err(makeError('SCHEMA_VIOLATION', `PR 编号无效：${input.number}`))
+    }
+    const parsed = parseRemoteUrl(input.remoteUrl)
+    if (!parsed.ok) return parsed
+    const { host, owner, repo } = parsed.value
+    const slug = `${owner}/${repo}`
+
+    const r = await this.request(host, `/repos/${slug}/pulls/${input.number}`)
+    if (!r.ok) return r
+    if (r.value.status !== 200) {
+      return err(
+        makeError(
+          'WORKSPACE_ERROR',
+          `读取 PR #${input.number} 返回非预期状态 HTTP ${r.value.status}`,
+        ),
+      )
+    }
+
+    const pr = r.value.json as RawPullRequest | null
+    if (pr === null || typeof pr !== 'object' || pr.number !== input.number) {
+      return err(makeError('PROTOCOL_ERROR', `GitHub 返回的 PR 响应缺少准确编号 #${input.number}`))
+    }
+    const state = isOpenState(pr.state)
+    if (state === null) {
+      return err(
+        makeError('PROTOCOL_ERROR', `PR #${input.number} 的 state 非法：${String(pr.state)}`),
+      )
+    }
+    if (pr.merged === true && state !== 'closed') {
+      return err(
+        makeError('PROTOCOL_ERROR', `PR #${input.number} 声称已合并但 state=${String(pr.state)}`),
+      )
+    }
+    if (typeof pr.merged !== 'boolean') {
+      return err(makeError('PROTOCOL_ERROR', `PR #${input.number} 缺少 merged 事实`))
+    }
+
+    return ok({
+      number: pr.number,
+      url: pr.html_url ?? `https://${host}/${slug}/pull/${input.number}`,
+      state,
+      merged: pr.merged === true,
+      mergedAt: pr.merged_at ?? null,
+      mergeSha: pr.merge_commit_sha ?? null,
+      closedAt: pr.closed_at ?? null,
+      headSha: pr.head?.sha ?? null,
+    })
   }
 
   /**
@@ -797,6 +888,84 @@ export class GitHubProvider implements PullRequestGateway, CiGateway, RequiredCh
     return ok({ issues: [...byNumber.values()], truncated })
   }
 
+  async issueActor(remoteUrl: string): Promise<Result<string>> {
+    const parsed = parseRemoteUrl(remoteUrl)
+    if (!parsed.ok) return parsed
+    const response = await this.request(parsed.value.host, '/user')
+    if (!response.ok) return response
+    const login = (response.value.json as { login?: unknown } | null)?.login
+    return response.value.status === 200 && typeof login === 'string'
+      ? ok(login)
+      : err(makeError('PROTOCOL_ERROR', 'GitHub 用户响应缺少 login'))
+  }
+
+  async listIssueComments(
+    remoteUrl: string,
+    number: number,
+    since?: string,
+  ): Promise<Result<IssueCommentPage>> {
+    const parsed = parseRemoteUrl(remoteUrl)
+    if (!parsed.ok) return parsed
+    const { host, owner, repo } = parsed.value
+    const comments: IssueComment[] = []
+    for (let page = 1; page <= 10; page++) {
+      const query = new URLSearchParams({ per_page: '100', page: String(page) })
+      if (since !== undefined) query.set('since', since)
+      const response = await this.request(
+        host,
+        `/repos/${owner}/${repo}/issues/${number}/comments?${query}`,
+      )
+      if (!response.ok) return response
+      if (response.value.status !== 200 || !Array.isArray(response.value.json)) {
+        return err(makeError('PROTOCOL_ERROR', 'GitHub 评论列表响应无效'))
+      }
+      for (const raw of response.value.json) {
+        const comment = parseIssueComment(raw)
+        if (comment === null) return err(makeError('PROTOCOL_ERROR', 'GitHub 评论缺少必需字段'))
+        comments.push(comment)
+      }
+      if (response.value.json.length < 100) return ok({ comments, truncated: false })
+    }
+    return ok({ comments, truncated: true })
+  }
+
+  async createIssueComment(
+    remoteUrl: string,
+    number: number,
+    body: string,
+  ): Promise<Result<IssueComment>> {
+    const parsed = parseRemoteUrl(remoteUrl)
+    if (!parsed.ok) return parsed
+    const { host, owner, repo } = parsed.value
+    const response = await this.request(host, `/repos/${owner}/${repo}/issues/${number}/comments`, {
+      method: 'POST',
+      body: { body },
+    })
+    if (!response.ok) return response
+    const comment = parseIssueComment(response.value.json)
+    return response.value.status === 201 && comment !== null
+      ? ok(comment)
+      : err(makeError('PROTOCOL_ERROR', `创建评论响应无效（HTTP ${response.value.status}）`))
+  }
+
+  async closeIssue(
+    remoteUrl: string,
+    number: number,
+    reason: 'completed' | 'not_planned',
+  ): Promise<Result<void>> {
+    const parsed = parseRemoteUrl(remoteUrl)
+    if (!parsed.ok) return parsed
+    const { host, owner, repo } = parsed.value
+    const response = await this.request(host, `/repos/${owner}/${repo}/issues/${number}`, {
+      method: 'PATCH',
+      body: { state: 'closed', state_reason: reason },
+    })
+    if (!response.ok) return response
+    return response.value.status === 200
+      ? ok(undefined)
+      : err(makeError('PROTOCOL_ERROR', `关闭 Issue 返回 HTTP ${response.value.status}`))
+  }
+
   async getIssue(remoteUrl: string, issueNumber: number): Promise<Result<IssueInfo>> {
     const parsed = parseRemoteUrl(remoteUrl)
     if (!parsed.ok) return parsed
@@ -835,6 +1004,23 @@ export class GitHubProvider implements PullRequestGateway, CiGateway, RequiredCh
       isPullRequest: raw.pull_request !== undefined,
     })
   }
+}
+
+function parseIssueComment(raw: unknown): IssueComment | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const item = raw as {
+    id?: unknown
+    body?: unknown
+    created_at?: unknown
+    user?: { login?: unknown }
+  }
+  return typeof item.id === 'number' &&
+    Number.isSafeInteger(item.id) &&
+    typeof item.body === 'string' &&
+    typeof item.created_at === 'string' &&
+    typeof item.user?.login === 'string'
+    ? { id: item.id, body: item.body, author: item.user.login, createdAt: item.created_at }
+    : null
 }
 
 /**

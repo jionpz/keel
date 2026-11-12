@@ -184,6 +184,62 @@ function happyWorker(root: string): ManagedTicketWorker {
   })
 }
 
+async function bindWorkflowIssue(
+  repoId: string,
+  taskId: string,
+  externalIssue: string,
+): Promise<void> {
+  const workflowId = randomUUID()
+  const nodeId = randomUUID()
+  await asOwner(async (c) => {
+    const task = (
+      await c.query<{
+        package_digest: string
+        baseline_commit: string
+        worktree_path: string
+        ticket_id: string
+        ticket_title: string
+      }>(
+        `SELECT package_digest,baseline_commit,worktree_path,ticket_id,ticket_title
+         FROM managed_ticket_task WHERE id=$1`,
+        [taskId],
+      )
+    ).rows[0]
+    if (task === undefined) throw new Error('fixture ticket task 不存在')
+    await c.query(`UPDATE repo SET remote_url='https://github.com/jionpz/keel.git' WHERE id=$1`, [
+      repoId,
+    ])
+    await c.query(
+      `INSERT INTO managed_workflow(
+        id,repo_id,package_digest,repo_config_digest,baseline_commit,worktree_root,
+        request,scope_paths,external_issue,completion_target,status,current_graph_version
+      ) VALUES($1,$2,$3,$4,$5,$6,'fixture workflow','["*"]'::jsonb,$7,'pr_ready','READY',1)`,
+      [
+        workflowId,
+        repoId,
+        task.package_digest,
+        'a'.repeat(64),
+        task.baseline_commit,
+        task.worktree_path,
+        externalIssue,
+      ],
+    )
+    await c.query(
+      `INSERT INTO managed_workflow_graph(workflow_id,version,plan_digest,plan)
+       VALUES($1,1,$2,'{}'::jsonb)`,
+      [workflowId, 'b'.repeat(64)],
+    )
+    await c.query(
+      `INSERT INTO managed_workflow_node(
+        id,workflow_id,graph_version,node_key,ticket_id,external_issue,ticket_title,
+        ticket_size,depends_on,scope_paths,acceptance,status,ticket_task_id
+      ) VALUES($1,$2,1,'ticket',$3,NULL,$4,'S','[]'::jsonb,'["*"]'::jsonb,
+        '["fixture"]'::jsonb,'RUNNING',$5)`,
+      [nodeId, workflowId, task.ticket_id, task.ticket_title, taskId],
+    )
+  })
+}
+
 describe('managed ticket runtime', () => {
   it('租约覆盖阶段超时及清理，失去租约时不谎报失败状态已落库', async () => {
     const { taskId } = await seed()
@@ -358,6 +414,25 @@ describe('managed ticket runtime', () => {
     expect(review?.evidence).toMatchObject({
       review: { reviewed_commit: review?.output_commit },
     })
+  })
+
+  it('land 时把 workflow 来源 issue 写进 PR 正文', async () => {
+    const { repoId, root, taskId } = await seed()
+    await bindWorkflowIssue(repoId, taskId, 'jionpz/keel#129')
+    const worker = happyWorker(root)
+    for (let index = 0; index < 4; index++) {
+      const tick = await tickManagedTicket(worker, taskId)
+      expect(tick.ok).toBe(true)
+    }
+
+    const intent = (
+      await asRole('keel_control', (c) =>
+        c.query<{ pr_body: string }>('SELECT pr_body FROM managed_action_intent WHERE task_id=$1', [
+          taskId,
+        ]),
+      )
+    ).rows[0]
+    expect(intent?.pr_body).toContain(`Closes #129\n<!-- keel:v1 task=${taskId} -->`)
   })
 
   it('verify 没有真实命令证据时暂停，不把模型自报当完成', async () => {

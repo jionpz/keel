@@ -15,9 +15,11 @@ import {
   DEFAULT_INTERVAL_MS,
   type PollerSignalSource,
   type PollIssueOutcome,
+  type PrOpenTask,
   type RepoRow,
 } from '../ingress/poller.js'
 import type { CancelOutcome, IngestedTask, IssueState } from '../ingress/reconcile.js'
+import type { RedriveCandidate } from '../ingress/redrive.js'
 import { type PollerMainDeps, parseConcurrency, parseIntervalMs, pollerMain } from './poller.js'
 
 const REPO: RepoRow = {
@@ -425,6 +427,71 @@ describe('pollerMain · 依赖接线', () => {
     expect(logs.find((l) => l.event === 'poll')).toMatchObject({
       reconcile: { checked: 1, cancelled: 1, skipped: 0, errors: 0 },
     })
+  })
+
+  it('S-PR_OPEN 独立列表与重驱动候选都接到 runIssue', async () => {
+    process.env.KEEL_GITHUB_TOKEN = 'ghp_test_token'
+    const prTask: PrOpenTask = {
+      taskId: 'task-9',
+      externalRef: 'acme/alpha#9',
+      repoId: 'repo-a',
+      remoteUrl: 'https://github.com/acme/alpha.git',
+    }
+    const candidate: RedriveCandidate = {
+      previousTaskId: 'task-old',
+      externalRef: 'acme/alpha#8',
+      prUrl: 'https://github.com/acme/alpha/pull/11',
+      prNumber: 11,
+      closedAt: '2026-11-12T02:00:00Z',
+    }
+    const runCalls: unknown[] = []
+
+    const signals = fakeSignals()
+    await runPollerMain(['--interval', '1'], {
+      listRepos: async () => [REPO],
+      listIssues: async () =>
+        ok<IssueList>({
+          issues: [
+            {
+              number: 8,
+              title: '旧任务',
+              state: 'open',
+              isPullRequest: false,
+              labels: ['triage'],
+            },
+          ],
+          truncated: false,
+        }),
+      taskStatus: async (ref) => (ref === 'acme/alpha#8' ? 'S-ABANDONED' : undefined),
+      listPrOpenTasks: async () => [prTask],
+      redriveCandidate: async (ref) => (ref === 'acme/alpha#8' ? candidate : undefined),
+      runIssue: async (input) => {
+        runCalls.push(input)
+        return ok<PollIssueOutcome>({ created: true })
+      },
+      acquireLock: async () => fakeLock().lock,
+      log: () => undefined,
+      now: () => '2026-11-12T03:00:00.000Z',
+      signals: signals.source,
+      sleep: async () => {
+        signals.fire('SIGTERM')
+      },
+      closeDb: async () => undefined,
+    })
+
+    expect(runCalls).toEqual([
+      {
+        issueUrl: 'https://github.com/acme/alpha/issues/8',
+        repoId: 'repo-a',
+        label: 'triage',
+        redrive: candidate,
+      },
+      {
+        issueUrl: 'https://github.com/acme/alpha/issues/9',
+        repoId: 'repo-a',
+        label: '',
+      },
+    ])
   })
 
   it('循环异常退出时也关闭连接池（不是只在优雅路径收尾）', async () => {

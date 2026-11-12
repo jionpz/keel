@@ -1,5 +1,5 @@
 /**
- * Issue → S-DONE 全真实闭环验收(AC5–AC7)。
+ * Issue → PR 待合并真实验收(AC5–AC7；不自动合并)。
  *
  * 这是 v0.1 判据「一条真实反馈进入系统 → 无人干预 → 通过 CI 的 PR」里
  * **「进入」那一环**的真实验证:此前 v01-criterion 用 seed SQL 直插 S-NEW,
@@ -80,8 +80,8 @@ beforeEach(async () => {
 
 afterAll(closePool)
 
-describe('Issue → S-DONE 全真实闭环(需要凭据、远程仓库与 gh CLI)', () => {
-  it('keel run-issue --ci real 从真实 Issue 走到 S-DONE,产出通过 CI 的真实 PR', {
+describe('Issue → PR 待合并真实验收(需要凭据、远程仓库与 gh CLI)', () => {
+  it('keel run-issue --ci real 产出通过 CI 的真实 PR 并等待合并', {
     timeout: 1_800_000,
   }, async () => {
     if (remote === undefined) throw new Error('缺少 KEEL_TEST_REMOTE_REPO')
@@ -176,16 +176,17 @@ describe('Issue → S-DONE 全真实闭环(需要凭据、远程仓库与 gh CLI
         return
       }
 
-      // ── AC5-1:走到 S-DONE ──
-      expect(result.value.finalStatus).toBe('S-DONE')
+      // ── AC5-1:CI 通过后等待维护者合并 ──
+      expect(result.value.finalStatus).toBe('S-PR_OPEN')
+      expect(result.value.stopReason).toBe('awaiting-pr-merge')
 
       // ── AC5-2:真实 PR ──
-      expect(prUrl, 'S-DONE 必须有真实 PR URL').not.toBeNull()
+      expect(prUrl, '待合并必须有真实 PR URL').not.toBeNull()
       expect(prUrl ?? '').toMatch(/^https:\/\/github\.com\/.+\/pull\/\d+$/)
       if (prUrl === null) return
 
-      // ── AC5-3:事件流终于 T-024(CI 通过)──
-      expect(transitions.at(-1), '最后一条转移应是 T-024(CI 通过 → S-DONE)').toBe('T-024')
+      // ── AC5-3:事件流终于 T-042(CI 通过)──
+      expect(transitions.at(-1), '最后一条转移应是 T-042(CI 通过，等待合并)').toBe('T-042')
 
       // ── AC5-3b:T-024 得有真实 CI 作证,不能只有 Keel 自己的事件 ──
       //

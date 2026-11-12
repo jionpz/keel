@@ -6,7 +6,7 @@
  *   - `v01-criterion`：全链路 S-NEW → S-DONE，但 CI 由测试注入（本地 cheap 版，刻意保留）；
  *   - `github-pr`：真实 push / PR / CI 回读，但不经编排器。
  * 本文件把两者合一：一条真实反馈，真实 OMP session 驱动，
- * `CreatePullRequest` 副作用真实开 PR，`T-024` 由真实 `waitForCi='passed'` 驱动。
+ * `CreatePullRequest` 副作用真实开 PR，`T-042` 记录真实 CI 通过并等待维护者合并。
  *
  * **不在默认 `pnpm run check` 中**（见 src/acceptance/README.md）。前置条件：
  *   1. `KEEL_GITHUB_TOKEN`（或 `GITHUB_TOKEN`）—— PR 创建与 CI 回读的凭据。
@@ -162,7 +162,7 @@ function deleteRemoteBranch(bare: string, remoteUrl: string, branch: string): vo
 }
 
 describe('v0.1 完成判据（合并：真实编排 + 真实 GitHub PR/CI）', () => {
-  it('一条真实反馈无人干预走完 S-NEW → S-DONE，PR 真实存在且 CI 通过，事件流可完整重建', async () => {
+  it('一条真实反馈无人干预走到 PR 待合并，PR 真实存在且 CI 通过，事件流可完整重建', async () => {
     if (remote === undefined) throw new Error('缺少 KEEL_TEST_REMOTE_REPO')
     const { taskId, repoId } = await seed(remote)
 
@@ -201,7 +201,8 @@ describe('v0.1 完成判据（合并：真实编排 + 真实 GitHub PR/CI）', (
       if (!result.ok) return
 
       // ── 1. 走到终态，且最后一步由真实 CI 驱动 ──
-      expect(result.value.finalStatus).toBe('S-DONE')
+      expect(result.value.finalStatus).toBe('S-PR_OPEN')
+      expect(result.value.stopReason).toBe('awaiting-pr-merge')
       expect(result.value.steps.map((s) => s.note).join('|')).toContain('外部 CI（GitHub）：passed')
 
       // ── 2. 事件流能完整重建全过程 ──
@@ -216,7 +217,7 @@ describe('v0.1 完成判据（合并：真实编排 + 真实 GitHub PR/CI）', (
         result.value.steps.map((s) => s.transition).filter((t) => t !== null),
       )
       expect(transitions[0]).toBe('T-002')
-      expect(transitions.at(-1)).toBe('T-024')
+      expect(transitions.at(-1)).toBe('T-042')
 
       // ── 3. PR 是真实副作用，不是意图：SideEffectApplied(CreatePullRequest) ──
       const prApplied = evs.value.find(

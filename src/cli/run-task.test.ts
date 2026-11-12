@@ -230,6 +230,27 @@ describe('runTask · --ci real 缺 token 时不进 loop', () => {
     }
   })
 
+  it('非法 KEEL_REPO_SIGNALS_* 在 task 查询之前失败（不静默回退默认值）', async () => {
+    const cases = [
+      ['KEEL_REPO_SIGNALS_DAYS', '0'],
+      ['KEEL_REPO_SIGNALS_MAX_TOKENS', '99'],
+    ] as const
+    for (const [name, raw] of cases) {
+      const previous = process.env[name]
+      try {
+        process.env[name] = raw
+        const r = await runTask(randomUUID(), { ci: 'passed' })
+        expect(r.ok, `${name}=${raw}`).toBe(false)
+        if (r.ok) continue
+        expect(r.error.kind).toBe('WORKSPACE_ERROR')
+        expect(r.error.detail).toContain(`${name}=${raw}`)
+      } finally {
+        if (previous === undefined) delete process.env[name]
+        else process.env[name] = previous
+      }
+    }
+  })
+
   it('allowlist 未覆盖 profile 模型：task 查询 / 认领之前失败', async () => {
     // 语法合法但缺省 profile 会 spawn deepseek-v4-flash —— 清单里没有它。
     process.env.KEEL_MODEL_ALLOWLIST = 'moonshotai/Kimi-K3'

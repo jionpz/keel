@@ -374,6 +374,7 @@ describe('schema 与代码的一致性', () => {
         'artifact',
         'event',
         'feedback',
+        'issue_delivery',
         'managed_action_intent',
         'managed_action_outbox',
         'managed_check_observation',

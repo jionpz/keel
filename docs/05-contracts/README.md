@@ -14,6 +14,7 @@
 | `PolicyEngine` | Policy 决定权限 | [`policy-engine.md`](./policy-engine.md) |
 | `ArtifactStore` | State 是事实 | [`artifact-store.md`](./artifact-store.md) |
 | `PullRequestGateway` | 外部写操作，幂等 | [`git-provider.md`](./git-provider.md) |
+| `PullRequestStateGateway` | 只读观察 PR 合并 / 关闭 | [`git-provider.md`](./git-provider.md) §4 |
 | `CiGateway` | CI 是外部事实源，只读归并 | [`ci-gateway.md`](./ci-gateway.md) |
 
 ---

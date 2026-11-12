@@ -145,6 +145,23 @@ async function seedTaskWithRemote(): Promise<{ taskId: string; repoId: string }>
   return { taskId, repoId }
 }
 
+async function seedGithubFeedback(taskId: string, externalRefs: readonly string[]): Promise<void> {
+  await asOwner(async (c) => {
+    for (const externalRef of externalRefs) {
+      const feedbackId = randomUUID()
+      await c.query(
+        `INSERT INTO feedback (id, source, external_ref, body)
+         VALUES ($1,'github',$2,'fixture issue')`,
+        [feedbackId, externalRef],
+      )
+      await c.query('INSERT INTO task_feedback (task_id, feedback_id) VALUES ($1,$2)', [
+        taskId,
+        feedbackId,
+      ])
+    }
+  })
+}
+
 async function eventsOf(
   taskId: string,
 ): Promise<{ type: string; payload: Record<string, unknown> }[]> {
@@ -187,6 +204,7 @@ describe('CreatePullRequest 副作用记账', () => {
     const input = gateway.calls[0]
     expect(input?.headBranch).toBe(branchFor(taskId))
     expect(input?.baseBranch).toBe('main')
+    expect(input?.body).toBe(`Keel Task ${taskId}\n\nAutomated PR.`)
 
     // 远端真的收到了这个分支
     const branches = execFileSync('git', ['-C', origin, 'branch', '--list'], {
@@ -231,6 +249,28 @@ describe('CreatePullRequest 副作用记账', () => {
     expect(skipped, '应有 SideEffectSkipped').toBeDefined()
     expect(skipped?.payload.pr_number).toBe(7)
     expect(evs.some((e) => e.type === 'SideEffectApplied')).toBe(false)
+  })
+
+  it('GitHub 来源 issue 追加引用与机器标记', async () => {
+    const { taskId, repoId } = await seedTaskWithRemote()
+    await seedGithubFeedback(taskId, ['acme/other#7', 'acme/other#8'])
+    const git = new GitWorkspace({ root })
+    const project = await prepareFor(git, repoId)
+    const gateway = firstTimeCreated()
+    const driver = new WorkflowDriver(
+      new RuleBasedPolicyEngine(DEFAULT_RULESET),
+      { git, repoId, project },
+      gateway,
+    )
+
+    const r = await driver.advance(taskId, { type: 'RunSucceeded', stage: 'review' }, NOW)
+    expect(r.ok && r.value.to === 'S-PR_OPEN').toBe(true)
+
+    expect(gateway.calls[0]?.body).toBe(
+      `Keel Task ${taskId}\n\nAutomated PR.\n\n` +
+        'Refs acme/other#7\nRefs acme/other#8\n' +
+        `<!-- keel:v1 task=${taskId} -->`,
+    )
   })
 
   it('未注入 gateway → SideEffectIntent,不报错也不假装成功', async () => {

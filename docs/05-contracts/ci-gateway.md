@@ -13,7 +13,10 @@
 
 Keel 在 `S-PR_OPEN` 停下来等 PR 上的 CI 结果。
 但 CI 是**外部世界的事实**：系统无法在内部推导它，
-只能读取并把它转成 `CIPassed` / `CIFailed` 事件驱动转移（T-024 / T-025）。
+只能读取并把它转成 `CIPassed` / `CIFailed` 事件驱动转移（T-042 / T-025）。
+
+> `CIPassed` 只记录事实（T-042 自环），**不进入 S-DONE**。完成由 PR 合并
+> （`PRMerged` → T-024）决定；PR 观测契约见 `git-provider.md` §4。
 
 接口必须回答两个问题：
 1. **等待多久、以什么粒度轮询** —— 硬超时怎么算「失败」;
@@ -78,7 +81,8 @@ Actions 的仓库 —— Actions 走 check-runs，不写 commit status），
 ## 5. 边界
 
 - **只读取，绝不制造结论**：归并逻辑不猜测 CI 意图，只合并外部事实。
-- **不创建 PR** —— 那是 `PullRequestGateway`（`git-provider.md`）。
+- **不创建 / 不观察 PR** —— 创建是 `PullRequestGateway`，合并/关闭观察是
+  `PullRequestStateGateway`（`git-provider.md` §6）。
 - 实现 = `src/contracts/ci-gateway.ts`；单测用 stub HTTP server
   （`github-provider.test.ts`）；真实路径 = `test:acceptance`。
 

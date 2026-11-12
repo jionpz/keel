@@ -130,10 +130,27 @@ export function cancelClosedIssue(task, issue, now): Promise<Result<CancelOutcom
   PR 已经开出去时，交付物落在 PR 上继续收口，issue 关闭不撤单；这类任务计入
   `reconcile.skipped` 并打 `reconcile_skipped`。其余非终态没有脱离 issue 仍成立的
   交付物，关闭就是撤单。误取消不可逆（终态 I8），宁可漏取消也不能错取消。
-- 按设计**不重新驱动 closed issue 的任务**：`ingestIssue` 的关闭闸门是授权边界，
-  对账不绕过它。
+- 按设计**不为 closed issue 重新 ingest 新任务**：`ingestIssue` 的关闭闸门是授权边界，
+  对账不绕过它。`S-PR_OPEN` 是唯一例外：任务已经 ingest 过，poller 从独立任务列表
+  继续观察 PR，不重走 issue 闸门。
 - 单条失败隔离：issue 状态查询或取消失败只记 `reconcile_error` + `errors += 1`，
   不影响其它任务；取消因并发未推进记 `reconcile_noop`，不假装成功。
+
+**S-PR_OPEN 独立观察（issue #132）**
+
+- `scanOnce` 在 open issue 扫描之外追加 `listPrOpenTasks()`：列出所有仍处于
+  `S-PR_OPEN` 的 GitHub Task。PR 合并后 `Closes #n` 会让 issue 自动关闭，
+  因此不能只依赖 open issue 列表。
+- 同一轮已从 open 列表认领的 `external_ref` 不重复驱动；`prOpen` 只统计
+  本轮纳入观察的 S-PR_OPEN 任务数。
+- 驱动入口按当前 Task 状态分流：`S-PR_OPEN` 直接续驱，不重新 ingest；
+  CI 已记录时直接观察 PR，PR 仍 open 则停在 `awaiting-pr-merge`。
+- **未合并关闭后的重驱动**：open issue 的最新 Task 为 `S-ABANDONED`，且最近
+  `PRClosed` 的理由是 `pr_closed_unmerged` 时，`redriveCandidate` 返回候选；
+  poller 以 `redrive: true` 调 `runIssue`，复用原 GitHub Feedback 并追加
+  `redrive:<previousTaskId>` 说明 Feedback。其它终态或其它放弃理由一律跳过。
+- 重驱动后新 Task 会成为同一 issue 的最新 Task，后续轮次不会拿旧的
+  `S-ABANDONED` 反复重开。
 
 **信号与退出**
 
@@ -149,7 +166,7 @@ export function cancelClosedIssue(task, issue, now): Promise<Result<CancelOutcom
 **日志**（单行 JSON）
 
 ```json
-{"ts":"...","event":"poll","repos":2,"scanned":5,"skipped":3,"errors":0,"truncated":false,"scheduled":2,"deferred":1,"inFlight":3,"reconcile":{"checked":1,"cancelled":1,"skipped":0,"errors":0},"stopped":false}
+{"ts":"...","event":"poll","repos":2,"scanned":5,"skipped":3,"prOpen":1,"errors":0,"truncated":false,"scheduled":2,"deferred":1,"inFlight":3,"reconcile":{"checked":1,"cancelled":1,"skipped":0,"errors":0},"stopped":false}
 {"ts":"...","event":"issue_driven","ref":"o/r#12","created":true}
 {"ts":"...","event":"reconcile_cancelled","ref":"o/r#12","task":"<uuid>","from":"S-HUMAN_REVIEW","transition":"T-040","closed_at":"2026-11-07T12:34:56Z"}
 {"ts":"...","event":"reconcile_skipped","ref":"o/r#12","task":"<uuid>","status":"S-PR_OPEN","reason":"pr_open"}
@@ -188,6 +205,8 @@ export function cancelClosedIssue(task, issue, now): Promise<Result<CancelOutcom
 | 驱动抛异常（DB 连接丢失等） | 记首个 fatal → 停止调度 → 在途收尾后抛出，不吞 |
 | issue 状态查询失败 | `reconcile_error`，`errors += 1`，继续下一条 |
 | issue 已关闭且任务 `S-PR_OPEN` | 不取消（显式守卫），`reconcile.skipped += 1`，打 `reconcile_skipped` |
+| `S-PR_OPEN` 任务即使 issue 已关闭 | 仍由独立任务列表驱动，直到 PR merged / closed |
+| 最新 Task `S-ABANDONED` 且理由 `pr_closed_unmerged` | 带重驱动候选调 `runIssue`；其余放弃理由跳过 |
 | issue 不在 open 列表但状态仍 open（label 被摘） | 不做任何动作 |
 | 取消因并发未推进 | `reconcile_noop`，不计入 `cancelled` |
 | `external_ref` 形状不对 | `reconcile_error`，不发请求、不取消 |
@@ -208,6 +227,8 @@ export function cancelClosedIssue(task, issue, now): Promise<Result<CancelOutcom
 - 每个仓库用自己的 label 调 `runIssue`；label 透传
 - 新 issue 驱动 / 终态跳过 / 非终态继续
 - 单条失败隔离；错误日志脱敏
+- issue 已关闭但 Task `S-PR_OPEN` 仍被纳入观察；同一轮不重复驱动
+- `S-ABANDONED + pr_closed_unmerged` 进入重驱动；其它终态/理由跳过
 - 同一轮同一 `external_ref` 只驱动一次
 - `scanOnce` 只返回待驱动请求，不调用 `runIssue`
 - 调度器：`N+1` 个请求时最多 `N` 个在途、其余 `at_capacity`；同一 ref 在途时
@@ -226,6 +247,8 @@ export function cancelClosedIssue(task, issue, now): Promise<Result<CancelOutcom
 - `DEFAULT_DRIVE_CONCURRENCY` 与全局 `DEFAULT_MAX_RUNNING_RUNS` 不漂移（数值断言）
 - 缺 token 前置失败；非法 `--concurrency` 不读 repo、不取锁、不解析 token
 - 循环抛错时连接池仍被关闭
+- `listPrOpenTasks` / `redriveCandidate` 接到 `runIssue`，重驱动候选映射为
+  `redrive: true`
 
 `src/ingress/reconcile.test.ts`（注入 deps，不碰数据库与 GitHub）：
 
@@ -270,10 +293,9 @@ token.request()                        // 只置位一次并清空订阅者
   因此一个永不返回的驱动会让进程停在 drain —— 这是刻意的，不是挂死。
 - **deferred 不是队列**：本轮排不下的 issue 只计数、不保存；下一轮重新扫描时再试。
   调度器里唯一的状态是 `inFlight` 集合，进程重启即清空，不构成第二份待办事实。
-- **closed issue 的任务不再被驱动**：扫描只列 `state=open`，`ingestIssue` 的关闭闸门
-  也拒绝重新 ingest。对账因此只保证「不误判、不悬着」：非终态任务要么被取消，
-  要么（`S-PR_OPEN`）显式放行并停在原状态等 PR 收口 —— 后者不会自动推进 CI，
-  需要人重新打开 issue 或手工 `keel run-task`。
+- **closed issue 只允许已 ingest 的 `S-PR_OPEN` 继续收口**：独立任务列表观察 PR
+  合并/关闭；其它状态会被对账取消，且不会重新 ingest。重驱动只服务于
+  `pr_closed_unmerged`，并要求 issue 仍 open 且带注册 label。
 - **扫描先于驱动**：一轮会先扫描完所有仓库再调度，所以停止信号只影响「是否继续调度」，
   不会回滚已经完成的扫描（`pollOnce` 的 `scanned` 因此可能多于旧版）。
 - **与 timer-worker 分工**：poller 管扫描与驱动，timer 管到期收割；poller 不处理 wall-clock timer。

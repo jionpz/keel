@@ -100,6 +100,7 @@ const EVENT_LABELS: Record<string, string> = {
   PolicyEvaluated: '策略裁决',
   CIFailed: 'CI 失败',
   CIPassed: 'CI 通过',
+  PRMerged: 'PR 合并',
   PRClosed: 'PR 关闭',
   ClarificationReceived: '补充澄清',
   Cancelled: '取消',

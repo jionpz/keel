@@ -1,9 +1,10 @@
 /**
- * 编排器 CI 接线的**确定性**验证 —— fake CiGateway 驱动 T-024 / T-025。
+ * 编排器 CI 与 PR 接线的**确定性**验证。
  *
  * 覆盖 implement.md Stage 5.3:
  *   - `opts.ci` 传入时优先于 `externalCi`,S-PR_OPEN 用真实 gateway 路径
- *   - waitForCi 返回 passed → CIPassed → T-024 → S-DONE
+ *   - waitForCi 返回 passed → CIPassed → T-042，留在 S-PR_OPEN
+ *   - PR merged → PRMerged → T-024 → S-DONE；closed 未合并 → T-027
  *   - waitForCi 返回 failed 且 dev_attempts < max → CIFailed → T-025 → S-DEVELOPING(新 develop run)
  *
  * 不调真实 GitHub:本层要验的是**编排器把外部事实转成哪个事件、走到哪条转移**,
@@ -23,6 +24,11 @@ import type {
   HarnessDescriptor,
   WorkspaceDiff,
 } from '../../contracts/harness-adapter.js'
+import type {
+  PullRequestState,
+  PullRequestStateGateway,
+  PullRequestStateInput,
+} from '../../contracts/pull-request-state.js'
 import type { Proposal } from '../../contracts/types.js'
 import { HarnessSessionManager } from '../../execution/session/manager.js'
 import { PgArtifactStore } from '../../fact/artifact-store.js'
@@ -41,6 +47,15 @@ class FakeCi implements CiGateway {
   async waitForCi(input: CiWaitInput): Promise<Result<'passed' | 'failed'>> {
     this.calls.push(input)
     return { ok: true, value: this.result }
+  }
+}
+
+class FakePullRequests implements PullRequestStateGateway {
+  readonly calls: PullRequestStateInput[] = []
+  constructor(private readonly state: PullRequestState) {}
+  async getPullRequest(input: PullRequestStateInput): Promise<Result<PullRequestState>> {
+    this.calls.push(input)
+    return { ok: true, value: this.state }
   }
 }
 
@@ -117,6 +132,25 @@ async function seedTaskAtPrOpen(): Promise<{ taskId: string; repoId: string }> {
   return { taskId, repoId }
 }
 
+async function seedPullRequest(taskId: string, number = 7): Promise<void> {
+  await asOwner((c) =>
+    c.query(
+      `INSERT INTO event (task_id, type, payload)
+       VALUES ($1,'SideEffectApplied',$2::jsonb)`,
+      [
+        taskId,
+        JSON.stringify({
+          kind: 'CreatePullRequest',
+          dedupe_key: `ai/${taskId}`,
+          pr_number: number,
+          pr_url: `file://${origin}/pull/${number}`,
+          head_branch: branchFor(taskId),
+        }),
+      ],
+    ),
+  )
+}
+
 async function statusOf(taskId: string): Promise<string> {
   const r = await asOwner((c) =>
     c.query<{ status: string }>('SELECT status FROM task WHERE id = $1', [taskId]),
@@ -176,8 +210,9 @@ async function prepareFor(git: GitWorkspace, repoId: string): Promise<PreparedPr
 }
 
 describe('编排器 CI 接线(opts.ci 优先)', () => {
-  it('waitForCi=passed → CIPassed → T-024 → S-DONE,gateway 收到裸仓库 head SHA', async () => {
+  it('waitForCi=passed → T-042 留在 S-PR_OPEN；PR merged → T-024 → S-DONE', async () => {
     const { taskId, repoId } = await seedTaskAtPrOpen()
+    await seedPullRequest(taskId)
     const git = new GitWorkspace({ root })
     const project = await prepareFor(git, repoId)
     // 分支要有 HEAD 才能读 SHA —— 在**裸仓库**(编排器读的就是它)里建出该 Task 的分支
@@ -198,8 +233,9 @@ describe('编排器 CI 接线(opts.ci 优先)', () => {
 
     expect(result.ok, result.ok ? '' : result.error.detail).toBe(true)
     if (!result.ok) return
-    expect(result.value.finalStatus).toBe('S-DONE')
-    expect(await statusOf(taskId)).toBe('S-DONE')
+    expect(result.value.finalStatus).toBe('S-PR_OPEN')
+    expect(result.value.stopReason).toBe('awaiting-pr-merge')
+    expect(await statusOf(taskId)).toBe('S-PR_OPEN')
 
     expect(ci.calls.length).toBe(1)
     const expectedSha = execFileSync(
@@ -212,16 +248,58 @@ describe('编排器 CI 接线(opts.ci 优先)', () => {
 
     const stepsNote = result.value.steps.map((s) => s.note).join('|')
     expect(stepsNote).toContain('外部 CI（GitHub）：passed')
+    expect(stepsNote).not.toContain('PR 已合并')
 
-    // 事件流本身能区分来源,不需要回头看 step note
-    const events = await asOwner((c) =>
+    const ciEvents = await asOwner((c) =>
+      c.query<{ payload: Record<string, unknown> }>(
+        `SELECT payload FROM event WHERE task_id=$1 AND type='TaskStatusChanged'
+         AND payload->>'event'='CIPassed' ORDER BY seq DESC LIMIT 1`,
+        [taskId],
+      ),
+    )
+    expect(ciEvents.rows[0]?.payload).toMatchObject({
+      event: 'CIPassed',
+      source: 'github',
+      transition: 'T-042',
+      head_sha: expectedSha,
+    })
+
+    const pr = new FakePullRequests({
+      number: 7,
+      url: `file://${origin}/pull/7`,
+      state: 'closed',
+      merged: true,
+      mergedAt: '2026-08-24T01:02:03Z',
+      mergeSha: 'b'.repeat(40),
+      closedAt: '2026-08-24T01:02:03Z',
+      headSha: expectedSha,
+    })
+    const done = await runTaskToCompletion(taskId, depsFor(repoId, git, project), {
+      maxSteps: 3,
+      ci,
+      pullRequests: pr,
+    })
+    expect(done.ok, done.ok ? '' : done.error.detail).toBe(true)
+    if (!done.ok) return
+    expect(done.value.finalStatus).toBe('S-DONE')
+    expect(await statusOf(taskId)).toBe('S-DONE')
+    expect(pr.calls).toEqual([{ repoId, remoteUrl: `file://${origin}`, number: 7 }])
+    // CI 已通过：第二次驱动不应再等一次 CI
+    expect(ci.calls.length).toBe(1)
+
+    const merged = await asOwner((c) =>
       c.query<{ payload: Record<string, unknown> }>(
         `SELECT payload FROM event WHERE task_id=$1 AND type='TaskStatusChanged'
          ORDER BY seq DESC LIMIT 1`,
         [taskId],
       ),
     )
-    expect(events.rows[0]?.payload).toMatchObject({ event: 'CIPassed', source: 'github' })
+    expect(merged.rows[0]?.payload).toMatchObject({
+      event: 'PRMerged',
+      transition: 'T-024',
+      merged_at: '2026-08-24T01:02:03Z',
+      merge_sha: 'b'.repeat(40),
+    })
   })
 
   it('externalCi 注入（模拟）→ payload.source=simulated，note 标模拟', async () => {
@@ -230,7 +308,7 @@ describe('编排器 CI 接线(opts.ci 优先)', () => {
     const project = await prepareFor(git, repoId)
 
     const result = await runTaskToCompletion(taskId, depsFor(repoId, git, project), {
-      maxSteps: 2,
+      maxSteps: 3,
       externalCi: async () => 'passed',
     })
     expect(result.ok, result.ok ? '' : result.error.detail).toBe(true)
@@ -241,11 +319,129 @@ describe('编排器 CI 接线(opts.ci 优先)', () => {
     const events = await asOwner((c) =>
       c.query<{ payload: Record<string, unknown> }>(
         `SELECT payload FROM event WHERE task_id=$1 AND type='TaskStatusChanged'
-         ORDER BY seq DESC LIMIT 1`,
+         AND payload->>'event'='CIPassed' ORDER BY seq DESC LIMIT 1`,
         [taskId],
       ),
     )
     expect(events.rows[0]?.payload).toMatchObject({ event: 'CIPassed', source: 'simulated' })
+  })
+
+  it('PR closed 未合并先于失败 CI 收口 → T-027 → S-ABANDONED，理由可查', async () => {
+    const { taskId, repoId } = await seedTaskAtPrOpen()
+    await seedPullRequest(taskId, 11)
+    const git = new GitWorkspace({ root })
+    const project = await prepareFor(git, repoId)
+    execFileSync(
+      'git',
+      ['-C', join(root, 'repos', `${repoId}.git`), 'branch', branchFor(taskId), 'main'],
+      { stdio: 'pipe' },
+    )
+
+    const ci = new FakeCi('failed')
+    const result = await runTaskToCompletion(taskId, depsFor(repoId, git, project), {
+      maxSteps: 4,
+      ci,
+      pullRequests: new FakePullRequests({
+        number: 11,
+        url: `file://${origin}/pull/11`,
+        state: 'closed',
+        merged: false,
+        mergedAt: null,
+        mergeSha: null,
+        closedAt: '2026-08-24T02:00:00Z',
+        headSha: null,
+      }),
+    })
+    expect(result.ok, result.ok ? '' : result.error.detail).toBe(true)
+    if (!result.ok) return
+    expect(result.value.finalStatus).toBe('S-ABANDONED')
+    expect(result.value.stopReason).toBe('terminal')
+    expect(ci.calls).toEqual([])
+
+    const events = await asOwner((c) =>
+      c.query<{ payload: Record<string, unknown> }>(
+        `SELECT payload FROM event WHERE task_id=$1 AND type='TaskStatusChanged'
+         ORDER BY seq DESC LIMIT 1`,
+        [taskId],
+      ),
+    )
+    expect(events.rows[0]?.payload).toMatchObject({
+      event: 'PRClosed',
+      transition: 'T-027',
+      reason: 'pr_closed_unmerged',
+      closed_at: '2026-08-24T02:00:00Z',
+    })
+  })
+
+  it('仅注入 PR 网关也能复用已记录的 CI 事实 → merged → S-DONE', async () => {
+    const { taskId, repoId } = await seedTaskAtPrOpen()
+    await seedPullRequest(taskId, 12)
+    const git = new GitWorkspace({ root })
+    const project = await prepareFor(git, repoId)
+    execFileSync(
+      'git',
+      ['-C', join(root, 'repos', `${repoId}.git`), 'branch', branchFor(taskId), 'main'],
+      { stdio: 'pipe' },
+    )
+
+    const ci = new FakeCi('passed')
+    const first = await runTaskToCompletion(taskId, depsFor(repoId, git, project), {
+      maxSteps: 3,
+      ci,
+    })
+    expect(first.ok, first.ok ? '' : first.error.detail).toBe(true)
+    if (!first.ok) return
+    expect(first.value.stopReason).toBe('awaiting-pr-merge')
+
+    const second = await runTaskToCompletion(taskId, depsFor(repoId, git, project), {
+      maxSteps: 2,
+      pullRequests: new FakePullRequests({
+        number: 12,
+        url: `file://${origin}/pull/12`,
+        state: 'closed',
+        merged: true,
+        mergedAt: '2026-08-24T03:00:00Z',
+        mergeSha: 'c'.repeat(40),
+        closedAt: '2026-08-24T03:00:00Z',
+        headSha: null,
+      }),
+    })
+    expect(second.ok, second.ok ? '' : second.error.detail).toBe(true)
+    if (!second.ok) return
+    expect(second.value.finalStatus).toBe('S-DONE')
+    expect(ci.calls.length).toBe(1)
+  })
+
+  it('merged=true 但缺少 merged_at → PROTOCOL_ERROR，不让异常逃出编排器', async () => {
+    const { taskId, repoId } = await seedTaskAtPrOpen()
+    await seedPullRequest(taskId, 13)
+    const git = new GitWorkspace({ root })
+    const project = await prepareFor(git, repoId)
+    execFileSync(
+      'git',
+      ['-C', join(root, 'repos', `${repoId}.git`), 'branch', branchFor(taskId), 'main'],
+      { stdio: 'pipe' },
+    )
+
+    const result = await runTaskToCompletion(taskId, depsFor(repoId, git, project), {
+      maxSteps: 4,
+      ci: new FakeCi('passed'),
+      pullRequests: new FakePullRequests({
+        number: 13,
+        url: `file://${origin}/pull/13`,
+        state: 'closed',
+        merged: true,
+        mergedAt: null,
+        mergeSha: null,
+        closedAt: '2026-08-24T04:00:00Z',
+        headSha: null,
+      }),
+    })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error.kind).toBe('PROTOCOL_ERROR')
+    expect(await statusOf(taskId)).toBe('S-PR_OPEN')
   })
 
   it('waitForCi=failed → CIFailed → T-025 → 回 S-DEVELOPING 并开新 develop run', async () => {

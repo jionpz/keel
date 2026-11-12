@@ -40,9 +40,25 @@ export type TransitionEvent =
    * CI 结果必须带来源：模拟结果与真实 GitHub Actions 在事件流里必须可区分。
    * 用一个必填字段而不是默认值 —— 默认值会让「忘了传」悄悄变成「真 CI」。
    */
-  | { readonly type: 'CIPassed'; readonly source: CiSource }
-  | { readonly type: 'CIFailed'; readonly source: CiSource }
-  | { readonly type: 'PRClosed' }
+  | { readonly type: 'CIPassed'; readonly source: CiSource; readonly headSha?: string }
+  | { readonly type: 'CIFailed'; readonly source: CiSource; readonly headSha?: string }
+  /**
+   * PR 已合并 —— 这是完成（S-DONE）的唯一入口。
+   * `mergedAt` / `mergeSha` 来自 GitHub，响应缺失时 mergeSha 为 null，不本地编造。
+   */
+  | {
+      readonly type: 'PRMerged'
+      readonly source: CiSource
+      readonly mergedAt: string
+      readonly mergeSha: string | null
+    }
+  /** PR 未合并即关闭：交付物没有落地，任务放弃并留证 */
+  | {
+      readonly type: 'PRClosed'
+      readonly source: CiSource
+      readonly closedAt: string | null
+      readonly reason: 'pr_closed_unmerged'
+    }
   /**
    * 取消（T-040）。缺省来源是人工 / 外部命令。
    *

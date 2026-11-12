@@ -256,6 +256,16 @@ Fact Plane  ◀──[ Proposal ]──  Execution Plane      产出 → 校验�
 
 ---
 
+### Issue Writeback（Issue 回写）
+
+**定义**：Control Plane 将 legacy Task 的关键节点经持久投递记录回写到来源 GitHub Issue。
+仓库开关默认关闭；评论带版本化机器标记，失败不阻断业务状态机。
+
+**区分**：回写不等于自动合并或 managed archive；只有 `comment_and_close` 模式下的
+拒收允许关闭 Issue。澄清评论答复仍作为 Ingress Feedback，经既有转移进入 PM。
+
+**生命周期**：投递记录由 Control Plane 维护，外部评论是回执，不替代内部 Event。
+
 ## 6. 废弃与更名对照表
 
 初稿中出现、但本文档集**不再使用**的写法：

@@ -14,6 +14,7 @@ import { DEFAULT_RULESET } from '../control/policy/ruleset.js'
 import { asOwner, closePool } from '../fact/db.js'
 import { GitHubProvider } from '../fact/github-provider.js'
 import { ingestIssue } from './ingest-issue.js'
+import { loadIngestedGithubTasks, loadPrOpenGithubTasks } from './poller.js'
 import { registerRepoMain } from './register-repo.js'
 
 const NOW = '2026-08-27T12:00:00Z'
@@ -74,6 +75,32 @@ async function countRows(table: 'feedback' | 'task'): Promise<number> {
 }
 
 describe('ingest-issue 集成', () => {
+  it('澄清答复 Feedback 不替代 issue 关闭对账和 PR 观测的原始来源', async () => {
+    await registerRepoMain([REMOTE])
+    const result = await ingestIssue({ issueUrl: ISSUE_URL, github: github(), now: NOW })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    await asOwner(async (client) => {
+      const comment = await client.query<{ id: string }>(
+        `INSERT INTO feedback (id,source,external_ref,body,received_at)
+         VALUES (gen_random_uuid(),'github','acme/widget#42/comment/123','澄清答复','2026-01-01')
+         RETURNING id`,
+      )
+      await client.query('INSERT INTO task_feedback VALUES ($1,$2)', [
+        result.value.taskId,
+        comment.rows[0]?.id,
+      ])
+    })
+    expect((await loadIngestedGithubTasks()).map((task) => task.externalRef)).toEqual([
+      'acme/widget#42',
+    ])
+    await asOwner((client) =>
+      client.query(`UPDATE task SET status='S-PR_OPEN' WHERE id=$1`, [result.value.taskId]),
+    )
+    expect((await loadPrOpenGithubTasks()).map((task) => task.externalRef)).toEqual([
+      'acme/widget#42',
+    ])
+  })
   it('AC1: ingest 产生 github feedback + S-NEW task + T-001 SideEffectApplied', async () => {
     await registerRepoMain([REMOTE])
 

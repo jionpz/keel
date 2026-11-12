@@ -165,7 +165,8 @@ Actions-only 仓库的 `commits/{sha}/status` 恒为 `state=pending` + 空 `stat
 而 check-run 要过 3–10s 才出现在 `commits/{sha}/check-runs`。于是建 PR 后的头几秒，
 两个端点都读不到东西 —— 与「该仓库压根没配 CI」**数据上完全同形**。
 旧实现为了「没配 CI 的仓库不该永远卡死」把这一形态归成 passed，
-结果 PR 建好 3.4s 就流出 `T-024`，CI 还没 `started_at`，系统已宣布它通过。
+结果 PR 建好 3.4s 就流出 CI 通过事件（当时是 `T-024`，现在对应 `T-042`
+自环），CI 还没 `started_at`，系统已宣布它通过。
 
 纪律：
 

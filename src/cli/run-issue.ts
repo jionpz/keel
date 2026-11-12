@@ -17,7 +17,8 @@ import { requirePiBinary } from '../execution/adapters/pi.js'
 import { parseAllowlist, parseProfile, preflightModelRouting } from '../execution/model-routing.js'
 import { loadConfiguredToolPolicy, type ToolPolicyDocument } from '../execution/tool-policy.js'
 import type { TokenResolver } from '../fact/github-auth.js'
-import { type GitHubProvider, parseIssueUrl } from '../fact/github-provider.js'
+import { type GitHubProvider, ownerRepo, parseIssueUrl } from '../fact/github-provider.js'
+import { findLatestGithubTask } from '../ingress/redrive.js'
 import { parseArgs } from './argv.js'
 import { resolveHumanReviewTtlMs } from './human-review-ttl.js'
 import { ingestIssue } from './ingest-issue.js'
@@ -45,6 +46,8 @@ export interface RunIssueOptions {
   readonly repoId?: string
   readonly maxSteps?: number
   readonly ci?: CiMode
+  /** 只允许前序 Task 因 PR 未合并关闭时重驱动 */
+  readonly redrive?: boolean
   /** 透传 runTask;显式覆盖 stage 墙钟硬上限 */
   readonly wallClockS?: number
   /** 透传 runTask 的 `--model`；省略则按 harness 解析 */
@@ -70,6 +73,7 @@ export interface RunIssueResult extends RunTaskResult {
   readonly taskId: string
   readonly feedbackId: string
   readonly created: boolean
+  readonly redrive: boolean
 }
 
 export async function runIssue(opts: RunIssueOptions): Promise<Result<RunIssueResult>> {
@@ -136,26 +140,57 @@ export async function runIssue(opts: RunIssueOptions): Promise<Result<RunIssueRe
     opts.toolPolicy === undefined ? await loadConfiguredToolPolicy() : ok(opts.toolPolicy)
   if (!toolPolicy.ok) return toolPolicy
 
+  const drive = (taskId: string) =>
+    runTask(taskId, {
+      ...(opts.maxSteps === undefined ? {} : { maxSteps: opts.maxSteps }),
+      ...(opts.wallClockS === undefined ? {} : { wallClockS: opts.wallClockS }),
+      ...(opts.claudeAuthProbe === undefined ? {} : { claudeAuthProbe: opts.claudeAuthProbe }),
+      harness: harness.value,
+      ...(model.value === undefined ? {} : { model: model.value }),
+      humanReviewTtlMs: humanReviewTtl.value,
+      ...(opts.tokenResolver === undefined ? {} : { tokenResolver: opts.tokenResolver }),
+      toolPolicy: toolPolicy.value,
+      ci,
+    })
+
+  const slug = ownerRepo(target.value.remoteUrl)
+  if (!slug.ok) return slug
+  const externalRef = `${slug.value}#${target.value.number}`
+  const existing = await findLatestGithubTask(externalRef)
+
+  // S-PR_OPEN 已经是现有 Task 的收口阶段：issue 可能因 PR 合并而关闭，
+  // 不能重新走 ingest 的「issue 必须 open」闸门；直接继续观察 PR。
+  if (existing?.status === 'S-PR_OPEN' && opts.redrive !== true) {
+    const run = await drive(existing.taskId)
+    if (!run.ok) {
+      return err(
+        makeError(
+          run.error.kind,
+          `task ${existing.taskId}(已 ingest,feedback ${existing.feedbackId})驱动失败:${run.error.detail}`,
+          run.error,
+        ),
+      )
+    }
+    return ok({
+      ...run.value,
+      taskId: existing.taskId,
+      feedbackId: existing.feedbackId,
+      created: false,
+      redrive: false,
+    })
+  }
+
   const ingested = await ingestIssue({
     issueUrl: opts.issueUrl,
     ...(opts.label === undefined ? {} : { label: opts.label }),
     ...(opts.repoId === undefined ? {} : { repoId: opts.repoId }),
     ...(opts.github === undefined ? {} : { github: opts.github }),
     ...(opts.now === undefined ? {} : { now: opts.now }),
+    ...(opts.redrive === undefined ? {} : { redrive: opts.redrive }),
   })
   if (!ingested.ok) return ingested
 
-  const run = await runTask(ingested.value.taskId, {
-    ...(opts.maxSteps === undefined ? {} : { maxSteps: opts.maxSteps }),
-    ...(opts.wallClockS === undefined ? {} : { wallClockS: opts.wallClockS }),
-    ...(opts.claudeAuthProbe === undefined ? {} : { claudeAuthProbe: opts.claudeAuthProbe }),
-    harness: harness.value,
-    ...(model.value === undefined ? {} : { model: model.value }),
-    humanReviewTtlMs: humanReviewTtl.value,
-    ...(opts.tokenResolver === undefined ? {} : { tokenResolver: opts.tokenResolver }),
-    toolPolicy: toolPolicy.value,
-    ci,
-  })
+  const run = await drive(ingested.value.taskId)
   // 编排出错(克隆失败 / 超步数)时 ingest 已经落库了 —— 错误里必须带上 taskId,
   // 否则库里多了一个 task 而命令输出从未提过它,重跑还是要人去猜是哪个。
   // kind 与 cause 原样保留:retryable 由 kind 推导,不在这里另立判断。
@@ -174,6 +209,7 @@ export async function runIssue(opts: RunIssueOptions): Promise<Result<RunIssueRe
     taskId: ingested.value.taskId,
     feedbackId: ingested.value.feedbackId,
     created: ingested.value.created,
+    redrive: ingested.value.redrive,
   })
 }
 
@@ -188,7 +224,7 @@ export async function runIssueMain(
 ): Promise<void> {
   const { positionals, flags } = parseArgs(argv)
   if (flags.help === true || positionals.length === 0) {
-    console.log(`用法: keel run-issue <issueUrl> [--label <name>] [--repo <uuid>]
+    console.log(`用法: keel run-issue <issueUrl> [--label <name>] [--repo <uuid>] [--redrive]
                           [--max-steps N] [--ci passed|failed|real] [--model <id>] [--harness omp|claude|pi]
                           [--wall-clock <秒>]
 
@@ -196,6 +232,7 @@ ingest 一个 GitHub Issue 并把产生的 task 驱动到终态。
 需要 GitHub 凭据（KEEL_GITHUB_TOKEN / GITHUB_TOKEN / gh auth login）。
 --ci 缺省 passed(模拟 CI);--ci real 接真实 GitHub PR / CI,凭据来源同上。
 --harness 缺省 omp，也可设 KEEL_HARNESS；非法值拒绝（不静默回退）。
+--redrive 仅用于上一轮 PR 未合并关闭后，为同一 issue 开新 Task；其它终态拒绝。
 --model 对 omp 缺省 ${DEFAULT_OMP_MODEL}，也可设 KEEL_MODEL；空白值拒绝（不静默回退）。
 claude / pi 未指定 --model / KEEL_MODEL 时不传 --model。
 KEEL_MODEL_PROFILE 可选 default|enterprise（缺省 default）：enterprise 按阶段使用企业网关目录；
@@ -211,6 +248,7 @@ KEEL_HUMAN_REVIEW_TTL_H 控制 S-HUMAN_REVIEW 的超时自动弃单（小时，�
   const issueUrl = positionals[0] as string
   const label = typeof flags.label === 'string' ? flags.label : undefined
   const repoId = typeof flags.repo === 'string' ? flags.repo : undefined
+  const redrive = flags.redrive === true
   const maxSteps =
     typeof flags['max-steps'] === 'number'
       ? flags['max-steps']
@@ -251,6 +289,7 @@ KEEL_HUMAN_REVIEW_TTL_H 控制 S-HUMAN_REVIEW 的超时自动弃单（小时，�
     ...(maxSteps === undefined ? {} : { maxSteps }),
     ci: ci.value,
     harness: harness.value,
+    redrive,
     ...(model.value === undefined ? {} : { model: model.value }),
     ...(wallClock.value === undefined ? {} : { wallClockS: wallClock.value }),
   })

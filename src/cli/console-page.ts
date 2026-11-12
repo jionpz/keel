@@ -1603,12 +1603,14 @@ export const CONSOLE_HTML = `<!doctype html>
     padding-bottom: 0;
     border-bottom: 0;
   }
-  .cockpit-meta code { font-size: 11px; }
+  .cockpit-meta code { font-size: 11px; overflow-wrap: anywhere; min-width: 0; }
   .cockpit-meta-item {
     display: inline-flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 4px;
-    white-space: nowrap;
+    min-width: 0;
+    max-width: 100%;
   }
   .pr-link-pill {
     display: inline;
@@ -4565,7 +4567,9 @@ export const CONSOLE_HTML = `<!doctype html>
 
   function renderClarificationBlock(d) {
     var t = d.task || {};
-    var questions = collectOpenQuestions(d);
+    var pm = latestArtifactOfKind(d, 'stage_outcome', 'pm');
+    var questions = pm && pm.body && Array.isArray(pm.body.questions)
+      ? pm.body.questions : collectOpenQuestions(d);
     var feedbacks = d.feedbacks || [];
     var origin = feedbacks.length > 0 && feedbacks[0].body ? String(feedbacks[0].body) : '';
 

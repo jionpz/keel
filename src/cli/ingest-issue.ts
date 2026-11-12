@@ -10,6 +10,7 @@ import { DEFAULT_RULESET } from '../control/policy/ruleset.js'
 import { asRole } from '../fact/db.js'
 import { GitHubProvider, ownerRepo, parseIssueUrl } from '../fact/github-provider.js'
 import { normalizeRemoteUrl } from '../fact/remote-url.js'
+import { ensureRedriveFeedback, findRedriveCandidate } from '../ingress/redrive.js'
 import { parseArgs } from './argv.js'
 
 export interface IngestIssueOptions {
@@ -18,12 +19,15 @@ export interface IngestIssueOptions {
   readonly repoId?: string
   readonly github?: GitHubProvider
   readonly now?: string
+  /** true = 只有前序 Task 因 PR 未合并关闭时才允许重驱动 */
+  readonly redrive?: boolean
 }
 
 export interface IngestIssueResult {
   readonly feedbackId: string
   readonly taskId: string
   readonly created: boolean
+  readonly redrive: boolean
 }
 
 /**
@@ -93,6 +97,22 @@ export async function ingestIssue(opts: IngestIssueOptions): Promise<Result<Inge
   })
 
   const driver = new WorkflowDriver(new RuleBasedPolicyEngine(DEFAULT_RULESET))
+
+  const redriveCandidate =
+    opts.redrive === true ? await findRedriveCandidate(externalRef) : undefined
+  if (opts.redrive === true && redriveCandidate === undefined) {
+    return err(
+      makeError(
+        'PERMISSION_DENIED',
+        `Issue #${number} 没有可重驱动的前序 Task：只有 PR 未合并关闭（pr_closed_unmerged）才允许 --redrive`,
+      ),
+    )
+  }
+
+  const redriveFeedback =
+    redriveCandidate === undefined ? undefined : await ensureRedriveFeedback(redriveCandidate, now)
+  if (redriveFeedback !== undefined && !redriveFeedback.ok) return redriveFeedback
+
   const intake = await driver.intake(
     {
       feedbackId,
@@ -101,6 +121,16 @@ export async function ingestIssue(opts: IngestIssueOptions): Promise<Result<Inge
       baseBranch: repoRow.default_branch,
     },
     now,
+    redriveCandidate === undefined || redriveFeedback === undefined
+      ? {}
+      : {
+          redrive: {
+            previousTaskId: redriveCandidate.previousTaskId,
+            redriveFeedbackId: redriveFeedback.value.feedbackId,
+            prUrl: redriveCandidate.prUrl,
+            closedAt: redriveCandidate.closedAt,
+          },
+        },
   )
   if (!intake.ok) return intake
 
@@ -108,6 +138,7 @@ export async function ingestIssue(opts: IngestIssueOptions): Promise<Result<Inge
     feedbackId,
     taskId: intake.value.taskId,
     created: intake.value.created,
+    redrive: redriveCandidate !== undefined,
   })
 }
 

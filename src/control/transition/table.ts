@@ -345,13 +345,13 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
   {
     id: 'T-024',
     from: 'S-PR_OPEN',
-    on: ['CIPassed'],
+    on: ['PRMerged'],
     guard: null,
     guardText: '—',
     to: 'S-DONE',
-    // CI 通过即交付：先按配置尝试 merge（当前只记意图），再清理工作树。
-    // 分支与提交历史保留 —— PR 仍然可以被审阅、被重新打开。
-    effects: [{ kind: 'MaybeAutoMerge' }, { kind: 'CleanWorkspace' }],
+    // CI 绿只代表可合并；PR 真正 merged 才是交付完成。
+    // 分支与提交历史保留 —— 合并记录本身仍在远端。
+    effects: [{ kind: 'CleanWorkspace' }],
     ignoresControlMode: false,
   },
   {
@@ -385,6 +385,18 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
     guardText: '—',
     to: 'S-ABANDONED',
     effects: [{ kind: 'CleanWorkspace' }],
+    ignoresControlMode: false,
+  },
+  {
+    id: 'T-042',
+    from: 'S-PR_OPEN',
+    on: ['CIPassed'],
+    guard: null,
+    guardText: '—',
+    to: 'SELF',
+    // 只记录「CI 已通过」事实，继续留在 S-PR_OPEN 等 PR 合并/关闭。
+    // 不触发 MaybeAutoMerge：自动合并不在 #132 范围。
+    effects: [],
     ignoresControlMode: false,
   },
 

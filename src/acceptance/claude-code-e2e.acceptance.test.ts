@@ -1,5 +1,5 @@
 /**
- * Claude Code harness：Issue → S-DONE 真实验收（opt-in，不进默认 check）。
+ * Claude Code harness：Issue → PR 待合并真实验收（opt-in，不进默认 check）。
  *
  * 对标 `issue-e2e.acceptance.test.ts`，差别只有执行层是 `ClaudeCodeAdapter`。
  * Control / Fact 契约不变 —— 这是 ADR-0005「Harness 可替换」的验收。
@@ -68,8 +68,8 @@ beforeEach(async () => {
 
 afterAll(closePool)
 
-describe('Claude Code · Issue → S-DONE 全真实闭环', () => {
-  it('runIssue harness=claude --ci real 从真实 Issue 走到 S-DONE', {
+describe('Claude Code · Issue → PR 待合并真实验收', () => {
+  it('runIssue harness=claude --ci real 从真实 Issue 走到 PR 待合并', {
     timeout: 1_800_000,
   }, async () => {
     if (remote === undefined) throw new Error('缺少 KEEL_TEST_REMOTE_REPO')
@@ -149,12 +149,13 @@ describe('Claude Code · Issue → S-DONE 全真实闭环', () => {
         return
       }
 
-      expect(result.value.finalStatus).toBe('S-DONE')
-      expect(prUrl, 'S-DONE 必须有真实 PR URL').not.toBeNull()
+      expect(result.value.finalStatus).toBe('S-PR_OPEN')
+      expect(result.value.stopReason).toBe('awaiting-pr-merge')
+      expect(prUrl, '待合并必须有真实 PR URL').not.toBeNull()
       expect(prUrl ?? '').toMatch(/^https:\/\/github\.com\/.+\/pull\/\d+$/)
       if (prUrl === null) return
 
-      expect(transitions.at(-1), '最后一条转移应是 T-024(CI 通过 → S-DONE)').toBe('T-024')
+      expect(transitions.at(-1), '最后一条转移应是 T-042(CI 通过，等待合并)').toBe('T-042')
       verifyCiOnPr(slug.value, prUrl)
 
       const prEvent = evs.value.find(

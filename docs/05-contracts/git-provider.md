@@ -35,6 +35,27 @@ interface PullRequestInfo {
 interface PullRequestGateway {
   createPullRequest(input: PullRequestInput): Promise<Result<PullRequestInfo>>
 }
+
+interface PullRequestStateInput {
+  repoId: string
+  remoteUrl: string
+  number: number
+}
+
+interface PullRequestState {
+  number: number
+  url: string
+  state: 'open' | 'closed'
+  merged: boolean
+  mergedAt: string | null
+  mergeSha: string | null
+  closedAt: string | null
+  headSha: string | null
+}
+
+interface PullRequestStateGateway {
+  getPullRequest(input: PullRequestStateInput): Promise<Result<PullRequestState>>
+}
 ```
 
 ## 2. 语义
@@ -71,7 +92,19 @@ interface PullRequestGateway {
 
 ---
 
-## 4. 凭据纪律
+## 4. PR 合并 / 关闭观察
+
+`S-PR_OPEN` 的 CI 通过只说明代码可交付；对用户而言完成是 **PR 已合并**。
+控制平面用 `PullRequestStateGateway` 读取 PR 当前状态：
+
+- `state=closed ∧ merged=true` → `PRMerged`（T-024）→ `S-DONE`；
+- `state=closed ∧ merged=false` → `PRClosed`（T-027）→ `S-ABANDONED`；
+- `state=open` → 继续等待，下一轮 poll 再观察。
+
+`mergedAt` / `mergeSha` / `closedAt` 原样返回；GitHub 响应缺失时给 `null`，
+控制平面不得在本地编造合并时间或 SHA。
+
+## 5. 凭据纪律
 
 - token 只从进程环境 `KEEL_GITHUB_TOKEN` / `GITHUB_TOKEN` 读（`readTokenFromEnv`）;
 - 不进 URL、不进 argv、不进事件 payload、不进错误信息;
@@ -80,7 +113,7 @@ interface PullRequestGateway {
 
 ---
 
-## 5. 边界
+## 6. 边界
 
 - **只做远端写操作**（创建 PR）。克隆 / worktree / commit / push 属 GitWorkspace
   （`src/fact/git-workspace.ts`），不在本契约内。

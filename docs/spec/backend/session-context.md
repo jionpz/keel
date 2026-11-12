@@ -103,6 +103,27 @@ function renderPrompt(spec: RunSpec): string {
 
 ---
 
+## PM 的 `repo_signals`（issue #133）
+
+PM 判断「是否重复 / 是否已修复」不能只看 issue 正文。`FactPlaneContextBuilder`
+在 `stage=pm` 时额外装填 `repo_signals`（只读、`retrieval`、优先级 `high`）：
+
+- 默认分支最近 `KEEL_REPO_SIGNALS_DAYS`（缺省 14）天的提交，按标题/正文关键词过滤；
+- 同仓相关 issue / PR（GitHub search，标题关键词，含已关闭与已合并）；
+- 明确引用本 issue 号的最近提交，以及搜索到的引用 PR；
+- 最多 30 条提交、10 条 issue、10 条 PR。
+
+### 失败与预算
+
+- 取材失败（403 / 超时 / 无凭据）**不阻塞 PM**：section 缺席，
+  `ContextBuilt.payload.diagnostics` 记 `status=degraded` 与错误 kind。
+- `KEEL_REPO_SIGNALS_MAX_TOKENS`（缺省 1200）限制该 section 自身；
+  超限时按行截断，事件记 `status=truncated`、`tokens_before` 与 `max_tokens`。
+- 证据不足时 PM 必须判 `actionable` / `unclear`，不得仅凭标题相似拒收。
+  `already_fixed` / `duplicate` 的证据要求由 `stage-outcome` schema 1.1 约束。
+
+---
+
 ## 为什么强暗示的提示词掩盖了这个缺陷
 
 阶段提示词里带着强暗示（如 PM 的「这是一个明确、范围很小的需求」），

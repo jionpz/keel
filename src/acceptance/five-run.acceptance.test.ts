@@ -106,7 +106,7 @@ beforeAll(async () => {
 afterAll(closePool)
 
 describe('五连稳定性战役(5× run-issue --ci real)', () => {
-  it('连续 5 次低风险 Issue 均到 S-DONE 且真实 CI 通过', { timeout: 9_000_000 }, async () => {
+  it('连续 5 次低风险 Issue 均到 PR 待合并且真实 CI 通过', { timeout: 9_000_000 }, async () => {
     if (remote === undefined) throw new Error('缺少 KEEL_TEST_REMOTE_REPO')
     const slug = ownerRepo(remote)
     expect(slug.ok, slug.ok ? '' : slug.error.detail).toBe(true)
@@ -173,14 +173,15 @@ describe('五连稳定性战役(5× run-issue --ci real)', () => {
 
         if (finalStatus === 'S-HUMAN_REVIEW') {
           failureClass = 'policy'
-          throw new Error(`run ${run}: Policy 人工闸门 —— 五连要求 S-DONE`)
+          throw new Error(`run ${run}: Policy 人工闸门 —— 五连要求 PR 待合并`)
         }
 
-        expect(finalStatus, `run ${run} 应 S-DONE`).toBe('S-DONE')
+        expect(finalStatus, `run ${run} 应等待合并`).toBe('S-PR_OPEN')
+        expect(result.value.stopReason).toBe('awaiting-pr-merge')
         expect(prUrl, `run ${run} 应有 PR`).not.toBeNull()
         if (prUrl === null) return
 
-        expect(transitions.at(-1)).toBe('T-024')
+        expect(transitions.at(-1)).toBe('T-042')
         verifyCiOnPr(slug.value, prUrl)
         ciVerified = true
       } finally {
@@ -212,7 +213,7 @@ describe('五连稳定性战役(5× run-issue --ci real)', () => {
     }
 
     expect(records.length, '应记录 5 行 JSONL').toBe(5)
-    expect(records.every((r) => r.final_status === 'S-DONE')).toBe(true)
+    expect(records.every((r) => r.final_status === 'S-PR_OPEN')).toBe(true)
     expect(records.every((r) => r.ci_verified)).toBe(true)
 
     console.log('\n五连汇总:')

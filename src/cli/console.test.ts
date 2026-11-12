@@ -191,6 +191,7 @@ interface ConsoleStateSeam {
 }
 
 interface ConsoleSeam {
+  renderClarificationBlock(detail: Row): string
   renderTaskControl(task: Row): string
   renderDecisionFacts(detail: Row): string
   renderDecisionOptions(detail: Row): string
@@ -258,6 +259,7 @@ function loadConsoleSeam(fetchImpl: SeamFetch = () => new Promise<never>(() => {
     /\}\)\(\);\s*$/,
     `
   globalThis.__keelSeam = {
+    renderClarificationBlock: renderClarificationBlock,
     renderDecisionFacts: renderDecisionFacts,
     renderTaskControl: renderTaskControl,
     renderDecisionOptions: renderDecisionOptions,
@@ -327,6 +329,26 @@ function expectNoNesting(html: string, parent: string, children: readonly string
     stack.push(name)
   }
 }
+
+describe('结构化澄清问题', () => {
+  it('优先显示当前 PM 的具体问题并转义正文', () => {
+    const { seam } = loadConsoleSeam()
+    const html = seam.renderClarificationBlock({
+      task: { status: 'S-NEED_CLARIFICATION' },
+      artifacts: [
+        {
+          id: 'pm-outcome',
+          kind: 'stage_outcome',
+          key: 'pm',
+          version: 1,
+          body: { stage: 'pm', questions: ['预期 <b>哪些值</b>？'] },
+        },
+      ],
+    })
+    expect(html).toContain('预期 &lt;b&gt;哪些值&lt;/b&gt;？')
+    expect(html).not.toContain('<b>哪些值</b>')
+  })
+})
 
 describe('运行活跃度', () => {
   const now = Date.parse('2026-11-12T08:00:00Z')

@@ -110,3 +110,9 @@ pnpm run test:acceptance
 
 每次验收通过后，把结果记入对应任务的 `prd.md`：日期、走过的路径、耗时。
 否则「上次验收是什么时候、结果如何」会无人知晓。
+
+## PR 完成语义（#132）
+
+真实 GitHub 用例在 CI 通过后停于 `S-PR_OPEN` / `awaiting-pr-merge`，
+不会为了测试自动合并 PR。维护者在外部合并后再次驱动，才以 `PRMerged` 进入 `S-DONE`。
+本地模拟链路的合并事件明确标记 `source=simulated`，不作为真实交付或试运行样本。

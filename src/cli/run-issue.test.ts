@@ -35,8 +35,10 @@ const savedAuthToken = process.env.ANTHROPIC_AUTH_TOKEN
 
 let server: Server
 let baseUrl: string
+let requestCount = 0
 
 beforeEach(async () => {
+  requestCount = 0
   for (const k of ENV_KEYS) delete process.env[k]
   delete process.env.KEEL_MODEL
   delete process.env.KEEL_HARNESS
@@ -53,6 +55,7 @@ beforeEach(async () => {
 
   // 一个**本应能通过闸门**的 Issue:这样「零写入」只可能来自凭据闸门
   server = createServer((_req, res) => {
+    requestCount += 1
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(
       JSON.stringify({
@@ -217,6 +220,48 @@ describe('run-issue 组合命令', () => {
     expect(await countRows('task')).toBe(0)
   })
 
+  it('最新 Task 已 S-PR_OPEN → 跳过 issue 关闭/label 闸门，直接续驱', async () => {
+    const repoId = randomUUID()
+    const taskId = randomUUID()
+    const feedbackId = randomUUID()
+    await asOwner(async (c) => {
+      await c.query(
+        `INSERT INTO repo (id, provider, remote_url, default_branch)
+         VALUES ($1, 'github', $2, 'main')`,
+        [repoId, `file:///nonexistent/keel-${repoId}.git`],
+      )
+      await c.query(
+        `INSERT INTO feedback (id, source, external_ref, body)
+         VALUES ($1, 'github', 'acme/widget#42', 'Fix the bug')`,
+        [feedbackId],
+      )
+      await c.query(
+        `INSERT INTO task (id, status, title, repo_id, base_branch, work_branch)
+         VALUES ($1, 'S-PR_OPEN', 'Fix the bug', $2, 'main', 'ai/task-test')`,
+        [taskId, repoId],
+      )
+      await c.query(`INSERT INTO task_feedback (task_id, feedback_id) VALUES ($1, $2)`, [
+        taskId,
+        feedbackId,
+      ])
+    })
+
+    const r = await runIssue({
+      issueUrl: ISSUE_URL,
+      ci: 'passed',
+      repoId,
+      github: github(),
+      now: NOW,
+    })
+
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('WORKSPACE_ERROR')
+    expect(r.error.detail).toContain(taskId)
+    expect(requestCount, 'S-PR_OPEN 续驱不应重新读取或校验 issue').toBe(0)
+    expect(await countRows('task')).toBe(1)
+  })
+
   /**
    * ingest 成功、驱动失败:task 已经在库里了 —— 错误信息必须点出是哪个 task,
    * 否则库里多一个 task 而命令输出从未提过它。
@@ -354,6 +399,7 @@ describe('runIssueMain · --wall-clock 闸门', () => {
         taskId: 't',
         feedbackId: 'f',
         created: false,
+        redrive: false,
         finalStatus: 'S-DONE',
         steps: [],
         stopReason: 'terminal',

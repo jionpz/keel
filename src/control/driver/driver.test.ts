@@ -230,6 +230,190 @@ describe('intake · T-001 真实化', () => {
     const tasks = await asOwner((c) => c.query<{ n: string }>('SELECT count(*) AS n FROM task'))
     expect(Number(tasks.rows[0]?.n)).toBe(1)
   })
+
+  async function seedRedriveSource(
+    status = 'S-ABANDONED',
+    reason = 'pr_closed_unmerged',
+  ): Promise<{
+    readonly repoId: string
+    readonly feedbackId: string
+    readonly previousTaskId: string
+    readonly redriveFeedbackId: string
+  }> {
+    const repoId = randomUUID()
+    const feedbackId = randomUUID()
+    const previousTaskId = randomUUID()
+    const redriveFeedbackId = randomUUID()
+    await asOwner(async (c) => {
+      await c.query(
+        `INSERT INTO repo (id, provider, remote_url, default_branch)
+         VALUES ($1, 'github', 'https://github.com/acme/widget.git', 'main')`,
+        [repoId],
+      )
+      await c.query(
+        `INSERT INTO feedback (id, source, external_ref, body)
+         VALUES ($1, 'github', 'acme/widget#42', 'Fix the bug')`,
+        [feedbackId],
+      )
+      await c.query(
+        `INSERT INTO feedback (id, source, external_ref, body)
+         VALUES ($1, 'manual', $2, '上一轮 PR 未合并关闭')`,
+        [redriveFeedbackId, `redrive:${previousTaskId}`],
+      )
+      await c.query(
+        `INSERT INTO task (id, status, title, repo_id, base_branch, work_branch)
+         VALUES ($1, $2, 'Fix the bug', $3, 'main', $4)`,
+        [previousTaskId, status, repoId, branchFor(previousTaskId)],
+      )
+      await c.query(`INSERT INTO task_feedback (task_id, feedback_id) VALUES ($1, $2)`, [
+        previousTaskId,
+        feedbackId,
+      ])
+      await c.query(
+        `INSERT INTO event (task_id, type, payload)
+         VALUES ($1, 'TaskStatusChanged', $2::jsonb)`,
+        [
+          previousTaskId,
+          JSON.stringify({
+            from: 'S-PR_OPEN',
+            to: status,
+            transition: 'T-027',
+            event: 'PRClosed',
+            reason,
+          }),
+        ],
+      )
+      await c.query(
+        `INSERT INTO event (task_id, type, payload)
+         VALUES ($1, 'SideEffectApplied', $2::jsonb)`,
+        [
+          previousTaskId,
+          JSON.stringify({
+            kind: 'CreatePullRequest',
+            pr_number: 11,
+            pr_url: 'https://github.com/acme/widget/pull/11',
+          }),
+        ],
+      )
+    })
+    return { repoId, feedbackId, previousTaskId, redriveFeedbackId }
+  }
+
+  it('redrive 新建 Task：复用原 GitHub Feedback，并链接不可变说明 Feedback', async () => {
+    const seeded = await seedRedriveSource()
+    const redrive = {
+      previousTaskId: seeded.previousTaskId,
+      redriveFeedbackId: seeded.redriveFeedbackId,
+      prUrl: 'https://github.com/acme/widget/pull/11',
+      closedAt: NOW,
+    }
+
+    const first = await driver.intake(
+      {
+        feedbackId: seeded.feedbackId,
+        title: 'Fix the bug',
+        repoId: seeded.repoId,
+        baseBranch: 'main',
+      },
+      NOW,
+      { redrive },
+    )
+    expect(first.ok).toBe(true)
+    if (!first.ok) return
+    expect(first.value.created).toBe(true)
+    expect(first.value.taskId).not.toBe(seeded.previousTaskId)
+
+    const links = await asOwner((c) =>
+      c.query<{ feedback_id: string }>(
+        'SELECT feedback_id FROM task_feedback WHERE task_id=$1 ORDER BY feedback_id',
+        [first.value.taskId],
+      ),
+    )
+    expect(links.rows.map((r) => r.feedback_id).sort()).toEqual(
+      [seeded.feedbackId, seeded.redriveFeedbackId].sort(),
+    )
+
+    const events = await store.readEvents(first.value.taskId, 0, 50)
+    expect(events.ok).toBe(true)
+    if (!events.ok) return
+    expect(events.value).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'SideEffectApplied',
+          payload: expect.objectContaining({
+            kind: 'Redrive',
+            previous_task_id: seeded.previousTaskId,
+            pr_url: 'https://github.com/acme/widget/pull/11',
+            reason: 'pr_closed_unmerged',
+          }),
+        }),
+        expect.objectContaining({
+          type: 'TaskStatusChanged',
+          payload: expect.objectContaining({
+            transition: 'T-001',
+            redrive_of: seeded.previousTaskId,
+          }),
+        }),
+      ]),
+    )
+
+    const second = await driver.intake(
+      {
+        feedbackId: seeded.feedbackId,
+        title: 'Fix the bug',
+        repoId: seeded.repoId,
+        baseBranch: 'main',
+      },
+      NOW,
+      { redrive },
+    )
+    expect(second.ok).toBe(true)
+    if (!second.ok) return
+    expect(second.value.created).toBe(false)
+    expect(second.value.taskId).toBe(first.value.taskId)
+
+    const tasks = await asOwner((c) => c.query<{ n: string }>('SELECT count(*) AS n FROM task'))
+    expect(Number(tasks.rows[0]?.n)).toBe(2)
+
+    // 原 GitHub Feedback 现在关联两轮 Task；普通 intake 应返回最新那轮。
+    const latest = await driver.intake(
+      {
+        feedbackId: seeded.feedbackId,
+        title: 'Fix the bug',
+        repoId: seeded.repoId,
+        baseBranch: 'main',
+      },
+      NOW,
+    )
+    expect(latest.ok).toBe(true)
+    if (!latest.ok) return
+    expect(latest.value.taskId).toBe(first.value.taskId)
+  })
+
+  it('redrive 只接受因 PR 未合并关闭而 S-ABANDONED 的前序 Task', async () => {
+    const seeded = await seedRedriveSource('S-DONE', 'pr_closed_unmerged')
+    const r = await driver.intake(
+      {
+        feedbackId: seeded.feedbackId,
+        title: 'Fix the bug',
+        repoId: seeded.repoId,
+        baseBranch: 'main',
+      },
+      NOW,
+      {
+        redrive: {
+          previousTaskId: seeded.previousTaskId,
+          redriveFeedbackId: seeded.redriveFeedbackId,
+          prUrl: 'https://github.com/acme/widget/pull/11',
+          closedAt: NOW,
+        },
+      },
+    )
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error.kind).toBe('CONFLICT')
+    expect(r.error.detail).toContain('只有 S-ABANDONED 可重驱动')
+  })
 })
 
 // ────────────────────────── 里程碑：走通闭环 ──────────────────────────
@@ -275,7 +459,16 @@ describe('里程碑：S-NEW → S-DONE', () => {
     await stageOutcome(taskId, 'review', 'pass')
     await step({ type: 'RunSucceeded', stage: 'review' }, 'S-PR_OPEN')
 
-    await step({ type: 'CIPassed', source: 'simulated' }, 'S-DONE')
+    await step({ type: 'CIPassed', source: 'simulated' }, 'S-PR_OPEN')
+    await step(
+      {
+        type: 'PRMerged',
+        source: 'simulated',
+        mergedAt: '2026-08-24T00:00:00Z',
+        mergeSha: 'a'.repeat(40),
+      },
+      'S-DONE',
+    )
 
     // 1. 终态与 terminal_at
     expect(await statusOf(taskId)).toBe('S-DONE')
@@ -294,6 +487,7 @@ describe('里程碑：S-NEW → S-DONE', () => {
       'T-017',
       'T-018',
       'T-021',
+      'T-042',
       'T-024',
     ])
 
@@ -322,7 +516,7 @@ describe('里程碑：S-NEW → S-DONE', () => {
     // 非 CI 事件不多出 source 键
     expect(
       ciPayloads
-        .filter((p) => p.event !== 'CIPassed' && p.event !== 'CIFailed')
+        .filter((p) => !['CIPassed', 'CIFailed', 'PRMerged', 'PRClosed'].includes(p.event))
         .every((p) => !('source' in p)),
     ).toBe(true)
 

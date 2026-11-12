@@ -360,6 +360,7 @@ export const SCHEMAS = {
           "NoTransition",
           "SideEffectApplied",
           "SideEffectIntent",
+          "SideEffectFailed",
           "ContextBuilt"
         ]
       },
@@ -659,6 +660,177 @@ export const SCHEMAS = {
                 "type": "boolean",
                 "description": "区分 T-003（走 brainstorm）与 T-004（直接起草 RFC）"
               }
+            }
+          }
+        }
+      },
+      {
+        "title": "PmActionableOutcome",
+        "type": "object",
+        "required": [
+          "schema_version",
+          "run_id",
+          "stage",
+          "verdict",
+          "reason"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "schema_version": {
+            "const": "1.1"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "stage": {
+            "const": "pm"
+          },
+          "verdict": {
+            "const": "actionable"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "needs_design": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      },
+      {
+        "title": "PmClarificationOutcome",
+        "type": "object",
+        "required": [
+          "schema_version",
+          "run_id",
+          "stage",
+          "verdict",
+          "reason",
+          "questions"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "schema_version": {
+            "const": "1.1"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "stage": {
+            "const": "pm"
+          },
+          "verdict": {
+            "const": "unclear"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "questions": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 5,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            }
+          }
+        }
+      },
+      {
+        "title": "PmEvidenceRejectionOutcome",
+        "type": "object",
+        "required": [
+          "schema_version",
+          "run_id",
+          "stage",
+          "verdict",
+          "reason",
+          "reject_kind",
+          "evidence"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "schema_version": {
+            "const": "1.1"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "stage": {
+            "const": "pm"
+          },
+          "verdict": {
+            "const": "reject"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "reject_kind": {
+            "enum": [
+              "duplicate",
+              "already_fixed"
+            ]
+          },
+          "evidence": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            }
+          }
+        }
+      },
+      {
+        "title": "PmRejectionOutcome",
+        "type": "object",
+        "required": [
+          "schema_version",
+          "run_id",
+          "stage",
+          "verdict",
+          "reason",
+          "reject_kind",
+          "evidence"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "schema_version": {
+            "const": "1.1"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "stage": {
+            "const": "pm"
+          },
+          "verdict": {
+            "const": "reject"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "reject_kind": {
+            "enum": [
+              "not_actionable",
+              "out_of_scope"
+            ]
+          },
+          "evidence": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
             }
           }
         }

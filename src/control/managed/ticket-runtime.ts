@@ -26,6 +26,7 @@ import type {
 } from '../../generated/managed.js'
 import { MANAGED_SCHEMAS } from '../../generated/managed.js'
 import { canonicalJson, sha256CanonicalJson, sha256Text } from '../../shared/canonical-json.js'
+import { prBodyWithIssueReferences } from '../pr-body.js'
 import { enqueueActionIntent, getRepoBinding } from './action-store.js'
 import {
   escalateDecisionRequest,
@@ -156,11 +157,14 @@ function roleInstruction(stage: ManagedTicketStageName): string {
 }
 
 function ticketPrBody(input: {
+  readonly taskId: string
   readonly ticketId: string
   readonly baselineCommit: string
   readonly headCommit: string
   readonly diffDigest: string
   readonly modelBody: string
+  readonly remoteUrl: string
+  readonly externalIssue: string | null
 }): string {
   const model = input.modelBody.slice(0, 12000)
   const evidence = [
@@ -171,7 +175,12 @@ function ticketPrBody(input: {
     `Head: ${input.headCommit}`,
     `Diff: ${input.diffDigest}`,
   ].join('\n')
-  return `${model}${evidence}`.slice(0, 16000)
+  return prBodyWithIssueReferences({
+    body: `${model}${evidence}`.slice(0, 16000),
+    taskId: input.taskId,
+    remoteUrl: input.remoteUrl,
+    externalRefs: input.externalIssue === null ? [] : [input.externalIssue],
+  })
 }
 
 function openFindings(result: unknown): readonly string[] {
@@ -522,14 +531,17 @@ interface WorkflowNodeReference {
   readonly ticket_id: string
   readonly scope_paths: readonly string[]
   readonly acceptance: readonly string[]
+  readonly external_issue: string | null
 }
 
 async function workflowNodeForTicket(taskId: string): Promise<WorkflowNodeReference | null> {
   const row = await asRole('keel_control', (c) =>
     c.query<WorkflowNodeReference>(
-      `SELECT id,workflow_id,graph_version,ticket_id,scope_paths,acceptance
-       FROM managed_workflow_node
-       WHERE ticket_task_id=$1 LIMIT 1`,
+      `SELECT n.id,n.workflow_id,n.graph_version,n.ticket_id,n.scope_paths,n.acceptance,
+         COALESCE(w.external_issue,n.external_issue) AS external_issue
+       FROM managed_workflow_node n
+       JOIN managed_workflow w ON w.id=n.workflow_id
+       WHERE n.ticket_task_id=$1 LIMIT 1`,
       [taskId],
     ),
   )
@@ -1276,11 +1288,14 @@ export async function tickManagedTicket(
             ],
             pr_title: result.land.action_intent.pr_title,
             pr_body: ticketPrBody({
+              taskId: claim.task.id,
               ticketId: claim.task.ticket_id,
               baselineCommit: claim.task.baseline_commit,
               headCommit: after.value.head,
               diffDigest: changedDiff.value,
               modelBody: result.land.action_intent.pr_body,
+              remoteUrl: repoBinding.remote_url,
+              externalIssue: workflowNode?.external_issue ?? null,
             }),
             ...(decision === undefined ? {} : { decision }),
             created_at: new Date().toISOString(),

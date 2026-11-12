@@ -54,13 +54,13 @@
 | `S-NEED_CLARIFICATION` | 等用户澄清 |
 | `S-RFC_READY` | RFC 已冻结，等 Policy 裁决 |
 | `S-HUMAN_REVIEW` | 等人工裁决 |
-| `S-PR_OPEN` | PR 已开，等 CI / 等合并 |
+| `S-PR_OPEN` | PR 已开，等 CI / 等合并；CI 绿仍停在这里 |
 
 **终态**：
 
 | ID | 含义 |
 |---|---|
-| `S-DONE` | 完成 |
+| `S-DONE` | 完成 —— PR 已合并 |
 | `S-REJECTED` | 判定不做（PM 判定或人工否决） |
 | `S-ABANDONED` | 放弃（超时未澄清 / 人工取消 / PR 被关） |
 | `S-FAILED` | 不可恢复失败 |
@@ -107,10 +107,11 @@
 | `T-021` | `S-REVIEW` | `RunSucceeded` | `review_verdict=pass` | `S-PR_OPEN` | **创建 PR（幂等）** |
 | `T-022` | `S-REVIEW` | `RunSucceeded` | `review_verdict=fail ∧ dev_attempts < max` | `S-DEVELOPING` | 创建 `run(develop, n+1)`，附评审意见 |
 | `T-023` | `S-REVIEW` | `RunSucceeded` | `review_verdict=fail ∧ dev_attempts ≥ max` | `S-HUMAN_REVIEW` | 通知人工；启动 `human_review_ttl` 定时器 |
-| `T-024` | `S-PR_OPEN` | `CIPassed` | — | `S-DONE` ★ | 按配置可自动 merge；清理工作区（分支保留） |
+| `T-024` | `S-PR_OPEN` | `PRMerged` | — | `S-DONE` ★ | 记录 `merged_at` / merge SHA；清理工作区（分支保留） |
 | `T-025` | `S-PR_OPEN` | `CIFailed` | `dev_attempts < max` | `S-DEVELOPING` | 创建 `run(develop, n+1)`，附 CI 日志 |
 | `T-026` | `S-PR_OPEN` | `CIFailed` | `dev_attempts ≥ max` | `S-HUMAN_REVIEW` | 通知人工；启动 `human_review_ttl` 定时器 |
-| `T-027` | `S-PR_OPEN` | `PRClosed` | — | `S-ABANDONED` ★ | 清理工作区 |
+| `T-027` | `S-PR_OPEN` | `PRClosed` | — | `S-ABANDONED` ★ | 记录 `pr_closed_unmerged`；清理工作区 |
+| `T-042` | `S-PR_OPEN` | `CIPassed` | — | `S-PR_OPEN` ⟲ | 只记录 CI 通过事实（含 head SHA），继续等 PR 合并/关闭 |
 
 ### 2.1 通用规则（适用于全部**阶段态**）
 
@@ -170,7 +171,7 @@
 | `S-DEVELOPING` | `T-012` `T-014` `T-019` `T-022` `T-025` `T-030` |
 | `S-QA` | `T-017` `T-030` |
 | `S-REVIEW` | `T-018` `T-030` |
-| `S-PR_OPEN` | `T-021` |
+| `S-PR_OPEN` | `T-021` `T-042`（自环） |
 | `S-DONE` | `T-024` |
 | `S-REJECTED` | `T-006` `T-015` |
 | `S-ABANDONED` | `T-008` `T-027` `T-028` `T-040` |
@@ -192,7 +193,7 @@
 | `S-DEVELOPING` | `T-017` `T-030` `T-031` `T-040` `T-041` |
 | `S-QA` | `T-018`–`T-020` `T-030` `T-031` `T-040` `T-041` |
 | `S-REVIEW` | `T-021`–`T-023` `T-030` `T-031` `T-040` `T-041` |
-| `S-PR_OPEN` | `T-024`–`T-027` `T-040` `T-041` |
+| `S-PR_OPEN` | `T-024`–`T-027` `T-042` `T-040` `T-041` |
 
 ✅ 无非终态死端。四个终态 `S-DONE` / `S-REJECTED` / `S-ABANDONED` / `S-FAILED` 无出边（符合定义）。
 
@@ -386,6 +387,22 @@ idempotency_key = hash(task_id, stage, attempt)
 > 与 GitHub 返回的 `closed_at`（写进 `TaskStatusChanged` 的 payload），
 > 让事件流能区分「人没来决策」与「工作对象已不存在」。
 > `S-PR_OPEN` 是显式例外：PR 已经开出去，交付物在 PR 上继续收口，issue 关闭不撤单。
+> PR 合并后 `Closes #n` 会让 issue 自动关闭；poller 仍从 `S-PR_OPEN` 任务列表
+> 观察 PR，不能因为 issue 不在 open 列表里就停止收口。
+>
+> **PR 合并/关闭观测（issue #132）**：`S-PR_OPEN` 的 CI 结果只说明代码可交付，
+> 不说明交付已完成。`CIPassed` 走 `T-042` 自环记录事实（payload 带 `head_sha`），
+> 任务继续留在 `S-PR_OPEN`；poller 每轮观察 PR：
+>
+> - `merged=true` → `PRMerged` 走 `T-024` → `S-DONE`，payload 带 `merged_at` 与
+>   `merge_sha`；
+> - `closed=true` 且未合并 → `PRClosed` 走 `T-027` → `S-ABANDONED`，payload 带
+>   `reason='pr_closed_unmerged'` 与 `closed_at`；
+> - 仍 open → 停在 `S-PR_OPEN`，下一轮继续观察。
+>
+> 未合并关闭后，若 issue 仍 open 且带注册 label，poller 可为同一 issue 创建新 Task
+> （复用原 GitHub Feedback，并追加一条不可变的 `redrive:<previousTaskId>` 说明
+> Feedback 作为 PM 上下文）；`keel run-issue <url> --redrive` 提供同一动作的手动入口。
 
 > **独立 timer worker(issue #26)**：方案 A/B 的收割由编排进程内执行
 > （澄清 branch / watchdog setTimeout）；进程崩溃后到期无人收割。
