@@ -1144,6 +1144,7 @@ export const CONSOLE_HTML = `<!doctype html>
   /* ─── Main Detail Area ─── */
   main#detail {
     height: 100%;
+    min-width: 0;
     overflow-y: auto;
     background: var(--panel);
     position: relative;
@@ -1252,6 +1253,23 @@ export const CONSOLE_HTML = `<!doctype html>
     gap: 2px;
     flex-wrap: wrap;
   }
+  .run-liveness { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--ink-3); }
+  .run-liveness-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
+  .run-liveness.active { color: var(--good); }
+  .run-liveness.active .run-liveness-dot { animation: liveness-pulse 1.5s ease-in-out infinite; }
+  .run-liveness.stalled { color: var(--signal); }
+  .task-control { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .control-confirmation { flex-basis: 100%; border-left: 2px solid var(--signal); padding: 8px 10px; font-size: 12px; }
+  .control-confirmation p { margin: 4px 0 8px; }
+  .control-confirmation textarea { width: 100%; min-height: 70px; margin: 6px 0; box-sizing: border-box; background: var(--panel); color: var(--ink); }
+  .control-message { color: var(--bad); font-size: 12px; }
+  .project-progress { min-width: 0; margin-top: 8px; }
+  .project-progress-track { display: flex; height: 8px; width: 100%; background: var(--rule); gap: 1px; }
+  .project-progress-segment { min-width: 0; }
+  .project-progress-segment:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .project-progress-summary { display: block; margin-top: 5px; color: var(--ink-3); font-size: 11px; overflow-wrap: anywhere; }
+  @keyframes liveness-pulse { 50% { opacity: 0.35; } }
+  @media (prefers-reduced-motion: reduce) { .run-liveness.active .run-liveness-dot { animation: none; } }
   .copy-btn {
     border: 0;
     background: transparent;
@@ -2360,10 +2378,11 @@ export const CONSOLE_HTML = `<!doctype html>
 
   @media (max-width: 900px) {
     /* 三块纵向排队：侧栏 → 详情 → 状态栏，状态栏必须落在文档最后一行 */
-    #app { grid-template-columns: 1fr; grid-template-rows: auto auto 26px; height: auto; overflow: visible; }
+    #app { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto; height: auto; overflow: visible; }
     aside { height: auto; max-height: 48vh; border-right: 0; border-bottom: 1px solid var(--rule); grid-row: 1; }
     main#detail { height: auto; overflow: visible; padding: 16px; grid-row: 2; }
-    .statusbar { grid-row: 3; position: sticky; bottom: 0; }
+    .statusbar { grid-row: 3; position: sticky; bottom: 0; flex-wrap: wrap; min-height: 26px; padding-block: 5px; }
+    .statusbar-left, .statusbar-right { flex-wrap: wrap; }
   }
 </style>
 </head>
@@ -2511,6 +2530,10 @@ export const CONSOLE_HTML = `<!doctype html>
     glossaryOpen: false,
     tasksSig: '',
     detailSig: '',
+    controlRequest: null,
+    controlBusy: false,
+    controlMessage: '',
+    controlNote: '',
     workflowsSig: '',
     workflowDetailSig: '',
     workflowsError: '',
@@ -2998,6 +3021,32 @@ export const CONSOLE_HTML = `<!doctype html>
     return projectFacts(p) + '，最近更新 ' + fmtListTime(p.lastUpdated);
   }
 
+  function renderProjectProgress(project) {
+    var counts = {};
+    var statuses = [];
+    for (var taskIndex = 0; taskIndex < project.tasks.length; taskIndex++) {
+      var status = project.tasks[taskIndex].status;
+      if (!counts[status]) statuses.push(status);
+      counts[status] = (counts[status] || 0) + 1;
+    }
+    statuses.sort();
+    var colors = { stage: '--move', gate: '--signal', done: '--good', bad: '--bad' };
+    var segments = '';
+    var labels = [];
+    for (var statusIndex = 0; statusIndex < statuses.length; statusIndex++) {
+      var current = statuses[statusIndex];
+      var label = (statusLabel(current) || current) + '：' + counts[current] + ' 个任务';
+      labels.push(label);
+      segments += '<span class="project-progress-segment" tabindex="0" title="' + esc(label) + '" aria-label="' + esc(label) +
+        '" style="flex:' + counts[current] + ';background:var(' + colors[statusKind(current)] + ')"></span>';
+    }
+    var active = project.counts.stage + project.counts.gate;
+    return '<div class="project-progress">' +
+      '<div class="project-progress-track" role="group" aria-label="' + esc(labels.join('，') || '暂无任务') + '">' + segments + '</div>' +
+      '<span class="project-progress-summary">' + active + ' 活跃 / ' + project.counts.all + ' 总，' + project.needsYou + ' 待处理</span>' +
+      '</div>';
+  }
+
   /** 项目页的一句话现状：先说有没有事等人，再说在跑的和等待中的 */
   function projectSummary(p) {
     var parts = [];
@@ -3065,6 +3114,7 @@ export const CONSOLE_HTML = `<!doctype html>
         '</div>' +
         '<div class="proj-item-sub"><span class="facts">' + esc(projectFacts(p)) + '</span>' +
           '<span class="time">' + esc(fmtListTime(p.lastUpdated)) + '</span></div>' +
+        renderProjectProgress(p) +
       '</li>';
     }
     list.innerHTML = html || '<li class="empty" style="padding:24px 12px">没有匹配的项目</li>';
@@ -3154,6 +3204,7 @@ export const CONSOLE_HTML = `<!doctype html>
         '<h2 class="cockpit-title" title="' + esc(p.repo) + '">' + esc(shortRepo(p.repo)) + '</h2>' +
         '<p class="proj-summary">' + projectSummary(p) + '</p>' +
         '<p class="proj-meta">' + esc(meta.join('，')) + '</p>' +
+        renderProjectProgress(p) +
       '</div>' +
       '<div class="view-body">' +
         '<div class="proj-toolbar">' + filterHtml +
@@ -4094,6 +4145,17 @@ export const CONSOLE_HTML = `<!doctype html>
       var prefix = target.getAttribute('data-prefix') || '';
       target.textContent = prefix + fmtDurationMs(now - since);
     }
+    var indicators = document.querySelectorAll('[data-run-liveness]');
+    var runs = state.detail ? state.detail.runs || [] : [];
+    for (var indicatorIndex = 0; indicatorIndex < indicators.length; indicatorIndex++) {
+      var runId = indicators[indicatorIndex].getAttribute('data-run-liveness');
+      for (var runIndex = 0; runIndex < runs.length; runIndex++) {
+        if (runs[runIndex].id === runId) {
+          indicators[indicatorIndex].outerHTML = renderRunLiveness(runs[runIndex], now);
+          break;
+        }
+      }
+    }
   }
 
   function extractPrInfo(events) {
@@ -4680,6 +4742,53 @@ export const CONSOLE_HTML = `<!doctype html>
     return html;
   }
 
+  function renderTaskControl(task) {
+    if (task.terminal_at || statusKind(task.status) === 'done' || statusKind(task.status) === 'bad') return '';
+    var mode = task.control_mode || 'auto';
+    var actions = mode === 'auto' ? [['pause', '暂停'], ['takeover', '接管']] :
+      (mode === 'paused' ? [['resume', '恢复'], ['takeover', '接管']] : [['resume', '交回 Agent']]);
+    var request = state.controlRequest;
+    var pending = request && request.taskId === task.id && request.mode === mode;
+    var html = '<div class="task-control">';
+    for (var actionIndex = 0; actionIndex < actions.length; actionIndex++) {
+      html += '<button type="button" class="copy-btn" data-control-action="' + actions[actionIndex][0] + '"' +
+        (state.controlBusy ? ' disabled' : '') + '>' + actions[actionIndex][1] + '</button>';
+    }
+    if (pending) {
+      var description = request.action === 'pause'
+        ? '暂停后不再派发新轮次，当前轮次会继续收尾。'
+        : (request.action === 'takeover'
+          ? '接管后由你驾驶。执行仍在收尾时会拒绝接管，请先暂停并等待收尾。'
+          : (mode === 'human' ? '交接说明会保存为 A-State；本次不标记任何阶段完成，Agent 继续现有流程。' : '恢复自动派发，后续由运行该任务的 worker 或 CLI 继续。'));
+      html += '<section class="control-confirmation" aria-label="确认驾驶模式变更">' +
+        '<p>' + description + '</p>' +
+        (mode === 'human'
+          ? '<label>人工交接说明<textarea data-control-note maxlength="8000" placeholder="做了什么、改变的决定和未决问题">' + esc(state.controlNote || '') + '</textarea></label>'
+          : '') +
+        '<button type="button" class="copy-btn" data-control-confirm' + (state.controlBusy || (mode === 'human' && !String(state.controlNote || '').trim()) ? ' disabled' : '') + '>确认</button>' +
+        '<button type="button" class="copy-btn" data-control-cancel' + (state.controlBusy ? ' disabled' : '') + '>取消</button>' +
+        '<p class="control-message" role="status">' + esc(state.controlMessage || '') + '</p></section>';
+    }
+    return html + '</div>';
+  }
+
+  function renderRunLiveness(run, now) {
+    if (run.status !== 'RUNNING') return '';
+    var live = run.liveness;
+    var progressAt = live && live.last_progress_at ? new Date(live.last_progress_at).getTime() : NaN;
+    var elapsed = Math.max(0, (now === undefined ? Date.now() : now) - progressAt);
+    var threshold = live && typeof live.silence_threshold_ms === 'number' ? live.silence_threshold_ms : null;
+    var kind = 'silent';
+    var text = '暂无进展信号';
+    if (isFinite(elapsed)) {
+      kind = threshold !== null && threshold > 0 && elapsed > threshold ? 'stalled' : (elapsed <= 30000 ? 'active' : 'silent');
+      text = (kind === 'stalled' ? '可能卡死' : (kind === 'active' ? '活跃' : '沉默')) + ' · 最近信号 ' + fmtDurationMs(elapsed) + '前';
+    }
+    var title = live && live.owner_heartbeat_at ? '执行进程心跳：' + fmtTime(live.owner_heartbeat_at) : '暂无执行进程心跳';
+    return '<span class="run-liveness ' + kind + '" data-run-liveness="' + esc(run.id || '') + '" title="' + esc(title) + '">' +
+      '<span class="run-liveness-dot" aria-hidden="true"></span>' + esc(text) + '</span>';
+  }
+
   function renderCockpitHeader(d) {
     var t = d.task;
     var runs = d.runs || [];
@@ -4713,6 +4822,7 @@ export const CONSOLE_HTML = `<!doctype html>
         '<div class="cockpit-badges">' +
           badge(t.status) +
           '<span class="mode-pill drive ' + esc(controlMode) + '" title="control_mode: ' + esc(controlMode) + '">' + controlLabel + '</span>' +
+          runs.filter(function (run) { return run.status === 'RUNNING'; }).map(function (run) { return renderRunLiveness(run); }).join('') +
           (t.risk ? '<span class="badge ' + (t.risk === 'high' ? 'bad' : (t.risk === 'medium' ? 'gate' : 'done')) + '">risk: ' + esc(t.risk) + '</span>' : '') +
           (t.complexity ? '<span class="badge neutral">complexity: ' + esc(t.complexity) + '</span>' : '') +
           (pr ? '<a class="pr-link-pill" href="' + esc(pr.url) + '" target="_blank" rel="noopener noreferrer">PR #' + esc(pr.number || '') + ' ↗</a>' : '') +
@@ -4724,6 +4834,7 @@ export const CONSOLE_HTML = `<!doctype html>
           '<button type="button" class="copy-btn" id="glossary-btn" aria-expanded="' + (state.glossaryOpen ? 'true' : 'false') + '" title="查看状态码、转移编号与核心术语的说明">术语表</button>' +
         '</div>' +
       '</div>' +
+      renderTaskControl(t) +
       '<h2 class="cockpit-title">' + esc(t.title) + '</h2>' +
       '<div class="cockpit-meta">' +
         '<span class="cockpit-meta-item">' + repoHtml + '</span>' +
@@ -5042,6 +5153,7 @@ export const CONSOLE_HTML = `<!doctype html>
             '<span class="run-stage-badge">' + esc(run.stage) + ' #' + esc(run.attempt) + '</span>' +
             '<span class="badge neutral">角色 ' + esc(run.role || '—') + '</span>' +
             runStatusBadge(run.status) +
+            renderRunLiveness(run) +
             '<span class="badge purple">harness ' + esc(run.harness_id || '—') + (run.harness_tier ? '，' + esc(run.harness_tier) : '') + '</span>' +
           '</div>' +
           '<div style="display:flex;align-items:center;gap:8px">' +
@@ -5376,6 +5488,9 @@ export const CONSOLE_HTML = `<!doctype html>
 
   function renderDetail(d, preserveScroll) {
     state.detail = d;
+    var focused = document.activeElement;
+    var keepControlFocus = preserveScroll && focused && focused.matches && focused.matches('[data-control-note]');
+    var controlSelection = keepControlFocus ? [focused.selectionStart, focused.selectionEnd] : null;
     var detailEl = document.getElementById('detail');
     var prevScroll = preserveScroll && detailEl ? detailEl.scrollTop : 0;
     if (preserveScroll) captureExpandedState();
@@ -5432,6 +5547,13 @@ export const CONSOLE_HTML = `<!doctype html>
 
     detailEl.innerHTML = html;
     restoreExpandedState(prevScroll);
+    if (controlSelection) {
+      var controlNote = document.querySelector('[data-control-note]');
+      if (controlNote) {
+        controlNote.focus({ preventScroll: true });
+        controlNote.setSelectionRange(controlSelection[0], controlSelection[1]);
+      }
+    }
     syncHash();
   }
 
@@ -5450,7 +5572,7 @@ export const CONSOLE_HTML = `<!doctype html>
     var lastSeq = evs.length > 0 ? evs[evs.length - 1].seq : 0;
     var runs = d.runs || [];
     var runStatuses = [];
-    for (var i = 0; i < runs.length; i++) runStatuses.push(runs[i].status);
+    for (var i = 0; i < runs.length; i++) runStatuses.push(runs[i].status + ':' + JSON.stringify(runs[i].liveness || null));
     return [t.id, t.status, t.control_mode, t.updated_at, runs.length, runStatuses.join(','), lastSeq, (d.artifacts || []).length].join('|');
   }
 
@@ -5805,6 +5927,35 @@ export const CONSOLE_HTML = `<!doctype html>
     submitAction(taskId, 'decide', payload, act);
   }
 
+  function submitControl() {
+    var request = state.controlRequest;
+    if (!request || state.controlBusy || !state.detail || state.detail.task.id !== request.taskId) return Promise.resolve();
+    state.controlBusy = true;
+    state.controlMessage = '提交中…';
+    renderDetail(state.detail, true);
+    var payload = { action: request.action, expected_mode: request.mode };
+    if (request.mode === 'human') payload.note = String(state.controlNote || '').trim();
+    return fetch('/api/tasks/' + encodeURIComponent(request.taskId) + '/control', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-keel-console': consoleToken() },
+      body: JSON.stringify(payload)
+    }).then(function (response) {
+      if (response.status === 401) window.location.replace('/login');
+      return response.json().then(function (body) {
+        if (!response.ok || !body.ok) throw new Error(body.error || '操作失败');
+        state.controlRequest = null;
+        state.controlNote = '';
+        state.detailSig = '';
+        return refreshAll(true);
+      });
+    }).catch(function (error) {
+      state.controlMessage = error.message;
+    }).then(function () {
+      state.controlBusy = false;
+      if (state.detail && state.detail.task.id === request.taskId) renderDetail(state.detail, true);
+    });
+  }
+
   // ─── Event Listeners ───
   document.getElementById('mode-switch').addEventListener('click', function (ev) {
     var btn = ev.target.closest('.mode-btn[data-mode]');
@@ -5923,9 +6074,31 @@ export const CONSOLE_HTML = `<!doctype html>
 
   detailRoot.addEventListener('input', function (ev) {
     if (ev.target.closest && ev.target.closest('textarea[data-note-for]')) syncOptionButtons();
+    if (ev.target.matches && ev.target.matches('textarea[data-control-note]')) {
+      state.controlNote = ev.target.value;
+      var confirmButton = document.querySelector('[data-control-confirm]');
+      if (confirmButton) confirmButton.disabled = state.controlBusy || !String(state.controlNote).trim();
+    }
   });
 
   detailRoot.addEventListener('click', function (ev) {
+    var controlButton = ev.target.closest('[data-control-action]');
+    if (controlButton && state.detail && !state.controlBusy) {
+      state.controlRequest = { taskId: state.detail.task.id, mode: state.detail.task.control_mode || 'auto', action: controlButton.getAttribute('data-control-action') };
+      state.controlMessage = '';
+      state.controlNote = '';
+      renderDetail(state.detail, true);
+      return;
+    }
+    if (ev.target.closest('[data-control-cancel]') && !state.controlBusy) {
+      state.controlRequest = null;
+      if (state.detail) renderDetail(state.detail, true);
+      return;
+    }
+    if (ev.target.closest('[data-control-confirm]')) {
+      submitControl();
+      return;
+    }
     var tabBtn = ev.target.closest('.tab-btn[data-tab]');
     if (tabBtn && state.detail) {
       state.activeTab = tabBtn.getAttribute('data-tab') || 'overview';

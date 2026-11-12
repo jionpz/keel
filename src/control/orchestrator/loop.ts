@@ -313,6 +313,15 @@ export async function runTaskToCompletion(
     // ── 阶段态：找 PENDING run 执行 ──
     const pending = await readPendingRun(taskId)
     if (pending === null) {
+      const deferred = await readDeferredRunEvent(taskId)
+      if (deferred !== null) {
+        const resumed = await deps.driver.advance(taskId, deferred.event, deps.now(), {
+          expectedRunId: deferred.runId,
+        })
+        if (!resumed.ok) return err(resumed.error)
+        steps.push(record(state.status, resumed, deferred.event.stage, '恢复暂停期间已收尾的轮次'))
+        continue
+      }
       // 没有待执行的 run。这里必须分清「设计内等待」与「卡住」——
       // 旧实现两者返回同一个 ok，于是派发丢失会以「退出码 0、跑完了」的样子出现
       // （2026-10-26 的 firstRun 撞键 bug 正是被这层兜住，查了两轮才定位到上游）。
@@ -924,6 +933,46 @@ async function readLatestRun(
     ),
   )
   return r.rows[0] ?? null
+}
+
+async function readDeferredRunEvent(taskId: string): Promise<{
+  event: { type: 'RunSucceeded' | 'RunFailed' | 'RunTimeout' | 'RunStalled'; stage: Stage }
+  runId: string
+} | null> {
+  const result = await asRole('keel_control', (client) =>
+    client.query<{
+      event: 'RunSucceeded' | 'RunFailed' | 'RunTimeout' | 'RunStalled'
+      stage: Stage
+      run_id: string
+    }>(
+      `SELECT e.payload->>'event' AS event, r.stage, r.id AS run_id
+       FROM task t JOIN run r ON r.id=t.current_run_id
+       JOIN event e ON e.task_id=t.id AND e.payload->>'run_id'=r.id::text
+       WHERE t.id=$1 AND e.type='NoTransition'
+         AND e.payload->>'reason' IN ('control_mode_not_auto','optimistic_lock_conflict')
+         AND e.payload->>'status'=t.status
+         AND e.payload->>'stage'=r.stage
+         AND CASE e.payload->>'event'
+           WHEN 'RunSucceeded' THEN r.status='SUCCEEDED'
+           WHEN 'RunFailed' THEN r.status='FAILED'
+           WHEN 'RunTimeout' THEN r.status='TIMEOUT'
+           WHEN 'RunStalled' THEN r.status='TIMEOUT'
+           ELSE false END
+         AND NOT EXISTS (
+           SELECT 1 FROM event advanced WHERE advanced.task_id=t.id
+             AND advanced.type='TaskStatusChanged' AND advanced.seq>e.seq
+         )
+       ORDER BY e.seq DESC LIMIT 1`,
+      [taskId],
+    ),
+  )
+  const row = result.rows[0]
+  return row === undefined
+    ? null
+    : {
+        event: { type: row.event, stage: row.stage },
+        runId: row.run_id,
+      }
 }
 
 /**

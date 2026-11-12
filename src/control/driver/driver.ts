@@ -83,6 +83,7 @@ export interface AdvanceOutcome {
  */
 export interface AdvanceOptions {
   readonly note?: string
+  readonly expectedRunId?: string
 }
 
 export class WorkflowDriver {
@@ -234,13 +235,17 @@ export class WorkflowDriver {
     opts: AdvanceOptions = {},
   ): Promise<Result<AdvanceOutcome>> {
     return asRole('keel_control', async (c) => {
-      const row = await c.query<{ status: TaskStatus; control_mode: ControlMode }>(
-        'SELECT status, control_mode FROM task WHERE id = $1',
-        [taskId],
-      )
+      const row = await c.query<{
+        status: TaskStatus
+        control_mode: ControlMode
+        current_run_id: string | null
+      }>('SELECT status, control_mode, current_run_id FROM task WHERE id = $1', [taskId])
       const task = row.rows[0]
       if (task === undefined) {
         return err<AdvanceOutcome>(makeError('NOT_FOUND', `找不到 task ${taskId}`))
+      }
+      if (opts.expectedRunId !== undefined && task.current_run_id !== opts.expectedRunId) {
+        return err(makeError('CONFLICT', '当前轮次已变化，拒绝重放旧轮次的阶段结论。'))
       }
 
       const facts = await loadTransitionFacts(c, taskId, event, {
@@ -265,6 +270,8 @@ export class WorkflowDriver {
               control_mode: task.control_mode,
               reason: result.reason,
               detail: result.detail,
+              run_id: task.current_run_id,
+              ...('stage' in event ? { stage: event.stage } : {}),
             }),
             traceId,
             now,
@@ -291,8 +298,17 @@ export class WorkflowDriver {
         `UPDATE task
          SET status = $2, updated_at = $3::timestamptz,
              terminal_at = CASE WHEN $4 THEN $3::timestamptz ELSE terminal_at END
-         WHERE id = $1 AND status = $5`,
-        [taskId, result.next_status, now, terminal, result.from],
+         WHERE id = $1 AND status = $5 AND control_mode = $6
+           AND current_run_id IS NOT DISTINCT FROM $7::uuid`,
+        [
+          taskId,
+          result.next_status,
+          now,
+          terminal,
+          result.from,
+          task.control_mode,
+          task.current_run_id,
+        ],
       )
       if (upd.rowCount === 0) {
         // 败者阻塞在行锁上、直到胜者提交才走到这里 ——
@@ -308,6 +324,8 @@ export class WorkflowDriver {
               status: result.from,
               reason: 'optimistic_lock_conflict',
               detail: `期望 status=${result.from}，但已被并发写者改变`,
+              run_id: task.current_run_id,
+              ...('stage' in event ? { stage: event.stage } : {}),
             }),
             traceId,
             now,

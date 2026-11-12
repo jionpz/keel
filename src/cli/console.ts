@@ -4,9 +4,9 @@
  * 定位（docs/09-roadmap.md）：UI 是 Fact Plane 的**消费者**，不是被验证的东西。
  * 因此本文件：
  *   - 读路径只有 SELECT，以 `keel_control` 角色访问；
- *   - 写路径只有一条：人工闸门的 `POST /api/tasks/:id/decide|answer`。它不是
+ *   - 人工闸门与驾驶控制走 `POST /api/tasks/:id/decide|answer|control`。它不是
  *     「控制台自己改状态」—— 它转调 `decide.ts` 的 `decideTask` / `answerTask`，
- *     和 CLI 走同一个 driver、同一套预检；
+ *     驾驶控制转调 `controlTask`，与 CLI 共用控制表和事务；
  *   - **鉴权**：除 `/login`、`POST /api/login`、`/healthz` 外，所有路由先过会话闸门。
  *     会话是进程内存态（HttpOnly + SameSite=Strict Cookie），重启即失效；
  *   - **写端点**在会话之外仍要求：Host 合法（绑回环时必须回环）、Origin 与 Host
@@ -21,9 +21,17 @@
 
 import { randomBytes } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { controlTask } from '../control/task-control.js'
+import { CONTROL_ACTIONS, type ControlAction } from '../control/transition/control-mode.js'
 import { TASK_TRANSITIONS } from '../control/transition/table.js'
 import { asRole, closePool, connectionString } from '../fact/db.js'
-import { GATE_STATUSES, STAGE_STATUSES, TERMINAL_STATUSES } from '../shared/ids.js'
+import {
+  CONTROL_MODES,
+  type ControlMode,
+  GATE_STATUSES,
+  STAGE_STATUSES,
+  TERMINAL_STATUSES,
+} from '../shared/ids.js'
 import { type AuthOptions, ConsoleAuth, resolveConsoleAuth } from './console-auth.js'
 import { CONSOLE_LOGIN_HTML } from './console-login-page.js'
 import { CONSOLE_HTML, CONSOLE_TOKEN_PLACEHOLDER } from './console-page.js'
@@ -168,6 +176,12 @@ export interface ActionReply {
 export interface ConsoleActions {
   decide(taskId: string, decision: Decision, note: string | undefined): Promise<ActionReply>
   answer(taskId: string, text: string): Promise<ActionReply>
+  control(
+    taskId: string,
+    action: ControlAction,
+    expectedMode: ControlMode | undefined,
+    note: string | undefined,
+  ): Promise<ActionReply>
 }
 
 export interface ConsoleDeps {
@@ -199,6 +213,19 @@ const ACTION_STATUS: Record<string, number> = {
 }
 
 const defaultActions: ConsoleActions = {
+  async control(taskId, action, expectedMode, note) {
+    const result = await controlTask(taskId, action, new Date().toISOString(), {
+      ...(expectedMode === undefined ? {} : { expectedMode }),
+      ...(note === undefined ? {} : { note }),
+    })
+    if (!result.ok) {
+      return {
+        status: ACTION_STATUS[result.error.kind] ?? 400,
+        body: { ok: false, kind: result.error.kind, error: result.error.detail },
+      }
+    }
+    return { status: 200, body: { ok: true, ...result.value } }
+  },
   async decide(taskId, decision, note) {
     const r = await decideTask(taskId, decision, note === undefined ? {} : { note })
     if (!r.ok) {
@@ -460,14 +487,14 @@ export function createConsoleHandler(
       return
     }
 
-    const action = /^\/api\/tasks\/([^/]+)\/(decide|answer)$/.exec(path)
+    const action = /^\/api\/tasks\/([^/]+)\/(decide|answer|control)$/.exec(path)
     if (action !== null) {
       await handleAction(act, token, boundHost, req, res, method, action[1] ?? '', action[2] ?? '')
       return
     }
 
     if (method !== 'GET' && method !== 'HEAD') {
-      sendJson(res, 405, { error: '只接受 GET；写操作仅有 /api/tasks/:id/decide|answer' })
+      sendJson(res, 405, { error: '只接受 GET；写操作仅有 /api/tasks/:id/decide|answer|control' })
       return
     }
 
@@ -775,6 +802,38 @@ async function handleAction(
   }
 
   try {
+    if (verb === 'control') {
+      if (
+        typeof payload.action !== 'string' ||
+        !(CONTROL_ACTIONS as readonly string[]).includes(payload.action)
+      ) {
+        sendJson(res, 400, { ok: false, error: `action 必须是 ${CONTROL_ACTIONS.join(' / ')}` })
+        return
+      }
+      if (
+        payload.expected_mode !== undefined &&
+        (typeof payload.expected_mode !== 'string' ||
+          !(CONTROL_MODES as readonly string[]).includes(payload.expected_mode))
+      ) {
+        sendJson(res, 400, { ok: false, error: 'expected_mode 必须是 auto / paused / human' })
+        return
+      }
+      if (
+        payload.note !== undefined &&
+        (typeof payload.note !== 'string' || payload.note.length > 8000)
+      ) {
+        sendJson(res, 400, { ok: false, error: 'note 必须是最多 8000 字的字符串' })
+        return
+      }
+      const reply = await act.control(
+        id,
+        payload.action as ControlAction,
+        payload.expected_mode as ControlMode | undefined,
+        payload.note as string | undefined,
+      )
+      sendJson(res, reply.status, reply.body)
+      return
+    }
     if (verb === 'decide') {
       const decision = payload.decision
       if (typeof decision !== 'string' || !(DECISIONS as readonly string[]).includes(decision)) {
@@ -816,11 +875,18 @@ async function loadTaskDetail(query: QueryFn, id: string): Promise<unknown | und
   if (task === undefined) return undefined
 
   const runs = await query(
-    `SELECT id, stage, role, attempt, status, harness_id, harness_tier, session_ref,
-            started_at, ended_at, error_kind, error_detail,
-            tokens_in, tokens_out, cost_usd, cost_basis
-     FROM run WHERE task_id = $1
-     ORDER BY started_at NULLS LAST, attempt`,
+    `SELECT r.id, r.stage, r.role, r.attempt, r.status, r.harness_id, r.harness_tier, r.session_ref,
+            r.started_at, r.ended_at, r.error_kind, r.error_detail,
+            r.tokens_in, r.tokens_out, r.cost_usd, r.cost_basis,
+            CASE WHEN l.run_id IS NOT NULL THEN json_build_object(
+              'last_progress_at', l.last_progress_at,
+              'silence_threshold_ms', l.silence_ms,
+              'owner_heartbeat_at', l.owner_heartbeat_at
+            ) ELSE NULL END AS liveness
+     FROM run r
+     LEFT JOIN run_liveness l ON l.run_id = r.id AND r.status = 'RUNNING'
+     WHERE r.task_id = $1
+     ORDER BY r.started_at NULLS LAST, r.attempt`,
     [id],
   )
 
@@ -931,8 +997,8 @@ Web 控制台，默认 http://${DEFAULT_HOST}:${DEFAULT_PORT}
   KEEL_DATABASE_URL           数据库连接串（与 CLI 共用）
 
 读：全部事实只走 SELECT。
-写：只有人工闸门的 POST /api/tasks/:id/decide|answer，
-    与 keel decide / keel answer 走同一个 driver 和同一套预检。
+写：POST /api/tasks/:id/decide|answer|control，
+    与 CLI 共用人工闸门 driver 或驾驶模式控制事务。
 鉴权：除 /login、POST /api/login、POST /api/logout、/healthz 外都需要登录。`)
     return
   }

@@ -28,6 +28,7 @@ import { runIssueMain } from './run-issue.js'
 import { runTaskMain } from './run-task.js'
 import { serveMain, serviceHealthMain, serviceStatusMain } from './service.js'
 import { statusMain } from './status.js'
+import { taskControlMain } from './task-control.js'
 import { timerWorkerMain } from './timer-worker.js'
 import { trialMain } from './trial.js'
 import { unlockMain } from './unlock.js'
@@ -50,12 +51,15 @@ export const HELP = `keel — AI Engineering Runtime CLI
   managed <investigate|status|questions|answer|worker|ticket-*|policy-*|workflow-*|action-*|memory-*>   调查、ticket、授权生命周期、路线图、受控 PR、required checks 与项目记忆（JT-01–05）
   backup --out <目录> [--blob-dir <目录>]      一致性备份数据库与 blob
   restore-verify --backup <目录> [--keep-database]   隔离恢复并校验备份
-  console                          只读 Web 控制台(默认 http://127.0.0.1:4321)
+  console                          观测与人工控制面板(默认 http://127.0.0.1:4321)
   timer-worker [--interval <ms>]   到期收割 timer(默认单次;--interval 常驻)
   run-task <taskId> [--max-steps N] [--ci passed|failed|real] [--model <id>] [--harness omp|claude|pi] [--wall-clock <秒>]   驱动单 task 到终态
   status <taskId> [--events N]     查 task / run / 事件摘要
   decide <taskId> <approve|reject|rework> [--note <text>]   人工裁决 S-HUMAN_REVIEW 的任务
   answer <taskId> --text <text>    回答 S-NEED_CLARIFICATION 的澄清
+  pause <taskId>                 暂停新轮次派发，当前轮次继续收尾
+  resume <taskId> [--note <text>]  恢复自动派发；人工交回需交接说明
+  takeover <taskId>              执行收尾后安全接管
   register-repo <remoteUrl> [--default-branch <name>] [--local-path <dir>] [--issue-label <name>]   注册 repo；可绑定本地项目目录、配置扫描 label
   ingest-issue <issueUrl> [--label <name>] [--repo <uuid>]   GitHub Issue → task
   run-issue <issueUrl> [--label <name>] [--max-steps N] [--ci passed|failed|real] [--model <id>] [--harness omp|claude|pi] [--wall-clock <秒>]   Issue → task → 驱动到终态
@@ -119,6 +123,11 @@ export async function dispatch(argv: readonly string[]): Promise<void> {
       return
     case 'answer':
       await answerMain(rest)
+      return
+    case 'pause':
+    case 'resume':
+    case 'takeover':
+      await taskControlMain(command, rest)
       return
     case 'register-repo':
       await registerRepoMain(rest)

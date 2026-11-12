@@ -96,6 +96,10 @@ async function withServer(
 function fakeActions() {
   const calls: string[] = []
   const act: ConsoleActions = {
+    async control(taskId, command, expectedMode, note) {
+      calls.push(`control ${taskId} ${command} ${expectedMode ?? ''} ${note ?? ''}`)
+      return { status: 200, body: { ok: true, from: expectedMode ?? 'auto', to: 'paused' } }
+    },
     async decide(taskId, decision, note) {
       calls.push(`decide ${taskId} ${decision} ${note ?? ''}`)
       return { status: 200, body: { ok: true, from: 'S-HUMAN_REVIEW', to: 'S-DEVELOPING' } }
@@ -110,7 +114,7 @@ function fakeActions() {
 
 function action(
   api: ApiFetch,
-  verb: 'decide' | 'answer',
+  verb: 'decide' | 'answer' | 'control',
   body: unknown,
   headers: Record<string, string> = {},
 ): Promise<Response> {
@@ -171,6 +175,8 @@ interface SeamElement {
 }
 
 interface ConsoleStateSeam {
+  controlRequest?: { taskId: string; mode: string; action: string } | null
+  controlNote?: string
   meta: {
     statuses: { stage: string[]; gate: string[]; terminal: string[] }
     statusLabels: Record<string, string>
@@ -185,9 +191,14 @@ interface ConsoleStateSeam {
 }
 
 interface ConsoleSeam {
+  renderTaskControl(task: Row): string
   renderDecisionFacts(detail: Row): string
   renderDecisionOptions(detail: Row): string
   renderCockpitHeader(detail: Row): string
+  renderRunLiveness(run: Row, now: number): string
+  computeDetailSig(detail: Row): string
+  groupByRepo(tasks: Row[]): Row[]
+  renderProjectProgress(project: Row): string
   renderTasks(): void
   renderWorkflowList(): void
   renderWorkflowDetail(data: Row): void
@@ -248,8 +259,13 @@ function loadConsoleSeam(fetchImpl: SeamFetch = () => new Promise<never>(() => {
     `
   globalThis.__keelSeam = {
     renderDecisionFacts: renderDecisionFacts,
+    renderTaskControl: renderTaskControl,
     renderDecisionOptions: renderDecisionOptions,
     renderCockpitHeader: renderCockpitHeader,
+    renderRunLiveness: renderRunLiveness,
+    computeDetailSig: computeDetailSig,
+    groupByRepo: groupByRepo,
+    renderProjectProgress: renderProjectProgress,
     renderTasks: renderTasks,
     renderWorkflowList: renderWorkflowList,
     renderWorkflowDetail: renderWorkflowDetail,
@@ -311,6 +327,156 @@ function expectNoNesting(html: string, parent: string, children: readonly string
     stack.push(name)
   }
 }
+
+describe('运行活跃度', () => {
+  const now = Date.parse('2026-11-12T08:00:00Z')
+  const run = {
+    id: TASK_ID,
+    status: 'RUNNING',
+    liveness: {
+      last_progress_at: new Date(now - 3000).toISOString(),
+      silence_threshold_ms: 300000,
+      owner_heartbeat_at: new Date(now - 1000).toISOString(),
+    },
+  }
+
+  it('只在运行中显示活跃度，缺遥测时不宣称活跃', () => {
+    const { seam } = loadConsoleSeam()
+    expect(seam.renderRunLiveness(run, now)).toContain('活跃 · 最近信号 3.0s前')
+    expect(seam.renderRunLiveness(run, now)).toContain('run-liveness active')
+    expect(seam.renderRunLiveness({ ...run, status: 'SUCCEEDED' }, now)).toBe('')
+    expect(seam.renderRunLiveness({ id: TASK_ID, status: 'RUNNING' }, now)).toContain(
+      '暂无进展信号',
+    )
+  })
+
+  it('按新进展而非 owner 心跳区分沉默与超阈值，豁免阈值不报警', () => {
+    const { seam } = loadConsoleSeam()
+    expect(seam.renderRunLiveness(run, now + 45000)).toContain('run-liveness silent')
+    expect(seam.renderRunLiveness(run, now + 300000)).toContain('可能卡死')
+    expect(
+      seam.renderRunLiveness(
+        { ...run, liveness: { ...run.liveness, silence_threshold_ms: null } },
+        now + 300000,
+      ),
+    ).not.toContain('可能卡死')
+    expect(
+      seam.renderRunLiveness(
+        { ...run, liveness: { ...run.liveness, last_progress_at: 'invalid' } },
+        now,
+      ),
+    ).toContain('暂无进展信号')
+  })
+
+  it('只有遥测变化时详情指纹也变化，轮询能更新指示器', () => {
+    const { seam } = loadConsoleSeam()
+    const before = seam.computeDetailSig({ task: { id: TASK_ID }, runs: [run] })
+    const after = seam.computeDetailSig({
+      task: { id: TASK_ID },
+      runs: [
+        { ...run, liveness: { ...run.liveness, last_progress_at: new Date(now).toISOString() } },
+      ],
+    })
+    expect(after).not.toBe(before)
+  })
+})
+
+describe('项目阶段分布', () => {
+  it('按仓库地址合并，覆盖全部状态并按非终态统计活跃和人工待处理', () => {
+    const { seam } = loadConsoleSeam()
+    const statuses = ['S-DEVELOPING', 'S-QA', 'S-HUMAN_REVIEW', 'S-NEW', 'S-DONE', 'S-FAILED']
+    const projects = seam.groupByRepo(
+      statuses.map((status, index) => ({
+        id: String(index),
+        repo_id: String(index),
+        repo: 'file:///tmp/demo',
+        status,
+      })),
+    )
+    expect(projects).toHaveLength(1)
+    const html = seam.renderProjectProgress(projects[0] ?? {})
+    expect(html).toContain('4 活跃 / 6 总，1 待处理')
+    for (const color of ['--move', '--signal', '--good', '--bad']) {
+      expect(html).toContain(`background:var(${color})`)
+    }
+    for (const status of statuses) expect(html).toContain(`title="${status}：1 个任务"`)
+    expect((html.match(/tabindex="0"/g) ?? []).length).toBe(6)
+  })
+
+  it('空项目显示零计数，不产生无效的百分比或片段', () => {
+    const { seam } = loadConsoleSeam()
+    const html = seam.renderProjectProgress({
+      tasks: [],
+      counts: { stage: 0, gate: 0, all: 0 },
+      needsYou: 0,
+    })
+    expect(html).toContain('0 活跃 / 0 总，0 待处理')
+    expect(html).toContain('暂无任务')
+    expect(html).not.toContain('NaN')
+    expect(html).not.toContain('tabindex="0"')
+  })
+})
+
+describe('主动驾驶控制', () => {
+  it.each([
+    ['auto', ['暂停', '接管'], ['恢复', '交回 Agent']],
+    ['paused', ['恢复', '接管'], ['暂停', '交回 Agent']],
+    ['human', ['交回 Agent'], ['暂停', '接管']],
+  ])('按 %s 模式展示动作', (mode, present, absent) => {
+    const { seam } = loadConsoleSeam()
+    const html = seam.renderTaskControl({ id: TASK_ID, status: 'S-DEVELOPING', control_mode: mode })
+    for (const label of present as string[]) expect(html).toContain(`>${label}</button>`)
+    for (const label of absent as string[]) expect(html).not.toContain(`>${label}</button>`)
+  })
+
+  it('终态无按钮，人工交回确认内要求交接说明并转义', () => {
+    const { seam } = loadConsoleSeam()
+    for (const status of ['S-DONE', 'S-FAILED', 'S-ABANDONED', 'S-REJECTED']) {
+      expect(seam.renderTaskControl({ status })).toBe('')
+    }
+    seam.state.controlRequest = { taskId: TASK_ID, mode: 'human', action: 'resume' }
+    const task = { id: TASK_ID, status: 'S-DEVELOPING', control_mode: 'human' }
+    expect(seam.renderTaskControl(task)).toContain('data-control-confirm disabled')
+    seam.state.controlNote = '<script>alert(1)</script>'
+    const html = seam.renderTaskControl(task)
+    expect(html).toContain('data-control-confirm>确认')
+    expect(html).toContain('&lt;script&gt;')
+    expect(html).not.toContain('<script>')
+    expect(html).toContain('本次不标记任何阶段完成')
+  })
+
+  it('写入口沿用会话、同源、令牌和 JSON 检查，并校验动作', async () => {
+    const { act, calls } = fakeActions()
+    await withServer({ query: fakeQuery({}), act }, async (_base, api) => {
+      expect(
+        (await action(api, 'control', { action: 'pause' }, { 'x-keel-console': '' })).status,
+      ).toBe(403)
+      expect(
+        (await action(api, 'control', { action: 'pause' }, { origin: 'https://example.com' }))
+          .status,
+      ).toBe(403)
+      expect(
+        (await action(api, 'control', { action: 'pause' }, { 'content-type': 'text/plain' }))
+          .status,
+      ).toBe(415)
+      expect((await action(api, 'control', { action: 'delete' })).status).toBe(400)
+      expect(
+        (await action(api, 'control', { action: 'pause', expected_mode: 'other' })).status,
+      ).toBe(400)
+      expect(calls).toEqual([])
+      const reply = await action(api, 'control', { action: 'pause', expected_mode: 'auto' })
+      expect(reply.status).toBe(200)
+      expect(calls).toEqual([`control ${TASK_ID} pause auto `])
+    })
+    await withServer(
+      { query: fakeQuery({}), act },
+      async (_base, api) => {
+        expect((await action(api, 'control', { action: 'pause' })).status).toBe(401)
+      },
+      { anonymous: true },
+    )
+  })
+})
 
 describe('keel console 鉴权', () => {
   it('未登录访问页面 302 到 /login', async () => {
@@ -542,14 +708,15 @@ describe('keel console', () => {
       // 状态标记 = 方块 + 文字，不做胶囊、不做脉冲
       expect(html).toContain('class="dot"')
       expect(html).not.toContain('pulse-ring')
-      expect(html).not.toContain('@keyframes')
+      expect(html).toContain('@keyframes liveness-pulse')
+      expect(html).toContain('prefers-reduced-motion: reduce')
       // 位置刻度：列表行上靠 10 段阶梯读「走到哪了」
       expect(html).toContain('class="ladder')
       // CTA 去掉箭头
       expect(html).not.toContain('去决策 →')
       expect(html).not.toContain('去回答 →')
       // 元信息用中文逗号成句，不用 `·` 拼接
-      expect(html).not.toContain(' · ')
+      expect(html).not.toContain('去决策 · ')
     })
   })
 

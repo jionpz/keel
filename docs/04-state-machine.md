@@ -223,13 +223,24 @@ task.control_mode  谁在驾驶     ──┘
 |---|---|---|---|---|
 | `C-001` | `auto` | `HumanPause` | `paused` | — |
 | `C-002` | `auto` | `BudgetExceeded` | `paused` | 通知；**status 不变** |
-| `C-003` | `auto` | `HumanTakeover` | `human` | 取消在跑 Run（`R-008`） |
-| `C-004` | `paused` | `HumanTakeover` | `human` | — |
+| `C-003` | `auto` | `HumanTakeover` | `human` | 执行已收尾才可接管；否则拒绝并提示先暂停 |
+| `C-004` | `paused` | `HumanTakeover` | `human` | 执行已收尾才可接管 |
 | `C-005` | `paused` | `HumanResume` | `auto` | 从当前 `status` 继续派发 |
 | `C-006` | `human` | `HumanHandback` | `auto` | **前置条件见 §3.2** |
 
 > `BudgetExceeded` 走 `control_mode` 而**不改 status**，是刻意的：
 > 预算耗尽与业务进展无关。改 status 会丢失"当时做到哪了"这个事实。
+
+人工驾驶控制入口为 `keel pause|resume|takeover` 与控制台
+`POST /api/tasks/:id/control`，共用 `control/transition/control-mode.ts` 与
+`control/task-control.ts`。C-002 继续由预算熔断负责。
+读取模式、校验、变更模式与写事件在同一 task 行锁事务内完成；认领 Run 锁同一行，
+Task 状态转移的乐观锁同时核对 status、control_mode 与 current_run_id，
+避免迟到 worker 在暂停/接管后继续认领或覆盖新模式。
+
+当前接管不会声称已强制中断另一个进程中的 Harness。RUNNING 或正在结算的轮次返回
+CONFLICT；暂停后等待当前轮次收尾，再接管。暂停期间已完成但未推进的轮次，
+由带准确 run/stage 的 NoTransition 证据在恢复后消费一次，不重新执行原阶段。
 
 ### 3.2 人工交还的前置条件
 
@@ -242,6 +253,10 @@ task.control_mode  谁在驾驶     ──┘
 
 1. 不提交 `A-State` → AI 接手时看到的事实还停留在接管前，会基于过时事实继续干活
 2. 不提交 `A-StageOutcome` → 控制平面不知道该阶段已完成，会**再派发一次 AI 执行**
+
+控制台与 CLI 的 C-006 要求提交人工交接说明，经 Proposal 校验后追加到新版 A-State，
+模式变更与产物提交同一事务，保留原有事实、决定和问题。该入口只交还驾驶权，
+不宣布任何阶段完成；需要提交人工阶段结论的完整 Human Harness 流程仍走下节协议。
 
 ### 3.2.1 人工被建模为一种 Harness
 

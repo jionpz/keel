@@ -20,12 +20,17 @@
   **鉴权始终生效**（2026-11-04 起）：除 `/login`、`POST /api/login`、
   `POST /api/logout`、`/healthz` 外，所有路由先过会话闸门。没有「关掉鉴权」的开关。
 
-写路径只有一条，2026-11-04 加入：
+写路径共用 CLI 与 Control Plane：
 
 - `POST /api/tasks/:id/decide`（`{decision: approve|reject|rework, note?}`）与
   `POST /api/tasks/:id/answer`（`{text}`）。它们**转调** `src/cli/decide.ts` 的
   `decideTask` / `answerTask` —— 和 `pnpm keel decide|answer` 同一个 driver、同一套预检，
   页面里不复制任何状态机逻辑。其余任何非 `GET` 方法仍然 `405`。
+- `POST /api/tasks/:id/control` 接受 `action: pause|resume|takeover`，可附
+  `expected_mode` 防止旧页面动作作用到新模式；转调 `controlTask`，与 CLI
+  `pause|resume|takeover` 共用控制表和事务。终态拒绝操作，接管要求执行已收尾。
+  从 `human` 交还必须提交 `note`，经同一 Proposal 校验保存新版 A-State，保留已有事实。
+  这个入口不声明人工阶段完成，也不合成 A-StageOutcome。
 - 四道本机校验全过才放行（`writeRejection`）：`Host` 回环、`Origin`（浏览器带时）
   回环、`Content-Type: application/json`、`X-Keel-Console` 等于进程启动时随机生成、
   注入到页面 `<meta name="keel-console-token">` 的令牌。前两条挡 DNS rebinding，
@@ -48,6 +53,9 @@
   放最后并标「终态 · 不可恢复」。理由用卡片内联 `<textarea>`，必填项为空时按钮 `disabled`；
   **不要用 `window.prompt` / `window.confirm`** —— 弹窗挡住了判断依据，也挡住了失败原因。
 - 提交成功 / 失败都写在**对应卡片内部**（`.option-msg`），不弹全局提示。
+- 主动驾驶按钮在 Cockpit 头部按模式显示。点击后展开内联确认区，写明后果；
+  人工交还在同一区填写交接说明。提交中锁住按钮，失败保留说明与原因，成功立即刷新。
+  不使用浏览器原生确认框，不把「暂停」描述为中断正在执行的轮次。
 - 选项文案是**承诺**：它与 `src/control/transition/table.ts` 的副作用一一对应
   （T-014 / T-016 / T-015 / T-007）。改转移表就要改文案；`console.test.ts` 断言页面里的
   选项 key 集合等于 `src/cli/decide.ts` 的 `DECISIONS`，别绕过它。
@@ -100,6 +108,9 @@
   - `task`：列表字段 + `repo_id, current_run_id`；
   - `runs`：`id, stage, role, attempt, status, harness_id, harness_tier, session_ref,
     started_at, ended_at, error_kind, error_detail, tokens_in, tokens_out, cost_usd, cost_basis`；
+    仅 `RUNNING` 的行 LEFT JOIN `run_liveness` 并附 `liveness`，字段为
+    `last_progress_at, silence_threshold_ms, owner_heartbeat_at`。无遥测或非运行行返回 null，
+    不暴露 PID、进程组或配置。沉默阈值使用已固化的 `silence_ms`，不按 stage 重算。
   - `events`：`seq, run_id, type, payload, trace_id, span_id, occurred_at`（按 `seq` 升序）；
   - `artifacts`：`id, kind, key, version, schema_version, produced_by_run, committed_at,
     committed_at_seq, superseded_by, body` —— 返回**全部版本**（`kind, key, version DESC`），
@@ -129,6 +140,10 @@
   不要在各处自己拼单位。
 - 「已停留」类实时文案在节点上带 `data-since` + `data-prefix`，由 `tickElapsed()` 在轮询节拍里
   单独刷新文本 —— 指纹未变时不会重绘 DOM，不这样写时长会冻住。
+- Run 卡片与 Cockpit 的活跃度只以新进展判断。30 秒内为活跃，之后沉默，
+  超过有效 `silence_threshold_ms` 才警告「可能卡死」；阈值 null 不报警，无信号不假装活跃。
+  owner 心跳只作补充说明，不替代进展。详情指纹包含遥测，时长也由轮询节拍刷新；
+  绿色脉冲仅用于活跃度，遵守 `prefers-reduced-motion`。
 
 ## 三种视图：概览 / 任务 / 项目
 
@@ -156,7 +171,10 @@
   不能把系统等待误报成人的待办。项目排序：`needsYou` 降序 → 最近更新降序。
 - 项目详情头部只留三样：项目名（`title` 带完整 URL）、一句话现状、累计元信息行。
   一句话用白话，例如「2 个任务需要你处理，2 个在跑。」；没有进行中任务时明说
-  「没有进行中的任务」。**不要**恢复 6 块指标带和状态分布图 —— 分组标题的计数已经表达同一事实。
+  「没有进行中的任务」。按 #127 在项目侧栏和详情头部加入一条阶段分布堆叠条，
+  从全部项目任务按 `status` 聚合；颜色复用 move/signal/good/bad，悬停或键盘聚焦
+  读取各状态任务数。摘要的「活跃」= 所有非终态，「待处理」仍只数人工闸门。
+  临时任务筛选不改变项目整体分布。窄屏保持整条缩放、摘要换行，不恢复指标方块。
 - 任务按行动分组，顺序固定，空组整组不渲染：
   `需要你处理`（needs）→ `进行中`（stage）→ `等待中`（waiting）→ `已收尾`（terminal）。
   分组判定只在 `projectGroupOf` 一处。`需要你处理` 组行内给 `去决策` / `去回答`（不带箭头），
@@ -271,7 +289,9 @@
 
 - ≤1024px：侧栏 260px，隐藏 `.ladder`，决策选项单列，阶段箭头去掉让 10 段一屏读完。
 - ≤900px：三块纵向排队（侧栏 → 详情 → 状态栏）。`#app` 用
-  `grid-template-rows: auto auto 26px`，并且**必须显式给 `aside` / `main` / `.statusbar`
+  `grid-template-rows: auto auto auto`，状态栏最小高度 26px、内容允许换行；
+  列用 `minmax(0, 1fr)`，详情设置 `min-width: 0`，避免长内容撑宽整页。
+  **必须显式给 `aside` / `main` / `.statusbar`
   指定 `grid-row`** —— `.statusbar` 基础样式里写死了 `grid-row: 2`，不覆盖就会插在侧栏和详情中间。
 - 窄屏覆盖（`@media (max-width: 1024px)`）必须写在**全部组件规则之后**：
   同特异性的选择器只有排在后面才盖得住基础样式，写在文件中部会静默失效。

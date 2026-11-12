@@ -69,6 +69,14 @@ export async function claimRunForExecution(
   maxRunningRuns: number = DEFAULT_MAX_RUNNING_RUNS,
   identity?: ClaimIdentity,
 ): Promise<Result<void>> {
+  const task = await c.query<{ control_mode: string }>(
+    `SELECT t.control_mode FROM task t JOIN run r ON r.task_id=t.id
+     WHERE r.id=$1 FOR UPDATE OF t`,
+    [runId],
+  )
+  if (task.rows[0]?.control_mode !== 'auto') {
+    return err(makeError('CONFLICT', `run ${runId} 所属任务已暂停、已接管或不存在，拒绝认领`))
+  }
   const running = await c.query<{ n: string }>(
     `SELECT count(*) AS n FROM run WHERE status = 'RUNNING'`,
   )

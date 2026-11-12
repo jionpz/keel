@@ -23,10 +23,12 @@ import type {
   WorkspaceDiff,
 } from '../../contracts/harness-adapter.js'
 import { HarnessSessionManager } from '../../execution/session/manager.js'
+import { PgArtifactStore } from '../../fact/artifact-store.js'
 import { asOwner, closePool } from '../../fact/db.js'
 import { WorkflowDriver } from '../driver/driver.js'
 import { RuleBasedPolicyEngine } from '../policy/engine.js'
 import { DEFAULT_RULESET } from '../policy/ruleset.js'
+import { controlTask } from '../task-control.js'
 import { runTaskToCompletion } from './loop.js'
 
 const NOW = '2026-10-26T12:00:00Z'
@@ -126,6 +128,63 @@ async function seedTimer(taskId: string, kind: string, dueAt: string): Promise<v
 }
 
 describe('阶段态 · 没有待执行 run', () => {
+  it('暂停期间收尾的真实结论在恢复后只消费一次，不能当派发丢失或重跑原阶段', async () => {
+    const taskId = await seedTask('S-PM_ANALYZING')
+    await seedRun(taskId, 'pm', 1, 'SUCCEEDED')
+    const selected = await asOwner((client) =>
+      client.query<{ id: string }>('SELECT id FROM run WHERE task_id=$1', [taskId]),
+    )
+    const runId = selected.rows[0]?.id ?? ''
+    await asOwner((client) =>
+      client.query('UPDATE task SET current_run_id=$2 WHERE id=$1', [taskId, runId]),
+    )
+    const outcome = await new PgArtifactStore().commit(
+      {
+        proposal_id: randomUUID(),
+        task_id: taskId,
+        produced_by_run: runId,
+        kind: 'stage_outcome',
+        key: 'pm',
+        supersedes: null,
+        body: {
+          schema_version: '1.0',
+          run_id: runId,
+          stage: 'pm',
+          verdict: 'unclear',
+          reason: '需要澄清',
+          details: {},
+        },
+      },
+      {
+        run_id: runId,
+        verdict: { accepted: true, artifact_ref: null, violations: [] },
+        emit_event: true,
+      },
+    )
+    expect(outcome.ok).toBe(true)
+    await controlTask(taskId, 'pause', NOW)
+    const driver = deps().driver
+    expect(await driver.advance(taskId, { type: 'RunSucceeded', stage: 'pm' }, NOW)).toMatchObject({
+      ok: true,
+      value: { advanced: false },
+    })
+    await controlTask(taskId, 'resume', NOW)
+    const result = await runTaskToCompletion(taskId, deps(), { maxSteps: 3 })
+    expect(result).toMatchObject({
+      ok: true,
+      value: { finalStatus: 'S-NEED_CLARIFICATION', stopReason: 'awaiting-clarification' },
+    })
+    const again = await runTaskToCompletion(taskId, deps(), { maxSteps: 3 })
+    expect(again.ok).toBe(true)
+    const events = await asOwner((client) =>
+      client.query(
+        `SELECT count(*)::int AS count FROM event WHERE task_id=$1 AND type='TaskStatusChanged' AND payload->>'transition'='T-005'`,
+        [taskId],
+      ),
+    )
+    expect(events.rows[0]?.count).toBe(1)
+  })
+
   it('最近 run 已 SUCCEEDED 却没有新 run → 报错（派发丢失），detail 可直接定位', async () => {
     const taskId = await seedTask('S-QA')
     await seedRun(taskId, 'qa', 1, 'SUCCEEDED')
