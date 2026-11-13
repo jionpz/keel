@@ -78,8 +78,9 @@ ticket 与 workflow 的租约为 965 秒，比执行上限和清理等待多 60 
 才允许下一轮使用这份脏工作区继续：
 
 - 最近一条 `execute` stage 记录是 `FAILED` / `RUN_TIMEOUT`；
-- 从该失败到本次认领之间没有进入另一阶段，只有 attempt 记录、相同的前置脏工作区
-  暂停或人工恢复事件；前置检查可能已经消耗 attempt 但没有创建 stage 行；
+- 从该失败到本次认领之间没有进入另一阶段，只有 attempt 记录、与当前 WIP 精确匹配
+  的前置检查暂停或人工恢复事件；前置检查可能已经消耗 attempt 但没有创建 stage
+  行，旧版本也可能把超时后已提交的同一 HEAD 记录为前置 `WORKTREE_DRIFT`；
 - ticket 已绑定 workflow node，HEAD 等于 baseline/input commit，或是该 commit 的后代；
   worktree 仍通过路径与隔离检查；
 - 从合法输入到当前工作树的全部已提交 / tracked / untracked 改动都在节点

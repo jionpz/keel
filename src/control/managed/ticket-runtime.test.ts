@@ -130,6 +130,33 @@ async function seed(): Promise<{
   return { repoId, root, base, packagePath, taskId: created.value }
 }
 
+async function simulatePreflightPause(
+  taskId: string,
+  code: 'WORKSPACE_ERROR' | 'WORKTREE_DRIFT',
+  detail: string,
+): Promise<number> {
+  const preflight = await claimManagedTicketTask(new Date().toISOString(), taskId)
+  if (preflight === null) throw new Error('expected ticket preflight claim')
+  await asOwner(async (c) => {
+    await c.query(
+      `UPDATE managed_ticket_task SET status='PAUSED',last_error=$2,
+         lease_token=NULL,lease_until=NULL,updated_at=now() WHERE id=$1`,
+      [taskId, `${code}: ${detail}`],
+    )
+    await c.query(
+      `INSERT INTO managed_ticket_event(task_id,type,payload)
+       VALUES($1,'ManagedTicketPaused',$2::jsonb)`,
+      [taskId, JSON.stringify({ code, detail })],
+    )
+    await c.query(
+      `UPDATE managed_ticket_task SET status='READY',last_error=NULL,
+         lease_token=NULL,lease_until=NULL,updated_at=now() WHERE id=$1`,
+      [taskId],
+    )
+  })
+  return preflight.attempt
+}
+
 function happyWorker(root: string): ManagedTicketWorker {
   return workerWith(async (input) => {
     if (input.stage === 'execute') {
@@ -1051,32 +1078,13 @@ describe('managed ticket runtime', () => {
     expect(first).toMatchObject({ ok: true, value: { status: 'READY', stage: 'execute' } })
 
     // 精确模拟现场：attempt 2 已被前置检查消耗，但没有 managed_ticket_stage 行。
-    const preflight = await claimManagedTicketTask(new Date().toISOString(), taskId)
-    expect(preflight?.attempt).toBe(2)
-    await asOwner(async (c) => {
-      await c.query(
-        `UPDATE managed_ticket_task SET status='PAUSED',
-           last_error='WORKSPACE_ERROR: ticket worktree 在阶段开始前必须干净',
-           lease_token=NULL,lease_until=NULL,updated_at=now() WHERE id=$1`,
-        [taskId],
-      )
-      await c.query(
-        `INSERT INTO managed_ticket_event(task_id,type,payload)
-         VALUES($1,'ManagedTicketPaused',$2::jsonb)`,
-        [
-          taskId,
-          JSON.stringify({
-            code: 'WORKSPACE_ERROR',
-            detail: 'ticket worktree 在阶段开始前必须干净',
-          }),
-        ],
-      )
-      await c.query(
-        `UPDATE managed_ticket_task SET status='READY',last_error=NULL,
-           lease_token=NULL,lease_until=NULL,updated_at=now() WHERE id=$1`,
-        [taskId],
-      )
-    })
+    expect(
+      await simulatePreflightPause(
+        taskId,
+        'WORKSPACE_ERROR',
+        'ticket worktree 在阶段开始前必须干净',
+      ),
+    ).toBe(2)
 
     let recovered = false
     const worker = workerWith(async (input) => {
@@ -1139,6 +1147,14 @@ describe('managed ticket runtime', () => {
     expect(await head(root)).toBe(timedOutCommit)
     expect(await git(root, 'status', '--porcelain')).toBe('')
 
+    expect(
+      await simulatePreflightPause(
+        taskId,
+        'WORKTREE_DRIFT',
+        `worktree HEAD ${timedOutCommit} 与绑定输入 ${task.value.baseline_commit} 不一致`,
+      ),
+    ).toBe(2)
+
     let observedInput = ''
     const worker = workerWith(async (input) => {
       observedInput = input.input_commit
@@ -1155,7 +1171,7 @@ describe('managed ticket runtime', () => {
     const stages = await listManagedTicketStages(taskId)
     expect(stages.map((stage) => [stage.attempt, stage.stage, stage.status, stage.error])).toEqual([
       [1, 'execute', 'FAILED', 'RUN_TIMEOUT'],
-      [2, 'execute', 'SUCCEEDED', null],
+      [3, 'execute', 'SUCCEEDED', null],
     ])
     expect(stages[1]?.input_commit).toBe(timedOutCommit)
     expect(stages[1]?.output_commit).not.toBe(timedOutCommit)
@@ -1172,12 +1188,61 @@ describe('managed ticket runtime', () => {
     expect(recovery?.payload).toMatchObject({
       stage: 'execute',
       previousAttempt: 1,
-      attempt: 2,
+      attempt: 3,
       headCommit: timedOutCommit,
       previousInputCommit: task.value.baseline_commit,
       worktreeState: 'committed',
       changedFiles: ['feature.txt'],
     })
+  })
+
+  it('RUN_TIMEOUT 后不对应的 WORKTREE_DRIFT 暂停仍拒绝恢复', async () => {
+    const { repoId, root, taskId } = await seed()
+    await bindWorkflowIssue(repoId, taskId, '#134', ['feature.txt'])
+    const task = await getManagedTicket(taskId)
+    if (!task.ok) throw new Error(task.error.detail)
+    let timedOutCommit = ''
+    await tickManagedTicket(
+      {
+        harness: 'pi',
+        toolInventory: workerTools,
+        run: async () => {
+          timedOutCommit = await commitFile(root, 'feature.txt', 'partial implementation\n')
+          return {
+            ok: false,
+            error: makeError('RUN_TIMEOUT', 'fixture stage timeout after commit'),
+            usage: ZERO_USAGE,
+          }
+        },
+      },
+      taskId,
+    )
+    expect(timedOutCommit).not.toBe(task.value.baseline_commit)
+    expect(
+      await simulatePreflightPause(
+        taskId,
+        'WORKTREE_DRIFT',
+        `worktree HEAD ${'f'.repeat(40)} 与绑定输入 ${task.value.baseline_commit} 不一致`,
+      ),
+    ).toBe(2)
+
+    let called = false
+    const blocked = await tickManagedTicket(
+      {
+        harness: 'pi',
+        toolInventory: workerTools,
+        run: async () => {
+          called = true
+          throw new Error('runner must not be called')
+        },
+      },
+      taskId,
+    )
+    expect(blocked).toMatchObject({ ok: true, value: { status: 'PAUSED', stage: 'execute' } })
+    expect(called).toBe(false)
+    const state = await getManagedTicket(taskId)
+    if (!state.ok) throw new Error(state.error.detail)
+    expect(state.value.last_error).toContain('RUN_TIMEOUT 后出现 ManagedTicketPaused')
   })
 
   it('RUN_TIMEOUT 后出现非绑定输入后代的 HEAD 时暂停', async () => {

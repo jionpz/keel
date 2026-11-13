@@ -641,6 +641,7 @@ async function timeoutRecoveryForExecute(
       [claim.task.id, failedSeq],
     ),
   )
+  const worktreeDriftDetail = `worktree HEAD ${worktree.head} 与绑定输入 ${expectedInput} 不一致`
   for (const event of laterEvents.rows) {
     if (event.type === 'ManagedTicketResumed') continue
     const payload = eventPayload(event.payload)
@@ -658,6 +659,12 @@ async function timeoutRecoveryForExecute(
       event.type === 'ManagedTicketPaused' &&
       payload.code === 'WORKSPACE_ERROR' &&
       payload.detail === STAGE_PREFLIGHT_CLEAN_DETAIL
+    )
+      continue
+    if (
+      event.type === 'ManagedTicketPaused' &&
+      payload.code === 'WORKTREE_DRIFT' &&
+      payload.detail === worktreeDriftDetail
     )
       continue
     return err(
