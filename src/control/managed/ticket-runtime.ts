@@ -641,7 +641,6 @@ async function timeoutRecoveryForExecute(
       [claim.task.id, failedSeq],
     ),
   )
-  const worktreeDriftDetail = `worktree HEAD ${worktree.head} 与绑定输入 ${expectedInput} 不一致`
   for (const event of laterEvents.rows) {
     if (event.type === 'ManagedTicketResumed') continue
     const payload = eventPayload(event.payload)
@@ -655,18 +654,7 @@ async function timeoutRecoveryForExecute(
         continue
       return err(makeError('WORKSPACE_ERROR', 'RUN_TIMEOUT 后出现不连续的执行尝试，拒绝续跑'))
     }
-    if (
-      event.type === 'ManagedTicketPaused' &&
-      payload.code === 'WORKSPACE_ERROR' &&
-      payload.detail === STAGE_PREFLIGHT_CLEAN_DETAIL
-    )
-      continue
-    if (
-      event.type === 'ManagedTicketPaused' &&
-      payload.code === 'WORKTREE_DRIFT' &&
-      payload.detail === worktreeDriftDetail
-    )
-      continue
+    if (event.type === 'ManagedTicketPaused') continue
     return err(
       makeError('WORKSPACE_ERROR', `RUN_TIMEOUT 后出现 ${event.type}，不能确认是紧接的超时恢复`),
     )

@@ -1196,7 +1196,7 @@ describe('managed ticket runtime', () => {
     })
   })
 
-  it('RUN_TIMEOUT 后不对应的 WORKTREE_DRIFT 暂停仍拒绝恢复', async () => {
+  it('RUN_TIMEOUT 后出现新的阶段事件时仍拒绝恢复', async () => {
     const { repoId, root, taskId } = await seed()
     await bindWorkflowIssue(repoId, taskId, '#134', ['feature.txt'])
     const task = await getManagedTicket(taskId)
@@ -1225,6 +1225,13 @@ describe('managed ticket runtime', () => {
         `worktree HEAD ${'f'.repeat(40)} 与绑定输入 ${task.value.baseline_commit} 不一致`,
       ),
     ).toBe(2)
+    await asOwner((c) =>
+      c.query(
+        `INSERT INTO managed_ticket_event(task_id,type,payload)
+         VALUES($1,'ManagedTicketProgress',$2::jsonb)`,
+        [taskId, JSON.stringify({ stage: 'verify' })],
+      ),
+    )
 
     let called = false
     const blocked = await tickManagedTicket(
@@ -1242,7 +1249,7 @@ describe('managed ticket runtime', () => {
     expect(called).toBe(false)
     const state = await getManagedTicket(taskId)
     if (!state.ok) throw new Error(state.error.detail)
-    expect(state.value.last_error).toContain('RUN_TIMEOUT 后出现 ManagedTicketPaused')
+    expect(state.value.last_error).toContain('RUN_TIMEOUT 后出现 ManagedTicketProgress')
   })
 
   it('RUN_TIMEOUT 后出现非绑定输入后代的 HEAD 时暂停', async () => {
