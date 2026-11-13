@@ -8,7 +8,7 @@ import { asOwner, closePool, connectionString } from '../../fact/db.js'
 import { sha256CanonicalJson } from '../../shared/canonical-json.js'
 import { fixtureRoutePackage } from '../managed/route-test-utils.js'
 import { fixtureTicketPackage } from '../managed/ticket-test-utils.js'
-import { createBackup, restoreVerify, verifyBackupDirectory } from './backup.js'
+import { createBackup, pgEnvironment, restoreVerify, verifyBackupDirectory } from './backup.js'
 
 const HASH = 'a'.repeat(64)
 const tempDirs: string[] = []
@@ -132,6 +132,44 @@ beforeEach(clean)
 afterAll(closePool)
 
 describe('JT-06 backup / restore-verify', () => {
+  it('pgEnvironment 使用 URL 查询参数中的有效连接地址', () => {
+    const env = pgEnvironment(
+      'postgres://url-user:url-pass@tcp.example:5432/db%20name' +
+        '?host=%2Ftmp%2Fpostgresql&port=6543' +
+        '&user=query%40user&password=query%3Apass&sslmode=verify-full',
+      { PATH: '/bin', PGHOST: 'stale', PGSERVICE: 'stale' },
+    )
+
+    expect(env).toMatchObject({
+      PATH: '/bin',
+      PGHOST: '/tmp/postgresql',
+      PGPORT: '6543',
+      PGUSER: 'query@user',
+      PGPASSWORD: 'query:pass',
+      PGDATABASE: 'db name',
+      PGSSLMODE: 'verify-full',
+    })
+    expect(env).not.toHaveProperty('PGSERVICE')
+  })
+
+  it('pgEnvironment 对缺失值、空查询参数和非法 URL 编码给出确定行为', () => {
+    const authority = pgEnvironment('postgres://tcp.example:5433/database?host=&port=', {})
+    expect(authority.PGHOST).toBe('tcp.example')
+    expect(authority.PGPORT).toBe('5433')
+
+    const env = pgEnvironment('postgres:///database', { PATH: '/bin' })
+
+    expect(env).not.toHaveProperty('PGHOST')
+    expect(env).not.toHaveProperty('PGPORT')
+    expect(env).not.toHaveProperty('PGUSER')
+    expect(env).not.toHaveProperty('PGPASSWORD')
+    expect(env.PGDATABASE).toBe('database')
+    expect(() => pgEnvironment('postgres://user%ZZ@tcp.example/database')).toThrow(
+      /username百分号编码非法/,
+    )
+    expect(() => pgEnvironment('postgres:///database%ZZ')).toThrow(/数据库名百分号编码非法/)
+  })
+
   it('真实 ticket/route 包的内容摘要与整包摘要分别校验并完整恢复', async () => {
     const fixture = await seed()
     const packages = [fixtureTicketPackage(), fixtureRoutePackage()]

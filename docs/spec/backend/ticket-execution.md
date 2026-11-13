@@ -129,6 +129,21 @@ keychain 沙箱；没有等价沙箱的平台在启动期拒绝，不回退到�
 `managed_decision_request`，绑定 `managed_ticket_task_id`、package digest、attempt
 与 input digest。
 
+受管执行不识别“Keel 自身仓库”。不得用 repo id、仓库名、remote URL 或本进程源码
+路径判断宿主身份，也不得为 Keel 仓库设置特殊分支、权限、超时、验证或恢复路径。
+Keel 仓库与其他项目一样，只按 repo 配置、固定工作流包、工作树状态、租约与
+`control_generation`、Harness 能力契约推进。本机部署与重启属于 operator 运维动作，
+不进入 managed ticket/workflow 的业务状态机。
+
+决策身份是 `(id, revision)`；revision 只能在同一 id 内比较。新建请求必须精确回读
+自身身份，天问领取、载入、落库及人工答复都要核对 ticket 的完整 pending 身份，
+不能按 ticket 的历史 revision 排序猜测当前请求。
+
+managed 模式的阶段记账由 Keel 维护；固定 provider 包中的源路径不构成执行环境路径
+契约，不再要求执行器调用来源工作区的 `stage.sh`。阶段进展通过 adapter hook 交回
+控制面，每十秒最多记录一次 `ManagedTicketProgress`，只保存阶段、事件种类与时间，
+不保存模型文本、进程号或凭据；该遥测不作为完成证据。
+
 - `must_stop` 或 `requested_action`：任务进入 `WAITING_HUMAN`，选项固定为
   “停止并等待人工处理（推荐）”与“批准本次继续（仅一次）”。请求与普通决策一样
   先进入天问；天问只有在精确委托范围内才能代批，否则返回 `owner_required` 并等待

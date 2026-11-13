@@ -25,6 +25,7 @@ import {
 } from './ticket-runtime.js'
 import { listManagedTicketStages } from './ticket-store.js'
 import { fixtureTicketPackage } from './ticket-test-utils.js'
+import { tickPendingTicketTianwen } from './ticket-tianwen.js'
 import { diffDigest } from './ticket-workspace.js'
 
 const run = promisify(execFile)
@@ -241,6 +242,139 @@ async function bindWorkflowIssue(
 }
 
 describe('managed ticket runtime', () => {
+  it('旧请求已解决到 revision 2 后，新请求仍精确绑定并领取自身 revision 1', async () => {
+    const { taskId } = await seed()
+    const blocked = workerWith(async () => ({
+      schema_version: '1.0',
+      stage: 'execute',
+      status: 'blocked',
+      summary: '需要选择验证环境',
+      decision: {
+        decision_key: 'ticket.verify.environment',
+        kind: 'approval',
+        question: '是否使用隔离验证环境？',
+        options: ['批准继续', '停止'],
+        action_category: 'ticket_stage',
+        impact: {
+          environment: 'local',
+          reversibility: 'reversible',
+          affected_resources: ['fixture'],
+        },
+      },
+    }))
+    expect((await tickManagedTicket(blocked, taskId)).ok).toBe(true)
+    const first = await getManagedTicket(taskId)
+    if (!first.ok || first.value.pending_decision_id === null) throw new Error('缺少第一次请求')
+    const oldId = first.value.pending_decision_id
+    await asOwner((c) =>
+      c.query(
+        'UPDATE managed_ticket_task SET pending_decision_id=NULL,pending_decision_revision=NULL WHERE id=$1',
+        [taskId],
+      ),
+    )
+    const stale = await answerManagedTicketDecision(oldId, 1, 'option-1', new Date().toISOString())
+    expect(stale.ok).toBe(false)
+    if (stale.ok) throw new Error('不应答复 ticket 未在等待的版本')
+    expect(stale.error.kind).toBe('CONFLICT')
+    await asOwner((c) =>
+      c.query(
+        'UPDATE managed_ticket_task SET pending_decision_id=$2,pending_decision_revision=1 WHERE id=$1',
+        [taskId, oldId],
+      ),
+    )
+    const answered = await answerManagedTicketDecision(
+      oldId,
+      1,
+      'option-1',
+      new Date().toISOString(),
+    )
+    expect(answered.ok).toBe(true)
+    if (!answered.ok) throw new Error(answered.error.detail)
+    expect(answered.value.resolution.request_revision).toBe(2)
+
+    const unavailable = async () => ({
+      ok: false as const,
+      error: makeError('HARNESS_UNAVAILABLE', 'test decision unavailable'),
+      usage: ZERO_USAGE,
+    })
+    let signalStarted: () => void = () => undefined
+    let release: () => void = () => undefined
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve
+    })
+    const proceed = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const secondTick = tickManagedTicket(
+      {
+        ...blocked,
+        decide: async () => {
+          signalStarted()
+          await proceed
+          return unavailable()
+        },
+      },
+      taskId,
+    )
+    await started
+    try {
+      const pending = await getManagedTicket(taskId)
+      if (!pending.ok) throw new Error(pending.error.detail)
+      const newId = pending.value.pending_decision_id
+      expect(newId).not.toBe(oldId)
+      expect(pending.value.pending_decision_revision).toBe(1)
+      await asOwner((c) =>
+        c.query(
+          'UPDATE managed_ticket_task SET pending_decision_id=$2,pending_decision_revision=2 WHERE id=$1',
+          [taskId, oldId],
+        ),
+      )
+      expect(await tickPendingTicketTianwen(unavailable, taskId)).toEqual({ ok: true, value: null })
+      await asOwner((c) =>
+        c.query(
+          'UPDATE managed_ticket_task SET pending_decision_id=$2,pending_decision_revision=NULL WHERE id=$1',
+          [taskId, newId],
+        ),
+      )
+      expect(await tickPendingTicketTianwen(unavailable, taskId)).toEqual({ ok: true, value: null })
+      await asOwner((c) =>
+        c.query('UPDATE managed_ticket_task SET pending_decision_revision=1 WHERE id=$1', [taskId]),
+      )
+    } finally {
+      release()
+      expect((await secondTick).ok).toBe(true)
+    }
+    const second = await getManagedTicket(taskId)
+    if (!second.ok) throw new Error(second.error.detail)
+    expect(second.value.pending_decision_id).not.toBe(oldId)
+    expect(second.value.pending_decision_revision).toBe(1)
+  })
+
+  it('阶段进展经控制面落库，并限制写入频率', async () => {
+    const { root, taskId } = await seed()
+    const worker = happyWorker(root)
+    const run = worker.run
+    const result = await tickManagedTicket(
+      {
+        ...worker,
+        run: async (input) => {
+          input.onProgress?.({ kind: 'tool_start', at: 1 })
+          input.onProgress?.({ kind: 'tool_end', at: 2 })
+          return run(input)
+        },
+      },
+      taskId,
+    )
+    expect(result.ok).toBe(true)
+    const events = await asRole('keel_control', (c) =>
+      c.query(
+        `SELECT payload FROM managed_ticket_event WHERE task_id=$1 AND type='ManagedTicketProgress'`,
+        [taskId],
+      ),
+    )
+    expect(events.rows).toHaveLength(1)
+    expect(events.rows[0]?.payload).toMatchObject({ stage: 'execute', kind: 'tool_start' })
+  })
   it('租约覆盖阶段超时及清理，失去租约时不谎报失败状态已落库', async () => {
     const { taskId } = await seed()
     const worker: ManagedTicketWorker = {

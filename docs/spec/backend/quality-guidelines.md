@@ -17,6 +17,18 @@ lint → typecheck → boundaries → check:generated → check:transitions → 
 根 `README.md` §四条被机械化的架构约束。**不要绕过其中任何一段**;
 要放宽约束走 ADR,不要注释掉配置。
 
+### 不依赖宿主数据库的检查
+
+`pnpm run check:isolated` 自建临时 PostgreSQL（仅 Unix socket、禁 TCP）、HOME、
+blob 与 TMPDIR，再执行同一条 `pnpm run check`。需要 PATH 中有 PostgreSQL 的
+`initdb`、`pg_ctl`、`createdb`、`pg_dump`、`pg_restore`。不继承数据库或模型凭据，
+不访问 `keel_dev` / `keel_test`；成功清理，失败停止数据库并保留现场。
+
+HTTP 夹具统一使用 `src/test-support/http-server.ts` 的 Unix socket；禁止为跑测试
+放宽 managed 沙箱的 TCP 权限。需要在宿主上证明沙箱边界的
+`*.isolation.test.ts` 放在 `check:isolation`，由独立 CI isolation job 执行；
+它们不能嵌套在待证明的沙箱中冒充宿主验收。
+
 ---
 
 ## TypeScript:全严格开关是基线
