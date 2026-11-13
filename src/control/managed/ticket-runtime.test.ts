@@ -1115,6 +1115,111 @@ describe('managed ticket runtime', () => {
     )
   })
 
+  it('execute 超时后已提交但尚未确认的 worktree 可以从新 HEAD 继续', async () => {
+    const { repoId, root, taskId } = await seed()
+    await bindWorkflowIssue(repoId, taskId, '#134', ['feature.txt'])
+    const task = await getManagedTicket(taskId)
+    if (!task.ok) throw new Error(task.error.detail)
+
+    let timedOutCommit = ''
+    const timeoutWorker: ManagedTicketWorker = {
+      harness: 'pi',
+      toolInventory: workerTools,
+      run: async () => {
+        timedOutCommit = await commitFile(root, 'feature.txt', 'partial implementation\n')
+        return {
+          ok: false,
+          error: makeError('RUN_TIMEOUT', 'fixture stage timeout after commit'),
+          usage: ZERO_USAGE,
+        }
+      },
+    }
+    const first = await tickManagedTicket(timeoutWorker, taskId)
+    expect(first).toMatchObject({ ok: true, value: { status: 'READY', stage: 'execute' } })
+    expect(await head(root)).toBe(timedOutCommit)
+    expect(await git(root, 'status', '--porcelain')).toBe('')
+
+    let observedInput = ''
+    const worker = workerWith(async (input) => {
+      observedInput = input.input_commit
+      await writeFile(join(root, 'feature.txt'), 'completed implementation\n')
+      await git(root, 'add', 'feature.txt')
+      await git(root, 'commit', '-m', 'complete timed out implementation')
+      const commit = await head(root)
+      return success('execute', { commit, worktree_head: commit })
+    })
+    const resumed = await tickManagedTicket(worker, taskId)
+    expect(resumed).toMatchObject({ ok: true, value: { status: 'READY', stage: 'execute' } })
+    expect(observedInput).toBe(timedOutCommit)
+
+    const stages = await listManagedTicketStages(taskId)
+    expect(stages.map((stage) => [stage.attempt, stage.stage, stage.status, stage.error])).toEqual([
+      [1, 'execute', 'FAILED', 'RUN_TIMEOUT'],
+      [2, 'execute', 'SUCCEEDED', null],
+    ])
+    expect(stages[1]?.input_commit).toBe(timedOutCommit)
+    expect(stages[1]?.output_commit).not.toBe(timedOutCommit)
+
+    const recovery = (
+      await asRole('keel_control', (c) =>
+        c.query<{ payload: unknown }>(
+          `SELECT payload FROM managed_ticket_event
+           WHERE task_id=$1 AND type='ManagedTicketTimeoutRecovery'`,
+          [taskId],
+        ),
+      )
+    ).rows[0]
+    expect(recovery?.payload).toMatchObject({
+      stage: 'execute',
+      previousAttempt: 1,
+      attempt: 2,
+      headCommit: timedOutCommit,
+      previousInputCommit: task.value.baseline_commit,
+      worktreeState: 'committed',
+      changedFiles: ['feature.txt'],
+    })
+  })
+
+  it('RUN_TIMEOUT 后出现非绑定输入后代的 HEAD 时暂停', async () => {
+    const { repoId, root, taskId } = await seed()
+    await bindWorkflowIssue(repoId, taskId, '#134', ['feature.txt'])
+    const timeoutWorker: ManagedTicketWorker = {
+      harness: 'pi',
+      toolInventory: workerTools,
+      run: async () => {
+        await git(root, 'checkout', '--orphan', 'unrelated-history')
+        await git(root, 'rm', '-rf', '.')
+        await commitFile(root, 'feature.txt', 'unrelated implementation\n')
+        return {
+          ok: false,
+          error: makeError('RUN_TIMEOUT', 'fixture stage timeout after unrelated commit'),
+          usage: ZERO_USAGE,
+        }
+      },
+    }
+    const first = await tickManagedTicket(timeoutWorker, taskId)
+    expect(first).toMatchObject({ ok: true, value: { status: 'READY', stage: 'execute' } })
+
+    let called = false
+    const blocked = await tickManagedTicket(
+      {
+        harness: 'pi',
+        toolInventory: workerTools,
+        run: async () => {
+          called = true
+          throw new Error('runner must not be called')
+        },
+      },
+      taskId,
+    )
+    expect(blocked).toMatchObject({ ok: true, value: { status: 'PAUSED', stage: 'execute' } })
+    expect(called).toBe(false)
+    const state = await getManagedTicket(taskId)
+    if (!state.ok) throw new Error(state.error.detail)
+    expect(state.value.last_error).toContain('WORKTREE_DRIFT')
+    expect(state.value.last_error).toContain('不是绑定输入')
+  })
+
   it('没有 RUN_TIMEOUT 证据的普通脏 worktree 仍暂停', async () => {
     const { repoId, root, taskId } = await seed()
     await bindWorkflowIssue(repoId, taskId, '#134', ['feature.txt'])

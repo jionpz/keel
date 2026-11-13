@@ -80,14 +80,17 @@ ticket 与 workflow 的租约为 965 秒，比执行上限和清理等待多 60 
 - 最近一条 `execute` stage 记录是 `FAILED` / `RUN_TIMEOUT`；
 - 从该失败到本次认领之间没有进入另一阶段，只有 attempt 记录、相同的前置脏工作区
   暂停或人工恢复事件；前置检查可能已经消耗 attempt 但没有创建 stage 行；
-- ticket 已绑定 workflow node，HEAD 仍等于 baseline/input commit，worktree 仍通过
-  路径与隔离检查；
-- 从 baseline 到当前工作树的全部 tracked / untracked 改动都在节点 `scope_paths` 内。
+- ticket 已绑定 workflow node，HEAD 等于 baseline/input commit，或是该 commit 的后代；
+  worktree 仍通过路径与隔离检查；
+- 从合法输入到当前工作树的全部已提交 / tracked / untracked 改动都在节点
+  `scope_paths` 内。
 
 续跑与 stage 启动在同一事务中写入 `ManagedTicketTimeoutRecovery`，记录保留路径、
-attempt 与 `dirtyDigest`；上下文明确要求模型基于 WIP 继续而不是丢弃。续跑不会绕过
-完成门禁：`execute` 仍必须产生新 commit，最终工作树必须干净。普通脏工作区、没有
-scope 的 dirty ticket、超时后出现其他阶段事件以及 scope 外 WIP 都 fail-closed。
+attempt、恢复前后的 HEAD、`worktreeState` 与 `dirtyDigest`；上下文明确要求模型基于
+恢复点继续而不是丢弃。即使超时发生在 agent 已提交但 stage 尚未确认时，也仍会把该
+commit 当作未确认输入，而不是误判为 drift。续跑不会绕过完成门禁：`execute` 仍必须
+在恢复输入之上产生新 commit，最终工作树必须干净。普通脏工作区、没有 scope、非绑定
+输入后代的 HEAD、超时后出现其他阶段事件以及 scope 外改动都 fail-closed。
 
 结构化阶段结果通过 schema 校验后，先保留 result 与实际 git/检查 evidence，再做
 阶段门禁；验证失败也必须能够回查命令、退出码与输出摘要。FAILED 行的结果只用于

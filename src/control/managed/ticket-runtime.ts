@@ -56,6 +56,7 @@ import {
   commitExists,
   diffDigest,
   inspectTicketWorktree,
+  isAncestor,
   resolveCommit,
   type TicketWorktreeState,
   workingTreeChangedFiles,
@@ -481,7 +482,8 @@ async function buildTicketContext(
       : [
           section(
             'timeout_recovery',
-            '上一轮 execute 因 RUN_TIMEOUT 中断，当前工作区保留了该 ticket 的未提交 WIP。' +
+            '上一轮 execute 因 RUN_TIMEOUT 中断，当前工作区保留了该 ticket 的恢复点' +
+              `（${timeoutRecovery.worktreeState}）。` +
               '先检查这些改动并基于它们继续，不要 reset、checkout 或丢弃；' +
               `完成实现后提交全部预期改动，最终工作树必须干净。改动必须限定在 scope_paths 内。` +
               `保留的路径：${timeoutRecovery.changedFiles.join(', ')}`,
@@ -554,6 +556,9 @@ interface WorkflowNodeReference {
 
 interface TimeoutRecovery {
   readonly previousAttempt: number
+  readonly previousInputCommit: string
+  readonly inputCommit: string
+  readonly worktreeState: 'dirty' | 'committed' | 'committed_and_dirty'
   readonly changedFiles: readonly string[]
   readonly dirtyDigest: string
 }
@@ -597,6 +602,7 @@ async function timeoutRecoveryForExecute(
   stage: ManagedTicketStageName,
   previous: readonly ManagedTicketStageRecord[],
   workflowNode: WorkflowNodeReference | null,
+  expectedInput: string,
   worktree: TicketWorktreeState,
 ): Promise<Result<TimeoutRecovery | null>> {
   if (stage !== 'execute') return ok(null)
@@ -659,10 +665,21 @@ async function timeoutRecoveryForExecute(
     )
   }
 
-  const changed = await workingTreeChangedFiles(worktree.path, claim.task.baseline_commit)
+  if (
+    worktree.head !== expectedInput &&
+    !(await isAncestor(worktree.path, expectedInput, worktree.head))
+  )
+    return err(
+      makeError(
+        'WORKSPACE_ERROR',
+        `WORKTREE_DRIFT: worktree HEAD ${worktree.head} 不是绑定输入 ${expectedInput} 的后代，拒绝恢复`,
+      ),
+    )
+
+  const changed = await workingTreeChangedFiles(worktree.path, expectedInput)
   if (!changed.ok) return changed
   if (changed.value.length === 0)
-    return err(makeError('WORKSPACE_ERROR', '工作区被标记为脏，但没有识别到 ticket 改动'))
+    return err(makeError('WORKSPACE_ERROR', 'RUN_TIMEOUT 后没有识别到 ticket 改动'))
   const outside = changed.value.filter(
     (path) => !workflowNode.scope_paths.some((scope) => scopeAllows(scope, path)),
   )
@@ -675,6 +692,14 @@ async function timeoutRecoveryForExecute(
     )
   return ok({
     previousAttempt: timedOut.attempt,
+    previousInputCommit: expectedInput,
+    inputCommit: worktree.head,
+    worktreeState:
+      worktree.head === expectedInput
+        ? 'dirty'
+        : worktree.clean
+          ? 'committed'
+          : 'committed_and_dirty',
     changedFiles: changed.value,
     dirtyDigest: sha256CanonicalJson({
       head: worktree.head,
@@ -1060,25 +1085,34 @@ export async function tickManagedTicket(
   const previous = await asRole('keel_control', (c) =>
     listManagedTicketStagesInTx(c, claim.task.id),
   )
-  const inputCommit = expectedInputCommit(claim.task, previous)
+  const expectedInput = expectedInputCommit(claim.task, previous)
   const worktree = await inspectTicketWorktree(claim.task.worktree_path)
   if (!worktree.ok) return pauseTicketWithError(claim, 'WORKSPACE_ERROR', worktree.error.detail)
   const isolated = await isolationViolations(worktree.value.path)
   if (!isolated.ok) return pauseTicketWithError(claim, 'WORKSPACE_ERROR', isolated.error.detail)
-  if (worktree.value.head !== inputCommit)
+  const needsRecovery = !worktree.value.clean || worktree.value.head !== expectedInput
+  const timeoutRecovery = needsRecovery
+    ? await timeoutRecoveryForExecute(
+        claim,
+        stage,
+        previous,
+        workflowNode,
+        expectedInput,
+        worktree.value,
+      )
+    : null
+  if (timeoutRecovery !== null && !timeoutRecovery.ok)
+    return pauseTicketWithError(claim, timeoutRecovery.error.kind, timeoutRecovery.error.detail)
+  const recovery = timeoutRecovery?.ok ? timeoutRecovery.value : null
+  if (recovery === null && worktree.value.head !== expectedInput)
     return pauseTicketWithError(
       claim,
       'WORKTREE_DRIFT',
-      `worktree HEAD ${worktree.value.head} 与绑定输入 ${inputCommit} 不一致`,
+      `worktree HEAD ${worktree.value.head} 与绑定输入 ${expectedInput} 不一致`,
     )
-  const timeoutRecovery = worktree.value.clean
-    ? null
-    : await timeoutRecoveryForExecute(claim, stage, previous, workflowNode, worktree.value)
-  if (timeoutRecovery !== null && !timeoutRecovery.ok)
-    return pauseTicketWithError(claim, timeoutRecovery.error.kind, timeoutRecovery.error.detail)
-  if (!worktree.value.clean && (timeoutRecovery === null || timeoutRecovery.value === null))
+  if (!worktree.value.clean && recovery === null)
     return pauseTicketWithError(claim, 'WORKSPACE_ERROR', STAGE_PREFLIGHT_CLEAN_DETAIL)
-  const recovery = timeoutRecovery?.ok ? timeoutRecovery.value : null
+  const inputCommit = recovery?.inputCommit ?? expectedInput
 
   const stageId = randomUUID()
   const inputDigest = sha256CanonicalJson({
@@ -1140,6 +1174,8 @@ export async function tickManagedTicket(
         previousAttempt: recovery.previousAttempt,
         attempt: claim.attempt,
         headCommit: inputCommit,
+        previousInputCommit: recovery.previousInputCommit,
+        worktreeState: recovery.worktreeState,
         changedFiles: recovery.changedFiles,
         dirtyDigest: recovery.dirtyDigest,
       })
