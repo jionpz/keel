@@ -57,6 +57,8 @@ import {
   diffDigest,
   inspectTicketWorktree,
   resolveCommit,
+  type TicketWorktreeState,
+  workingTreeChangedFiles,
 } from './ticket-workspace.js'
 import {
   findReusableWorkflowEvidence,
@@ -403,6 +405,7 @@ async function buildTicketContext(
   stage: ManagedTicketStageName,
   inputCommit: string,
   plan: ManagedTicketToolPlan,
+  timeoutRecovery: TimeoutRecovery | null,
 ): Promise<Context> {
   const stages = await listManagedTicketStagesInTx(c, claim.task.id)
   const reworkNotes = stages
@@ -453,6 +456,7 @@ async function buildTicketContext(
     must_stop: ticketPackage.must_stop,
     history,
     workflow_node: workflowNode ?? null,
+    timeout_recovery: timeoutRecovery,
     rework_notes: reworkNotes,
     human_decisions: decisions,
   })
@@ -472,6 +476,18 @@ async function buildTicketContext(
           ),
         ]
       : []),
+    ...(timeoutRecovery === null
+      ? []
+      : [
+          section(
+            'timeout_recovery',
+            '上一轮 execute 因 RUN_TIMEOUT 中断，当前工作区保留了该 ticket 的未提交 WIP。' +
+              '先检查这些改动并基于它们继续，不要 reset、checkout 或丢弃；' +
+              `完成实现后提交全部预期改动，最终工作树必须干净。改动必须限定在 scope_paths 内。` +
+              `保留的路径：${timeoutRecovery.changedFiles.join(', ')}`,
+            'fixed:ticket/timeout-recovery-v1',
+          ),
+        ]),
     ...(stage === 'land' && ticketPackage.completion_target === 'branch_ready'
       ? [
           section(
@@ -536,6 +552,14 @@ interface WorkflowNodeReference {
   readonly external_issue: string | null
 }
 
+interface TimeoutRecovery {
+  readonly previousAttempt: number
+  readonly changedFiles: readonly string[]
+  readonly dirtyDigest: string
+}
+
+const STAGE_PREFLIGHT_CLEAN_DETAIL = 'ticket worktree 在阶段开始前必须干净'
+
 async function workflowNodeForTicket(taskId: string): Promise<WorkflowNodeReference | null> {
   const row = await asRole('keel_control', (c) =>
     c.query<WorkflowNodeReference>(
@@ -560,6 +584,103 @@ function workflowNodeBinding(node: WorkflowNodeReference): string {
 
 function scopeAllows(scope: string, path: string): boolean {
   return scope === '*' || path === scope || path.startsWith(`${scope}/`)
+}
+
+function eventPayload(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {}
+}
+
+async function timeoutRecoveryForExecute(
+  claim: ManagedTicketClaim,
+  stage: ManagedTicketStageName,
+  previous: readonly ManagedTicketStageRecord[],
+  workflowNode: WorkflowNodeReference | null,
+  worktree: TicketWorktreeState,
+): Promise<Result<TimeoutRecovery | null>> {
+  if (stage !== 'execute') return ok(null)
+  const executeHistory = previous
+    .filter((record) => record.stage === 'execute')
+    .slice()
+    .sort((left, right) => left.attempt - right.attempt)
+  const timedOut = executeHistory[executeHistory.length - 1]
+  if (timedOut === undefined || timedOut.status !== 'FAILED' || timedOut.error !== 'RUN_TIMEOUT')
+    return ok(null)
+  if (workflowNode === null || workflowNode.scope_paths.length === 0)
+    return err(
+      makeError(
+        'WORKSPACE_ERROR',
+        'SCOPE_VIOLATION: RUN_TIMEOUT 后保留的 WIP 需要 ticket 声明 scope_paths，无法证明边界时拒绝续跑',
+      ),
+    )
+
+  const failedEvent = await asRole('keel_control', (c) =>
+    c.query<{ seq: string }>(
+      `SELECT seq::text AS seq FROM managed_ticket_event
+       WHERE task_id=$1 AND type='ManagedTicketStageFailed'
+         AND payload->>'stageId'=$2
+       ORDER BY seq DESC LIMIT 1`,
+      [claim.task.id, timedOut.id],
+    ),
+  )
+  const failedSeq = failedEvent.rows[0]?.seq
+  if (failedSeq === undefined)
+    return err(makeError('WORKSPACE_ERROR', '无法证明脏工作区来自紧接的 RUN_TIMEOUT，拒绝续跑'))
+
+  const laterEvents = await asRole('keel_control', (c) =>
+    c.query<{ type: string; payload: unknown }>(
+      `SELECT type,payload FROM managed_ticket_event
+       WHERE task_id=$1 AND seq > $2::bigint ORDER BY seq`,
+      [claim.task.id, failedSeq],
+    ),
+  )
+  for (const event of laterEvents.rows) {
+    if (event.type === 'ManagedTicketResumed') continue
+    const payload = eventPayload(event.payload)
+    if (event.type === 'ManagedTicketAttemptStarted') {
+      if (
+        payload.stage === 'execute' &&
+        Number.isSafeInteger(payload.attempt) &&
+        Number(payload.attempt) > timedOut.attempt &&
+        Number(payload.attempt) <= claim.attempt
+      )
+        continue
+      return err(makeError('WORKSPACE_ERROR', 'RUN_TIMEOUT 后出现不连续的执行尝试，拒绝续跑'))
+    }
+    if (
+      event.type === 'ManagedTicketPaused' &&
+      payload.code === 'WORKSPACE_ERROR' &&
+      payload.detail === STAGE_PREFLIGHT_CLEAN_DETAIL
+    )
+      continue
+    return err(
+      makeError('WORKSPACE_ERROR', `RUN_TIMEOUT 后出现 ${event.type}，不能确认是紧接的超时恢复`),
+    )
+  }
+
+  const changed = await workingTreeChangedFiles(worktree.path, claim.task.baseline_commit)
+  if (!changed.ok) return changed
+  if (changed.value.length === 0)
+    return err(makeError('WORKSPACE_ERROR', '工作区被标记为脏，但没有识别到 ticket 改动'))
+  const outside = changed.value.filter(
+    (path) => !workflowNode.scope_paths.some((scope) => scopeAllows(scope, path)),
+  )
+  if (outside.length > 0)
+    return err(
+      makeError(
+        'WORKSPACE_ERROR',
+        `SCOPE_VIOLATION: RUN_TIMEOUT 后保留的 WIP 超出 scope_paths：${outside.slice(0, 10).join(', ')}`,
+      ),
+    )
+  return ok({
+    previousAttempt: timedOut.attempt,
+    changedFiles: changed.value,
+    dirtyDigest: sha256CanonicalJson({
+      head: worktree.head,
+      changed_files: changed.value,
+    }),
+  })
 }
 
 function stageGateDigest(stage: JstackTicketPackage['stages'][number]): string {
@@ -935,23 +1056,29 @@ export async function tickManagedTicket(
   const plan = toolPlan(loaded.value.toolPolicy, stage, stageDefinition.tool_profile, worker)
   if (!plan.ok) return pauseTicketWithError(claim, 'TOOL_PROFILE_MISSING', plan.error.detail)
 
-  const worktree = await inspectTicketWorktree(claim.task.worktree_path)
-  if (!worktree.ok) return pauseTicketWithError(claim, 'WORKSPACE_ERROR', worktree.error.detail)
-  const isolated = await isolationViolations(worktree.value.path)
-  if (!isolated.ok) return pauseTicketWithError(claim, 'WORKSPACE_ERROR', isolated.error.detail)
-  if (!worktree.value.clean)
-    return pauseTicketWithError(claim, 'WORKSPACE_ERROR', 'ticket worktree 在阶段开始前必须干净')
-
+  const workflowNode = await workflowNodeForTicket(claim.task.id)
   const previous = await asRole('keel_control', (c) =>
     listManagedTicketStagesInTx(c, claim.task.id),
   )
   const inputCommit = expectedInputCommit(claim.task, previous)
+  const worktree = await inspectTicketWorktree(claim.task.worktree_path)
+  if (!worktree.ok) return pauseTicketWithError(claim, 'WORKSPACE_ERROR', worktree.error.detail)
+  const isolated = await isolationViolations(worktree.value.path)
+  if (!isolated.ok) return pauseTicketWithError(claim, 'WORKSPACE_ERROR', isolated.error.detail)
   if (worktree.value.head !== inputCommit)
     return pauseTicketWithError(
       claim,
       'WORKTREE_DRIFT',
       `worktree HEAD ${worktree.value.head} 与绑定输入 ${inputCommit} 不一致`,
     )
+  const timeoutRecovery = worktree.value.clean
+    ? null
+    : await timeoutRecoveryForExecute(claim, stage, previous, workflowNode, worktree.value)
+  if (timeoutRecovery !== null && !timeoutRecovery.ok)
+    return pauseTicketWithError(claim, timeoutRecovery.error.kind, timeoutRecovery.error.detail)
+  if (!worktree.value.clean && (timeoutRecovery === null || timeoutRecovery.value === null))
+    return pauseTicketWithError(claim, 'WORKSPACE_ERROR', STAGE_PREFLIGHT_CLEAN_DETAIL)
+  const recovery = timeoutRecovery?.ok ? timeoutRecovery.value : null
 
   const stageId = randomUUID()
   const inputDigest = sha256CanonicalJson({
@@ -960,6 +1087,7 @@ export async function tickManagedTicket(
     baseline_commit: claim.task.baseline_commit,
     input_commit: inputCommit,
     attempt: claim.attempt,
+    timeout_recovery: recovery,
     previous: previous.map((record) => ({
       stage: record.stage,
       attempt: record.attempt,
@@ -967,21 +1095,22 @@ export async function tickManagedTicket(
       output_digest: record.output_digest,
     })),
   })
-  const workflowNode = await workflowNodeForTicket(claim.task.id)
-  const reused = await tryReuseStage(
-    claim,
-    workflowNode,
-    stageId,
-    stage,
-    stageDefinition,
-    inputCommit,
-    inputDigest,
-  )
-  if (!reused.ok) return reused
-  if (reused.value) return ok({ taskId: claim.task.id, status: 'READY', stage })
+  if (recovery === null) {
+    const reused = await tryReuseStage(
+      claim,
+      workflowNode,
+      stageId,
+      stage,
+      stageDefinition,
+      inputCommit,
+      inputDigest,
+    )
+    if (!reused.ok) return reused
+    if (reused.value) return ok({ taskId: claim.task.id, status: 'READY', stage })
+  }
 
   const context = await asRole('keel_control', (c) =>
-    buildTicketContext(c, claim, ticketPackage, stage, inputCommit, plan.value),
+    buildTicketContext(c, claim, ticketPackage, stage, inputCommit, plan.value, recovery),
   )
   if (context.total_tokens > 60000)
     return pauseTicketWithError(claim, 'CONTEXT_BUDGET_EXCEEDED', 'ticket 阶段上下文超预算')
@@ -1004,6 +1133,17 @@ export async function tickManagedTicket(
         gateDigest,
       ],
     )
+    if (recovery !== null) {
+      await ticketEvent(c, claim.task.id, 'ManagedTicketTimeoutRecovery', {
+        stageId,
+        stage,
+        previousAttempt: recovery.previousAttempt,
+        attempt: claim.attempt,
+        headCommit: inputCommit,
+        changedFiles: recovery.changedFiles,
+        dirtyDigest: recovery.dirtyDigest,
+      })
+    }
     await ticketEvent(c, claim.task.id, 'ManagedTicketStageStarted', {
       stageId,
       stage,
