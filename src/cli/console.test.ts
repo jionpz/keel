@@ -207,6 +207,8 @@ interface ConsoleSeam {
   renderRunLiveness(run: Row, now: number): string
   computeDetailSig(detail: Row): string
   groupByRepo(tasks: Row[]): Row[]
+  taskRecords(): Row[]
+  managedTicketRecord(workflow: Row, node: Row): Row
   projectRecords(): Row[]
   renderProjectProgress(project: Row): string
   renderTasks(): void
@@ -293,6 +295,8 @@ function loadConsoleSeam(fetchImpl: SeamFetch = () => new Promise<never>(() => {
     renderRunLiveness: renderRunLiveness,
     computeDetailSig: computeDetailSig,
     groupByRepo: groupByRepo,
+    taskRecords: taskRecords,
+    managedTicketRecord: managedTicketRecord,
     projectRecords: projectRecords,
     renderProjectProgress: renderProjectProgress,
     renderTasks: renderTasks,
@@ -716,6 +720,65 @@ describe('项目阶段分布', () => {
       repo: 'https://github.com/jionpz/keel.git',
       counts: { all: 1, stage: 0, gate: 1, done: 0, bad: 0 },
     })
+  })
+
+  it('任务页按 managed ticket 展开，运行中的 ticket 不再只藏在工作流页', async () => {
+    const workflow = {
+      id: 'workflow-1',
+      repo_id: 'repo-1',
+      repo: 'https://github.com/jionpz/keel.git',
+      repo_provider: 'github',
+      request: '运行 #134 与 #135',
+      status: 'READY',
+      node_count: 2,
+      run_count: 1,
+      updated_at: '2026-11-13T15:11:15.000Z',
+      tickets: [
+        {
+          node_key: 'repo-commit-policy',
+          ticket_task_id: 'ticket-134',
+          ticket_id: 'keel-134',
+          external_issue: 'jionpz/keel#134',
+          ticket_title: '按仓库配置提交身份与提交信息规范',
+          ticket_status: 'RUNNING',
+          current_stage: 'execute',
+          run_count: 1,
+          activity_at: '2026-11-13T15:11:15.000Z',
+        },
+        {
+          node_key: 'pr-description',
+          ticket_id: 'keel-135',
+          external_issue: 'jionpz/keel#135',
+          ticket_title: '生成可追溯的 PR 标题与正文',
+          status: 'PENDING',
+          run_count: 0,
+          activity_at: '2026-11-13T13:08:00.000Z',
+        },
+      ],
+    }
+    const { seam, elements } = loadConsoleSeam((url) => {
+      if (url === '/api/tasks') return jsonResponse({ tasks: [] })
+      if (url === '/api/workflows') return jsonResponse({ workflows: [workflow] })
+      return new Promise<never>(() => {})
+    })
+    seam.state.mode = 'tasks'
+
+    await seam.loadRecords(false)
+
+    const html = elements.get('task-list')?.innerHTML ?? ''
+    expect(html).toContain('data-workflow-id="workflow-1"')
+    expect(html).toContain('jionpz/keel#134 · 按仓库配置提交身份与提交信息规范')
+    expect(html).toContain('运行中')
+    expect(html).toContain('execute')
+    expect(html).toContain('jionpz/keel#135 · 生成可追溯的 PR 标题与正文')
+    expect(elements.get('mode-count-tasks')?.textContent).toBe('2')
+    expect(elements.get('count')?.textContent).toBe('2 个任务')
+
+    seam.state.statusCat = 'stage'
+    seam.renderTasks()
+    const runningOnly = elements.get('task-list')?.innerHTML ?? ''
+    expect(runningOnly).toContain('jionpz/keel#134')
+    expect(runningOnly).not.toContain('jionpz/keel#135')
   })
 
   it('进入项目页时立即拉取托管工作流，不等待自动刷新', async () => {

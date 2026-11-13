@@ -2429,7 +2429,7 @@ export const CONSOLE_HTML = `<!doctype html>
     </div>
 
     <div class="workflow-projection" id="workflow-projection" hidden>
-      托管工作流，与 legacy 任务分开
+      任务页按 managed ticket 展开；这里按工作流聚合
       <code>projection=jstack-managed-v1</code>
     </div>
 
@@ -2828,10 +2828,11 @@ export const CONSOLE_HTML = `<!doctype html>
       var p = findProject(state.selectedRepo);
       return p ? p.tasks : [];
     }
-    if (state.repoFilter === 'all') return state.tasks;
+    var records = taskRecords();
+    if (state.repoFilter === 'all') return records;
     var out = [];
-    for (var i = 0; i < state.tasks.length; i++) {
-      var t = state.tasks[i];
+    for (var i = 0; i < records.length; i++) {
+      var t = records[i];
       if (String(t.repo || t.repo_id || 'unknown') === state.repoFilter) out.push(t);
     }
     return out;
@@ -2848,7 +2849,7 @@ export const CONSOLE_HTML = `<!doctype html>
       pills[p].innerHTML = esc(label) + '<span class="pill-n">' + (counts[cat] || 0) + '</span>';
     }
     var mt = document.getElementById('mode-count-tasks');
-    if (mt) mt.textContent = String(state.tasks.length);
+    if (mt) mt.textContent = String(taskRecords().length);
     var mp = document.getElementById('mode-count-projects');
     if (mp) mp.textContent = String(groupByRepo(projectRecords()).length);
   }
@@ -2860,8 +2861,9 @@ export const CONSOLE_HTML = `<!doctype html>
   function renderRepoFilter() {
     var sel = document.getElementById('repo-filter');
     if (!sel) return;
-    var projects = groupByRepo(state.tasks);
-    var sig = 'all:' + state.tasks.length;
+    var records = taskRecords();
+    var projects = groupByRepo(records);
+    var sig = 'all:' + records.length;
     for (var i = 0; i < projects.length; i++) sig += '|' + projects[i].id + ':' + projects[i].counts.all;
     if (state.repoFilter !== 'all') {
       var known = false;
@@ -2871,7 +2873,7 @@ export const CONSOLE_HTML = `<!doctype html>
       if (!known) state.repoFilter = 'all';
     }
     if (sel.getAttribute('data-sig') !== sig) {
-      var html = '<option value="all">全部项目（' + state.tasks.length + '）</option>';
+      var html = '<option value="all">全部项目（' + records.length + '）</option>';
       for (var k = 0; k < projects.length; k++) {
         html += '<option value="' + esc(projects[k].id) + '">' +
           esc(shortRepo(projects[k].repo)) + '（' + projects[k].counts.all + '）</option>';
@@ -2886,14 +2888,17 @@ export const CONSOLE_HTML = `<!doctype html>
 
   function getFilteredTasks() {
     var q = state.searchQuery.trim().toLowerCase();
+    var records = taskRecords();
     var out = [];
-    for (var i = 0; i < state.tasks.length; i++) {
-      var t = state.tasks[i];
+    for (var i = 0; i < records.length; i++) {
+      var t = records[i];
       if (state.repoFilter !== 'all' &&
           String(t.repo || t.repo_id || 'unknown') !== state.repoFilter) continue;
-      if (state.statusCat !== 'all' && statusKind(t.status) !== state.statusCat) continue;
+      if (state.statusCat !== 'all' && recordKind(t) !== state.statusCat) continue;
       if (q) {
-        var hay = ((t.title || '') + ' ' + (t.id || '') + ' ' + (t.status || '') + ' ' + (t.repo || '') + ' ' + (t.work_branch || '')).toLowerCase();
+        var hay = ((t.title || '') + ' ' + (t.id || '') + ' ' + (t.status || '') + ' ' +
+          (t.repo || '') + ' ' + (t.work_branch || '') + ' ' + (t.external_issue || '') + ' ' +
+          (t.current_stage || '') + ' ' + (t.workflow_id || '')).toLowerCase();
         if (hay.indexOf(q) < 0) continue;
       }
       out.push(t);
@@ -2907,17 +2912,47 @@ export const CONSOLE_HTML = `<!doctype html>
     var clearBtn = document.getElementById('search-clear');
     if (clearBtn) clearBtn.style.display = state.searchQuery ? 'block' : 'none';
 
-    var filtered = state.mode === 'overview' ? state.tasks : getFilteredTasks();
+    var filtered = state.mode === 'overview' ? taskRecords() : getFilteredTasks();
     var list = document.getElementById('task-list');
     var html = '';
     for (var i = 0; i < filtered.length; i++) {
       var t = filtered[i];
-      var isAct = t.id === state.selectedId;
       var runCount = t.run_count != null ? Number(t.run_count) : null;
-      var cat = statusKind(t.status);
-      var zh = statusLabel(t.status) || t.status;
-      var needsHuman = isGateStatus(t.status);
+      var cat = recordKind(t);
+      var zh = t.managed_ticket
+        ? (WORKFLOW_STATUS_LABELS[t.status] || t.status)
+        : (statusLabel(t.status) || t.status);
+      var needsHuman = recordNeedsHuman(t);
       var dotCls = needsHuman ? 'gate' : (cat === 'gate' ? 'waiting' : cat);
+      if (t.managed_ticket) {
+        var issueRef = String(t.external_issue || '');
+        var issueHash = issueRef.indexOf('#');
+        var ticketLabel = issueHash >= 0 ? issueRef.slice(issueHash) : (t.node_key || shortId(t.id));
+        var managedTitle = issueRef ? issueRef + ' · ' + t.title : t.title;
+        html += '<li data-workflow-id="' + esc(t.workflow_id) + '" data-managed-ticket="' + esc(t.node_key) +
+            '" class="task-item' + (needsHuman ? ' needs-action' : '') + '" title="打开所属工作流">' +
+          '<span class="task-dot ' + dotCls + '" title="' + esc(t.status) + (needsHuman ? '（需人工处理）' : '') + '"></span>' +
+          '<div class="task-body">' +
+            '<div class="task-title-row">' +
+              '<span class="task-title" title="' + esc(managedTitle) + '">' + esc(managedTitle) + '</span>' +
+              '<span class="task-id">' + esc(ticketLabel) + '</span>' +
+            '</div>' +
+            '<div class="task-sub">' +
+              '<span class="task-status ' + cat + (needsHuman ? ' need-badge' : '') + '">' +
+                esc(zh) + (needsHuman ? '（需处理）' : '') + '</span>' +
+              '<span class="task-mode">受管</span>' +
+              (t.current_stage ? '<span>' + esc(t.current_stage) + '</span>' : '') +
+              '<span class="task-repo" title="' + esc(t.repo) + '">' + esc(shortRepo(t.repo)) + '</span>' +
+              '<span class="task-time">' +
+                (runCount ? runCount + ' 次，' : '') +
+                esc(fmtListTime(t.updated_at)) +
+              '</span>' +
+            '</div>' +
+          '</div>' +
+        '</li>';
+        continue;
+      }
+      var isAct = t.id === state.selectedId;
       html += '<li data-id="' + esc(t.id) + '" class="task-item' + (isAct ? ' active' : '') + (needsHuman ? ' needs-action' : '') + '">' +
         '<span class="task-dot ' + dotCls + '" title="' + esc(t.status) + (needsHuman ? '（需人工处理）' : '') + '"></span>' +
         '<div class="task-body">' +
@@ -3004,10 +3039,17 @@ export const CONSOLE_HTML = `<!doctype html>
    * 页面记录保留各自的状态体系；概览、项目和状态栏共用分类，不伪造 S-*。
    */
   function recordNeedsHuman(row) {
+    if (row.managed_ticket) return row.status === 'WAITING_HUMAN' || row.decision_status === 'WAITING_HUMAN';
     return row.managed_workflow ? Number(row.waiting_human) > 0 : isGateStatus(row.status);
   }
 
   function recordKind(row) {
+    if (row.managed_ticket) {
+      if (recordNeedsHuman(row)) return 'gate';
+      if (row.status === 'RUNNING' || row.decision_status === 'PROCESSING' || row.workflow_status === 'ROUTING') return 'stage';
+      var ticketKind = workflowBadgeKind(row.status);
+      return ticketKind === 'neutral' ? 'gate' : ticketKind;
+    }
     if (!row.managed_workflow) return statusKind(row.status);
     if (row.status === 'DONE') return 'done';
     if (row.status === 'FAILED' || row.status === 'CANCELLED') return 'bad';
@@ -3022,6 +3064,7 @@ export const CONSOLE_HTML = `<!doctype html>
   }
 
   function recordBadge(row) {
+    if (row.managed_ticket) return workflowBadge(row.status, true);
     return row.managed_workflow ? workflowBadge(row.status, true) : badge(row.status, true);
   }
 
@@ -3053,6 +3096,52 @@ export const CONSOLE_HTML = `<!doctype html>
       tickets: workflow.tickets || [],
       last_error: workflow.last_error
     };
+  }
+
+  function managedTicketRecord(workflow, node) {
+    var status = node.ticket_status || node.status || 'PENDING';
+    return {
+      id: node.ticket_task_id || (workflow.id + ':' + node.node_key),
+      title: node.ticket_title || node.external_issue || node.ticket_id || node.node_key,
+      status: status,
+      managed_ticket: true,
+      workflow_id: workflow.id,
+      workflow_status: workflow.status,
+      node_key: node.node_key,
+      ticket_id: node.ticket_id,
+      external_issue: node.external_issue,
+      current_stage: node.current_stage,
+      decision_status: node.decision_status,
+      decision_question: node.decision_question,
+      ticket_status: node.ticket_status || null,
+      latest_stage: node.latest_stage,
+      stage_attempt: node.stage_attempt,
+      stage_status: node.stage_status,
+      stage_error: node.stage_error,
+      last_progress_at: node.last_progress_at,
+      run_count: node.run_count,
+      created_at: node.created_at || workflow.created_at,
+      updated_at: node.activity_at || node.updated_at || workflow.updated_at,
+      repo_id: workflow.repo_id,
+      repo: workflow.repo || '',
+      repo_provider: workflow.repo_provider || '',
+      last_error: node.ticket_error || node.last_error || null,
+      control_mode: status === 'PAUSED' ? 'paused' : null
+    };
+  }
+
+  /** 任务页展示实际工作项；工作流只作为 task 的容器与详情入口。 */
+  function taskRecords() {
+    var rows = state.tasks.slice();
+    for (var i = 0; i < state.workflows.length; i++) {
+      var workflow = state.workflows[i];
+      var tickets = workflow.tickets || [];
+      for (var j = 0; j < tickets.length; j++) rows.push(managedTicketRecord(workflow, tickets[j]));
+    }
+    rows.sort(function (a, b) {
+      return (Date.parse(b.updated_at) || 0) - (Date.parse(a.updated_at) || 0);
+    });
+    return rows;
   }
 
   function projectRecords() {
@@ -4020,9 +4109,18 @@ export const CONSOLE_HTML = `<!doctype html>
         loadDetail(state.selectedId, false);
       } else if (state.tasks.length > 0) {
         select(state.tasks[0].id);
+      } else {
+        renderTaskSelectionPrompt();
       }
     }
     syncHash();
+  }
+
+  function renderTaskSelectionPrompt() {
+    document.getElementById('detail').innerHTML = '<div class="view">' +
+      '<div class="view-head"><h2 class="cockpit-title">任务</h2>' +
+        '<p class="muted">从左侧选择任务。受管 ticket 会打开它所属的工作流详情；工作流页只负责按容器聚合。</p>' +
+      '</div></div>';
   }
 
   function analyzeTrajectory(task, events) {
@@ -5905,12 +6003,13 @@ export const CONSOLE_HTML = `<!doctype html>
         for (var j = 0; j < state.tasks.length; j++) {
           if (state.tasks[j].id === state.selectedId) { exists = true; break; }
         }
-        if (!exists && state.tasks.length > 0) {
-          state.selectedId = state.tasks[0].id;
+        if (!exists) {
+          state.selectedId = state.tasks.length > 0 ? state.tasks[0].id : null;
           renderTasks();
         }
       }
       if (state.selectedId) return loadDetail(state.selectedId, !!silent);
+      renderTaskSelectionPrompt();
     }).then(function () {
       pulse.textContent = (state.tasksError || state.workflowsError ? '部分同步，记录加载失败 · ' : '已同步 ') +
         new Date().toLocaleTimeString('zh-CN', { hour12: false });
@@ -6137,6 +6236,11 @@ export const CONSOLE_HTML = `<!doctype html>
   });
 
   document.getElementById('task-list').addEventListener('click', function (ev) {
+    var workflowLi = ev.target.closest('li[data-workflow-id]');
+    if (workflowLi) {
+      selectWorkflow(workflowLi.getAttribute('data-workflow-id'));
+      return;
+    }
     var li = ev.target.closest('li[data-id]');
     if (li) select(li.getAttribute('data-id'));
   });
