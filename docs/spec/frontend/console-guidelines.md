@@ -181,7 +181,8 @@
 - 已经物化 ticket 的 workflow 只贡献真实 ticket，不能把整个容器折成一条任务；零 ticket 的
   workflow 保留为 `item_type=workflow` 的规划项，否则 ROUTING / READY 等调度事实会从所有
   工作项视图消失。`recordKind / recordNeedsHuman / recordBadge` 按 `item_type` 集中分类；
-  **禁止把 workflow 伪装成 `S-*`**。
+  缺失或未知 `item_type` 视为投影错误，不静默兼容成 legacy task；**禁止把 workflow
+  伪装成 `S-*`**。
   分类以真实 ticket 为准：ticket RUNNING 或决策 PROCESSING 算活跃，即使 workflow 仍为 READY；
   decision PROCESSING 显示「天问处理中」；有 ticket 但没有实际活跃 ticket/决策时归入等待，
   人工待办优先分组。图尚无 ticket 时展示 workflow 自身的规划/调度状态。

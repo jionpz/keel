@@ -2986,9 +2986,10 @@ export const CONSOLE_HTML = `<!doctype html>
   }
 
   function itemType(row) {
-    return row && (row.item_type === 'ticket' || row.item_type === 'workflow')
-      ? row.item_type
-      : 'task';
+    if (!row || (row.item_type !== 'task' && row.item_type !== 'ticket' && row.item_type !== 'workflow')) {
+      throw new Error('WorkItem 缺少合法的 item_type');
+    }
+    return row.item_type;
   }
 
   function isManagedItem(row) {

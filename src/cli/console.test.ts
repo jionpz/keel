@@ -1051,6 +1051,7 @@ describe('项目阶段分布', () => {
         repo_id: String(index),
         repo: 'file:///tmp/demo',
         status,
+        item_type: 'task',
       })),
     )
     expect(projects).toHaveLength(1)
@@ -1995,10 +1996,10 @@ describe('console 页面渲染 seam', () => {
 
     expect(seam.isGateStatus('S-HUMAN_REVIEW')).toBe(true)
     expect(seam.isGateStatus('S-RFC_READY')).toBe(false)
-    expect(seam.projectGroupOf({ status: 'S-HUMAN_REVIEW' })).toBe('needs')
-    expect(seam.projectGroupOf({ status: 'S-NEED_CLARIFICATION' })).toBe('needs')
-    expect(seam.projectGroupOf({ status: 'S-RFC_READY' })).toBe('waiting')
-    expect(seam.projectGroupOf({ status: 'S-NEW' })).toBe('waiting')
+    expect(seam.projectGroupOf({ status: 'S-HUMAN_REVIEW', item_type: 'task' })).toBe('needs')
+    expect(seam.projectGroupOf({ status: 'S-NEED_CLARIFICATION', item_type: 'task' })).toBe('needs')
+    expect(seam.projectGroupOf({ status: 'S-RFC_READY', item_type: 'task' })).toBe('waiting')
+    expect(seam.projectGroupOf({ status: 'S-NEW', item_type: 'task' })).toBe('waiting')
   })
 
   it('只有批准卡片带主路径标记，返工与驳回不冒充默认选项', () => {

@@ -37,6 +37,8 @@
 - 任务列表、项目聚合、概览进行中、项目卡片和状态栏全部消费 `workItems()`。
 - 分类只在 `recordKind / recordNeedsHuman / recordBadge` 中按 `item_type` 完成；
   删除 `managed_ticket`、`managed_workflow`、`repository_only` 布尔分支。
+- `item_type` 是 `workItems()` 之后必须成立的不变量；缺失或未知类型立即失败，
+  不再静默兼作 legacy task。
 - `node_count` 按 workflow id 去重；同一 workflow 的多条 ticket 不重复累计图节点。
 - 未登记到 repo 注册表的历史 workflow 仍创建项目，避免静默丢失。
 
