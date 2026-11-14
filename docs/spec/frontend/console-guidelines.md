@@ -165,25 +165,31 @@
 
 ## 四种视图：概览 / 任务 / 项目 / 工作流
 
-- 页面有四种视图，共用同一个侧栏骨架：**概览**回答「最近干得怎么样」，**任务**以 legacy task 为主体，
+- 页面有四种视图，共用同一个侧栏骨架：**概览**回答「最近干得怎么样」，**任务**列真实工作项，
   **项目**以仓库为主体，**工作流**展示 managed workflow 的图和实际 ticket 进展。
   切换只改可见容器与按钮态（`applyModeChrome`），不要复制多套侧栏。
 - 概览是默认落点（`state.mode` 的初值），因为它先回答最常见的问题；周期控件选的是「哪段时间」，
   与「看哪个任务」正交。
 - 概览模式隐藏搜索框、项目下拉与状态 chip：它的列表是「全部任务、按更新时间」的原始顺序，
   点了就进任务模式 —— 这类筛选在概览里没有对应口径，留着只会让人以为筛选生效了。
-- `projectRecords()` 合并 legacy tasks 与 managed tickets，工作流只在图尚未物化 ticket 时
-  作为规划/调度的容器记录出现。已经物化 ticket 的 workflow 不能被折叠成一条任务，否则同一仓库
-  会因采用 legacy 或 managed 而在项目页呈现完全不同的工作项数量与点击路径。
-  项目聚合、概览的进行中/项目卡片、状态栏和项目/概览模式计数共用这组记录，
-  `recordKind / recordNeedsHuman` 统一分类；**禁止把 workflow 伪装成 `S-*`**。
+- 后端事实保留四种身份：repo 定义项目，legacy task、managed ticket 是工作项，
+  managed workflow 是容器与依赖图。状态机不同，不能为“整洁”把数据库或 API 合并。
+- 客户端只有 `workItems()` 一个投影：它把 legacy task、managed ticket 和尚未物化 ticket 的
+  workflow 统一成 `item_type = task | ticket | workflow` 的列表。`Project.items`、任务列表、
+  概览进行中、项目卡片、状态栏和项目/概览计数全部消费这组列表，不再保留
+  `taskRecords()` / `projectRecords()` 两套重复口径。
+- 已经物化 ticket 的 workflow 只贡献真实 ticket，不能把整个容器折成一条任务；零 ticket 的
+  workflow 保留为 `item_type=workflow` 的规划项，否则 ROUTING / READY 等调度事实会从所有
+  工作项视图消失。`recordKind / recordNeedsHuman / recordBadge` 按 `item_type` 集中分类；
+  **禁止把 workflow 伪装成 `S-*`**。
   分类以真实 ticket 为准：ticket RUNNING 或决策 PROCESSING 算活跃，即使 workflow 仍为 READY；
   decision PROCESSING 显示「天问处理中」；有 ticket 但没有实际活跃 ticket/决策时归入等待，
   人工待办优先分组。图尚无 ticket 时展示 workflow 自身的规划/调度状态。
 - 项目由客户端按 `repo`（仓库地址）归组，**不是** `repo_id`：`repo` 表没有 remote_url 唯一约束，
-  按 id 分会把同一项目拆成两行。项目全集来自 `/api/tasks` 返回的 `repos`；legacy task、
-  managed workflow 只往对应仓库补内容。没有任务的已注册仓库仍显示任务数 0，不能从下拉与
-  项目页消失。聚合只消费 `/api/tasks`、`/api/workflows` 的现成字段。
+  按 id 分会把同一项目拆成两行。项目全集来自 `/api/tasks` 返回的 `repos`；先用仓库建立
+  `Project`，再把工作项附到 `items`。没有任务的已注册仓库因此天然是空 `items`，**不得**
+  再合成 `repository_only` 伪任务来让项目出现。工作项找不到注册仓库时仍要建立项目，
+  保证异常旧数据不被静默丢弃。聚合只消费 `/api/tasks`、`/api/workflows` 的现成字段。
   项目视图只做聚合与跳转：legacy 明细回任务模式，managed 明细回工作流模式。
 - 所有模式的首次加载、切入概览/项目/工作流、手动刷新与 5s 轮询，都经 `loadRecords`
   同时获取两类记录，落定后统一绘制。不得让概览只加载 legacy，或等用户先访问工作流页才补齐项目。
@@ -229,7 +235,7 @@
   - 项目模式：项目下拉隐藏，状态 chip **移到任务列表上方**（`.proj-filters`），
     筛的是当前项目的任务表；工具栏写「显示 X / Y」，无命中时给一行空态。
     侧栏只保留项目搜索 —— chip 筛谁，就站在谁旁边，不要让侧栏 chip 看起来像在筛项目列表。
-  - chip 计数跟随当前筛选口径（`filterScopeTasks`）：任务模式跟项目下拉、项目模式跟选中项目；
+  - chip 计数跟随当前筛选口径（`filterScopeItems`）：任务模式跟项目下拉、项目模式跟选中项目；
     否则会出现「chip 说 7 条、点下去 0 条」。
 - 筛选状态不进 URL Hash（属于临时视图态），但切模式不能丢；5s 轮询重绘也不能丢。
 - 项目下拉按签名（项目集合 + 计数）决定是否重建选项，避免轮询重置用户正在操作的下拉框。
@@ -238,7 +244,7 @@
 
 - 历史统计只来自 `GET /api/stats`（`STATS_DAYS_SQL` / `STATS_TOTALS_SQL`，只读聚合），
   范围为 legacy tasks/runs，页面标注「历史统计（旧版任务）」。
-  当前进行中、项目与状态栏另按统一记录集合表达，不把 managed 节点混进 legacy Run 统计。
+  当前进行中、项目与状态栏另按 `workItems()` 表达，不把 managed 节点混进 legacy Run 统计。
   改动统计口径时 SQL 与这里的定义必须一起改。
 - 口径（`keel status` 对得上）：
   - **运行次数** = `run.started_at` 落在当天的 Run（成功 / 失败 / 取消都算）；

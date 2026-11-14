@@ -209,10 +209,8 @@ interface ConsoleSeam {
   renderCockpitHeader(detail: Row): string
   renderRunLiveness(run: Row, now: number): string
   computeDetailSig(detail: Row): string
-  groupByRepo(tasks: Row[]): Row[]
-  taskRecords(): Row[]
-  managedTicketRecord(workflow: Row, node: Row): Row
-  projectRecords(): Row[]
+  groupByRepo(items: Row[], repos?: Row[]): Row[]
+  workItems(): Row[]
   projectGroups(): Row[]
   renderProjectProgress(project: Row): string
   renderTasks(): void
@@ -299,9 +297,7 @@ function loadConsoleSeam(fetchImpl: SeamFetch = () => new Promise<never>(() => {
     renderRunLiveness: renderRunLiveness,
     computeDetailSig: computeDetailSig,
     groupByRepo: groupByRepo,
-    taskRecords: taskRecords,
-    managedTicketRecord: managedTicketRecord,
-    projectRecords: projectRecords,
+    workItems: workItems,
     projectGroups: projectGroups,
     renderProjectProgress: renderProjectProgress,
     renderTasks: renderTasks,
@@ -459,7 +455,7 @@ describe('项目阶段分布', () => {
   ])('工作流 %s（人工待办 %s）保留状态并归入 %s', (status, waiting, group, kind) => {
     const { seam } = loadConsoleSeam()
     seam.state.workflows = [{ id: 'w1', status, waiting_human: waiting }]
-    const row = seam.projectRecords()[0] ?? {}
+    const row = seam.workItems()[0] ?? {}
     expect(row.status).toBe(status)
     expect(seam.projectGroupOf(row)).toBe(group)
     expect(seam.recordKind(row)).toBe(kind)
@@ -482,7 +478,7 @@ describe('项目阶段分布', () => {
       },
       { id: 'human', repo, status: 'WAITING_HUMAN', waiting_human: 1, run_count: 0 },
     ]
-    const projects = seam.groupByRepo(seam.projectRecords())
+    const projects = seam.groupByRepo(seam.workItems())
     expect(projects).toHaveLength(1)
     expect(projects[0]).toMatchObject({
       counts: { all: 5, stage: 2, gate: 3, done: 0, bad: 0 },
@@ -510,7 +506,7 @@ describe('项目阶段分布', () => {
   it('缺执行次数时显示不可用，不从节点数补零或伪造次数', () => {
     const { seam, elements } = loadConsoleSeam()
     seam.state.workflows = [{ id: 'w1', repo: 'file:///tmp/demo', status: 'READY', node_count: 18 }]
-    const row = seam.projectRecords()[0] ?? {}
+    const row = seam.workItems()[0] ?? {}
     expect(row.run_count).toBeUndefined()
     seam.renderProjectView()
     expect(elements.get('detail')?.innerHTML).toContain('执行次数不可用')
@@ -531,7 +527,7 @@ describe('项目阶段分布', () => {
         tickets: [{ ticket_id: 'T-1', activity_at: '2026-11-13T12:00:00+08:00' }],
       },
     ]
-    const records = seam.projectRecords()
+    const records = seam.workItems()
     expect(records.map((record) => record.id)).toEqual(['newer:T-1', 'legacy', 'older'])
     const projects = seam.groupByRepo(records)
     expect(Date.parse(String(projects[0]?.lastUpdated))).toBe(Date.parse('2026-11-13T04:00:00Z'))
@@ -566,7 +562,7 @@ describe('项目阶段分布', () => {
         return new Promise<never>(() => {})
       })
       await seam.setMode('projects')
-      const row = seam.projectRecords()[0] ?? {}
+      const row = seam.workItems()[0] ?? {}
       expect(row.status).toBe(ticketStatus)
       expect(seam.projectGroupOf(row)).toBe('stage')
       expect(seam.recordNeedsHuman(row)).toBe(false)
@@ -585,7 +581,7 @@ describe('项目阶段分布', () => {
       ticket.ticket_status = 'PAUSED'
       ticket.decision_status = null
       await seam.refreshAll(true)
-      expect(seam.projectGroupOf(seam.projectRecords()[0] ?? {})).toBe('waiting')
+      expect(seam.projectGroupOf(seam.workItems()[0] ?? {})).toBe('waiting')
       expect(elements.get('sb-running')?.textContent).toBe('0')
       expect(elements.get('sb-waiting')?.textContent).toBe('1')
     },
@@ -713,13 +709,13 @@ describe('项目阶段分布', () => {
       },
     ]
 
-    const records = seam.projectRecords()
+    const records = seam.workItems()
     const projects = seam.groupByRepo(records)
 
     expect(records[0]).toMatchObject({
       id: 'workflow-1',
       repo: 'https://github.com/jionpz/keel.git',
-      managed_workflow: true,
+      item_type: 'workflow',
       status: 'READY',
     })
     expect(projects).toHaveLength(1)
@@ -727,6 +723,148 @@ describe('项目阶段分布', () => {
       repo: 'https://github.com/jionpz/keel.git',
       counts: { all: 1, stage: 0, gate: 1, done: 0, bad: 0 },
     })
+  })
+
+  it('消融重复投影后，任务、项目和状态栏只消费同一组工作项', () => {
+    const repo = 'https://github.com/jionpz/active.git'
+    const emptyRepo = 'https://github.com/jionpz/empty.git'
+    const { seam, elements } = loadConsoleSeam()
+    seam.state.repos = [
+      { id: 'repo-active', repo, provider: 'github', created_at: '2026-11-12T01:00:00Z' },
+      { id: 'repo-empty', repo: emptyRepo, provider: 'github', created_at: '2026-11-13T01:00:00Z' },
+    ]
+    seam.state.tasks = [
+      {
+        id: 'legacy',
+        title: 'legacy work',
+        status: 'S-DEVELOPING',
+        repo,
+        run_count: 1,
+        updated_at: '2026-11-13T01:00:00Z',
+      },
+    ]
+    seam.state.workflows = [
+      {
+        id: 'materialized',
+        repo,
+        status: 'RUNNING',
+        node_count: 2,
+        run_count: 2,
+        updated_at: '2026-11-13T03:00:00Z',
+        tickets: [
+          {
+            ticket_task_id: 'ticket-1',
+            ticket_id: 'T-1',
+            ticket_title: 'running ticket',
+            ticket_status: 'RUNNING',
+            run_count: 1,
+            activity_at: '2026-11-13T03:00:00Z',
+          },
+          {
+            ticket_task_id: 'ticket-2',
+            ticket_id: 'T-2',
+            ticket_title: 'waiting ticket',
+            ticket_status: 'PENDING',
+            run_count: 1,
+            activity_at: '2026-11-13T02:00:00Z',
+          },
+        ],
+      },
+      {
+        id: 'planned',
+        repo,
+        status: 'ROUTING',
+        node_count: 3,
+        request: 'planned workflow',
+        updated_at: '2026-11-13T04:00:00Z',
+      },
+    ]
+    seam.state.mode = 'tasks'
+
+    const items = seam.workItems()
+    expect(items.map((item) => item.item_type).sort()).toEqual([
+      'task',
+      'ticket',
+      'ticket',
+      'workflow',
+    ])
+    expect(
+      items.every(
+        (item) =>
+          !('managed_ticket' in item) &&
+          !('managed_workflow' in item) &&
+          !('repository_only' in item),
+      ),
+    ).toBe(true)
+
+    const projects = seam.projectGroups()
+    const active = projects.find((project) => project.repo === repo)
+    const empty = projects.find((project) => project.repo === emptyRepo)
+    expect(active).toMatchObject({
+      counts: { all: 4, stage: 3, gate: 1, done: 0, bad: 0 },
+      nodes: 5,
+    })
+    expect(active?.items).toHaveLength(4)
+    expect(empty?.items).toEqual([])
+    expect(empty && 'repositoryOnly' in empty).toBe(false)
+
+    seam.renderTasks()
+    expect(elements.get('mode-count-tasks')?.textContent).toBe('4')
+    expect(elements.get('count')?.textContent).toBe('4 个任务')
+    expect(elements.get('task-list')?.innerHTML).toContain('data-work-item-type="ticket"')
+    expect(elements.get('task-list')?.innerHTML).toContain('data-work-item-type="workflow"')
+    expect(elements.get('task-list')?.innerHTML).toContain('planned workflow')
+  })
+
+  it('零 ticket workflow 保留规划项，有 ticket 后由真实 ticket 替换容器', () => {
+    const repo = 'file:///tmp/work-items'
+    const { seam } = loadConsoleSeam()
+    seam.state.workflows = [
+      {
+        id: 'planned',
+        repo,
+        status: 'ROUTING',
+        request: 'planned workflow',
+        updated_at: '2026-11-13T01:00:00Z',
+      },
+      {
+        id: 'materialized',
+        repo,
+        status: 'READY',
+        request: 'materialized workflow',
+        updated_at: '2026-11-13T01:00:00Z',
+        tickets: [
+          {
+            ticket_task_id: 'ticket-1',
+            ticket_id: 'T-1',
+            ticket_title: 'real ticket',
+            activity_at: '2026-11-13T02:00:00Z',
+          },
+        ],
+      },
+    ]
+
+    expect(seam.workItems()).toMatchObject([
+      { id: 'ticket-1', item_type: 'ticket', workflow_id: 'materialized' },
+      { id: 'planned', item_type: 'workflow', workflow_id: 'planned' },
+    ])
+  })
+
+  it('未登记到 repo 注册表的 workflow 仍进入项目投影，不被静默丢弃', () => {
+    const registeredRepo = 'file:///tmp/registered'
+    const orphanRepo = 'file:///tmp/orphan'
+    const { seam } = loadConsoleSeam()
+    seam.state.repos = [{ id: 'repo-1', repo: registeredRepo }]
+    seam.state.workflows = [{ id: 'orphan-workflow', repo: orphanRepo, status: 'READY' }]
+
+    const projects = seam.projectGroups()
+    expect(projects.map((project) => project.repo)).toEqual(
+      expect.arrayContaining([registeredRepo, orphanRepo]),
+    )
+    const orphan = projects.find((project) => project.repo === orphanRepo)
+    expect(orphan?.items).toMatchObject([
+      { id: 'orphan-workflow', item_type: 'workflow', repo: orphanRepo },
+    ])
   })
 
   it('项目集合以 repo 注册表为全集，没有任务的仓库也进入下拉与项目页', async () => {
@@ -774,10 +912,9 @@ describe('项目阶段分布', () => {
     expect(projects).toHaveLength(2)
     const empty = projects.find((project) => project.repo === emptyRepo)
     expect(empty).toMatchObject({
-      tasks: [],
+      items: [],
       counts: { all: 0, stage: 0, gate: 0, done: 0, bad: 0 },
       defaultBranch: 'develop',
-      repositoryOnly: true,
     })
     const selectHtml = elements.get('repo-filter')?.innerHTML ?? ''
     expect(selectHtml).toContain('全部项目（2）')
@@ -929,7 +1066,7 @@ describe('项目阶段分布', () => {
   it('空项目显示零计数，不产生无效的百分比或片段', () => {
     const { seam } = loadConsoleSeam()
     const html = seam.renderProjectProgress({
-      tasks: [],
+      items: [],
       counts: { stage: 0, gate: 0, all: 0 },
       needsYou: 0,
     })
