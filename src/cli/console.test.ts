@@ -528,11 +528,11 @@ describe('项目阶段分布', () => {
         repo,
         status: 'READY',
         updated_at: '2026-11-13T01:00:00Z',
-        tickets: [{ activity_at: '2026-11-13T12:00:00+08:00' }],
+        tickets: [{ ticket_id: 'T-1', activity_at: '2026-11-13T12:00:00+08:00' }],
       },
     ]
     const records = seam.projectRecords()
-    expect(records.map((record) => record.id)).toEqual(['newer', 'legacy', 'older'])
+    expect(records.map((record) => record.id)).toEqual(['newer:T-1', 'legacy', 'older'])
     const projects = seam.groupByRepo(records)
     expect(Date.parse(String(projects[0]?.lastUpdated))).toBe(Date.parse('2026-11-13T04:00:00Z'))
   })
@@ -541,7 +541,7 @@ describe('项目阶段分布', () => {
     ['RUNNING', null],
     ['WAITING_HUMAN', 'PROCESSING'],
   ])(
-    'READY 图下真实 ticket=%s、决策=%s 时计为活跃，保留排队原始徽章',
+    'READY 图下真实 ticket=%s、决策=%s 时按 ticket 展示并计为活跃',
     async (ticketStatus, decisionStatus) => {
       const workflow = {
         id: 'w1',
@@ -567,16 +567,18 @@ describe('项目阶段分布', () => {
       })
       await seam.setMode('projects')
       const row = seam.projectRecords()[0] ?? {}
-      expect(row.status).toBe('READY')
+      expect(row.status).toBe(ticketStatus)
       expect(seam.projectGroupOf(row)).toBe('stage')
       expect(seam.recordNeedsHuman(row)).toBe(false)
       expect(elements.get('sb-running')?.textContent).toBe('1')
       expect(elements.get('sb-waiting')?.textContent).toBe('0')
-      expect(elements.get('detail')?.innerHTML).toContain('排队等待')
-      expect(elements.get('detail')?.innerHTML).toContain('当前阶段 execute')
+      expect(elements.get('detail')?.innerHTML).not.toContain('排队等待')
+      expect(elements.get('detail')?.innerHTML).toContain('T-1 · execute')
       expect(elements.get('workflow-list')?.innerHTML).toContain('READY')
       if (decisionStatus === 'PROCESSING') {
         expect(elements.get('detail')?.innerHTML).toContain('天问处理中')
+      } else {
+        expect(elements.get('detail')?.innerHTML).toContain('运行中')
       }
       const ticket = workflow.tickets[0]
       if (ticket === undefined) throw new Error('缺少测试 ticket')
@@ -683,7 +685,7 @@ describe('项目阶段分布', () => {
     ticket.current_stage = 'verify'
     await seam.refreshAll(true)
     expect(elements.get('detail')?.innerHTML).toContain('1 待处理')
-    expect(elements.get('detail')?.innerHTML).toContain('当前阶段 verify')
+    expect(elements.get('detail')?.innerHTML).toContain('T-1 · verify')
     expect(elements.get('detail')?.innerHTML).not.toContain('天问处理中')
     await seam.setMode('projects')
     seam.state.statusCat = 'gate'
@@ -794,7 +796,7 @@ describe('项目阶段分布', () => {
     expect(detail).not.toContain('执行次数不可用')
   })
 
-  it('任务页按 managed ticket 展开，运行中的 ticket 不再只藏在工作流页', async () => {
+  it('任务页和项目页都按 managed ticket 展开，不把整个 workflow 伪装成一个任务', async () => {
     const workflow = {
       id: 'workflow-1',
       repo_id: 'repo-1',
@@ -851,6 +853,18 @@ describe('项目阶段分布', () => {
     const runningOnly = elements.get('task-list')?.innerHTML ?? ''
     expect(runningOnly).toContain('jionpz/keel#134')
     expect(runningOnly).not.toContain('jionpz/keel#135')
+
+    seam.state.statusCat = 'all'
+    await seam.setMode('projects')
+    const projectHtml = elements.get('detail')?.innerHTML ?? ''
+    expect(projectHtml).toContain('2 个任务')
+    expect(projectHtml).toContain('2 个工作流节点')
+    expect(projectHtml).toContain('jionpz/keel#134')
+    expect(projectHtml).toContain('jionpz/keel#135')
+    expect((projectHtml.match(/查看工作流/g) ?? []).length).toBe(2)
+    expect((projectHtml.match(/data-workflow-id="workflow-1"/g) ?? []).length).toBe(2)
+    expect(projectHtml).not.toContain('data-task-id="ticket-134"')
+    expect(projectHtml).not.toContain('托管工作流 · 托管工作流')
   })
 
   it('进入项目页时立即拉取托管工作流，不等待自动刷新', async () => {

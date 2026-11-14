@@ -2920,8 +2920,11 @@ export const CONSOLE_HTML = `<!doctype html>
       var t = filtered[i];
       var runCount = t.run_count != null ? Number(t.run_count) : null;
       var cat = recordKind(t);
+      var displayStatus = t.managed_ticket && t.decision_status === 'PROCESSING'
+        ? 'PROCESSING'
+        : t.status;
       var zh = t.managed_ticket
-        ? (WORKFLOW_STATUS_LABELS[t.status] || t.status)
+        ? (WORKFLOW_STATUS_LABELS[displayStatus] || displayStatus)
         : (statusLabel(t.status) || t.status);
       var needsHuman = recordNeedsHuman(t);
       var dotCls = needsHuman ? 'gate' : (cat === 'gate' ? 'waiting' : cat);
@@ -3009,7 +3012,8 @@ export const CONSOLE_HTML = `<!doctype html>
           lastUpdated: '',
           defaultBranch: '',
           localPath: '',
-          repositoryOnly: true
+          repositoryOnly: true,
+          workflowIds: {}
         };
         order.push(g);
       }
@@ -3029,7 +3033,12 @@ export const CONSOLE_HTML = `<!doctype html>
       if (recordNeedsHuman(t)) g.needsYou++;
       if (t.run_count == null) g.unknownRuns++;
       else g.runs += Number(t.run_count);
-      if (t.managed_workflow) g.nodes += Number(t.node_count || 0);
+      if (t.managed_workflow) {
+        g.nodes += Number(t.node_count || 0);
+      } else if (t.managed_ticket && t.workflow_id && !g.workflowIds[t.workflow_id]) {
+        g.workflowIds[t.workflow_id] = true;
+        g.nodes += Number(t.workflow_node_count || 0);
+      }
       g.cost += Number(t.total_cost_usd || 0);
       g.budget += Number(t.budget_usd || 0);
       if (!g.lastUpdated || Date.parse(t.updated_at) > Date.parse(g.lastUpdated)) g.lastUpdated = t.updated_at || '';
@@ -3052,7 +3061,10 @@ export const CONSOLE_HTML = `<!doctype html>
    * 页面记录保留各自的状态体系；概览、项目和状态栏共用分类，不伪造 S-*。
    */
   function recordNeedsHuman(row) {
-    if (row.managed_ticket) return row.status === 'WAITING_HUMAN' || row.decision_status === 'WAITING_HUMAN';
+    if (row.managed_ticket) {
+      if (row.decision_status) return row.decision_status === 'WAITING_HUMAN';
+      return row.status === 'WAITING_HUMAN';
+    }
     return row.managed_workflow ? Number(row.waiting_human) > 0 : isGateStatus(row.status);
   }
 
@@ -3077,7 +3089,9 @@ export const CONSOLE_HTML = `<!doctype html>
   }
 
   function recordBadge(row) {
-    if (row.managed_ticket) return workflowBadge(row.status, true);
+    if (row.managed_ticket) {
+      return workflowBadge(row.decision_status === 'PROCESSING' ? 'PROCESSING' : row.status, true);
+    }
     return row.managed_workflow ? workflowBadge(row.status, true) : badge(row.status, true);
   }
 
@@ -3114,12 +3128,13 @@ export const CONSOLE_HTML = `<!doctype html>
   function managedTicketRecord(workflow, node) {
     var status = node.ticket_status || node.status || 'PENDING';
     return {
-      id: node.ticket_task_id || (workflow.id + ':' + node.node_key),
+      id: node.ticket_task_id || (workflow.id + ':' + (node.node_key || node.ticket_id || 'unknown')),
       title: node.ticket_title || node.external_issue || node.ticket_id || node.node_key,
       status: status,
       managed_ticket: true,
       workflow_id: workflow.id,
       workflow_status: workflow.status,
+      workflow_node_count: workflow.node_count,
       node_key: node.node_key,
       ticket_id: node.ticket_id,
       external_issue: node.external_issue,
@@ -3158,10 +3173,11 @@ export const CONSOLE_HTML = `<!doctype html>
   }
 
   function projectRecords() {
-    var rows = state.tasks.slice();
+    var rows = taskRecords();
     var workflows = state.workflows || [];
     for (var i = 0; i < workflows.length; i++) {
-      rows.push(workflowProjectRecord(workflows[i]));
+      // 图尚未物化 ticket 时保留 workflow 作为工作项；已有 ticket 时只展示真实工作项。
+      if ((workflows[i].tickets || []).length === 0) rows.push(workflowProjectRecord(workflows[i]));
     }
     return rows.sort(function (a, b) {
       return (Date.parse(b.updated_at) || 0) - (Date.parse(a.updated_at) || 0);
@@ -3228,10 +3244,11 @@ export const CONSOLE_HTML = `<!doctype html>
     var kinds = {};
     var statuses = [];
     for (var taskIndex = 0; taskIndex < project.tasks.length; taskIndex++) {
-      var status = project.tasks[taskIndex].status;
+      var taskRow = project.tasks[taskIndex];
+      var status = taskRow.status;
       if (!counts[status]) statuses.push(status);
       counts[status] = (counts[status] || 0) + 1;
-      kinds[status] = project.tasks[taskIndex].managed_workflow ? workflowBadgeKind(status) : statusKind(status);
+      kinds[status] = recordKind(taskRow);
     }
     statuses.sort();
     var colors = { stage: '--move', gate: '--signal', done: '--good', bad: '--bad' };
@@ -3272,7 +3289,7 @@ export const CONSOLE_HTML = `<!doctype html>
   }
 
   function projectRowCta(row) {
-    if (row.managed_workflow) return '查看工作流';
+    if (row.managed_workflow || row.managed_ticket) return '查看工作流';
     var status = row.status;
     if (status === 'S-HUMAN_REVIEW') return '去决策';
     if (status === 'S-NEED_CLARIFICATION') return '去回答';
@@ -3399,16 +3416,21 @@ export const CONSOLE_HTML = `<!doctype html>
       for (var r = 0; r < rows.length; r++) {
         var t = rows[r];
         var cta = projectRowCta(t);
-        var rowBinding = t.managed_workflow
-          ? ' data-workflow-id="' + esc(t.id) + '"'
+        var rowBinding = t.managed_workflow || t.managed_ticket
+          ? ' data-workflow-id="' + esc(t.workflow_id || t.id) + '"'
           : ' data-task-id="' + esc(t.id) + '"';
         var projectBadge = recordBadge(t);
-        var rowTitle = t.managed_workflow ? t.title + ' · 托管工作流' : t.title;
+        var rowTitle = t.title;
+        if (t.managed_workflow && rowTitle.indexOf('托管工作流') !== 0) rowTitle += ' · 托管工作流';
+        if (t.managed_ticket) {
+          rowTitle = (t.external_issue ? t.external_issue + ' · ' : '') + t.title +
+            (t.current_stage ? ' · ' + t.current_stage : '');
+        }
         body += '<li class="proj-row"' + rowBinding + '>' +
           projectBadge +
-          '<span class="proj-row-title" title="' + esc(t.title) + '">' + esc(rowTitle) +
+          '<span class="proj-row-title" title="' + esc(rowTitle) + '">' + esc(rowTitle) +
             (t.managed_workflow ? renderWorkflowProgress(t.tickets, t.last_error) : '') + '</span>' +
-          (t.managed_workflow ? '<span></span>' : ladderHtml(t.status)) +
+          (t.managed_workflow || t.managed_ticket ? '<span></span>' : ladderHtml(t.status)) +
           '<span class="proj-row-time">更新 ' + esc(fmtListTime(t.updated_at)) + '</span>' +
           (cta ? '<span class="proj-row-cta">' + cta + '</span>' : '') +
         '</li>';
@@ -4003,9 +4025,15 @@ export const CONSOLE_HTML = `<!doctype html>
       html += '<ul class="ov-tasks">';
       for (var j = 0; j < rows.length; j++) {
         var t = rows[j];
-        html += '<li class="ov-task"' + (t.managed_workflow ? ' data-workflow-id="' : ' data-task-id="') + esc(t.id) + '">' +
+        var workflowEntry = t.managed_workflow || t.managed_ticket;
+        var rowTitle = t.managed_ticket && t.current_stage
+          ? t.title + ' · ' + t.current_stage
+          : t.title;
+        html += '<li class="ov-task"' + (workflowEntry
+            ? ' data-workflow-id="' + esc(t.workflow_id || t.id) + '"'
+            : ' data-task-id="' + esc(t.id) + '"') + '>' +
           '<div class="ov-task-main">' +
-            '<span class="ov-task-title" title="' + esc(t.title) + '">' + esc(t.title) + '</span>' +
+            '<span class="ov-task-title" title="' + esc(rowTitle) + '">' + esc(rowTitle) + '</span>' +
             '<span class="ov-task-meta">' +
               recordBadge(t) +
               '<span class="task-repo" title="' + esc(t.repo) + '">' + esc(shortRepo(t.repo)) + '</span>' +
@@ -4014,9 +4042,9 @@ export const CONSOLE_HTML = `<!doctype html>
                 '更新 ' + esc(fmtListTime(t.updated_at)) +
               '</span>' +
             '</span>' +
-            (t.managed_workflow ? renderWorkflowProgress(t.tickets, t.last_error) : '') +
+            (workflowEntry ? renderWorkflowProgress(t.tickets || [], t.last_error) : '') +
           '</div>' +
-          (t.managed_workflow ? '' : ladderHtml(t.status)) +
+          (workflowEntry ? '' : ladderHtml(t.status)) +
         '</li>';
       }
       html += '</ul>';

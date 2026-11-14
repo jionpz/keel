@@ -172,13 +172,14 @@
   与「看哪个任务」正交。
 - 概览模式隐藏搜索框、项目下拉与状态 chip：它的列表是「全部任务、按更新时间」的原始顺序，
   点了就进任务模式 —— 这类筛选在概览里没有对应口径，留着只会让人以为筛选生效了。
-- `projectRecords()` 合并 legacy tasks 与 managed workflows，保留两套原始状态。
+- `projectRecords()` 合并 legacy tasks 与 managed tickets，工作流只在图尚未物化 ticket 时
+  作为规划/调度的容器记录出现。已经物化 ticket 的 workflow 不能被折叠成一条任务，否则同一仓库
+  会因采用 legacy 或 managed 而在项目页呈现完全不同的工作项数量与点击路径。
   项目聚合、概览的进行中/项目卡片、状态栏和项目/概览模式计数共用这组记录，
   `recordKind / recordNeedsHuman` 统一分类；**禁止把 workflow 伪装成 `S-*`**。
-  READY/PENDING 徽章表达排队等待，PAUSED 表达暂停；不能仅据这些顶层状态宣称正在执行或有人待办。
   分类以真实 ticket 为准：ticket RUNNING 或决策 PROCESSING 算活跃，即使 workflow 仍为 READY；
-  有节点但没有实际活跃 ticket/决策时归入等待；人工待办优先分组，workflow 终态以其原始状态为准。
-  图尚无节点时展示 workflow 自身的规划/调度状态。原始徽章与实际进展并列，不能用一个覆盖另一个。
+  decision PROCESSING 显示「天问处理中」；有 ticket 但没有实际活跃 ticket/决策时归入等待，
+  人工待办优先分组。图尚无 ticket 时展示 workflow 自身的规划/调度状态。
 - 项目由客户端按 `repo`（仓库地址）归组，**不是** `repo_id`：`repo` 表没有 remote_url 唯一约束，
   按 id 分会把同一项目拆成两行。项目全集来自 `/api/tasks` 返回的 `repos`；legacy task、
   managed workflow 只往对应仓库补内容。没有任务的已注册仓库仍显示任务数 0，不能从下拉与
@@ -201,8 +202,8 @@
 - legacy 的 `needsYou` 只数**能直接进决策页**的状态（`isGateStatus`：`S-HUMAN_REVIEW` /
   `S-NEED_CLARIFICATION`）；managed 只看当前 ticket 的真实人工等待。
   活跃请求为 `PROCESSING`（天问处理中）或 `OPEN` 时不算人的待办，`WAITING_HUMAN` 才算；
-  没有当前决策请求时按 ticket/节点的 `WAITING_HUMAN` 判断。一个 workflow 有多个待办节点时，
-  项目待办仍以一条 workflow 记录计数，工作流侧栏单列待办节点数。
+  没有当前决策请求时按 ticket 的 `WAITING_HUMAN` 判断。一个 workflow 有多个待办 ticket 时，
+  项目页逐个计数；工作流侧栏仍单列待办节点数。
   其余等待态不能误报成人的待办。项目排序：`needsYou` 降序 → 最近更新降序。
 - 项目详情头部只留三样：项目名（`title` 带完整 URL）、一句话现状、累计元信息行。
   一句话用白话，例如「2 个任务需要你处理，2 个在跑。」；没有进行中任务时明说
