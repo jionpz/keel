@@ -2510,6 +2510,7 @@ export const CONSOLE_HTML = `<!doctype html>
 
   var state = {
     tasks: [],
+    repos: [],
     workflows: [],
     meta: null,
     // 默认落点：概览先回答「最近怎么样」，再往里点任务 / 项目
@@ -2532,6 +2533,7 @@ export const CONSOLE_HTML = `<!doctype html>
     expandedIds: {},
     glossaryOpen: false,
     tasksSig: '',
+    reposSig: '',
     detailSig: '',
     controlRequest: null,
     controlBusy: false,
@@ -2851,7 +2853,7 @@ export const CONSOLE_HTML = `<!doctype html>
     var mt = document.getElementById('mode-count-tasks');
     if (mt) mt.textContent = String(taskRecords().length);
     var mp = document.getElementById('mode-count-projects');
-    if (mp) mp.textContent = String(groupByRepo(projectRecords()).length);
+    if (mp) mp.textContent = String(projectGroups().length);
   }
 
   /**
@@ -2861,9 +2863,8 @@ export const CONSOLE_HTML = `<!doctype html>
   function renderRepoFilter() {
     var sel = document.getElementById('repo-filter');
     if (!sel) return;
-    var records = taskRecords();
-    var projects = groupByRepo(records);
-    var sig = 'all:' + records.length;
+    var projects = projectGroups();
+    var sig = 'projects:' + projects.length;
     for (var i = 0; i < projects.length; i++) sig += '|' + projects[i].id + ':' + projects[i].counts.all;
     if (state.repoFilter !== 'all') {
       var known = false;
@@ -2873,7 +2874,7 @@ export const CONSOLE_HTML = `<!doctype html>
       if (!known) state.repoFilter = 'all';
     }
     if (sel.getAttribute('data-sig') !== sig) {
-      var html = '<option value="all">全部项目（' + records.length + '）</option>';
+      var html = '<option value="all">全部项目（' + projects.length + '）</option>';
       for (var k = 0; k < projects.length; k++) {
         html += '<option value="' + esc(projects[k].id) + '">' +
           esc(shortRepo(projects[k].repo)) + '（' + projects[k].counts.all + '）</option>';
@@ -3005,10 +3006,22 @@ export const CONSOLE_HTML = `<!doctype html>
           nodes: 0,
           cost: 0,
           budget: 0,
-          lastUpdated: ''
+          lastUpdated: '',
+          defaultBranch: '',
+          localPath: '',
+          repositoryOnly: true
         };
         order.push(g);
       }
+      if (t.default_branch) g.defaultBranch = t.default_branch;
+      if (t.local_path) g.localPath = t.local_path;
+      if (t.repository_only) {
+        if (!g.lastUpdated || Date.parse(t.updated_at) > Date.parse(g.lastUpdated)) {
+          g.lastUpdated = t.updated_at || '';
+        }
+        continue;
+      }
+      g.repositoryOnly = false;
       g.tasks.push(t);
       g.counts.all++;
       var k = recordKind(t);
@@ -3155,6 +3168,32 @@ export const CONSOLE_HTML = `<!doctype html>
     });
   }
 
+  function repoProjectRecord(repo) {
+    return {
+      id: 'repo:' + String(repo.id || repo.repo || ''),
+      repo_id: repo.id,
+      repo: repo.repo || '',
+      repo_provider: repo.provider || '',
+      repository_only: true,
+      default_branch: repo.default_branch,
+      local_path: repo.local_path,
+      created_at: repo.created_at,
+      updated_at: repo.created_at
+    };
+  }
+
+  /**
+   * 项目集合来自 repo 注册表；任务和工作流只往对应分组里填内容。
+   * 没有任务的项目仍然是项目，不能被“有记录才出现”的旧口径藏掉。
+   */
+  function projectGroups() {
+    var rows = projectRecords();
+    for (var i = 0; i < state.repos.length; i++) {
+      rows.push(repoProjectRecord(state.repos[i]));
+    }
+    return groupByRepo(rows);
+  }
+
   /**
    * 项目页的分组口径（唯一判定处）：
    *   needs    能直接进决策页的人工闸门（人工介入 / 待澄清）
@@ -3253,7 +3292,7 @@ export const CONSOLE_HTML = `<!doctype html>
   }
 
   function findProject(id) {
-    var projects = groupByRepo(projectRecords());
+    var projects = projectGroups();
     for (var i = 0; i < projects.length; i++) {
       if (projects[i].id === id) return projects[i];
     }
@@ -3261,7 +3300,7 @@ export const CONSOLE_HTML = `<!doctype html>
   }
 
   function renderProjects() {
-    var all = groupByRepo(projectRecords());
+    var all = projectGroups();
     var projects = getFilteredProjects(all);
     var selectedVisible = false;
     for (var v = 0; v < projects.length; v++) {
@@ -3302,13 +3341,18 @@ export const CONSOLE_HTML = `<!doctype html>
     }
     state.selectedRepo = p.id;
     var c = p.counts;
-    var executions = p.unknownRuns === c.all ? '执行次数不可用'
-      : p.runs + ' 次阶段执行' + (p.unknownRuns ? '（另有 ' + p.unknownRuns + ' 项次数不可用）' : '');
-    var meta = [c.all + ' 个任务', executions];
+    var meta = [c.all + ' 个任务'];
+    if (c.all > 0) {
+      var executions = p.unknownRuns === c.all ? '执行次数不可用'
+        : p.runs + ' 次阶段执行' + (p.unknownRuns ? '（另有 ' + p.unknownRuns + ' 项次数不可用）' : '');
+      meta.push(executions);
+    }
+    if (p.defaultBranch) meta.push('默认分支 ' + p.defaultBranch);
+    if (p.localPath) meta.push('本地目录 ' + p.localPath);
     if (p.nodes > 0) meta.push(p.nodes + ' 个工作流节点');
     if (p.cost > 0) meta.push('累计 ' + fmtCostShort(p.cost));
     if (p.budget > 0) meta.push('预算 ' + fmtCostShort(p.budget));
-    meta.push(fmtListTime(p.lastUpdated) + ' 更新');
+    meta.push(p.repositoryOnly ? '项目注册于 ' + fmtListTime(p.lastUpdated) : fmtListTime(p.lastUpdated) + ' 更新');
 
     var counts = statusCounts(p.tasks);
     var filterDefs = [['all', '全部'], ['stage', '运行中'], ['gate', '等待 / 待处理'], ['done', '已完成'], ['bad', '异常']];
@@ -3981,7 +4025,7 @@ export const CONSOLE_HTML = `<!doctype html>
   }
 
   function renderOverviewProjects() {
-    var projects = groupByRepo(projectRecords());
+    var projects = projectGroups();
     var html = '<div class="card">' +
       '<div class="card-header"><h3>项目</h3><span class="muted">' +
         (projects.length > 0 ? projects.length + ' 个项目，点击进入项目视图' : '还没有项目') + '</span></div>';
@@ -5790,6 +5834,15 @@ export const CONSOLE_HTML = `<!doctype html>
     return parts.join('|');
   }
 
+  function computeReposSig(repos) {
+    var parts = [];
+    for (var i = 0; i < repos.length; i++) {
+      var r = repos[i];
+      parts.push(r.id + ':' + (r.repo || '') + ':' + (r.default_branch || ''));
+    }
+    return parts.join('|');
+  }
+
   function computeDetailSig(d) {
     var t = d.task || {};
     var evs = d.events || [];
@@ -5841,9 +5894,9 @@ export const CONSOLE_HTML = `<!doctype html>
    * 所有模式在一次刷新里拉取两类记录，落定后再统一绘制计数与列表。
    */
   function loadRecords(silent) {
-    var before = state.tasksSig + state.workflowsSig + state.workflowsError + state.tasksError;
+    var before = state.tasksSig + state.reposSig + state.workflowsSig + state.workflowsError + state.tasksError;
     return Promise.all([loadTasks(), loadWorkflows()]).then(function (results) {
-      var changed = before !== state.tasksSig + state.workflowsSig + state.workflowsError + state.tasksError;
+      var changed = before !== state.tasksSig + state.reposSig + state.workflowsSig + state.workflowsError + state.tasksError;
       if (!silent || changed) {
         if (state.mode === 'projects') renderProjects();
         else if (state.mode !== 'workflows') renderTasks();
@@ -5926,8 +5979,11 @@ export const CONSOLE_HTML = `<!doctype html>
   function loadTasks() {
     return fetchJSON('/api/tasks').then(function (data) {
       var nextTasks = data.tasks || [];
+      var nextRepos = data.repos || [];
       state.tasks = nextTasks;
+      state.repos = nextRepos;
       state.tasksSig = computeTasksSig(nextTasks);
+      state.reposSig = computeReposSig(nextRepos);
       state.tasksError = '';
       return data;
     }).catch(function (err) {
@@ -5973,12 +6029,12 @@ export const CONSOLE_HTML = `<!doctype html>
   function refreshAll(silent) {
     var pulse = document.getElementById('pulse');
     if (!silent) pulse.textContent = '同步中…';
-    var previous = state.tasksSig + state.workflowsSig + state.workflowsError + state.tasksError;
+    var previous = state.tasksSig + state.reposSig + state.workflowsSig + state.workflowsError + state.tasksError;
     return loadRecords(!!silent).then(function (ok) {
       if (state.mode === 'overview') {
         return loadStats(!!silent).then(function (statsChanged) {
           if (state.mode === 'overview' && (!silent || statsChanged ||
-            previous !== state.tasksSig + state.workflowsSig + state.workflowsError + state.tasksError)) renderOverview();
+            previous !== state.tasksSig + state.reposSig + state.workflowsSig + state.workflowsError + state.tasksError)) renderOverview();
         });
       }
       if (state.mode === 'workflows') {

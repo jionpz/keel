@@ -126,6 +126,7 @@ function action(
 
 function fakeQuery(rows: {
   tasks?: readonly Row[]
+  repos?: readonly Row[]
   task?: readonly Row[]
   runs?: readonly Row[]
   events?: readonly Row[]
@@ -150,6 +151,7 @@ function fakeQuery(rows: {
       return (rows.workflowNodes ?? []).map((node) => ({ node }))
     }
     if (sql.includes('FROM managed_workflow WHERE id = $1')) return rows.workflow ?? []
+    if (sql.includes('FROM repo') && !sql.includes('JOIN task')) return rows.repos ?? []
     if (sql.includes('FROM task t JOIN repo r') && sql.includes('WHERE t.id = $1')) {
       return rows.task ?? []
     }
@@ -189,6 +191,7 @@ interface ConsoleStateSeam {
     transitions: unknown[]
   } | null
   tasks: Row[]
+  repos: Row[]
   workflows: Row[]
   mode: string
   selectedRepo: string | null
@@ -210,6 +213,7 @@ interface ConsoleSeam {
   taskRecords(): Row[]
   managedTicketRecord(workflow: Row, node: Row): Row
   projectRecords(): Row[]
+  projectGroups(): Row[]
   renderProjectProgress(project: Row): string
   renderTasks(): void
   renderWorkflowList(): void
@@ -298,6 +302,7 @@ function loadConsoleSeam(fetchImpl: SeamFetch = () => new Promise<never>(() => {
     taskRecords: taskRecords,
     managedTicketRecord: managedTicketRecord,
     projectRecords: projectRecords,
+    projectGroups: projectGroups,
     renderProjectProgress: renderProjectProgress,
     renderTasks: renderTasks,
     renderWorkflowList: renderWorkflowList,
@@ -720,6 +725,73 @@ describe('项目阶段分布', () => {
       repo: 'https://github.com/jionpz/keel.git',
       counts: { all: 1, stage: 0, gate: 1, done: 0, bad: 0 },
     })
+  })
+
+  it('项目集合以 repo 注册表为全集，没有任务的仓库也进入下拉与项目页', async () => {
+    const activeRepo = 'https://github.com/jionpz/keel.git'
+    const emptyRepo = 'https://github.com/jionpz/keel-demo-api.git'
+    const repos = [
+      {
+        id: 'repo-active',
+        repo: activeRepo,
+        provider: 'github',
+        default_branch: 'main',
+        created_at: '2026-11-12T01:00:00Z',
+      },
+      {
+        id: 'repo-empty',
+        repo: emptyRepo,
+        provider: 'github',
+        default_branch: 'develop',
+        created_at: '2026-11-13T01:00:00Z',
+      },
+    ]
+    const { seam, elements } = loadConsoleSeam((url) => {
+      if (url === '/api/tasks') {
+        return jsonResponse({
+          tasks: [
+            {
+              id: 'task-active',
+              title: '有任务的项目',
+              status: 'S-DEVELOPING',
+              repo: activeRepo,
+              updated_at: '2026-11-13T03:00:00Z',
+            },
+          ],
+          repos,
+        })
+      }
+      if (url === '/api/workflows') return jsonResponse({ workflows: [] })
+      return new Promise<never>(() => {})
+    })
+    seam.state.mode = 'tasks'
+
+    await seam.loadRecords(false)
+
+    const projects = seam.projectGroups()
+    expect(projects).toHaveLength(2)
+    const empty = projects.find((project) => project.repo === emptyRepo)
+    expect(empty).toMatchObject({
+      tasks: [],
+      counts: { all: 0, stage: 0, gate: 0, done: 0, bad: 0 },
+      defaultBranch: 'develop',
+      repositoryOnly: true,
+    })
+    const selectHtml = elements.get('repo-filter')?.innerHTML ?? ''
+    expect(selectHtml).toContain('全部项目（2）')
+    expect(selectHtml).toContain('keel-demo-api（0）')
+
+    await seam.setMode('projects')
+    const projectList = elements.get('project-list')?.innerHTML ?? ''
+    expect(projectList).toContain('keel')
+    expect(projectList).toContain('keel-demo-api')
+
+    seam.state.selectedRepo = emptyRepo
+    seam.renderProjectView()
+    const detail = elements.get('detail')?.innerHTML ?? ''
+    expect(detail).toContain('这个项目还没有任务')
+    expect(detail).toContain('默认分支 develop')
+    expect(detail).not.toContain('执行次数不可用')
   })
 
   it('任务页按 managed ticket 展开，运行中的 ticket 不再只藏在工作流页', async () => {
@@ -1161,13 +1233,22 @@ describe('keel console', () => {
     const tasks: Row[] = [
       { id: TASK_ID, title: 'demo', status: 'S-DONE', control_mode: 'auto', repo: 'file:///tmp/x' },
     ]
-    await withServer(fakeQuery({ tasks }), async (_base, api) => {
+    const repos: Row[] = [
+      {
+        id: 'repo-empty',
+        repo: 'file:///tmp/empty',
+        provider: 'local',
+        default_branch: 'main',
+      },
+    ]
+    await withServer(fakeQuery({ tasks, repos }), async (_base, api) => {
       const res = await api('/api/tasks')
       expect(res.status).toBe(200)
-      const body = (await res.json()) as { tasks: Row[] }
+      const body = (await res.json()) as { tasks: Row[]; repos: Row[] }
       expect((body as { projection?: string }).projection).toBe('legacy-v01')
       expect(body.tasks).toHaveLength(1)
       expect(body.tasks[0]?.title).toBe('demo')
+      expect(body.repos).toEqual(repos)
     })
   })
 

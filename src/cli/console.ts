@@ -660,30 +660,39 @@ export function createConsoleHandler(
 
     if (path === '/api/tasks') {
       try {
-        const rows = await deps.query(
-          `SELECT t.id, t.title, t.status, t.control_mode, t.risk, t.complexity,
-                  t.work_branch, t.base_branch, t.budget_usd,
-                  t.created_at, t.updated_at, t.terminal_at,
-                  r.id AS repo_id, r.remote_url AS repo, r.provider AS repo_provider,
-                  COALESCE(rs.run_count, 0)::int AS run_count,
-                  COALESCE(rs.total_cost_usd, 0)::text AS total_cost_usd,
-                  COALESCE(rs.total_tokens, 0)::text AS total_tokens,
-                  COALESCE(es.event_count, 0)::int AS event_count
-           FROM task t JOIN repo r ON r.id = t.repo_id
-           LEFT JOIN LATERAL (
-             SELECT COUNT(*) AS run_count,
-                    SUM(COALESCE(run.cost_usd, 0)) AS total_cost_usd,
-                    SUM(COALESCE(run.tokens_in, 0) + COALESCE(run.tokens_out, 0)) AS total_tokens
-             FROM run WHERE run.task_id = t.id
-           ) rs ON true
-           LEFT JOIN LATERAL (
-             SELECT COUNT(*) AS event_count
-             FROM event WHERE event.task_id = t.id
-           ) es ON true
-           ORDER BY t.updated_at DESC`,
-          [],
-        )
-        sendJson(res, 200, { projection: 'legacy-v01', tasks: rows })
+        const [rows, repos] = await Promise.all([
+          deps.query(
+            `SELECT t.id, t.title, t.status, t.control_mode, t.risk, t.complexity,
+                    t.work_branch, t.base_branch, t.budget_usd,
+                    t.created_at, t.updated_at, t.terminal_at,
+                    r.id AS repo_id, r.remote_url AS repo, r.provider AS repo_provider,
+                    COALESCE(rs.run_count, 0)::int AS run_count,
+                    COALESCE(rs.total_cost_usd, 0)::text AS total_cost_usd,
+                    COALESCE(rs.total_tokens, 0)::text AS total_tokens,
+                    COALESCE(es.event_count, 0)::int AS event_count
+             FROM task t JOIN repo r ON r.id = t.repo_id
+             LEFT JOIN LATERAL (
+               SELECT COUNT(*) AS run_count,
+                      SUM(COALESCE(run.cost_usd, 0)) AS total_cost_usd,
+                      SUM(COALESCE(run.tokens_in, 0) + COALESCE(run.tokens_out, 0)) AS total_tokens
+               FROM run WHERE run.task_id = t.id
+             ) rs ON true
+             LEFT JOIN LATERAL (
+               SELECT COUNT(*) AS event_count
+               FROM event WHERE event.task_id = t.id
+             ) es ON true
+             ORDER BY t.updated_at DESC`,
+            [],
+          ),
+          // 项目下拉与项目视图以注册表为全集；task / workflow 只补记录，不再定义项目是否存在。
+          deps.query(
+            `SELECT id, provider, remote_url AS repo, default_branch, local_path, created_at
+             FROM repo
+             ORDER BY remote_url, id`,
+            [],
+          ),
+        ])
+        sendJson(res, 200, { projection: 'legacy-v01', tasks: rows, repos })
       } catch (e) {
         sendJson(res, 503, {
           error: '数据库不可用',

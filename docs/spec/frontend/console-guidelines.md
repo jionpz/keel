@@ -100,10 +100,13 @@
 
 ### 只读字段范围（`src/cli/console.ts`）
 
-- `GET /api/tasks`（列表）：`id, title, status, control_mode, risk, complexity,
-  work_branch, base_branch, budget_usd, created_at, updated_at, terminal_at,
-  repo_id, repo, repo_provider`，外加 `LEFT JOIN LATERAL` 聚合出来的
-  `run_count, total_cost_usd, total_tokens, event_count`（只读统计，不写回）。
+- `GET /api/tasks`（列表）同时返回 `tasks` 与项目全集 `repos`。`tasks` 含
+  `id, title, status, control_mode, risk, complexity, work_branch, base_branch,
+  budget_usd, created_at, updated_at, terminal_at, repo_id, repo, repo_provider`，
+  外加 `LEFT JOIN LATERAL` 聚合出来的 `run_count, total_cost_usd, total_tokens,
+  event_count`（只读统计，不写回）。`repos` 直接读注册表，含
+  `id, provider, repo, default_branch, local_path, created_at`；它是项目下拉与项目视图的
+  全集，不能从「是否已有 task/workflow」反推。
 - `GET /api/tasks/:id`（详情）：
   - `task`：列表字段 + `repo_id, current_run_id`；
   - `runs`：`id, stage, role, attempt, status, harness_id, harness_tier, session_ref,
@@ -177,7 +180,9 @@
   有节点但没有实际活跃 ticket/决策时归入等待；人工待办优先分组，workflow 终态以其原始状态为准。
   图尚无节点时展示 workflow 自身的规划/调度状态。原始徽章与实际进展并列，不能用一个覆盖另一个。
 - 项目由客户端按 `repo`（仓库地址）归组，**不是** `repo_id`：`repo` 表没有 remote_url 唯一约束，
-  按 id 分会把同一项目拆成两行。聚合只消费 `/api/tasks`、`/api/workflows` 的现成字段。
+  按 id 分会把同一项目拆成两行。项目全集来自 `/api/tasks` 返回的 `repos`；legacy task、
+  managed workflow 只往对应仓库补内容。没有任务的已注册仓库仍显示任务数 0，不能从下拉与
+  项目页消失。聚合只消费 `/api/tasks`、`/api/workflows` 的现成字段。
   项目视图只做聚合与跳转：legacy 明细回任务模式，managed 明细回工作流模式。
 - 所有模式的首次加载、切入概览/项目/工作流、手动刷新与 5s 轮询，都经 `loadRecords`
   同时获取两类记录，落定后统一绘制。不得让概览只加载 legacy，或等用户先访问工作流页才补齐项目。
