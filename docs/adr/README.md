@@ -18,6 +18,7 @@
 | [0010](./0010-workflow-jstack.md) | 开发工作流全员迁移到 jstack，Trellis 退役 | **Accepted** — 2026-11-07 |
 | [0011](./0011-jstack-tianwen-runtime.md) | jstack 为主工作流，天问作为项目用户代表 | **Proposed** — 生产方案已记录，技术契约待实现与验证 |
 | [0012](./0012-pr-merge-completion.md) | S-DONE 以 PR 合并为准，未合并关闭可重驱动 | **Accepted** — 2026-11-12，issue #132 方案 A |
+| [0013](./0013-console-work-item-projection.md) | 控制台唯一 WorkItem 投影，底层事实分离 | **Accepted** — 2026-11-14，消融实验后落地 |
 
 ## Status 语义
 

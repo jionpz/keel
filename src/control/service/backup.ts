@@ -170,6 +170,26 @@ function parsePostgresUrl(raw: string): URL {
   return url
 }
 
+function decodeUrlPart(value: string, label: string): string {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    throw new Error(`数据库 URL 的${label}百分号编码非法`)
+  }
+}
+
+function connectionValue(
+  url: URL,
+  name: string,
+  authorityValue: string,
+  label: string,
+): string | undefined {
+  const queryValue = url.searchParams.get(name)
+  if (queryValue !== null && queryValue !== '') return queryValue
+  if (authorityValue === '') return undefined
+  return decodeUrlPart(authorityValue, label)
+}
+
 /** 把连接串拆成 libpq 环境变量，避免密码出现在子进程参数列表。 */
 export function pgEnvironment(
   databaseUrl: string,
@@ -177,11 +197,15 @@ export function pgEnvironment(
 ): NodeJS.ProcessEnv {
   const url = parsePostgresUrl(databaseUrl)
   const result: NodeJS.ProcessEnv = { ...env }
-  if (url.hostname !== '') result.PGHOST = decodeURIComponent(url.hostname)
-  if (url.port !== '') result.PGPORT = url.port
-  if (url.username !== '') result.PGUSER = decodeURIComponent(url.username)
-  if (url.password !== '') result.PGPASSWORD = decodeURIComponent(url.password)
-  const database = decodeURIComponent(url.pathname.replace(/^\/+/, ''))
+  const host = connectionValue(url, 'host', url.hostname, 'host')
+  if (host !== undefined) result.PGHOST = host
+  const port = connectionValue(url, 'port', url.port, 'port')
+  if (port !== undefined) result.PGPORT = port
+  const username = connectionValue(url, 'user', url.username, 'username')
+  if (username !== undefined) result.PGUSER = username
+  const password = connectionValue(url, 'password', url.password, 'password')
+  if (password !== undefined) result.PGPASSWORD = password
+  const database = decodeUrlPart(url.pathname.replace(/^\/+/, ''), '数据库名')
   if (database !== '') result.PGDATABASE = database
   const sslmode = url.searchParams.get('sslmode')
   if (sslmode !== null) result.PGSSLMODE = sslmode
@@ -191,7 +215,7 @@ export function pgEnvironment(
 
 function databaseName(databaseUrl: string): string {
   const url = parsePostgresUrl(databaseUrl)
-  const name = decodeURIComponent(url.pathname.replace(/^\/+/, ''))
+  const name = decodeUrlPart(url.pathname.replace(/^\/+/, ''), '数据库名')
   if (name === '') throw new Error('数据库 URL 缺少数据库名')
   return name
 }

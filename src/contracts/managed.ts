@@ -9,6 +9,7 @@ import type {
   TianwenDecision,
 } from '../generated/managed.js'
 import type { ResultWithUsage } from './errors.js'
+import type { RunHooks } from './harness-adapter.js'
 import type { Context, Usage } from './types.js'
 
 export interface ManagedObservation {
@@ -154,6 +155,7 @@ export interface ManagedTicketToolPlan {
 }
 
 export interface ManagedTicketStageInput {
+  readonly onProgress?: RunHooks['onProgress']
   readonly attempt_id: string
   readonly task_id: string
   readonly repo_id: string

@@ -41,6 +41,39 @@ const DEFAULT_PORT = 4321
 const DEFAULT_HOST = '127.0.0.1'
 /** 只用来解析相对 URL；与监听地址无关。 */
 const URL_BASE = 'http://127.0.0.1'
+
+/** 列表与详情共用节点读模型；ticket 与决策进展不必等待 workflow 再次同步。 */
+const WORKFLOW_NODE_SELECT = `
+  SELECT n.*, t.status AS ticket_status, t.current_stage,
+         t.last_error AS ticket_error, d.status AS decision_status,
+         d.question AS decision_question,
+         COALESCE(s.run_count, 0)::int AS run_count,
+         s.stage AS latest_stage, s.status AS stage_status,
+         s.attempt AS stage_attempt, s.error AS stage_error,
+         s.started_at AS stage_started_at, s.ended_at AS stage_ended_at,
+         p.payload->>'observedAt' AS last_progress_at,
+         GREATEST(n.updated_at, t.updated_at, d.updated_at,
+                  s.started_at, s.ended_at, p.occurred_at) AS activity_at
+  FROM managed_workflow_node n
+  LEFT JOIN managed_ticket_task t ON t.id = n.ticket_task_id
+  LEFT JOIN managed_decision_request d
+    ON d.id = t.pending_decision_id AND d.revision = t.pending_decision_revision
+  LEFT JOIN LATERAL (
+    SELECT count(*) OVER () AS run_count, id, stage, status, attempt, error, started_at, ended_at
+    FROM managed_ticket_stage
+    WHERE task_id = t.id
+    ORDER BY started_at DESC, attempt DESC, id
+    LIMIT 1
+  ) s ON true
+  LEFT JOIN LATERAL (
+    SELECT payload, occurred_at
+    FROM managed_ticket_event
+    WHERE task_id = t.id AND type = 'ManagedTicketProgress'
+      AND t.status = 'RUNNING' AND s.status = 'RUNNING' AND s.stage = t.current_stage
+      AND payload->>'stageId' = s.id::text
+    ORDER BY seq DESC
+    LIMIT 1
+  ) p ON true`
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /**
@@ -533,24 +566,36 @@ export function createConsoleHandler(
     if (path === '/api/workflows') {
       try {
         const rows = await deps.query(
-          `SELECT w.id, w.repo_id, w.status, w.current_graph_version,
+          `SELECT w.id, w.repo_id, r.remote_url AS repo, r.provider AS repo_provider,
+                  w.status, w.current_graph_version,
                   w.request, w.scope_paths, w.external_issue, w.completion_target,
                   w.package_digest, w.baseline_commit, w.last_error,
                   w.created_at, w.updated_at,
+                  GREATEST(w.updated_at, n.activity_at) AS activity_at,
                   COALESCE(n.node_count, 0)::int AS node_count,
                   COALESCE(n.archived_count, 0)::int AS archived_count,
                   COALESCE(n.waiting_human, 0)::int AS waiting_human,
-                  COALESCE(n.failed_count, 0)::int AS failed_count
+                  COALESCE(n.failed_count, 0)::int AS failed_count,
+                  COALESCE(n.run_count, 0)::int AS run_count,
+                  COALESCE(n.tickets, '[]'::jsonb) AS tickets
            FROM managed_workflow w
+           JOIN repo r ON r.id = w.repo_id
            LEFT JOIN LATERAL (
              SELECT count(*) AS node_count,
                     count(*) FILTER (WHERE status = 'ARCHIVED') AS archived_count,
-                    count(*) FILTER (WHERE status = 'WAITING_HUMAN') AS waiting_human,
-                    count(*) FILTER (WHERE status = 'FAILED') AS failed_count
-             FROM managed_workflow_node
-             WHERE workflow_id = w.id AND graph_version = w.current_graph_version
+                    count(*) FILTER (WHERE COALESCE(
+                      decision_status = 'WAITING_HUMAN',
+                      COALESCE(ticket_status, status) = 'WAITING_HUMAN'
+                    )) AS waiting_human,
+                    count(*) FILTER (WHERE COALESCE(ticket_status, status) = 'FAILED') AS failed_count,
+                    sum(run_count) AS run_count,
+                    max(activity_at) AS activity_at,
+                    jsonb_agg(to_jsonb(nodes) ORDER BY node_key) AS tickets
+             FROM (${WORKFLOW_NODE_SELECT}
+               WHERE n.workflow_id = w.id AND n.graph_version = w.current_graph_version
+             ) nodes
            ) n ON true
-           ORDER BY w.updated_at DESC`,
+           ORDER BY activity_at DESC, w.id`,
           [],
         )
         sendJson(res, 200, { projection: 'jstack-managed-v1', workflows: rows })
@@ -575,10 +620,10 @@ export function createConsoleHandler(
         const [workflow, nodes, evidence, graph] = await Promise.all([
           deps.query('SELECT * FROM managed_workflow WHERE id = $1', [id]),
           deps.query(
-            `SELECT * FROM managed_workflow_node
-             WHERE workflow_id = $1
-               AND graph_version = (SELECT current_graph_version FROM managed_workflow WHERE id = $1)
-             ORDER BY node_key`,
+            `SELECT to_jsonb(nodes) AS node FROM (${WORKFLOW_NODE_SELECT}
+             WHERE n.workflow_id = $1
+               AND n.graph_version = (SELECT current_graph_version FROM managed_workflow WHERE id = $1)
+             ORDER BY n.node_key) nodes`,
             [id],
           ),
           deps.query(
@@ -600,7 +645,7 @@ export function createConsoleHandler(
           projection: 'jstack-managed-v1',
           workflow: workflow[0],
           graph: graph[0] ?? null,
-          nodes,
+          nodes: nodes.map((row) => row.node),
           evidence,
         })
       } catch (e) {
@@ -615,30 +660,39 @@ export function createConsoleHandler(
 
     if (path === '/api/tasks') {
       try {
-        const rows = await deps.query(
-          `SELECT t.id, t.title, t.status, t.control_mode, t.risk, t.complexity,
-                  t.work_branch, t.base_branch, t.budget_usd,
-                  t.created_at, t.updated_at, t.terminal_at,
-                  r.id AS repo_id, r.remote_url AS repo, r.provider AS repo_provider,
-                  COALESCE(rs.run_count, 0)::int AS run_count,
-                  COALESCE(rs.total_cost_usd, 0)::text AS total_cost_usd,
-                  COALESCE(rs.total_tokens, 0)::text AS total_tokens,
-                  COALESCE(es.event_count, 0)::int AS event_count
-           FROM task t JOIN repo r ON r.id = t.repo_id
-           LEFT JOIN LATERAL (
-             SELECT COUNT(*) AS run_count,
-                    SUM(COALESCE(run.cost_usd, 0)) AS total_cost_usd,
-                    SUM(COALESCE(run.tokens_in, 0) + COALESCE(run.tokens_out, 0)) AS total_tokens
-             FROM run WHERE run.task_id = t.id
-           ) rs ON true
-           LEFT JOIN LATERAL (
-             SELECT COUNT(*) AS event_count
-             FROM event WHERE event.task_id = t.id
-           ) es ON true
-           ORDER BY t.updated_at DESC`,
-          [],
-        )
-        sendJson(res, 200, { projection: 'legacy-v01', tasks: rows })
+        const [rows, repos] = await Promise.all([
+          deps.query(
+            `SELECT t.id, t.title, t.status, t.control_mode, t.risk, t.complexity,
+                    t.work_branch, t.base_branch, t.budget_usd,
+                    t.created_at, t.updated_at, t.terminal_at,
+                    r.id AS repo_id, r.remote_url AS repo, r.provider AS repo_provider,
+                    COALESCE(rs.run_count, 0)::int AS run_count,
+                    COALESCE(rs.total_cost_usd, 0)::text AS total_cost_usd,
+                    COALESCE(rs.total_tokens, 0)::text AS total_tokens,
+                    COALESCE(es.event_count, 0)::int AS event_count
+             FROM task t JOIN repo r ON r.id = t.repo_id
+             LEFT JOIN LATERAL (
+               SELECT COUNT(*) AS run_count,
+                      SUM(COALESCE(run.cost_usd, 0)) AS total_cost_usd,
+                      SUM(COALESCE(run.tokens_in, 0) + COALESCE(run.tokens_out, 0)) AS total_tokens
+               FROM run WHERE run.task_id = t.id
+             ) rs ON true
+             LEFT JOIN LATERAL (
+               SELECT COUNT(*) AS event_count
+               FROM event WHERE event.task_id = t.id
+             ) es ON true
+             ORDER BY t.updated_at DESC`,
+            [],
+          ),
+          // 项目下拉与项目视图以注册表为全集；task / workflow 只补记录，不再定义项目是否存在。
+          deps.query(
+            `SELECT id, provider, remote_url AS repo, default_branch, local_path, created_at
+             FROM repo
+             ORDER BY remote_url, id`,
+            [],
+          ),
+        ])
+        sendJson(res, 200, { projection: 'legacy-v01', tasks: rows, repos })
       } catch (e) {
         sendJson(res, 503, {
           error: '数据库不可用',

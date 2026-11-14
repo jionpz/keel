@@ -100,10 +100,13 @@
 
 ### 只读字段范围（`src/cli/console.ts`）
 
-- `GET /api/tasks`（列表）：`id, title, status, control_mode, risk, complexity,
-  work_branch, base_branch, budget_usd, created_at, updated_at, terminal_at,
-  repo_id, repo, repo_provider`，外加 `LEFT JOIN LATERAL` 聚合出来的
-  `run_count, total_cost_usd, total_tokens, event_count`（只读统计，不写回）。
+- `GET /api/tasks`（列表）同时返回 `tasks` 与项目全集 `repos`。`tasks` 含
+  `id, title, status, control_mode, risk, complexity, work_branch, base_branch,
+  budget_usd, created_at, updated_at, terminal_at, repo_id, repo, repo_provider`，
+  外加 `LEFT JOIN LATERAL` 聚合出来的 `run_count, total_cost_usd, total_tokens,
+  event_count`（只读统计，不写回）。`repos` 直接读注册表，含
+  `id, provider, repo, default_branch, local_path, created_at`；它是项目下拉与项目视图的
+  全集，不能从「是否已有 task/workflow」反推。
 - `GET /api/tasks/:id`（详情）：
   - `task`：列表字段 + `repo_id, current_run_id`；
   - `runs`：`id, stage, role, attempt, status, harness_id, harness_tier, session_ref,
@@ -119,6 +122,21 @@
   - `timers`：`id, run_id, kind, due_at, state, fired_at, created_at, updated_at`。
 - 以上查询全部走 `asRole('keel_control')` 且只含 `SELECT`；新增字段时同步扩充
   `src/cli/console.test.ts` 里的注入式 `fakeQuery` 分支，保持可测。
+- `GET /api/workflows` 保留 workflow 原始状态，附 `repo / repo_provider`、
+  当前图的 `node_count / archived_count / waiting_human / failed_count / run_count`、
+  `activity_at` 与 `tickets`。`tickets` 和详情 `nodes` 共用 `WORKFLOW_NODE_SELECT`：
+  关联实际 `managed_ticket_task` 的 `ticket_status / current_stage / ticket_error`，
+  当前 `pending_decision_id + pending_decision_revision` 的 `decision_status / decision_question`，
+  以及最新 `managed_ticket_stage` 的阶段、状态、attempt、错误与起止时间。
+  不以 graph 节点状态代替实际 ticket 进展。
+- `run_count` 只数当前图所绑定 ticket 的 `managed_ticket_stage` 行（含重试与失败）；
+  `node_count` 只数当前图节点，二者独立表达。API 字段缺失时显示「执行次数不可用」，
+  不从节点数、workflow 调度 attempts 或默认零伪造执行次数。
+- `last_progress_at` 只读当前 RUNNING ticket、当前 RUNNING stage 对应的
+  `ManagedTicketProgress` 事件 `payload.observedAt`，按 `stageId` 排除上一轮遥测。
+  没有事件显示「暂无进展信号」，不拿 owner 心跳或更新时间冒充执行进展。
+  `activity_at` 合并节点、ticket、决策、阶段和进展事件的更新时间；列表排序、项目最近更新、
+  详情时间与静默轮询指纹均包含这些进展，不依赖 workflow 顶层状态先同步。
 
 ## 人话层：术语与「一句话现状」
 
@@ -145,18 +163,40 @@
   owner 心跳只作补充说明，不替代进展。详情指纹包含遥测，时长也由轮询节拍刷新；
   绿色脉冲仅用于活跃度，遵守 `prefers-reduced-motion`。
 
-## 三种视图：概览 / 任务 / 项目
+## 四种视图：概览 / 任务 / 项目 / 工作流
 
-- 页面有三种视图，共用同一个侧栏骨架：**概览**回答「最近干得怎么样」，**任务**以 task 为主体，
-  **项目**以仓库为主体。切换只改可见容器与按钮态（`applyModeChrome`），不要复制多套侧栏。
+- 页面有四种视图，共用同一个侧栏骨架：**概览**回答「最近干得怎么样」，**任务**列真实工作项，
+  **项目**以仓库为主体，**工作流**展示 managed workflow 的图和实际 ticket 进展。
+  切换只改可见容器与按钮态（`applyModeChrome`），不要复制多套侧栏。
 - 概览是默认落点（`state.mode` 的初值），因为它先回答最常见的问题；周期控件选的是「哪段时间」，
   与「看哪个任务」正交。
 - 概览模式隐藏搜索框、项目下拉与状态 chip：它的列表是「全部任务、按更新时间」的原始顺序，
   点了就进任务模式 —— 这类筛选在概览里没有对应口径，留着只会让人以为筛选生效了。
+- 后端事实保留四种身份：repo 定义项目，legacy task、managed ticket 是工作项，
+  managed workflow 是容器与依赖图。状态机不同，不能为“整洁”把数据库或 API 合并。
+- 客户端只有 `workItems()` 一个投影：它把 legacy task、managed ticket 和尚未物化 ticket 的
+  workflow 统一成 `item_type = task | ticket | workflow` 的列表。`Project.items`、任务列表、
+  概览进行中、项目卡片、状态栏和项目/概览计数全部消费这组列表，不再保留
+  `taskRecords()` / `projectRecords()` 两套重复口径。
+- 已经物化 ticket 的 workflow 只贡献真实 ticket，不能把整个容器折成一条任务；零 ticket 的
+  workflow 保留为 `item_type=workflow` 的规划项，否则 ROUTING / READY 等调度事实会从所有
+  工作项视图消失。`recordKind / recordNeedsHuman / recordBadge` 按 `item_type` 集中分类；
+  缺失或未知 `item_type` 视为投影错误，不静默兼容成 legacy task；**禁止把 workflow
+  伪装成 `S-*`**。
+  分类以真实 ticket 为准：ticket RUNNING 或决策 PROCESSING 算活跃，即使 workflow 仍为 READY；
+  decision PROCESSING 显示「天问处理中」；有 ticket 但没有实际活跃 ticket/决策时归入等待，
+  人工待办优先分组。图尚无 ticket 时展示 workflow 自身的规划/调度状态。
 - 项目由客户端按 `repo`（仓库地址）归组，**不是** `repo_id`：`repo` 表没有 remote_url 唯一约束，
-  按 id 分会把同一项目拆成两行。聚合值（任务数、状态分布、轮次、成本）都从 `/api/tasks` 的
-  现成字段算，不新增写路径、不新增聚合接口。
-- 项目视图只做聚合与跳转：任务明细仍然回任务模式看，避免一个事实出现两种口径。
+  按 id 分会把同一项目拆成两行。项目全集来自 `/api/tasks` 返回的 `repos`；先用仓库建立
+  `Project`，再把工作项附到 `items`。没有任务的已注册仓库因此天然是空 `items`，**不得**
+  再合成 `repository_only` 伪任务来让项目出现。工作项找不到注册仓库时仍要建立项目，
+  保证异常旧数据不被静默丢弃。聚合只消费 `/api/tasks`、`/api/workflows` 的现成字段。
+  项目视图只做聚合与跳转：legacy 明细回任务模式，managed 明细回工作流模式。
+- 所有模式的首次加载、切入概览/项目/工作流、手动刷新与 5s 轮询，都经 `loadRecords`
+  同时获取两类记录，落定后统一绘制。不得让概览只加载 legacy，或等用户先访问工作流页才补齐项目。
+  任一路记录加载失败都保留其上次成功记录，并在共享视图和状态栏标明未同步；
+  工作流侧栏也显示该路错误，不把部分同步报成全部成功。
+  历史统计失败也不能遮住当前记录。刷新保持模式、选中项目和临时筛选。
 
 ### 项目页：先回答「有没有事等我」，再给全量
 
@@ -166,9 +206,12 @@
   - 第一行：项目短名 + 待处理徽章（仅当 `needsYou > 0`，文案 `2 待处理`）；
   - 第二行：`5 个任务，2 个在跑，1 个完成`，时间单独右对齐一列（`projectFacts` / `projectSubline`）。
   - 完整 URL 只进 `title`；provider 不常驻；成本与秒级时间不进侧栏。
-- `needsYou` 只数**能直接进决策页**的状态（`isGateStatus`：`S-HUMAN_REVIEW` /
-  `S-NEED_CLARIFICATION`）。其余闸门态（`S-NEW` / `S-RFC_READY` / `S-PR_OPEN`）算「等待中」，
-  不能把系统等待误报成人的待办。项目排序：`needsYou` 降序 → 最近更新降序。
+- legacy 的 `needsYou` 只数**能直接进决策页**的状态（`isGateStatus`：`S-HUMAN_REVIEW` /
+  `S-NEED_CLARIFICATION`）；managed 只看当前 ticket 的真实人工等待。
+  活跃请求为 `PROCESSING`（天问处理中）或 `OPEN` 时不算人的待办，`WAITING_HUMAN` 才算；
+  没有当前决策请求时按 ticket 的 `WAITING_HUMAN` 判断。一个 workflow 有多个待办 ticket 时，
+  项目页逐个计数；工作流侧栏仍单列待办节点数。
+  其余等待态不能误报成人的待办。项目排序：`needsYou` 降序 → 最近更新降序。
 - 项目详情头部只留三样：项目名（`title` 带完整 URL）、一句话现状、累计元信息行。
   一句话用白话，例如「2 个任务需要你处理，2 个在跑。」；没有进行中任务时明说
   「没有进行中的任务」。按 #127 在项目侧栏和详情头部加入一条阶段分布堆叠条，
@@ -177,12 +220,13 @@
   临时任务筛选不改变项目整体分布。窄屏保持整条缩放、摘要换行，不恢复指标方块。
 - 任务按行动分组，顺序固定，空组整组不渲染：
   `需要你处理`（needs）→ `进行中`（stage）→ `等待中`（waiting）→ `已收尾`（terminal）。
-  分组判定只在 `projectGroupOf` 一处。`需要你处理` 组行内给 `去决策` / `去回答`（不带箭头），
+  分组判定只在 `projectGroupOf(record)` 一处。`需要你处理` 组 legacy 行内给 `去决策` / `去回答`（不带箭头），
   点击仍走 `select(taskId)`（它会重置 `tabChosen`，闸门任务自动落到决策 Tab），
+  managed 行只给「查看工作流」，并展示 ticket、当前阶段、阻塞原因和最近更新；
   **不要**在项目页复制决策逻辑。
 - 列表列只保留状态 / 标题 / 更新时间；分支、单任务成本降层到任务详情。
   时间统一 `fmtListTime`（MM-DD HH:mm）；项目级成本用 `fmtCostShort`（≥ $0.01 时 2 位小数）。
-- 口径差异要写在标签上：`待处理` = needs，`待介入` = needs + waiting。
+- 口径差异要写在标签上：`待处理` = needs，`等待 / 待处理` = needs + waiting。
   两个数字不同是正常的，但标签必须不同，不能让用户以为计数在撒谎。
 - 模式与选中项进 URL Hash：`#mode=overview`、`#mode=projects&repo=<url>` 与 `#task=<id>&tab=<tab>`；
   只有 `task` 键的链接回落到任务模式。5s 轮询必须保持当前模式与选中项目。
@@ -192,15 +236,17 @@
   - 项目模式：项目下拉隐藏，状态 chip **移到任务列表上方**（`.proj-filters`），
     筛的是当前项目的任务表；工具栏写「显示 X / Y」，无命中时给一行空态。
     侧栏只保留项目搜索 —— chip 筛谁，就站在谁旁边，不要让侧栏 chip 看起来像在筛项目列表。
-  - chip 计数跟随当前筛选口径（`filterScopeTasks`）：任务模式跟项目下拉、项目模式跟选中项目；
+  - chip 计数跟随当前筛选口径（`filterScopeItems`）：任务模式跟项目下拉、项目模式跟选中项目；
     否则会出现「chip 说 7 条、点下去 0 条」。
 - 筛选状态不进 URL Hash（属于临时视图态），但切模式不能丢；5s 轮询重绘也不能丢。
 - 项目下拉按签名（项目集合 + 计数）决定是否重建选项，避免轮询重置用户正在操作的下拉框。
 
 ## 概览：统计口径
 
-- 数据只来自 `GET /api/stats`（`STATS_DAYS_SQL` / `STATS_TOTALS_SQL`，只读聚合），
-  页面不自造第三套统计。改动口径时 SQL 与这里的定义必须一起改。
+- 历史统计只来自 `GET /api/stats`（`STATS_DAYS_SQL` / `STATS_TOTALS_SQL`，只读聚合），
+  范围为 legacy tasks/runs，页面标注「历史统计（旧版任务）」。
+  当前进行中、项目与状态栏另按 `workItems()` 表达，不把 managed 节点混进 legacy Run 统计。
+  改动统计口径时 SQL 与这里的定义必须一起改。
 - 口径（`keel status` 对得上）：
   - **运行次数** = `run.started_at` 落在当天的 Run（成功 / 失败 / 取消都算）；
     `runs_ok` = `SUCCEEDED`，`runs_failed` = `FAILED|TIMEOUT`；

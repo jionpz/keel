@@ -12,6 +12,7 @@
 import { createServer } from 'node:http'
 import { runInNewContext } from 'node:vm'
 import { describe, expect, it } from 'vitest'
+import { listenTestServer } from '../test-support/http-server.js'
 import {
   type ConsoleActions,
   type ConsoleDeps,
@@ -31,8 +32,8 @@ type ServerDeps = Omit<ConsoleDeps, 'auth'> & { readonly auth?: AuthOptions }
 type ApiFetch = (path: string, init?: RequestInit) => Promise<Response>
 
 /** 登录一次，取出 `cookie` 请求头需要的 `name=value`。 */
-async function loginCookie(base: string): Promise<string> {
-  const res = await loginRequest(base, PASSWORD)
+async function loginCookie(fetch: typeof globalThis.fetch, base: string): Promise<string> {
+  const res = await loginRequest(fetch, base, PASSWORD)
   if (res.status !== 200) throw new Error(`测试登录失败：HTTP ${res.status}`)
   const setCookie = res.headers.get('set-cookie') ?? ''
   const pair = setCookie.split(';')[0] ?? ''
@@ -43,6 +44,7 @@ async function loginCookie(base: string): Promise<string> {
 }
 
 function loginRequest(
+  fetch: typeof globalThis.fetch,
   base: string,
   password: string,
   extra: Record<string, string> = {},
@@ -56,7 +58,7 @@ function loginRequest(
 
 async function withServer(
   deps: QueryFn | ServerDeps,
-  fn: (base: string, api: ApiFetch) => Promise<void>,
+  fn: (base: string, api: ApiFetch, fetch: typeof globalThis.fetch) => Promise<void>,
   opts: { readonly anonymous?: boolean } = {},
 ): Promise<void> {
   const input: ServerDeps = typeof deps === 'function' ? { query: deps } : deps
@@ -72,23 +74,20 @@ async function withServer(
   const server = createServer((req, res) => {
     handler(req, res).catch(() => res.end())
   })
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
-  const address = server.address()
-  const port = typeof address === 'object' && address !== null ? address.port : 0
-  const base = `http://127.0.0.1:${port}`
-  const cookie = opts.anonymous === true ? undefined : await loginCookie(base)
-  const api: ApiFetch = (path, init = {}) =>
-    fetch(`${base}${path}`, {
-      ...init,
-      headers: {
-        ...(cookie === undefined ? {} : { cookie }),
-        ...(init.headers as Record<string, string> | undefined),
-      },
-    })
+  const { baseUrl: base, fetch, close } = await listenTestServer(server)
   try {
-    await fn(base, api)
+    const cookie = opts.anonymous === true ? undefined : await loginCookie(fetch, base)
+    const api: ApiFetch = (path, init = {}) =>
+      fetch(`${base}${path}`, {
+        ...init,
+        headers: {
+          ...(cookie === undefined ? {} : { cookie }),
+          ...(init.headers as Record<string, string> | undefined),
+        },
+      })
+    await fn(base, api, fetch)
   } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()))
+    await close()
   }
 }
 
@@ -127,6 +126,7 @@ function action(
 
 function fakeQuery(rows: {
   tasks?: readonly Row[]
+  repos?: readonly Row[]
   task?: readonly Row[]
   runs?: readonly Row[]
   events?: readonly Row[]
@@ -147,8 +147,11 @@ function fakeQuery(rows: {
     if (sql.includes('FROM managed_workflow_evidence')) return rows.workflowEvidence ?? []
     if (sql.includes('FROM managed_workflow_graph')) return rows.workflowGraph ?? []
     if (sql.includes('FROM managed_workflow w')) return rows.workflows ?? []
-    if (sql.includes('FROM managed_workflow_node')) return rows.workflowNodes ?? []
+    if (sql.includes('SELECT to_jsonb(nodes) AS node')) {
+      return (rows.workflowNodes ?? []).map((node) => ({ node }))
+    }
     if (sql.includes('FROM managed_workflow WHERE id = $1')) return rows.workflow ?? []
+    if (sql.includes('FROM repo') && !sql.includes('JOIN task')) return rows.repos ?? []
     if (sql.includes('FROM task t JOIN repo r') && sql.includes('WHERE t.id = $1')) {
       return rows.task ?? []
     }
@@ -164,9 +167,13 @@ function fakeQuery(rows: {
 
 interface SeamElement {
   innerHTML: string
+  textContent: string
   style: Record<string, string>
   classList: {
     toggle(name: string, force?: boolean): void
+    add(name: string): void
+    remove(name: string): void
+    contains(name: string): boolean
   }
   addEventListener(...args: unknown[]): void
   setAttribute(name: string, value: unknown): void
@@ -184,10 +191,14 @@ interface ConsoleStateSeam {
     transitions: unknown[]
   } | null
   tasks: Row[]
+  repos: Row[]
   workflows: Row[]
   mode: string
+  selectedRepo: string | null
   selectedWorkflowId: string | null
   workflowsError: string
+  statusCat: string
+  workflowDetail: Row | null
 }
 
 interface ConsoleSeam {
@@ -198,15 +209,24 @@ interface ConsoleSeam {
   renderCockpitHeader(detail: Row): string
   renderRunLiveness(run: Row, now: number): string
   computeDetailSig(detail: Row): string
-  groupByRepo(tasks: Row[]): Row[]
+  groupByRepo(items: Row[], repos?: Row[]): Row[]
+  workItems(): Row[]
+  projectGroups(): Row[]
   renderProjectProgress(project: Row): string
   renderTasks(): void
   renderWorkflowList(): void
   renderWorkflowDetail(data: Row): void
-  loadWorkflows(silent?: boolean): Promise<boolean>
+  loadRecords(silent?: boolean): Promise<boolean>
   loadWorkflowDetail(id: string, silent?: boolean): Promise<void>
   selectWorkflow(id: string): Promise<void> | void
-  projectGroupOf(status: string): string
+  projectGroupOf(row: Row): string
+  setMode(mode: string): Promise<unknown> | undefined
+  refreshAll(silent?: boolean): Promise<void>
+  renderInFlight(): string
+  renderOverviewProjects(): string
+  renderProjectView(): void
+  recordKind(row: Row): string
+  recordNeedsHuman(row: Row): boolean
   isGateStatus(status: string): boolean
   state: ConsoleStateSeam
 }
@@ -216,8 +236,18 @@ function makeSeamElement(): SeamElement {
   const classes = new Set<string>()
   return {
     innerHTML: '',
+    textContent: '',
     style: {},
     classList: {
+      add(name) {
+        classes.add(name)
+      },
+      remove(name) {
+        classes.delete(name)
+      },
+      contains(name) {
+        return classes.has(name)
+      },
       toggle(name, force) {
         const on = force ?? !classes.has(name)
         if (on) classes.add(name)
@@ -267,14 +297,23 @@ function loadConsoleSeam(fetchImpl: SeamFetch = () => new Promise<never>(() => {
     renderRunLiveness: renderRunLiveness,
     computeDetailSig: computeDetailSig,
     groupByRepo: groupByRepo,
+    workItems: workItems,
+    projectGroups: projectGroups,
     renderProjectProgress: renderProjectProgress,
     renderTasks: renderTasks,
     renderWorkflowList: renderWorkflowList,
     renderWorkflowDetail: renderWorkflowDetail,
-    loadWorkflows: loadWorkflows,
+    loadRecords: loadRecords,
     loadWorkflowDetail: loadWorkflowDetail,
     selectWorkflow: selectWorkflow,
     projectGroupOf: projectGroupOf,
+    setMode: setMode,
+    refreshAll: refreshAll,
+    renderInFlight: renderInFlight,
+    renderOverviewProjects: renderOverviewProjects,
+    renderProjectView: renderProjectView,
+    recordKind: recordKind,
+    recordNeedsHuman: recordNeedsHuman,
     isGateStatus: isGateStatus,
     state: state
   };
@@ -404,6 +443,605 @@ describe('运行活跃度', () => {
 })
 
 describe('项目阶段分布', () => {
+  it.each([
+    ['READY', 0, 'waiting', 'gate'],
+    ['CANCELLED', 0, 'terminal', 'bad'],
+    ['PAUSED', 0, 'waiting', 'gate'],
+    ['WAITING_HUMAN', 0, 'waiting', 'gate'],
+    ['WAITING_HUMAN', 1, 'needs', 'gate'],
+    ['RUNNING', 0, 'stage', 'stage'],
+    ['DONE', 0, 'terminal', 'done'],
+    ['FAILED', 0, 'terminal', 'bad'],
+  ])('工作流 %s（人工待办 %s）保留状态并归入 %s', (status, waiting, group, kind) => {
+    const { seam } = loadConsoleSeam()
+    seam.state.workflows = [{ id: 'w1', status, waiting_human: waiting }]
+    const row = seam.workItems()[0] ?? {}
+    expect(row.status).toBe(status)
+    expect(seam.projectGroupOf(row)).toBe(group)
+    expect(seam.recordKind(row)).toBe(kind)
+    expect(seam.recordNeedsHuman(row)).toBe(waiting > 0)
+  })
+
+  it('混合项目的节点数、真实执行次数与待办独立计数，概览沿用工作流跳转', () => {
+    const { seam, elements } = loadConsoleSeam()
+    const repo = 'file:///tmp/console'
+    seam.state.tasks = [{ id: 'legacy', repo, status: 'S-DEVELOPING', run_count: 5 }]
+    seam.state.workflows = [
+      { id: 'queued', repo, status: 'READY', node_count: 30, run_count: 2 },
+      { id: 'paused', repo, status: 'PAUSED', node_count: 1, run_count: 0 },
+      {
+        id: 'tianwen',
+        repo,
+        status: 'WAITING_HUMAN',
+        waiting_human: 0,
+        tickets: [{ ticket_id: 'T-1', current_stage: 'review', decision_status: 'PROCESSING' }],
+      },
+      { id: 'human', repo, status: 'WAITING_HUMAN', waiting_human: 1, run_count: 0 },
+    ]
+    const projects = seam.groupByRepo(seam.workItems())
+    expect(projects).toHaveLength(1)
+    expect(projects[0]).toMatchObject({
+      counts: { all: 5, stage: 2, gate: 3, done: 0, bad: 0 },
+      needsYou: 1,
+      runs: 7,
+      nodes: 31,
+      unknownRuns: 1,
+    })
+    seam.state.selectedRepo = repo
+    seam.renderProjectView()
+    const projectHtml = elements.get('detail')?.innerHTML ?? ''
+    expect(projectHtml).toContain('31 个工作流节点')
+    expect(projectHtml).toContain('7 次阶段执行')
+    expect(projectHtml).toContain('1 项次数不可用')
+    expect(projectHtml).toContain('天问处理中')
+    const inFlight = seam.renderInFlight()
+    expect(inFlight).toContain('data-task-id="legacy"')
+    for (const id of ['queued', 'paused', 'tianwen', 'human']) {
+      expect(inFlight).toContain(`data-workflow-id="${id}"`)
+    }
+    expect(inFlight).toContain('排队等待')
+    expect(seam.renderOverviewProjects()).toContain('1 待处理')
+  })
+
+  it('缺执行次数时显示不可用，不从节点数补零或伪造次数', () => {
+    const { seam, elements } = loadConsoleSeam()
+    seam.state.workflows = [{ id: 'w1', repo: 'file:///tmp/demo', status: 'READY', node_count: 18 }]
+    const row = seam.workItems()[0] ?? {}
+    expect(row.run_count).toBeUndefined()
+    seam.renderProjectView()
+    expect(elements.get('detail')?.innerHTML).toContain('执行次数不可用')
+    expect(elements.get('detail')?.innerHTML).not.toContain('18 次阶段执行')
+  })
+
+  it('合并更新时间按时刻排序，不让 SQL JSON 的时区偏移改变记录次序', () => {
+    const { seam } = loadConsoleSeam()
+    const repo = 'file:///tmp/demo'
+    seam.state.tasks = [{ id: 'legacy', repo, status: 'S-NEW', updated_at: '2026-11-13T03:30:00Z' }]
+    seam.state.workflows = [
+      { id: 'older', repo, status: 'READY', updated_at: '2026-11-13T03:00:00Z' },
+      {
+        id: 'newer',
+        repo,
+        status: 'READY',
+        updated_at: '2026-11-13T01:00:00Z',
+        tickets: [{ ticket_id: 'T-1', activity_at: '2026-11-13T12:00:00+08:00' }],
+      },
+    ]
+    const records = seam.workItems()
+    expect(records.map((record) => record.id)).toEqual(['newer:T-1', 'legacy', 'older'])
+    const projects = seam.groupByRepo(records)
+    expect(Date.parse(String(projects[0]?.lastUpdated))).toBe(Date.parse('2026-11-13T04:00:00Z'))
+  })
+
+  it.each([
+    ['RUNNING', null],
+    ['WAITING_HUMAN', 'PROCESSING'],
+  ])(
+    'READY 图下真实 ticket=%s、决策=%s 时按 ticket 展示并计为活跃',
+    async (ticketStatus, decisionStatus) => {
+      const workflow = {
+        id: 'w1',
+        status: 'READY',
+        repo: 'file:///tmp/demo',
+        waiting_human: 0,
+        node_count: 1,
+        run_count: 1,
+        tickets: [
+          {
+            ticket_id: 'T-1',
+            ticket_status: ticketStatus,
+            decision_status: decisionStatus,
+            current_stage: 'execute',
+            run_count: 1,
+          },
+        ],
+      }
+      const { seam, elements } = loadConsoleSeam((url) => {
+        if (url === '/api/tasks') return jsonResponse({ tasks: [] })
+        if (url === '/api/workflows') return jsonResponse({ workflows: [workflow] })
+        return new Promise<never>(() => {})
+      })
+      await seam.setMode('projects')
+      const row = seam.workItems()[0] ?? {}
+      expect(row.status).toBe(ticketStatus)
+      expect(seam.projectGroupOf(row)).toBe('stage')
+      expect(seam.recordNeedsHuman(row)).toBe(false)
+      expect(elements.get('sb-running')?.textContent).toBe('1')
+      expect(elements.get('sb-waiting')?.textContent).toBe('0')
+      expect(elements.get('detail')?.innerHTML).not.toContain('排队等待')
+      expect(elements.get('detail')?.innerHTML).toContain('T-1 · execute')
+      expect(elements.get('workflow-list')?.innerHTML).toContain('READY')
+      if (decisionStatus === 'PROCESSING') {
+        expect(elements.get('detail')?.innerHTML).toContain('天问处理中')
+      } else {
+        expect(elements.get('detail')?.innerHTML).toContain('运行中')
+      }
+      const ticket = workflow.tickets[0]
+      if (ticket === undefined) throw new Error('缺少测试 ticket')
+      ticket.ticket_status = 'PAUSED'
+      ticket.decision_status = null
+      await seam.refreshAll(true)
+      expect(seam.projectGroupOf(seam.workItems()[0] ?? {})).toBe('waiting')
+      expect(elements.get('sb-running')?.textContent).toBe('0')
+      expect(elements.get('sb-waiting')?.textContent).toBe('1')
+    },
+  )
+
+  it('工作流或统计失败时概览仍显示当前记录，并把旧计数标成未同步；恢复后清除错误', async () => {
+    let unavailable = false
+    const workflow = {
+      id: 'w1',
+      status: 'READY',
+      repo: 'file:///tmp/demo',
+      request: '排队的工作流',
+    }
+    const { seam, elements } = loadConsoleSeam((url) => {
+      if (url === '/api/tasks') return jsonResponse({ tasks: [] })
+      if (url === '/api/workflows') {
+        return unavailable ? jsonResponse({}, 503) : jsonResponse({ workflows: [workflow] })
+      }
+      if (url === '/api/stats') return jsonResponse({}, 503)
+      return new Promise<never>(() => {})
+    })
+    await seam.setMode('overview')
+    expect(elements.get('detail')?.innerHTML).toContain('data-workflow-id="w1"')
+    unavailable = true
+    await seam.refreshAll(true)
+    expect(elements.get('detail')?.innerHTML).toContain('含上次成功加载')
+    expect(elements.get('detail')?.innerHTML).toContain('data-workflow-id="w1"')
+    expect(elements.get('sb-health')?.textContent).toBe('工作流数据未同步')
+    expect(elements.get('pulse')?.textContent).toContain('部分同步')
+    unavailable = false
+    await seam.refreshAll(true)
+    expect(elements.get('detail')?.innerHTML).not.toContain('含上次成功加载')
+    expect(elements.get('sb-health')?.textContent).toBe('已连接')
+  })
+
+  it('切入项目页遇到任务加载失败时保留旧任务，明确报错并继续加载工作流', async () => {
+    const { seam, elements } = loadConsoleSeam((url) => {
+      if (url === '/api/tasks') return jsonResponse({}, 503)
+      if (url === '/api/workflows') {
+        return jsonResponse({
+          workflows: [{ id: 'w1', status: 'READY', repo: 'file:///tmp/demo' }],
+        })
+      }
+      return new Promise<never>(() => {})
+    })
+    seam.state.tasks = [{ id: 'legacy', repo: 'file:///tmp/demo', status: 'S-DEVELOPING' }]
+    await seam.setMode('projects')
+    expect(seam.state.tasks).toHaveLength(1)
+    expect(seam.state.workflows).toHaveLength(1)
+    expect(elements.get('detail')?.innerHTML).toContain('无法加载任务')
+    expect(elements.get('detail')?.innerHTML).toContain('含上次成功加载的任务记录')
+    expect(elements.get('sb-health')?.textContent).toBe('任务数据未同步')
+    expect(elements.get('sb-running')?.textContent).toBe('1')
+    expect(elements.get('sb-waiting')?.textContent).toBe('1')
+  })
+
+  it('概览首次加载和静默轮询都读取两类记录，仅 ticket 变化也刷新并保留项目筛选', async () => {
+    const calls: string[] = []
+    const repo = 'file:///tmp/managed-only'
+    const workflow = {
+      id: 'w1',
+      repo,
+      request: '托管执行',
+      status: 'WAITING_HUMAN',
+      updated_at: '2026-11-13T01:00:00Z',
+      waiting_human: 0,
+      run_count: 1,
+      tickets: [
+        {
+          ticket_id: 'T-1',
+          current_stage: 'execute',
+          ticket_status: 'WAITING_HUMAN',
+          decision_status: 'PROCESSING',
+          activity_at: '2026-11-13T02:00:00Z',
+        },
+      ],
+    }
+    const { seam, elements } = loadConsoleSeam((url) => {
+      calls.push(url)
+      if (url === '/api/tasks') return jsonResponse({ tasks: [] })
+      if (url === '/api/workflows') return jsonResponse({ workflows: [workflow] })
+      if (url === '/api/stats') return jsonResponse({ days: [], totals: {} })
+      return new Promise<never>(() => {})
+    })
+    await seam.setMode('overview')
+    expect(calls.filter((url) => url === '/api/workflows')).toHaveLength(1)
+    expect(calls.filter((url) => url === '/api/tasks')).toHaveLength(1)
+    expect(elements.get('sb-running')?.textContent).toBe('1')
+    expect(elements.get('sb-waiting')?.textContent).toBe('0')
+    expect(elements.get('mode-count-overview')?.textContent).toBe('1')
+    expect(elements.get('mode-count-projects')?.textContent).toBe('1')
+    expect(elements.get('detail')?.innerHTML).toContain('天问处理中')
+    workflow.waiting_human = 1
+    const ticket = workflow.tickets[0]
+    if (ticket === undefined) throw new Error('缺少测试 ticket')
+    ticket.decision_status = 'WAITING_HUMAN'
+    ticket.current_stage = 'verify'
+    await seam.refreshAll(true)
+    expect(elements.get('detail')?.innerHTML).toContain('1 待处理')
+    expect(elements.get('detail')?.innerHTML).toContain('T-1 · verify')
+    expect(elements.get('detail')?.innerHTML).not.toContain('天问处理中')
+    await seam.setMode('projects')
+    seam.state.statusCat = 'gate'
+    await seam.refreshAll(true)
+    expect(seam.state.mode).toBe('projects')
+    expect(seam.state.selectedRepo).toBe(repo)
+    expect(seam.state.statusCat).toBe('gate')
+    expect(calls.filter((url) => url === '/api/workflows')).toHaveLength(4)
+    expect(calls.filter((url) => url === '/api/tasks')).toHaveLength(4)
+  })
+
+  it('没有 legacy task 时，托管工作流仍按仓库出现在项目投影', () => {
+    const { seam } = loadConsoleSeam()
+    seam.state.tasks = []
+    seam.state.workflows = [
+      {
+        id: 'workflow-1',
+        repo_id: 'repo-1',
+        repo: 'https://github.com/jionpz/keel.git',
+        repo_provider: 'github',
+        request: '运行 #134 与 #135 的受管工作流',
+        status: 'READY',
+        node_count: 2,
+        updated_at: '2026-11-13T11:26:09.800Z',
+      },
+    ]
+
+    const records = seam.workItems()
+    const projects = seam.groupByRepo(records)
+
+    expect(records[0]).toMatchObject({
+      id: 'workflow-1',
+      repo: 'https://github.com/jionpz/keel.git',
+      item_type: 'workflow',
+      status: 'READY',
+    })
+    expect(projects).toHaveLength(1)
+    expect(projects[0]).toMatchObject({
+      repo: 'https://github.com/jionpz/keel.git',
+      counts: { all: 1, stage: 0, gate: 1, done: 0, bad: 0 },
+    })
+  })
+
+  it('消融重复投影后，任务、项目和状态栏只消费同一组工作项', () => {
+    const repo = 'https://github.com/jionpz/active.git'
+    const emptyRepo = 'https://github.com/jionpz/empty.git'
+    const { seam, elements } = loadConsoleSeam()
+    seam.state.repos = [
+      { id: 'repo-active', repo, provider: 'github', created_at: '2026-11-12T01:00:00Z' },
+      { id: 'repo-empty', repo: emptyRepo, provider: 'github', created_at: '2026-11-13T01:00:00Z' },
+    ]
+    seam.state.tasks = [
+      {
+        id: 'legacy',
+        title: 'legacy work',
+        status: 'S-DEVELOPING',
+        repo,
+        run_count: 1,
+        updated_at: '2026-11-13T01:00:00Z',
+      },
+    ]
+    seam.state.workflows = [
+      {
+        id: 'materialized',
+        repo,
+        status: 'RUNNING',
+        node_count: 2,
+        run_count: 2,
+        updated_at: '2026-11-13T03:00:00Z',
+        tickets: [
+          {
+            ticket_task_id: 'ticket-1',
+            ticket_id: 'T-1',
+            ticket_title: 'running ticket',
+            ticket_status: 'RUNNING',
+            run_count: 1,
+            activity_at: '2026-11-13T03:00:00Z',
+          },
+          {
+            ticket_task_id: 'ticket-2',
+            ticket_id: 'T-2',
+            ticket_title: 'waiting ticket',
+            ticket_status: 'PENDING',
+            run_count: 1,
+            activity_at: '2026-11-13T02:00:00Z',
+          },
+        ],
+      },
+      {
+        id: 'planned',
+        repo,
+        status: 'ROUTING',
+        node_count: 3,
+        request: 'planned workflow',
+        updated_at: '2026-11-13T04:00:00Z',
+      },
+    ]
+    seam.state.mode = 'tasks'
+
+    const items = seam.workItems()
+    expect(items.map((item) => item.item_type).sort()).toEqual([
+      'task',
+      'ticket',
+      'ticket',
+      'workflow',
+    ])
+    expect(
+      items.every(
+        (item) =>
+          !('managed_ticket' in item) &&
+          !('managed_workflow' in item) &&
+          !('repository_only' in item),
+      ),
+    ).toBe(true)
+
+    const projects = seam.projectGroups()
+    const active = projects.find((project) => project.repo === repo)
+    const empty = projects.find((project) => project.repo === emptyRepo)
+    expect(active).toMatchObject({
+      counts: { all: 4, stage: 3, gate: 1, done: 0, bad: 0 },
+      nodes: 5,
+    })
+    expect(active?.items).toHaveLength(4)
+    expect(empty?.items).toEqual([])
+    expect(empty && 'repositoryOnly' in empty).toBe(false)
+
+    seam.renderTasks()
+    expect(elements.get('mode-count-tasks')?.textContent).toBe('4')
+    expect(elements.get('count')?.textContent).toBe('4 个任务')
+    expect(elements.get('task-list')?.innerHTML).toContain('data-work-item-type="ticket"')
+    expect(elements.get('task-list')?.innerHTML).toContain('data-work-item-type="workflow"')
+    expect(elements.get('task-list')?.innerHTML).toContain('planned workflow')
+  })
+
+  it('零 ticket workflow 保留规划项，有 ticket 后由真实 ticket 替换容器', () => {
+    const repo = 'file:///tmp/work-items'
+    const { seam } = loadConsoleSeam()
+    seam.state.workflows = [
+      {
+        id: 'planned',
+        repo,
+        status: 'ROUTING',
+        request: 'planned workflow',
+        updated_at: '2026-11-13T01:00:00Z',
+      },
+      {
+        id: 'materialized',
+        repo,
+        status: 'READY',
+        request: 'materialized workflow',
+        updated_at: '2026-11-13T01:00:00Z',
+        tickets: [
+          {
+            ticket_task_id: 'ticket-1',
+            ticket_id: 'T-1',
+            ticket_title: 'real ticket',
+            activity_at: '2026-11-13T02:00:00Z',
+          },
+        ],
+      },
+    ]
+
+    expect(seam.workItems()).toMatchObject([
+      { id: 'ticket-1', item_type: 'ticket', workflow_id: 'materialized' },
+      { id: 'planned', item_type: 'workflow', workflow_id: 'planned' },
+    ])
+  })
+
+  it('未登记到 repo 注册表的 workflow 仍进入项目投影，不被静默丢弃', () => {
+    const registeredRepo = 'file:///tmp/registered'
+    const orphanRepo = 'file:///tmp/orphan'
+    const { seam } = loadConsoleSeam()
+    seam.state.repos = [{ id: 'repo-1', repo: registeredRepo }]
+    seam.state.workflows = [{ id: 'orphan-workflow', repo: orphanRepo, status: 'READY' }]
+
+    const projects = seam.projectGroups()
+    expect(projects.map((project) => project.repo)).toEqual(
+      expect.arrayContaining([registeredRepo, orphanRepo]),
+    )
+    const orphan = projects.find((project) => project.repo === orphanRepo)
+    expect(orphan?.items).toMatchObject([
+      { id: 'orphan-workflow', item_type: 'workflow', repo: orphanRepo },
+    ])
+  })
+
+  it('项目集合以 repo 注册表为全集，没有任务的仓库也进入下拉与项目页', async () => {
+    const activeRepo = 'https://github.com/jionpz/keel.git'
+    const emptyRepo = 'https://github.com/jionpz/keel-demo-api.git'
+    const repos = [
+      {
+        id: 'repo-active',
+        repo: activeRepo,
+        provider: 'github',
+        default_branch: 'main',
+        created_at: '2026-11-12T01:00:00Z',
+      },
+      {
+        id: 'repo-empty',
+        repo: emptyRepo,
+        provider: 'github',
+        default_branch: 'develop',
+        created_at: '2026-11-13T01:00:00Z',
+      },
+    ]
+    const { seam, elements } = loadConsoleSeam((url) => {
+      if (url === '/api/tasks') {
+        return jsonResponse({
+          tasks: [
+            {
+              id: 'task-active',
+              title: '有任务的项目',
+              status: 'S-DEVELOPING',
+              repo: activeRepo,
+              updated_at: '2026-11-13T03:00:00Z',
+            },
+          ],
+          repos,
+        })
+      }
+      if (url === '/api/workflows') return jsonResponse({ workflows: [] })
+      return new Promise<never>(() => {})
+    })
+    seam.state.mode = 'tasks'
+
+    await seam.loadRecords(false)
+
+    const projects = seam.projectGroups()
+    expect(projects).toHaveLength(2)
+    const empty = projects.find((project) => project.repo === emptyRepo)
+    expect(empty).toMatchObject({
+      items: [],
+      counts: { all: 0, stage: 0, gate: 0, done: 0, bad: 0 },
+      defaultBranch: 'develop',
+    })
+    const selectHtml = elements.get('repo-filter')?.innerHTML ?? ''
+    expect(selectHtml).toContain('全部项目（2）')
+    expect(selectHtml).toContain('keel-demo-api（0）')
+
+    await seam.setMode('projects')
+    const projectList = elements.get('project-list')?.innerHTML ?? ''
+    expect(projectList).toContain('keel')
+    expect(projectList).toContain('keel-demo-api')
+
+    seam.state.selectedRepo = emptyRepo
+    seam.renderProjectView()
+    const detail = elements.get('detail')?.innerHTML ?? ''
+    expect(detail).toContain('这个项目还没有任务')
+    expect(detail).toContain('默认分支 develop')
+    expect(detail).not.toContain('执行次数不可用')
+  })
+
+  it('任务页和项目页都按 managed ticket 展开，不把整个 workflow 伪装成一个任务', async () => {
+    const workflow = {
+      id: 'workflow-1',
+      repo_id: 'repo-1',
+      repo: 'https://github.com/jionpz/keel.git',
+      repo_provider: 'github',
+      request: '运行 #134 与 #135',
+      status: 'READY',
+      node_count: 2,
+      run_count: 1,
+      updated_at: '2026-11-13T15:11:15.000Z',
+      tickets: [
+        {
+          node_key: 'repo-commit-policy',
+          ticket_task_id: 'ticket-134',
+          ticket_id: 'keel-134',
+          external_issue: 'jionpz/keel#134',
+          ticket_title: '按仓库配置提交身份与提交信息规范',
+          ticket_status: 'RUNNING',
+          current_stage: 'execute',
+          run_count: 1,
+          activity_at: '2026-11-13T15:11:15.000Z',
+        },
+        {
+          node_key: 'pr-description',
+          ticket_id: 'keel-135',
+          external_issue: 'jionpz/keel#135',
+          ticket_title: '生成可追溯的 PR 标题与正文',
+          status: 'PENDING',
+          run_count: 0,
+          activity_at: '2026-11-13T13:08:00.000Z',
+        },
+      ],
+    }
+    const { seam, elements } = loadConsoleSeam((url) => {
+      if (url === '/api/tasks') return jsonResponse({ tasks: [] })
+      if (url === '/api/workflows') return jsonResponse({ workflows: [workflow] })
+      return new Promise<never>(() => {})
+    })
+    seam.state.mode = 'tasks'
+
+    await seam.loadRecords(false)
+
+    const html = elements.get('task-list')?.innerHTML ?? ''
+    expect(html).toContain('data-workflow-id="workflow-1"')
+    expect(html).toContain('jionpz/keel#134 · 按仓库配置提交身份与提交信息规范')
+    expect(html).toContain('运行中')
+    expect(html).toContain('execute')
+    expect(html).toContain('jionpz/keel#135 · 生成可追溯的 PR 标题与正文')
+    expect(elements.get('mode-count-tasks')?.textContent).toBe('2')
+    expect(elements.get('count')?.textContent).toBe('2 个任务')
+
+    seam.state.statusCat = 'stage'
+    seam.renderTasks()
+    const runningOnly = elements.get('task-list')?.innerHTML ?? ''
+    expect(runningOnly).toContain('jionpz/keel#134')
+    expect(runningOnly).not.toContain('jionpz/keel#135')
+
+    seam.state.statusCat = 'all'
+    await seam.setMode('projects')
+    const projectHtml = elements.get('detail')?.innerHTML ?? ''
+    expect(projectHtml).toContain('2 个任务')
+    expect(projectHtml).toContain('2 个工作流节点')
+    expect(projectHtml).toContain('jionpz/keel#134')
+    expect(projectHtml).toContain('jionpz/keel#135')
+    expect((projectHtml.match(/查看工作流/g) ?? []).length).toBe(2)
+    expect((projectHtml.match(/data-workflow-id="workflow-1"/g) ?? []).length).toBe(2)
+    expect(projectHtml).not.toContain('data-task-id="ticket-134"')
+    expect(projectHtml).not.toContain('托管工作流 · 托管工作流')
+  })
+
+  it('进入项目页时立即拉取托管工作流，不等待自动刷新', async () => {
+    const repo = 'https://github.com/jionpz/keel.git'
+    const calls: string[] = []
+    const { seam, elements } = loadConsoleSeam((url) => {
+      calls.push(url)
+      if (url === '/api/tasks') return jsonResponse({ tasks: [] })
+      if (url === '/api/workflows') {
+        return jsonResponse({
+          workflows: [
+            {
+              id: 'workflow-1',
+              repo_id: 'repo-1',
+              repo,
+              repo_provider: 'github',
+              request: '运行 #134 与 #135 的受管工作流',
+              status: 'READY',
+              node_count: 2,
+              updated_at: '2026-11-13T11:26:09.800Z',
+            },
+          ],
+        })
+      }
+      return new Promise<never>(() => {})
+    })
+    seam.state.mode = 'projects'
+    seam.state.tasks = []
+    seam.state.selectedRepo = null
+
+    await seam.setMode('projects')
+
+    expect(calls).toContain('/api/workflows')
+    expect(calls).toContain('/api/tasks')
+    expect(seam.state.selectedRepo).toBe(repo)
+    const html = elements.get('project-list')?.innerHTML ?? ''
+    expect(html).toContain('jionpz/keel')
+    expect(html).toContain(repo)
+  })
+
   it('按仓库地址合并，覆盖全部状态并按非终态统计活跃和人工待处理', () => {
     const { seam } = loadConsoleSeam()
     const statuses = ['S-DEVELOPING', 'S-QA', 'S-HUMAN_REVIEW', 'S-NEW', 'S-DONE', 'S-FAILED']
@@ -413,6 +1051,7 @@ describe('项目阶段分布', () => {
         repo_id: String(index),
         repo: 'file:///tmp/demo',
         status,
+        item_type: 'task',
       })),
     )
     expect(projects).toHaveLength(1)
@@ -428,7 +1067,7 @@ describe('项目阶段分布', () => {
   it('空项目显示零计数，不产生无效的百分比或片段', () => {
     const { seam } = loadConsoleSeam()
     const html = seam.renderProjectProgress({
-      tasks: [],
+      items: [],
       counts: { stage: 0, gate: 0, all: 0 },
       needsYou: 0,
     })
@@ -504,7 +1143,7 @@ describe('keel console 鉴权', () => {
   it('未登录访问页面 302 到 /login', async () => {
     await withServer(
       fakeQuery({}),
-      async (base) => {
+      async (base, _api, fetch) => {
         const res = await fetch(`${base}/`, { redirect: 'manual' })
         expect(res.status).toBe(302)
         expect(res.headers.get('location')).toBe('/login')
@@ -516,7 +1155,7 @@ describe('keel console 鉴权', () => {
   it('未登录访问 API 401，不泄漏事实', async () => {
     await withServer(
       fakeQuery({ tasks: [{ id: TASK_ID, title: 'secret' }] }),
-      async (base) => {
+      async (base, _api, fetch) => {
         for (const path of ['/api/tasks', '/api/stats', '/api/meta', `/api/tasks/${TASK_ID}`]) {
           const res = await fetch(`${base}${path}`)
           expect(res.status).toBe(401)
@@ -532,7 +1171,7 @@ describe('keel console 鉴权', () => {
   it('登录页可访问，且注入了本机令牌', async () => {
     await withServer(
       fakeQuery({}),
-      async (base) => {
+      async (base, _api, fetch) => {
         const res = await fetch(`${base}/login`)
         expect(res.status).toBe(200)
         expect(res.headers.get('content-type')).toContain('text/html')
@@ -557,8 +1196,8 @@ describe('keel console 鉴权', () => {
   it('错误口令 401，且不签发 Cookie', async () => {
     await withServer(
       fakeQuery({}),
-      async (base) => {
-        const res = await loginRequest(base, 'wrong-password')
+      async (base, _api, fetch) => {
+        const res = await loginRequest(fetch, base, 'wrong-password')
         expect(res.status).toBe(401)
         expect(res.headers.get('set-cookie')).toBeNull()
         const body = (await res.json()) as { ok: boolean; error: string }
@@ -571,8 +1210,8 @@ describe('keel console 鉴权', () => {
   it('正确口令签发 HttpOnly / SameSite=Strict Cookie', async () => {
     await withServer(
       fakeQuery({}),
-      async (base) => {
-        const res = await loginRequest(base, PASSWORD)
+      async (base, _api, fetch) => {
+        const res = await loginRequest(fetch, base, PASSWORD)
         expect(res.status).toBe(200)
         const setCookie = res.headers.get('set-cookie') ?? ''
         expect(setCookie).toContain(`${SESSION_COOKIE}=`)
@@ -588,7 +1227,7 @@ describe('keel console 鉴权', () => {
   it('保持登录使用 7 天会话', async () => {
     await withServer(
       fakeQuery({}),
-      async (base) => {
+      async (base, _api, fetch) => {
         const res = await fetch(`${base}/api/login`, {
           method: 'POST',
           headers: { 'content-type': 'application/json', 'x-keel-console': TOKEN },
@@ -604,14 +1243,14 @@ describe('keel console 鉴权', () => {
   it('连续失败 5 次后 429，正确口令也被限流', async () => {
     await withServer(
       fakeQuery({}),
-      async (base) => {
+      async (base, _api, fetch) => {
         for (let i = 0; i < 5; i += 1) {
-          expect((await loginRequest(base, 'wrong')).status).toBe(401)
+          expect((await loginRequest(fetch, base, 'wrong')).status).toBe(401)
         }
-        const limited = await loginRequest(base, 'wrong')
+        const limited = await loginRequest(fetch, base, 'wrong')
         expect(limited.status).toBe(429)
         expect(limited.headers.get('retry-after')).toBeTruthy()
-        expect((await loginRequest(base, PASSWORD)).status).toBe(429)
+        expect((await loginRequest(fetch, base, PASSWORD)).status).toBe(429)
       },
       { anonymous: true },
     )
@@ -746,13 +1385,22 @@ describe('keel console', () => {
     const tasks: Row[] = [
       { id: TASK_ID, title: 'demo', status: 'S-DONE', control_mode: 'auto', repo: 'file:///tmp/x' },
     ]
-    await withServer(fakeQuery({ tasks }), async (_base, api) => {
+    const repos: Row[] = [
+      {
+        id: 'repo-empty',
+        repo: 'file:///tmp/empty',
+        provider: 'local',
+        default_branch: 'main',
+      },
+    ]
+    await withServer(fakeQuery({ tasks, repos }), async (_base, api) => {
       const res = await api('/api/tasks')
       expect(res.status).toBe(200)
-      const body = (await res.json()) as { tasks: Row[] }
+      const body = (await res.json()) as { tasks: Row[]; repos: Row[] }
       expect((body as { projection?: string }).projection).toBe('legacy-v01')
       expect(body.tasks).toHaveLength(1)
       expect(body.tasks[0]?.title).toBe('demo')
+      expect(body.repos).toEqual(repos)
     })
   })
 
@@ -823,11 +1471,12 @@ describe('keel console', () => {
       const calls: string[] = []
       const { seam, elements } = loadConsoleSeam((url) => {
         calls.push(url)
+        if (url === '/api/tasks') return jsonResponse({ tasks: [] })
         if (url === '/api/workflows') return jsonResponse(payload)
         return new Promise<never>(() => {})
       })
 
-      await expect(seam.loadWorkflows(false)).resolves.toBe(true)
+      await expect(seam.loadRecords(false)).resolves.toBe(true)
 
       expect(calls).toContain('/api/workflows')
       const html = elements.get('workflow-list')?.innerHTML ?? ''
@@ -835,7 +1484,7 @@ describe('keel console', () => {
       expect(html).toContain('1d891a16')
       expect(html).toContain('RUNNING')
       expect(html).toContain('图 v2')
-      expect(html).toContain('3 tickets')
+      expect(html).toContain('3 个节点')
       expect(html).toContain('1 已归档')
       expect(html).toContain('1 等待人工')
       expect(html).toContain('实现工作流控制台视图')
@@ -927,19 +1576,69 @@ describe('keel console', () => {
   })
 
   it('工作流 API 失败时返回诊断文案，不抛未处理异常', async () => {
-    const { seam, elements } = loadConsoleSeam((url) =>
-      url === '/api/workflows'
+    const { seam, elements } = loadConsoleSeam((url) => {
+      if (url === '/api/tasks') return jsonResponse({ tasks: [] })
+      return url === '/api/workflows'
         ? jsonResponse({ error: '数据库不可用', detail: 'connection refused' }, 503)
-        : new Promise<never>(() => {}),
-    )
+        : new Promise<never>(() => {})
+    })
 
-    await expect(seam.loadWorkflows(false)).resolves.toBe(false)
+    await expect(seam.loadRecords(false)).resolves.toBe(false)
 
     const html = elements.get('workflow-list')?.innerHTML ?? ''
     expect(html).toContain('无法加载工作流')
     expect(html).toContain('/api/workflows')
     expect(html).toContain('HTTP 503')
     expect(html).toContain('legacy 任务视图不受影响')
+  })
+
+  it('详情轮询响应实际阶段、错误和进展变化，无当前遥测时不伪装活跃', async () => {
+    const node = {
+      ticket_id: 'T-134',
+      status: 'RUNNING',
+      ticket_status: 'RUNNING',
+      current_stage: 'verify',
+      latest_stage: 'verify',
+      stage_status: 'RUNNING',
+      stage_attempt: 2,
+      run_count: 4,
+      last_progress_at: null as string | null,
+      ticket_error: null as string | null,
+      activity_at: '2026-11-13T02:00:00Z',
+    }
+    const data = {
+      workflow: { id: TASK_ID, status: 'RUNNING', updated_at: '2026-11-13T01:00:00Z' },
+      nodes: [node],
+    }
+    const { seam, elements } = loadConsoleSeam((url) => {
+      if (url === `/api/workflows/${TASK_ID}`) return jsonResponse(data)
+      return new Promise<never>(() => {})
+    })
+    seam.state.mode = 'workflows'
+    seam.state.selectedWorkflowId = TASK_ID
+    await seam.loadWorkflowDetail(TASK_ID, false)
+    expect(elements.get('detail')?.innerHTML).toContain('暂无进展信号')
+    expect(elements.get('detail')?.innerHTML).toContain('当前阶段 verify')
+    expect(elements.get('detail')?.innerHTML).toContain('4 次阶段执行')
+    const detail = elements.get('detail')
+    if (detail === undefined) throw new Error('缺少详情 DOM')
+    detail.innerHTML = 'unchanged'
+    await seam.loadWorkflowDetail(TASK_ID, true)
+    expect(detail.innerHTML).toBe('unchanged')
+    node.last_progress_at = '2026-11-13T02:01:00Z'
+    await seam.loadWorkflowDetail(TASK_ID, true)
+    expect(detail.innerHTML).toContain('最近进展 ')
+    expect(detail.innerHTML).not.toContain('暂无进展信号')
+    expect(seam.state.workflowDetail).toMatchObject({
+      nodes: [{ last_progress_at: node.last_progress_at }],
+    })
+    node.current_stage = 'review'
+    node.ticket_status = 'PAUSED'
+    node.ticket_error = '<停止原因>'
+    await seam.loadWorkflowDetail(TASK_ID, true)
+    expect(detail.innerHTML).toContain('当前阶段 review')
+    expect(detail.innerHTML).toContain('阻塞原因：&lt;停止原因&gt;')
+    expect(detail.innerHTML).not.toContain('最近进展 ')
   })
 
   it('GET /api/tasks/:id 组装 task / runs / events / artifacts / feedbacks / timers', async () => {
@@ -1163,7 +1862,7 @@ describe('keel console', () => {
     }
     await withServer(
       broken,
-      async (base) => {
+      async (base, _api, fetch) => {
         const res = await fetch(`${base}/healthz`)
         expect(res.status).toBe(503)
         expect(await res.json()).toEqual({ ok: false })
@@ -1297,10 +1996,10 @@ describe('console 页面渲染 seam', () => {
 
     expect(seam.isGateStatus('S-HUMAN_REVIEW')).toBe(true)
     expect(seam.isGateStatus('S-RFC_READY')).toBe(false)
-    expect(seam.projectGroupOf('S-HUMAN_REVIEW')).toBe('needs')
-    expect(seam.projectGroupOf('S-NEED_CLARIFICATION')).toBe('needs')
-    expect(seam.projectGroupOf('S-RFC_READY')).toBe('waiting')
-    expect(seam.projectGroupOf('S-NEW')).toBe('waiting')
+    expect(seam.projectGroupOf({ status: 'S-HUMAN_REVIEW', item_type: 'task' })).toBe('needs')
+    expect(seam.projectGroupOf({ status: 'S-NEED_CLARIFICATION', item_type: 'task' })).toBe('needs')
+    expect(seam.projectGroupOf({ status: 'S-RFC_READY', item_type: 'task' })).toBe('waiting')
+    expect(seam.projectGroupOf({ status: 'S-NEW', item_type: 'task' })).toBe('waiting')
   })
 
   it('只有批准卡片带主路径标记，返工与驳回不冒充默认选项', () => {

@@ -74,6 +74,25 @@ ticket 与 workflow 的租约为 965 秒，比执行上限和清理等待多 60 
 恰好撞上租约失效而无法记录失败。租约失效时，失败或暂停的落库返回 `CONFLICT`，
 不能输出一个数据库中并不存在的 `READY` 或 `PAUSED`。
 
+`execute` 是真实现场中唯一允许留下合法 WIP 的阶段。只有同时满足以下条件，Keel
+才允许下一轮使用这份脏工作区继续：
+
+- 最近一条 `execute` stage 记录是 `FAILED` / `RUN_TIMEOUT`；
+- 从该失败到本次认领之间没有进入另一阶段，只有 attempt 记录与 pause/resume 控制
+  事件；前置检查可能已经消耗 attempt 但没有创建 stage 行。pause/resume 不改写
+  Git，WIP 是否可续跑完全由下一条对 HEAD 和路径的独立校验决定；
+- ticket 已绑定 workflow node，HEAD 等于 baseline/input commit，或是该 commit 的后代；
+  worktree 仍通过路径与隔离检查；
+- 从合法输入到当前工作树的全部已提交 / tracked / untracked 改动都在节点
+  `scope_paths` 内。
+
+续跑与 stage 启动在同一事务中写入 `ManagedTicketTimeoutRecovery`，记录保留路径、
+attempt、恢复前后的 HEAD、`worktreeState` 与 `dirtyDigest`；上下文明确要求模型基于
+恢复点继续而不是丢弃。即使超时发生在 agent 已提交但 stage 尚未确认时，也仍会把该
+commit 当作未确认输入，而不是误判为 drift。续跑不会绕过完成门禁：`execute` 仍必须
+在恢复输入之上产生新 commit，最终工作树必须干净。普通脏工作区、没有 scope、非绑定
+输入后代的 HEAD、超时后出现其他阶段事件以及 scope 外改动都 fail-closed。
+
 结构化阶段结果通过 schema 校验后，先保留 result 与实际 git/检查 evidence，再做
 阶段门禁；验证失败也必须能够回查命令、退出码与输出摘要。FAILED 行的结果只用于
 诊断，没有成功摘要，不能作为成功阶段或可复用证明。
@@ -128,6 +147,21 @@ keychain 沙箱；没有等价沙箱的平台在启动期拒绝，不回退到�
 标记 `MUST_STOP`，并在一个 `keel_control` 事务中创建统一
 `managed_decision_request`，绑定 `managed_ticket_task_id`、package digest、attempt
 与 input digest。
+
+受管执行不识别“Keel 自身仓库”。不得用 repo id、仓库名、remote URL 或本进程源码
+路径判断宿主身份，也不得为 Keel 仓库设置特殊分支、权限、超时、验证或恢复路径。
+Keel 仓库与其他项目一样，只按 repo 配置、固定工作流包、工作树状态、租约与
+`control_generation`、Harness 能力契约推进。本机部署与重启属于 operator 运维动作，
+不进入 managed ticket/workflow 的业务状态机。
+
+决策身份是 `(id, revision)`；revision 只能在同一 id 内比较。新建请求必须精确回读
+自身身份，天问领取、载入、落库及人工答复都要核对 ticket 的完整 pending 身份，
+不能按 ticket 的历史 revision 排序猜测当前请求。
+
+managed 模式的阶段记账由 Keel 维护；固定 provider 包中的源路径不构成执行环境路径
+契约，不再要求执行器调用来源工作区的 `stage.sh`。阶段进展通过 adapter hook 交回
+控制面，每十秒最多记录一次 `ManagedTicketProgress`，只保存阶段、事件种类与时间，
+不保存模型文本、进程号或凭据；该遥测不作为完成证据。
 
 - `must_stop` 或 `requested_action`：任务进入 `WAITING_HUMAN`，选项固定为
   “停止并等待人工处理（推荐）”与“批准本次继续（仅一次）”。请求与普通决策一样

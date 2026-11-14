@@ -251,7 +251,11 @@ async function loadTianwenInput(requestId: string, revision: number) {
       throw makeError('CONFLICT', `decision request 当前是 ${request.status}，不接受天问提案`)
     const task = await getManagedTicketTask(request.managed_ticket_task_id)
     if (task === null) throw makeError('NOT_FOUND', '找不到 managed ticket task')
-    if (task.status !== 'WAITING_HUMAN' || task.pending_decision_id !== request.id)
+    if (
+      task.status !== 'WAITING_HUMAN' ||
+      task.pending_decision_id !== request.id ||
+      task.pending_decision_revision !== request.revision
+    )
       throw makeError('CONFLICT', 'ticket task 不在等待该决策')
     const ticketPackage = await loadTicketPackage(c, task)
     const built = await buildTianwenContext(c, task, ticketPackage, request)
@@ -350,8 +354,8 @@ export async function runTicketTianwen(
   return asRole('keel_control', async (c) => {
     const locked = await c.query(
       `SELECT id FROM managed_ticket_task WHERE id=$1 AND status='WAITING_HUMAN'
-       AND pending_decision_id=$2 FOR UPDATE`,
-      [loaded.task.id, requestId],
+        AND pending_decision_id=$2 AND pending_decision_revision=$3 FOR UPDATE`,
+      [loaded.task.id, requestId, revision],
     )
     if (locked.rowCount !== 1) return err(makeError('CONFLICT', 'ticket task 已不再等待该决策'))
     const request = await getDecisionRequest(requestId, revision, c)
@@ -466,6 +470,7 @@ export async function tickPendingTicketTianwen(
        FROM managed_decision_request r
        JOIN managed_ticket_task t ON t.id=r.managed_ticket_task_id
        WHERE r.status='PROCESSING' AND t.status='WAITING_HUMAN'
+          AND r.id=t.pending_decision_id AND r.revision=t.pending_decision_revision
          AND ($1::uuid IS NULL OR t.id=$1)
        ORDER BY r.created_at LIMIT 1`,
       [taskId ?? null],

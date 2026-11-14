@@ -1185,19 +1185,25 @@ export async function openDecisionRequestForTicket(
   if (input.options.length < 2 || input.options.length > 12)
     return err(makeError('SCHEMA_VIOLATION', 'ticket decision 选项必须是 2..12 个'))
   const run = async (c: PoolClient): Promise<Result<DecisionRequest>> => {
+    const idempotencyKey = `managed-ticket:${input.task_id}:${input.stage}:${input.attempt}:${input.decision_key}`
     const existing = await c.query<{ body: unknown }>(
       `SELECT ${REQUEST_JSON} WHERE r.managed_ticket_task_id=$1
        AND r.status IN ('OPEN','PROCESSING','WAITING_HUMAN')
-       ORDER BY r.revision DESC LIMIT 1`,
+       LIMIT 2`,
       [input.task_id],
     )
-    if (existing.rows[0] !== undefined) return ok(existing.rows[0].body as DecisionRequest)
+    if (existing.rows[0] !== undefined) {
+      const request = existing.rows[0].body as DecisionRequest
+      if (existing.rows.length !== 1 || request.idempotency_key !== idempotencyKey)
+        return err(makeError('CONFLICT', 'ticket 尚有其他待决请求，不能复用为本次决策'))
+      return ok(request)
+    }
     const options = optionList(input.options)
     const request: DecisionRequest = {
       schema_version: '1.0',
       id: randomUUID(),
       revision: 1,
-      idempotency_key: `managed-ticket:${input.task_id}:${input.stage}:${input.attempt}:${input.decision_key}`,
+      idempotency_key: idempotencyKey,
       project_id: input.repo_id,
       repo_id: input.repo_id,
       managed_ticket_task_id: input.task_id,
@@ -1252,12 +1258,9 @@ export async function openDecisionRequestForTicket(
         request.created_at,
       ],
     )
-    const persisted = await c.query<{ body: unknown }>(
-      `SELECT ${REQUEST_JSON} WHERE r.managed_ticket_task_id=$1
-       ORDER BY r.revision DESC LIMIT 1`,
-      [input.task_id],
-    )
-    return ok(persisted.rows[0]?.body as DecisionRequest)
+    const persisted = await requestBody(c, request.id, request.revision)
+    if (persisted === null) throw makeError('NOT_FOUND', '新建 ticket decision request 无法回读')
+    return ok(persisted)
   }
   return client === undefined ? asRole('keel_control', run) : run(client)
 }
@@ -1276,77 +1279,82 @@ export async function answerManagedTicketDecision(
   now: string,
 ): Promise<Result<ManagedTicketDecisionAnswer>> {
   if (timestamp(now) === null) return err(makeError('SCHEMA_VIOLATION', '答复时间不是合法时间'))
-  return asRole('keel_control', async (c) => {
-    const locked = await c.query(
-      'SELECT id FROM managed_decision_request WHERE id=$1 AND revision=$2 FOR UPDATE',
-      [requestId, revision],
-    )
-    if (locked.rowCount !== 1) return err(makeError('NOT_FOUND', '找不到 decision request'))
-    const request = await requestBody(c, requestId, revision)
-    if (request === null) return err(makeError('NOT_FOUND', '找不到 decision request'))
-    if (request.managed_ticket_task_id === undefined)
-      return err(makeError('CONFLICT', '该请求不属于 managed ticket task'))
-    if (request.status !== 'WAITING_HUMAN')
-      return err(makeError('CONFLICT', `decision request 当前是 ${request.status}，不可人工答复`))
-    const option = request.options.find((entry) => entry.id === optionId)
-    if (option === undefined) return err(makeError('SCHEMA_VIOLATION', '答案不在请求选项内'))
-    const preview = (
-      await c.query<{ status: string }>('SELECT status FROM managed_ticket_task WHERE id=$1', [
-        request.managed_ticket_task_id,
-      ])
-    ).rows[0]
-    if (preview === undefined) return err(makeError('NOT_FOUND', '找不到 managed ticket task'))
-    if (preview.status !== 'WAITING_HUMAN')
-      return err(makeError('CONFLICT', `ticket task 当前是 ${preview.status}，不可答复`))
-    const boundary = await blockPendingActionsInTx(
-      c,
-      request.managed_ticket_task_id,
-      `人工答复 ${request.id}`,
-      now,
-    )
-    const task = (
-      await c.query<{ status: string; last_error: string | null }>(
-        'SELECT status,last_error FROM managed_ticket_task WHERE id=$1 FOR UPDATE',
-        [request.managed_ticket_task_id],
+  try {
+    return await asRole('keel_control', async (c) => {
+      const locked = await c.query(
+        'SELECT id FROM managed_decision_request WHERE id=$1 AND revision=$2 FOR UPDATE',
+        [requestId, revision],
       )
-    ).rows[0]
-    if (task === undefined) return err(makeError('NOT_FOUND', '找不到 managed ticket task'))
-    if (task.status !== 'WAITING_HUMAN')
-      return err(makeError('CONFLICT', `ticket task 当前是 ${task.status}，不可答复`))
-    const existing = await resolutionDisposition(c, request.id, request.revision)
-    const target = existing === null ? request : await supersedeRequest(c, request, now)
-    const resolution = await insertHumanResolution(c, target, option, option.text, now)
-    const mustStop = task.last_error === 'MUST_STOP' || task.last_error === 'UNAUTHORIZED_ACTION'
-    const shouldContinue = decisionContinues(option.text, mustStop)
-    const taskStatus = shouldContinue ? 'READY' : 'CANCELLED'
-    await c.query(
-      `UPDATE managed_ticket_task SET status=$2,pending_decision_id=NULL,pending_decision_revision=NULL,
+      if (locked.rowCount !== 1) return err(makeError('NOT_FOUND', '找不到 decision request'))
+      const request = await requestBody(c, requestId, revision)
+      if (request === null) return err(makeError('NOT_FOUND', '找不到 decision request'))
+      if (request.managed_ticket_task_id === undefined)
+        return err(makeError('CONFLICT', '该请求不属于 managed ticket task'))
+      if (request.status !== 'WAITING_HUMAN')
+        return err(makeError('CONFLICT', `decision request 当前是 ${request.status}，不可人工答复`))
+      const option = request.options.find((entry) => entry.id === optionId)
+      if (option === undefined) return err(makeError('SCHEMA_VIOLATION', '答案不在请求选项内'))
+      const boundary = await blockPendingActionsInTx(
+        c,
+        request.managed_ticket_task_id,
+        `人工答复 ${request.id}`,
+        now,
+      )
+      const task = (
+        await c.query<{
+          status: string
+          last_error: string | null
+          pending_decision_id: string
+          pending_decision_revision: number
+        }>(
+          'SELECT status,last_error,pending_decision_id,pending_decision_revision FROM managed_ticket_task WHERE id=$1 FOR UPDATE',
+          [request.managed_ticket_task_id],
+        )
+      ).rows[0]
+      if (task === undefined) throw makeError('NOT_FOUND', '找不到 managed ticket task')
+      if (task.status !== 'WAITING_HUMAN')
+        throw makeError('CONFLICT', `ticket task 当前是 ${task.status}，不可答复`)
+      if (task.pending_decision_id !== requestId || task.pending_decision_revision !== revision)
+        throw makeError('CONFLICT', 'ticket task 不在等待该决策版本')
+      const existing = await resolutionDisposition(c, request.id, request.revision)
+      const target = existing === null ? request : await supersedeRequest(c, request, now)
+      const resolution = await insertHumanResolution(c, target, option, option.text, now)
+      const mustStop = task.last_error === 'MUST_STOP' || task.last_error === 'UNAUTHORIZED_ACTION'
+      const shouldContinue = decisionContinues(option.text, mustStop)
+      const taskStatus = shouldContinue ? 'READY' : 'CANCELLED'
+      await c.query(
+        `UPDATE managed_ticket_task SET status=$2,pending_decision_id=NULL,pending_decision_revision=NULL,
          control_generation=control_generation+1,lease_token=NULL,lease_until=NULL,
          handoff=COALESCE(handoff,'{}'::jsonb) || $4::jsonb,updated_at=$3 WHERE id=$1`,
-      [
-        request.managed_ticket_task_id,
+        [
+          request.managed_ticket_task_id,
+          taskStatus,
+          now,
+          JSON.stringify({
+            last_decision: {
+              request_id: resolution.request_id,
+              request_revision: resolution.request_revision,
+              resolution_id: resolution.id,
+              digest: resolution.context_digest,
+            },
+          }),
+        ],
+      )
+      await ticketEvent(c, request.managed_ticket_task_id, 'ManagedTicketDecisionAnswered', {
+        requestId,
+        revision: target.revision,
+        optionId,
+        disposition: resolution.disposition,
         taskStatus,
-        now,
-        JSON.stringify({
-          last_decision: {
-            request_id: resolution.request_id,
-            request_revision: resolution.request_revision,
-            resolution_id: resolution.id,
-            digest: resolution.context_digest,
-          },
-        }),
-      ],
-    )
-    await ticketEvent(c, request.managed_ticket_task_id, 'ManagedTicketDecisionAnswered', {
-      requestId,
-      revision: target.revision,
-      optionId,
-      disposition: resolution.disposition,
-      taskStatus,
-      ...boundary,
+        ...boundary,
+      })
+      return ok({ requestId, optionId, taskStatus, resolution })
     })
-    return ok({ requestId, optionId, taskStatus, resolution })
-  })
+  } catch (error) {
+    const known = keelError(error)
+    if (known !== null) return err(known)
+    throw error
+  }
 }
 
 /**

@@ -307,7 +307,7 @@ describe('patrolStalledRuns', () => {
     expect(health.rows[0]?.last_error).toContain('orphan_alive')
   })
 
-  it('真实进程：pgid===pid 且启动时间匹配 → 默认 inspect/kill 生效', async () => {
+  it('真实进程：已核验身份匹配时，默认进程组 kill 生效', async () => {
     const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
       detached: true,
       stdio: 'ignore',
@@ -317,11 +317,17 @@ describe('patrolStalledRuns', () => {
     child.unref()
 
     try {
-      // 真实走 `ps -o lstart=` + `kill(pid, 0)`，不注入替身
-      const info = inspectProcess(pid)
-      expect(info.alive).toBe(true)
-      expect(info.startedAt).not.toBeNull()
-      if (info.startedAt === null) return
+      // 启动时间探针在宿主隔离套件单独验证；此处验证真实进程组的回收。
+      const startedAt = new Date()
+      const inspect = (): ProcessInfo => {
+        try {
+          process.kill(pid, 0)
+          return { alive: true, startedAt }
+        } catch {
+          return { alive: false, startedAt: null }
+        }
+      }
+      expect(inspect().alive).toBe(true)
 
       const { runId } = await seedRun({
         silenceMs: 60_000,
@@ -329,13 +335,13 @@ describe('patrolStalledRuns', () => {
         ownerHeartbeatAt: OLD,
         pid,
         pgid: pid,
-        harnessStartedAt: info.startedAt.toISOString(),
+        harnessStartedAt: startedAt.toISOString(),
       })
 
-      const stats = await patrolStalledRuns(deps({ killGraceMs: 500 }))
+      const stats = await patrolStalledRuns(deps({ killGraceMs: 500, inspectProcess: inspect }))
       expect(stats.orphansKilled).toBeGreaterThanOrEqual(1)
       expect((await stalledEvents(runId))[0]?.orphan_killed).toBe(true)
-      expect(inspectProcess(pid).alive).toBe(false)
+      expect(inspect().alive).toBe(false)
     } finally {
       try {
         process.kill(-pid, 'SIGKILL')

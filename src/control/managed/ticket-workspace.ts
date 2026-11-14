@@ -143,9 +143,43 @@ export async function changedFiles(
   if (!(await commitExists(path, baseline)) || !(await commitExists(path, head)))
     return err(makeError('WORKSPACE_ERROR', 'changed-files 基线或目标 commit 不存在'))
   try {
-    const output = await git(path, ['diff', '--name-only', '-z', `${baseline}..${head}`])
+    const output = await git(path, [
+      'diff',
+      '--name-only',
+      '--no-renames',
+      '-z',
+      `${baseline}..${head}`,
+    ])
     return ok([...new Set(output.split('\0'))].filter((entry) => entry !== '').sort())
   } catch {
     return err(makeError('WORKSPACE_ERROR', '无法读取 ticket changed files'))
+  }
+}
+
+/**
+ * 读取 baseline 到当前工作树的全部改动路径。
+ *
+ * `git diff <baseline>` 能看见已提交、已暂存和未暂存的 tracked 文件；
+ * 未跟踪文件必须另查 `git ls-files`。超时恢复的 scope 门禁要检查真实现场，
+ * 不能只看最后一个 commit，否则新建 WIP 文件会绕过 `scope_paths`。
+ */
+export async function workingTreeChangedFiles(
+  path: string,
+  baseline: string,
+): Promise<Result<readonly string[]>> {
+  if (!(await commitExists(path, baseline)))
+    return err(makeError('WORKSPACE_ERROR', 'working-tree changed-files 基线不存在'))
+  try {
+    const [tracked, untracked] = await Promise.all([
+      git(path, ['diff', '--name-only', '--no-renames', '-z', baseline, '--']),
+      git(path, ['ls-files', '--others', '--exclude-standard', '-z']),
+    ])
+    return ok(
+      [...new Set([...tracked.split('\0'), ...untracked.split('\0')])]
+        .filter((entry) => entry !== '')
+        .sort(),
+    )
+  } catch {
+    return err(makeError('WORKSPACE_ERROR', '无法读取 ticket working-tree changed files'))
   }
 }
