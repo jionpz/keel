@@ -1,18 +1,11 @@
-# Backend Development Guidelines
+# 后端开发指南
 
-> Best practices for backend development in this project.
+> 本索引列出当前仓库实际使用、可核验的后端工程约定。文档内容以现有实现与测试为准；
+> 实现变化时同步更新对应规范和证据。
 
----
+## 规范索引
 
-## Overview
-
-This directory contains guidelines for backend development. Fill in each file with your project's specific conventions.
-
----
-
-## Guidelines Index
-
-| Guide | Description | Status |
+| 规范 | 说明 | 状态 |
 |-------|-------------|--------|
 | [Directory Structure](./directory-structure.md) | 三平面结构、边界规则、生成物纪律、import 写法 | ✅ 已填（`08-22-repo-skeleton`） |
 | [Database Guidelines](./database-guidelines.md) | 角色身份写入(含 keel_ingress/intake)、SECURITY DEFINER、乐观版本号、错误映射、blob 写入、测试隔离 | ✅ 已填（含 08-27 github ingress） |
@@ -32,39 +25,23 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Ingress Poller](./ingress-poller.md) | 每仓库 `issue_label`、分页与 `truncated`、轮内去重、`StopToken` 订阅制、日志脱敏 | ✅ 已填（`08-29-ingress-poller`） |
 | [Issue Writeback](./issue-writeback.md) | 仓库回写开关、持久投递、v1 评论标记、失败重试、澄清答复与 PM 1.1 产物 | ✅ 已填（#130、#131、#133） |
 | [CLI Lifecycle](./cli-lifecycle.md) | 分发层统一关池（`finally`）、常驻循环 SIGTERM 必跳出、监听不叠加、关池失败不改退出码、常驻角色单实例 advisory lock | ✅ 已填（11-04 生命周期收口；`11-05-poller-single-instance` 补单实例锁） |
-| [Decision Acceptance](./decision-acceptance.md) | 项目决定/委托版本、E3/E1 确定性接纳、request revision CAS、唯一决议与角色权限 | ✅ 已填（JT-02B；未接 runtime 自动唤醒） |
+| [Decision Acceptance](./decision-acceptance.md) | 项目决定/委托版本、E3/E1 确定性接纳、request revision CAS、唯一决议与角色权限 | ✅ 已实现（JT-02B/JT-05；runtime/ticket 已接天问自动恢复） |
 | [Project Memory](./project-memory.md) | 项目记忆事实源、版本化摘要、epoch/水位增量、检索预算、回滚与人工规则提升 | ✅ 已填（JT-03） |
-| [Ticket Execution](./ticket-execution.md) | jstack 单 ticket 固定包、阶段门禁、verify/review 证据绑定、must-stop DecisionRequest、scope 检查与 branch_ready 边界 | ✅ 已填（JT-02C；JT-04 补 scope） |
+| [Ticket Execution](./ticket-execution.md) | jstack 单 ticket 固定包、阶段门禁、verify/review 证据绑定、must-stop DecisionRequest、scope 检查与 branch_ready/pr_ready 边界 | ✅ 已实现（JT-02C/JT-04；外部动作见 Action Gateway） |
 | [Workflow Routing](./workflow-routing.md) | jstack XS/S/M/L/XL route 包、依赖图校验、节点调度、scope、证据复用、archive 与双投影 | ✅ 已填（JT-04） |
 | [Action Gateway](./action-gateway.md) | action intent / ExecutionPermit / 持久 outbox、受控 push 与 PR、required checks 与准确 SHA 的 `pr_ready` | ✅ 已填（JT-02D/02E） |
 | [Service Runtime](./service-runtime.md) | 单一 `serve` 入口、角色健康、公平调度、SIGTERM 边界、一致性备份与隔离恢复校验 | ✅ 已填（JT-06） |
 | [Trial Readiness](./trial-readiness.md) | `doctor` 支持矩阵、单 owner 试运行账本、7 天/30 代决/5 完成任务门槛与证据边界 | ✅ 已填（JT-07 readiness） |
-| [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | ⏳ 暂缓 —— 尚无日志代码 |
+| [Logging Guidelines](./logging-guidelines.md) | 结构化日志与日志级别 | ⏳ 暂缓 —— 尚未形成统一日志模块规范 |
 
 > **⏳ 暂缓的 logging 是刻意留空的**,不是遗漏。
-> 本项目的规则是「记录现实而非理想」:日志尚无任何代码,
-> 现在写等于凭空发明约定,而子 agent 会照着它写出与实际不符的代码。
-> 等 v0.1 有了真实实现再填。frontend 各文件同理(无前端代码)。
+> 本项目的规则是「记录现实而非理想」：CLI 已有输出与错误报告，但尚无统一日志模块。
+> 不凭空发明模块约定，避免子 agent 照着它写出与实际不符的代码。
+> 等统一日志模块落地再补充。控制台已有实现，前端约定见 `docs/spec/frontend/`，
+> 不能把历史空模板的说明当作当前“无前端代码”的事实。
 
 ---
 
 ## 语言
 
 代码注释与本 spec 用**中文**；标识符、类型名、字段名、命令用英文。
-
----
-
-## How to Fill These Guidelines
-
-For each guideline file:
-
-1. Document your project's **actual conventions** (not ideals)
-2. Include **code examples** from your codebase
-3. List **forbidden patterns** and why
-4. Add **common mistakes** your team has made
-
-The goal is to help AI assistants and new team members understand how YOUR project works.
-
----
-
-**Language**: All documentation should be written in **English**.

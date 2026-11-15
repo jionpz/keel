@@ -1,5 +1,8 @@
 # 06 · 结构化产物（Artifacts）
 
+> 范围：本文保留 `legacy-v01` 的契约、机制与历史验收。当前 jstack managed 主路径见
+> [managed 状态机](./managed-state-machine.md)；旧 Task/Run 阶段与完成条件不适用于 managed。
+
 > 满足 PRD `R5`；关闭缺口 `G4`（Critic 调用无 schema）、`G6`（Checkpoint 无 schema、与 State 关系不明）。
 > 机器可读的 schema 文件在 [`../docs/schemas/`](./schemas/)，本文讲**语义**与**为什么这样设计**。
 

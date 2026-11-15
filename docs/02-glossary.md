@@ -30,7 +30,7 @@
 
 **中心不变量**：
 
-> 能在进程崩溃后存活的，只有 Artifact。其余一切都是 Session。
+> 事实必须持久化；Session 只是临时计算资源，不是事实来源。
 
 | 平面 | 组件 | 硬约束 |
 |---|---|---|
@@ -54,26 +54,89 @@
 > ⚠️ Feedback 是**不可信输入**。它会被送进 LLM 上下文，因此是 prompt injection 的主要入口。
 > 见 `08-cross-cutting.md`。
 
-### Task（任务）
+### `legacy-v01` Task（旧任务）
 
-**定义**：系统为推进一条或多条 Feedback 而开的工单，**是 Task 级状态机的宿主**。
+**定义**：系统为推进一条或多条 Feedback 而开的旧版工单，**是 `legacy-v01`
+Task 级状态机的宿主**。
 
-**区分**：`Task` ≠ `Run`。Task 是"这件事"，Run 是"这次尝试"。
+**区分**：`legacy-v01 Task` ≠ `legacy-v01 Run`。Task 是"这件事"，Run 是"这次尝试"。
+本文未加限定的 `Task` 只指旧驱动；managed 工作单元使用下文的 Workflow / Ticket / Stage。
 
 **生命周期**：Control Plane 创建 → Control Plane **独占写** → 到达终态后不再变更（不删除）。
 
-### Run（执行）
+### `legacy-v01` Run（旧执行记录）
 
-**定义**：对某个 Task 的某个 stage 的**一次执行尝试**，是 Run 级状态机的宿主。
+**定义**：对某个 `legacy-v01 Task` 的某个 stage 的**一次执行尝试**，是 Run 级状态机的宿主。
 
 **区分**：`Run` ≠ `Session`。
 Run 是 Control Plane 的**记账单位**（第几次尝试、成功还是超时）；
 Session 是 Execution Plane 的**计算资源**。
 一个 Run 通常绑定一个 Session，但 **Run 在 Session 销毁后依然存在** —— 这正是失败可追溯的原因。
+Run 也不等同于 managed Stage：两者都记录尝试与证据，但属于不同投影和状态机。
 
 **生命周期**：Control Plane 创建 → Control Plane 写 → 终态后不可变。
 
 > Task 与 Run 的两级拆分，是初稿画不出失败路径的根因所在。详见 `04-state-machine.md`。
+
+### Managed Workflow（managed 工作流）
+
+**定义**：`managed_workflow` 是固定在某个 jstack route 包上的持久编排聚合；
+它保存 route/graph 版本、依赖节点、scope、completion target 和证据，按依赖前沿调度
+managed ticket。它可以包含一个或多个 ticket。
+
+**区分**：Managed Workflow ≠ `legacy-v01 Task`，也 ≠ 单个 managed Ticket。
+工作流负责整条路线的图与完成门；旧 Task 只属于 `S-*` 状态机。
+
+**生命周期**：Control Plane 创建并推进；已绑定 ticket 固定包，不随 route 升级漂移；
+所有节点 archive 后工作流结束。
+
+### Managed Ticket（managed ticket）
+
+**定义**：`managed_ticket_task` 是一个绑定固定 jstack ticket 包的工作单元，
+包含独立工作树/分支、baseline commit、package digest、四阶段进度、控制代次和 handoff。
+它由单 ticket CLI 创建，或由 managed Workflow 的节点物化。
+
+**区分**：Managed Ticket ≠ `legacy-v01 Task`；它没有 `S-*` 状态，而是使用
+`READY` / `RUNNING` / `WAITING_HUMAN` / `WAITING_GATEWAY` / `PR_OPENED` /
+`CHECKING` / `PR_READY` 等 managed 状态。
+
+**生命周期**：Control Plane 绑定固定包 → 执行
+`execute → verify → review → land` → 得到 branch handoff 或创建 PR 并等待 check gate；
+终态记录不可重新回退。
+
+### Managed Stage（managed 阶段记录）
+
+**定义**：`managed_ticket_stage` 是 managed ticket 对 `execute`、`verify`、`review`
+或 `land` 的**一次持久执行尝试**，记录输入/输出 commit、result、evidence、usage
+与门禁摘要。Workflow 的 `archive` 是额外的完成门证据，不是第五个 jstack ticket 阶段。
+
+**区分**：Managed Stage ≠ `legacy-v01 Run`。Stage 只属于固定 ticket 包与 managed
+门禁；Run 属于旧 Task 状态机。Session 仍只是执行资源，不等于两者中的任何一个。
+
+**生命周期**：认领阶段时创建 → 执行器提交结构化结果 → Control Plane 重算 git/diff/
+证据并通过门禁 → 行不可重写。
+
+### `DecisionRequest`（决策请求）
+
+**定义**：工作流提出的持久、版本化问题，绑定项目、repo、来源 task/node/attempt、
+`decision_key`、kind、选项、约束、缺失信息、影响与 input digest。每个 revision
+显式记录状态，不能把旧答复静默套用到新问题。
+
+**区分**：DecisionRequest ≠ `ProjectDecision`，前者是待答问题，后者是已确认的项目事实；
+也 ≠ `DelegationPolicy`，后者只规定可复用的委托范围。系统生成的问题先交给天问形成
+proposal，由确定性接纳器判定 `delegated` / `owner_required` / `denied`，人工纠正创建新 revision。
+
+**生命周期**：`OPEN` → `PROCESSING` → `WAITING_HUMAN` / `RESOLVED`；控制路径可将其
+取消，人工覆盖会通过新 revision 将旧 revision 标为 `SUPERSEDED`，历史 revision 保留。
+
+### `PR_READY`（PR 检查通过）
+
+**定义**：check gateway 对某个 PR 的**准确 head SHA** 读取全部 required checks，
+并以每个 check 的显式 `success` 结论与持久证据将 managed ticket 置为 `PR_READY`。
+
+**区分**：`PR_READY` 只表示 required checks 已通过，**不表示 PR 已合并**。
+普通 `PR_OPENED`、仍在 `CHECKING`、`PR_READY`、merge、部署是不同阶段；
+当前 gateway 不把任一项写成合并事实。
 
 ---
 
@@ -234,8 +297,9 @@ Fact Plane  ◀──[ Proposal ]──  Execution Plane      产出 → 校验�
 
 **区分**：
 - `Context` ≠ `State`：Context 是从 State 等事实**派生**的、面向单次调用的**视图**
-- `Context` ≠ `Memory`：**本系统不设独立的 Memory 概念**。长期记忆就是 Fact Plane。
-  （初稿 §3 架构图里出现过 "Memory"，本文档集起废弃该词）
+- `Context` ≠ `Memory`：旧路径不设独立 Memory；managed 项目记忆是从权威
+  `ProjectDecision` 重建的版本化读模型，仍不是第二个事实源，也不替代当前授权检查。
+  （初稿 §3 架构图里出现过 "Memory"，本文档集起不再把它当作独立组件）
 
 **生命周期**：每轮构造 → **用完即弃** → 不是事实来源。
 但其**构造参数**会被 Event 记录，以便复现"当时这个 Agent 到底看到了什么"。
@@ -274,7 +338,7 @@ Fact Plane  ◀──[ Proposal ]──  Execution Plane      产出 → 校验�
 |---|---|---|---|
 | `State`（指状态机位置） | §15 | `Task.status` | 与事实集合同名，必须拆分 |
 | `Shared State` | §3、§7 | `State`（`A-State`） | "Shared" 暗示多方可写，违反中心不变量 |
-| `Memory` | §3 架构图 | 无 —— 长期记忆即 Fact Plane | 引入独立 Memory 会产生第二个事实来源 |
+| `Memory` | §3 架构图 | 无独立 Memory 组件；旧路径保留 Fact Plane，managed 使用 `ProjectDecision` 与可重建记忆摘要 | 引入独立 Memory 会产生第二个事实来源 |
 | `Agent`（笼统指代） | 全文 | 按语境拆为 `Role` / `Session` / `Harness` | 一个词混指职能、进程、工具三层 |
 | `Agent Runtime` | §3、§19 | `Execution Plane` | 与项目名 "Runtime" 混淆 |
 
@@ -287,23 +351,26 @@ Fact Plane  ◀──[ Proposal ]──  Execution Plane      产出 → 校验�
 - [ ] 出现 `State` 处，指的是**事实集合**；若指状态机位置，必须写 `Task.status`
 - [ ] 出现 `Checkpoint` 处，owner 是 **Session** 而非 Task
 - [ ] 出现 `Agent` 处，已按语境替换为 `Role` / `Session` / `Harness`
-- [ ] 未出现 `Shared State`、`Memory`、`Agent Runtime`
+- [ ] 未将 `Shared State`、`Memory` 或 `Agent Runtime` 恢复为独立事实源；managed 项目记忆只作读模型
+- [ ] `Task` / `Run` 仅指 `legacy-v01`；managed 工作单元写成 Workflow / Ticket / Stage
+- [ ] 描述 `PR_READY` 时没有把它说成 merge
 - [ ] 描述"某平面写某数据"时，未出现 Execution Plane 直接写 Fact Plane
 
 ---
 
-## 8. 下一版方案术语（待实现）
+## 8. Managed 模式补充术语
 
-以下用于 [jstack 与天问生产方案](./plans/jstack-tianwen/README.md)，不表示当前代码已具备这些能力。
+以下术语已进入 managed 实现的协议、持久模型或运行路径。存在代码和规范只表示该切片
+具备实现与测试，不表示真实模型验收或生产准入已经完成；当前边界见
+[实施进度](./plans/jstack-tianwen/implementation.md)。
 
 | 术语 | 定义与边界 |
 |---|---|
 | 天问（Tianwen） | 项目范围内代表用户查证、代答与作出授权内取舍的 Role；属于 Execution Plane，只提交 Proposal，不冒充真实用户 |
-| 决策请求（DecisionRequest） | 工作流提出的一个持久问题，包含来源节点、作用域、选项、前置条件和修订版本；所有系统生成的人工请求先进入天问 |
 | 委托策略（DelegationPolicy） | 用户明确确认的可复用权限范围；定义哪些决定/动作可由天问代决、需要哪些证据，以及何时必须由 owner 决定 |
-| 项目决策摘要（ProjectCapsule） | 从项目有效决定生成的有版本读模型，含来源、适用条件和日志水位；不是独立事实来源，也不替代最新授权检查 |
-| 工作流包（WorkflowPackage） | jstack 发布并由任务固定引用的阶段、路由、提供者、门禁及依赖的内容寻址版本 |
-| 项目记忆 | 本方案中对 Fact Plane 的项目决定及读模型的描述；不恢复初稿中作为独立组件/事实来源的 `Memory` 概念 |
+| 项目记忆 | 从项目有效 `ProjectDecision` 生成、带 epoch/水位与来源的版本化读模型；不是独立事实源，不恢复为可写 Memory 组件 |
+| jstack 固定包 | `JstackInvestigationPackage` / `JstackRoutePackage` / `JstackTicketPackage` 按内容摘要固定来源、阶段、provider、工具策略与门禁；新导出不会改写已绑定任务 |
+| managed projection | `managed_workflow*` / `managed_ticket*` 等表及其状态、证据、队列；与 `legacy-v01` 的 Task/Run 投影不共享状态机 |
 
 ---
 

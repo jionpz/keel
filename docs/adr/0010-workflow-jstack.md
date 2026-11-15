@@ -4,6 +4,17 @@
 **Date**: 2026-11-07
 **Related**: ADR-0003（Workflow engine 选型，与产品运行时无关）；`#76`–`#80`；`project/keel/decisions/jstack-migration-2026-11-07`
 
+## 后续接线更新（2026-11-15）
+
+下面的迁移范围与限制是 2026-11-07 的历史记录。当前 jstack 已支持 Codex 的项目级
+skills、agents 与 hooks；Pi、OMP、Codex、Cursor 共享 `.agents/skills` 入口，
+这些目录不再能作为 Trellis 残留的判断依据。DSH 仍按同一 route 文档执行。
+工程入口以当前 `AGENTS.md` 与已核验的 jstack 安装锁为准；本次核对上游
+`main` 为 `20a8a3e`，不改写产品进行中任务的固定包。
+
+Trellis 退役和单一 jstack 编排的决定持续有效。历史删除清单不授权删除当前 jstack
+安装产物，目录存在也不证明 hooks 已信任或实际加载。
+
 ## Context
 
 首轮迁移只把 Claude Code / OMP 切到 jstack，保留 Trellis 给 Codex / DSH，

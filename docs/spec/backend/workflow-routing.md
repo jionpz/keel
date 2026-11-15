@@ -76,12 +76,14 @@ PENDING → READY → RUNNING → WAITING_HUMAN / WAITING_GATEWAY
 1. 无图时调用 jstack planner，校验并提交图；
 2. 图已存在时物化一个依赖已满足的 `PENDING` 节点；
 3. 否则推进一个 `READY` 节点的一个阶段；
-4. 同步节点状态、尝试 archive、重算工作流状态。
+4. 同步节点状态、尝试 archive、重算工作流状态。完整状态与优先级见
+   [managed 状态机](../../managed-state-machine.md)；同步在选取节点前也执行一次，
+   避免使用旧 `WAITING_HUMAN` / `PR_READY` 调度。
 
 独立节点只等待自己的依赖闭包。一个节点进入 `WAITING_HUMAN` 不会阻塞无依赖关系的
 根节点；依赖它的节点仍保持 `PENDING`。
 
-多个依赖提交必须位于同一条历史线上，Keel 用 `git merge-base --is-ancestor`
+依赖只有到 `ARCHIVED` 才满足，不能绕过完成门就启动下游。多个依赖提交必须位于同一条历史线上，Keel 用 `git merge-base --is-ancestor`
 选出确定的覆盖 commit 作为下游基线；分叉历史直接拒绝，不做隐式合并。
 
 ## 4. scope 与工作树
@@ -119,12 +121,14 @@ review 要求 rework 时，后续 verify/review/land 证据失效；重新 execu
 `archive` 是工作流完成门，不是远程 Issue 自动关闭器。归档要求：
 
 - `pr_ready` 目标下 ticket 已到 `PR_READY`，或 `branch_ready` 目标下已到 `DONE`；
-- execute、verify、review、land 都有成功或复用证据；
-- handoff 提供准确 40 位 head SHA；
-- `pr_ready` 目标还要求 check gate 为 `READY`。
+- execute、verify、review、land 的最新尝试成功或复用，输出 head、包、门禁摘要与当前
+  `VALID` workflow 证据匹配；
+- handoff 提供准确 40 位 head SHA，工作树仍干净，当前 HEAD 与 diff 均匹配 handoff；
+- `pr_ready` 目标还要求 check gate 为 `READY`，绑定相同 head 与有效证据摘要。
 
 归档写 `archive` 证据并记录 archive gate 摘要；成功后节点变 `ARCHIVED`，所有节点
-归档后 workflow 变 `DONE`。`archive` 证据明确注明“远端 issue 的关闭仍需受控写入口”，
+归档后 workflow 变 `DONE`。归档失败写节点 `FAILED` 与持久错误；无其他可推进节点时
+workflow 为 `PAUSED`，修复后用 `workflow-retry` 重新尝试完成门。`archive` 证据明确注明“远端 issue 的关闭仍需受控写入口”，
 不把本地归档冒充远程关闭。
 
 ## 7. 两套投影
@@ -145,8 +149,9 @@ pnpm keel managed workflow-tick --harness pi --model <id>
 pnpm keel managed workflow-worker --harness pi --model <id>
 ```
 
-`workflow-retry` 只把已暂停/失败的节点恢复为 `READY`，保留原 attempt 预算与
-当前阶段；`ARCHIVED`、`CANCELLED` 与工作流终态不可回退。
+`workflow-retry` 只把失败节点恢复为 `READY`，保留原 attempt 预算与当前阶段；
+ticket 已达到完成目标时只重试 archive，不改写已结束 ticket、不重新执行四阶段。
+`ARCHIVED`、`CANCELLED` 与工作流终态不可回退。
 
 控制台只读 API：
 
@@ -161,6 +166,7 @@ pnpm keel managed workflow-worker --harness pi --model <id>
 - 真实 L 多 ticket 模型 E2E 已通过（Pi + `opencode-go/deepseek-v4.1-flash`，2 个
   依赖 ticket、两节点 archive、outbox 为空）；XL 复用同一路径，但未单独跑真实模型 E2E。
 - archive 不自动关闭 GitHub Issue；远程关闭需要后续受控写入口。
-- 旧 `legacy-v01` 任务可阻止新 managed 任务占用同一 issue，但反向（managed 已占用后
-  新建 legacy task）尚无数据库级触发器，需由入口检查或后续迁移补齐。
+- legacy intake 与 managed issue claim 共用事务 advisory lock 并双向检查所有权；
+  两个引擎并发进入时只有一个成功。该边界在 Control 入口强制，不是数据库触发器，
+  不允许新入口绕过 `WorkflowDriver.intake` / `claimIssue` 直接写所有权。
 - 工作流图的真实重规划仍由 jstack planner 产出；Keel 不做语义重规划。
