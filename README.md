@@ -15,14 +15,15 @@
 **[`docs/`](./docs/README.md) 是架构的事实来源。**
 
 赶时间就读这三篇：
-[总览](./docs/01-overview.md) → [术语表](./docs/02-glossary.md) → [状态机](./docs/04-state-machine.md)
+[总览](./docs/01-overview.md) → [术语表](./docs/02-glossary.md) → [当前 managed 状态机](./docs/managed-state-machine.md)
 
 | | |
 |---|---|
 | [`docs/README.md`](./docs/README.md) | 索引、阅读顺序、文档约定 |
 | [`docs/05-contracts/`](./docs/05-contracts/) | 7 个核心接口契约 |
-| [`docs/schemas/`](./docs/schemas/) | 11 份机器可读 JSON Schema（含 `managed/` 3 份） |
-| [`docs/adr/`](./docs/adr/) | 11 份架构决策记录（ADR-0001～0011） |
+| [`docs/schemas/`](./docs/schemas/) | legacy 产物与 managed 固定包、决策、动作的机器可读 JSON Schema |
+| [`docs/adr/`](./docs/adr/) | 架构决策记录及其采用状态 |
+| [`docs/04-state-machine.md`](./docs/04-state-machine.md) | `legacy-v01` Task/Run 保留契约，不定义 managed |
 | [`docs/plans/jstack-tianwen/`](./docs/plans/jstack-tianwen/) | 当前 jstack + 天问路线（JT-01～JT-07）；进度见 [#85](https://github.com/jionpz/keel/issues/85) |
 | [`docs/archive/`](./docs/archive/) | 立项初稿（已归档，**请勿据其实现**） |
 
@@ -30,7 +31,7 @@
 
 ## 中心不变量
 
-> 能在进程崩溃后存活的，只有 Artifact。其余一切都是 Session。
+> 事实必须持久化；Session 只是临时计算资源，不是事实来源。
 
 由此推出三个平面，每个平面由它**不许做什么**定义：
 
@@ -55,10 +56,13 @@ Fact 与 Execution 之间只有两条单向通道：`Context` 下行、`Proposal
 
 每条原则落成机制的位置见 [`docs/01-overview.md`](./docs/01-overview.md) §4。
 
-## v0.1 完成判据
+## Legacy 完成判据
 
 > 一条真实的用户反馈进入系统后，在无人干预的情况下走完 `S-NEW → S-DONE`，
-> 产出一个通过 CI 的 PR；且 `readEvents(task_id, 0)` 能完整重建这个 Task 的全过程。
+> 产出一个已合并的 PR；且 `readEvents(task_id, 0)` 能完整重建这个 Task 的全过程。
+
+这是 ADR-0012 后的 legacy 语义。managed 按固定 `branch_ready` / `pr_ready` 目标
+验收并归档全部节点，不能用旧 `S-DONE` 推断其完成条件。
 
 ## 技术栈
 
@@ -208,7 +212,10 @@ pnpm run check     # CI 跑的就是这一条 —— 与本地完全一致
 
 ### AI 工作流
 
-所有 harness 使用 jstack：Claude Code / OMP 走 `/flow:route`，按任务大小路由到 `/spec:*`（需求澄清、拆票）或 `/pstack:poteto-mode`（实现）；Codex / DSH 暂无原生插件适配，按 `AGENTS.md` 工作，需要完整流程时读 jstack 仓库的入口 `SKILL.md`。项目编码规范在 `docs/spec/`。
+所有 harness 从 jstack `flow:route` 开始；阶段表选择 `spec`、`flow:execute` 或
+`pstack:poteto-mode`。Codex 已有项目级 skills/agents/hooks，DSH 按同一入口文档工作，
+接线与核验见 `AGENTS.md`。当前产品职责与状态见
+[`managed-state-machine.md`](./docs/managed-state-machine.md)，项目编码规范在 `docs/spec/`。
 
 ### 控制台（口令登录）
 
@@ -252,7 +259,10 @@ pnpm run console     # http://127.0.0.1:4321
 
 要放宽任何一条约束，**走 ADR**，不要在配置里临时注释掉。
 
-## 状态
+## Legacy 验收历史
+
+以下是当时完成条件下的历史记录；2026-11-12 起 `S-DONE` 必须有 PR merge 事实。
+历史 CI 验收不证明现行 merge 收口或 managed 生产准入已完成。
 
 **架构框架 + 仓库骨架已完成。** v0.1 最小闭环已跑通：真实反馈在本地 worktree 中无人干预走完 `S-NEW → S-DONE`，事件流可完整重建；回归测试全绿。
 

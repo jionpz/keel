@@ -2,6 +2,8 @@
 
 > 满足 PRD `R2`；关闭缺口 `G11`（RFC 无定义）。
 > 术语一律以 [`02-glossary.md`](./02-glossary.md) 为准。
+> §1–§6 的 Task/Run/Artifact DDL 是 `legacy-v01` 模型；当前 managed 模型与写入边界
+> 见 [`managed-state-machine.md`](./managed-state-machine.md) 和 `migrations/1000000000010_*` 起的 managed 迁移。
 
 ---
 
@@ -160,8 +162,8 @@ Task 作用的目标仓库。
 - **只允许 INSERT**。"更新"= 插入新 version + 回填旧行的 `superseded_by`
 
 > **大 body 落 blob（ADR-0004）**：`body` 超过 256 KB（`BLOB_THRESHOLD_BYTES`，
-> `src/fact/blob.ts`）时，body 只存 `{"blob": "<sha256>"}` 引用，
-> 真实内容进 `blob` 表。写顺序：先写 blob，后写 artifact ——
+> `src/fact/blob.ts`）时，body 只存 `{"$ref": "blob://<sha256>", "size": …, "preview": …}` 引用，
+> 真实内容进内容寻址的 blob 文件存储。写顺序：先写 blob，后写 artifact ——
 > 反过来会产生悬空引用；孤儿 blob 只是垃圾，可后台清理。
 > 读回时由 `materialize()` 还原（`src/fact/artifact-store.ts`）。
 

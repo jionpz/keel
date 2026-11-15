@@ -26,8 +26,9 @@
    但对误触的命令来说就是「什么都没做，库里却多了一条」。入口先读 `(status, control_mode)`
    并零写入退出；预检到 advance 之间的竞争仍由 `advance` 的 `advanced:false` 表达。
 2. **`control_mode ≠ auto` 时不派发**（`ignoresControlMode: false`）。`paused` 是预算熔断、
-   `human` 是人工接管，两者都要求先恢复 —— 而恢复入口（C-003 / C-005 / C-006）尚未提供。
-   入口要如实说出这一点，不要让用户以为命令坏了。
+   `human` 是人工接管，两者都要求先恢复。现有 CLI/控制台控制入口使用
+   `controlTransition` 处理 C-003 / C-005 / C-006；人工交还还要求持久交接说明。
+   decide/answer 不能自行绕过驾驶权控制。
 3. **`LinkFeedback` 踩在两条路径上**：事件带 `feedbackId` 时真写 `task_feedback` 并发
    `SideEffectApplied`；不带时维持 `recordIntent`。区分它们的是**调用方手上到底有没有 feedback 行**，
    不是「哪种事件」。`T-001` 不经 `applyEffects`（`driver.intake` 自己落事件）。

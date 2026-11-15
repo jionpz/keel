@@ -1,5 +1,8 @@
 # 05 · 核心契约（Contracts）
 
+> 范围：本文保留 `legacy-v01` 的契约、机制与历史验收。当前 jstack managed 主路径见
+> [managed 状态机](../managed-state-machine.md)；旧 Task/Run 阶段与完成条件不适用于 managed。
+
 > 满足 PRD `R4`；关闭缺口 `G3` `G5` `G7` `G10`。
 
 ---

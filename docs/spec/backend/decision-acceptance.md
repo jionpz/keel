@@ -102,7 +102,7 @@ request 的 `attempt_id` 指向产生问题的 `managed_attempt`，把决策尝�
   `policy-publish/policy-revoke` 的 owner 身份来自本机 CLI 显式参数并要求
   `--confirm`，不接受策略文件自报身份。Keel 定位为个人单用户工具，不做多租户/
   HTTP 多用户认证。
-- `impact` 仍由调查或 ticket 模型声明；JT-02D 的执行网关必须重新核对动作、环境与
+- `impact` 仍由调查或 ticket 模型声明；已实现的 JT-02D 执行网关会重新核对动作、环境与
   资源，`approval` 不会自动委派。
-- outbox/PR 属 JT-02D，required checks 属 JT-02E；action gateway 独立消费
+- outbox/PR 与 required checks 已分别在 JT-02D / JT-02E 实现；action gateway 独立消费
   `required_checks`，决策接纳器仍按本切片规则拒绝带这些要求的自动代答。

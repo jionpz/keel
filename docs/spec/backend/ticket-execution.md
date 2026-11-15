@@ -2,7 +2,8 @@
 
 > 范围：JT-02C / JT-04。Keel 消费 jstack 导出的固定 ticket 包，按
 > `execute → verify → review → land` 执行；阶段执行器本身不 push、不创建 PR。
-> 外部动作与 `pr_ready` 由 JT-02D/02E 的独立网关完成。
+> 已实现的 action gateway / check gateway 分别负责受控 push、PR 与准确 SHA 的
+> `pr_ready`，见 [action-gateway.md](./action-gateway.md)。
 > 多 ticket 路线由 [workflow-routing.md](./workflow-routing.md) 定义。
 
 ## 1. 固定包
@@ -225,13 +226,18 @@ pnpm keel managed workflow-tick --harness pi --model <id>
 pnpm keel managed workflow-worker --harness pi --model <id>
 ```
 
-## 9. 未完成
+## 9. 当前边界
 
-- push / PR 属 JT-02D；required checks 与 `pr_ready` 属 JT-02E；
-- archive、多 ticket 图与证据复用属 JT-04，见
-  [workflow-routing.md](./workflow-routing.md)；项目记忆增量检索属 JT-03；
-- 真实模型端到端验收属 JT-02F；
-- 自动 merge / 部署仍不在本路径内；`PR_READY` 不等于已合并。
+- push、幂等创建 PR 与故障回查已在 JT-02D action gateway 中实现；
+  required checks 与 `PR_READY` 已在 JT-02E check gateway 中实现，见
+  [action-gateway.md](./action-gateway.md)。
+- archive、多 ticket 图与证据复用已在 JT-04 实现，见
+  [workflow-routing.md](./workflow-routing.md)；项目记忆增量检索在
+  [project-memory.md](./project-memory.md) 中定义。
+- 真实模型端到端验收仍属 JT-02F；确定性测试和有限真实证据不能替代完整 Harness /
+  生产验收。
+- 自动 merge 与部署不在本路径内；`PR_READY` 只代表准确 PR head 的 required checks
+  已通过，**不等于已合并**。
 
 验证：`ticket-protocol.test.ts` 覆盖摘要与来源完整性；`ticket-runtime.test.ts`
 覆盖正常四阶段、verify 缺证据、review 旧证据、must-stop 决策、天问按项目决定

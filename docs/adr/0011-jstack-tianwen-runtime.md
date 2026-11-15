@@ -1,6 +1,7 @@
 # ADR-0011 · jstack 为主工作流，天问作为项目用户代表
 
-**Status**: Proposed — 用户已确认产品方向；JT-01 只读影子协议已有代码，完整技术契约尚未全部实现/验收。
+**Status**: Accepted — 用户已确认产品方向与职责边界；JT-01～JT-06 的实现已合入 `main`，
+JT-07 就绪工具已实现，但真实 7 天试运行、独立评测与生产准入仍未完成。
 **Date**: 2026-11-10
 **Related**: ADR-0003、0004、0006、0010；[完整方案](../plans/jstack-tianwen/README.md)。
 
@@ -22,7 +23,7 @@ ADR-0010 只规定开发 Keel 时使用 jstack，没有实现 Keel 在产品运�
 
 ## Decision
 
-推荐第三项，具体约束如下：
+采用第三项，具体约束如下。Accepted 表示方向已采用，不表示生产准入已完成：
 
 1. jstack 是工作流的定义源，Keel 是持久运行层；新任务固定工作流包、路线、提供者和门禁版本。
 2. 所有系统生成的人工请求先进入天问。天问可以在明确项目授权内直接代答/代批；需要新授权或仍缺依据时，整理建议交给用户。
@@ -32,6 +33,23 @@ ADR-0010 只规定开发 Keel 时使用 jstack，没有实现 Keel 在产品运�
 6. jstack 的 managed 模式正式扩展 must-stop：暂停动作并获取有效处置；对必须 owner 的请求，天问准备后升级。不能把现有规则偷偷解释为 AI 等于真人。
 7. 等待异步持久化，答复自动恢复；独立节点继续；失效、撤销、并发、外部副作用和灾后恢复都有明确语义。
 8. 原有 `legacy-v01` 任务保留原驱动；新增模型与新流程通过 expand–contract 交付，不自动改造已运行任务。
+
+## 当前实现进度
+
+以下是 2026-11-15 的独立实现快照，用于区分“决策已采用”和“生产验收已完成”；
+它不改变本 ADR 的原始约束，也不把历史验证结果升级为全局支持声明。
+
+| 切片 | 当前仓库中的实现锚点 | 证据边界 |
+|---|---|---|
+| JT-01 / JT-02 | `src/control/managed/runtime.ts`、`runtime-decision.test.ts` 实现只读调查、DecisionRequest、天问 proposal 与答复唤醒；`ticket-runtime.ts`、`ticket-protocol.ts` 实现固定 ticket 包和四阶段门禁 | 调查链仍是影子模式；固定包、阶段与决策路径已有确定性测试，不能据此声称所有 Harness 原生验收通过 |
+| JT-02D / 02E / JT-05 | `action-gateway.ts` 重验授权、工作树、SHA 与 diff 后执行受控 push/PR；`check-gateway.ts` 只接受准确 PR head 的显式 required-check success；`action-gateway.test.ts`、`check-gateway.test.ts` 覆盖撤销、暂停、幂等与旧 SHA 拒绝 | `PR_READY` 仅表示 required checks 已通过，不表示 PR 已 merge；自动 merge/部署不在当前路径 |
+| JT-03 | `memory-protocol.ts` 与 `memory-store.ts` 实现项目隔离、版本化摘要、epoch/水位失效、增量检索、回滚与人工答案提升 | 当前检索为关键词/子串与受控扩展，不是语义检索；跨项目记忆和自动扩权不在范围 |
+| JT-04 | `route-protocol.ts`、`workflow-runtime.ts` 实现 XS/S/M/L/XL route 包、依赖图、scope、节点调度、证据复用与 archive | 有限多 ticket 实测不等于 XL、所有 provider 或生产故障场景均已验收 |
+| JT-06 / JT-07 | `keel serve`、备份恢复、`doctor` 支持矩阵与试运行账本是当前实现的一部分，详见 [实施进度](../plans/jstack-tianwen/implementation.md) | 尚无生产部署；完整试运行门槛、独立评测、原生 Claude、Pi 完整原生协议与生产恢复演练仍未完成 |
+
+当前最可靠的总体证据是
+[实施进度](../plans/jstack-tianwen/implementation.md)；GitHub issue 的具体状态以
+tracker 为准。代码与测试通过只证明对应切片可重复验证，**不构成生产验收通过**。
 
 ## Consequences
 
@@ -44,4 +62,6 @@ ADR-0010 只规定开发 Keel 时使用 jstack，没有实现 Keel 在产品运�
 
 ## Verification
 
-采用[交付与准入](../plans/jstack-tianwen/delivery.md)及[验收场景](../plans/jstack-tianwen/acceptance.md)。本 ADR 不表示已经完成开发、通过真实模型验收或获得任何生产动作权限。
+采用[交付与准入](../plans/jstack-tianwen/delivery.md)及[验收场景](../plans/jstack-tianwen/acceptance.md)。
+本 ADR 的采用不替代各切片验收，也不授予生产动作权限；当前实现进度与未验项以上文
+“当前实现进度”为准。代码合入、确定性测试和有限真实证据均不等于生产准入通过。

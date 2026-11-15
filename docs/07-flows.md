@@ -1,5 +1,8 @@
 # 07 · 端到端流程（Flows）
 
+> 范围：本文保留 `legacy-v01` 的契约、机制与历史验收。当前 jstack managed 主路径见
+> [managed 状态机](./managed-state-machine.md)；旧 Task/Run 阶段与完成条件不适用于 managed。
+
 > 满足 PRD `R6`。
 > **本章是三平面骨架的证伪测试**（见任务 `design.md` §7）：
 > 如果任何一条真实流程跨不过 Context / Proposal 这两座桥，说明骨架有问题，

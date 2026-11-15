@@ -42,7 +42,10 @@ scripts/            # 构建与检查脚本，不受平面约束
 
 ## `src/generated/` 的纪律
 
-JT-01 新增的 `docs/schemas/managed/*.schema.json` 生成 `src/generated/managed.ts`，只描述 managed 调查/天问影子协议；它们不加入旧 ArtifactKind 注册表。持久运行和审计使用独立 managed 表，不让旧 driver/poller 把它们当作旧任务驱动。实现与限制见 [`JT-01`](../../plans/jstack-tianwen/implementation.md)。
+`docs/schemas/managed/*.schema.json` 生成 `src/generated/managed.ts`，覆盖调查、决策、
+ticket/route 包、动作授权与项目记忆协议，不加入旧 ArtifactKind 注册表。
+持久运行和审计使用独立 managed 表，旧 driver/poller 不驱动这些表。
+实现与限制见[当前进度](../../plans/jstack-tianwen/implementation.md)。
 
 由 `pnpm run generate` 从 `docs/schemas/*.schema.json` 生成，**提交进 git**。
 
