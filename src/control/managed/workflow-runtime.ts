@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join, relative } from 'node:path'
 import type { PoolClient } from 'pg'
 import { err, errorFrom, makeError, ok, type Result } from '../../contracts/errors.js'
 import type {
+  ManagedTicketStageRecord,
   ManagedTicketTask,
   ManagedWorkflow,
   ManagedWorkflowEvidence,
@@ -30,10 +31,10 @@ import {
   type ManagedTicketWorker,
   tickManagedTicket,
 } from './ticket-runtime.js'
-import { getManagedTicketTask, listManagedTicketStages } from './ticket-store.js'
 import {
   addWorktree,
   commitExists,
+  diffDigest,
   inspectTicketWorktree,
   isAncestor,
   resolveCommit,
@@ -51,7 +52,6 @@ import {
   type ManagedWorkflowClaim,
   nodeStatusForTicket,
   setNodeStatus,
-  setWorkflowStatus,
   unlockWorkflow,
   withManagedWorkflowClaim,
   workflowEvent,
@@ -497,7 +497,7 @@ function depsDone(nodes: readonly ManagedWorkflowNode[], node: ManagedWorkflowNo
   const byKey = new Map(nodes.map((entry) => [entry.node_key, entry]))
   return node.depends_on.every((key) => {
     const dependency = byKey.get(key)
-    return dependency !== undefined && ['PR_READY', 'ARCHIVED'].includes(dependency.status)
+    return dependency?.status === 'ARCHIVED'
   })
 }
 
@@ -642,108 +642,184 @@ async function syncNodeFromTicket(
   const current = node.rows[0]
   if (current === undefined || current.ticket_task_id === null) return ok(null)
   if (current.status === 'ARCHIVED' || current.status === 'CANCELLED') return ok(current)
-  const ticket = await getManagedTicketTask(current.ticket_task_id)
-  if (ticket === null) return ok(null)
-  const mapped = nodeStatusForTicket(ticket)
-  const nextStatus =
-    current.status === 'PR_READY' && mapped.status !== 'PR_READY' ? current.status : mapped.status
-  await asRole('keel_control', async (c) => {
+  return asRole('keel_control', async (c) => {
+    const ticket = (
+      await c.query<ManagedTicketTask>('SELECT * FROM managed_ticket_task WHERE id=$1 FOR UPDATE', [
+        current.ticket_task_id,
+      ])
+    ).rows[0]
+    if (ticket === undefined) return err(makeError('NOT_FOUND', '节点绑定的 ticket 不存在'))
+    const locked = (
+      await c.query<ManagedWorkflowNode>(
+        'SELECT * FROM managed_workflow_node WHERE id=$1 FOR UPDATE',
+        [nodeId],
+      )
+    ).rows[0]
+    if (locked === undefined) return err(makeError('NOT_FOUND', 'workflow 节点不存在'))
+    if (['ARCHIVED', 'CANCELLED'].includes(locked.status)) return ok(locked)
+    const mapped = nodeStatusForTicket(ticket)
+    if (locked.status === 'FAILED' && mapped.status !== 'READY') return ok(locked)
+    const nextStatus = mapped.status
+    if (nextStatus === locked.status) return ok(locked)
     await setNodeStatus(c, nodeId, nextStatus, {
       outputCommit: mapped.outputCommit,
       lastError: mapped.lastError,
     })
-    if (nextStatus !== current.status) {
-      await workflowEvent(c, workflowId, 'ManagedWorkflowNodeUpdated', {
-        nodeId,
-        from: current.status,
-        to: nextStatus,
-        ticketStatus: ticket.status,
-      })
-    }
-  })
-  return ok({
-    ...current,
-    status: nextStatus,
-    output_commit: mapped.outputCommit ?? current.output_commit,
+    await workflowEvent(c, workflowId, 'ManagedWorkflowNodeUpdated', {
+      nodeId,
+      from: locked.status,
+      to: nextStatus,
+      ticketStatus: ticket.status,
+    })
+    return ok({
+      ...locked,
+      status: nextStatus,
+      output_commit: mapped.outputCommit ?? locked.output_commit,
+    })
   })
 }
 
 async function archiveNode(
-  workflow: ManagedWorkflow,
+  claim: ManagedWorkflowClaim,
   routePackage: JstackRoutePackage,
   node: ManagedWorkflowNode,
 ): Promise<Result<boolean>> {
+  const workflow = claim.workflow
   if (node.ticket_task_id === null) return ok(false)
-  const ticket = await getManagedTicketTask(node.ticket_task_id)
-  if (ticket === null) return err(makeError('NOT_FOUND', '找不到 ticket task'))
-  const canArchive =
-    workflow.completion_target === 'pr_ready'
-      ? ticket.status === 'PR_READY' || ticket.status === 'DONE'
-      : ['WAITING_GATEWAY', 'PR_OPENED', 'CHECKING', 'PR_READY', 'DONE'].includes(ticket.status)
-  if (!canArchive) return ok(false)
-  const stages = await listManagedTicketStages(ticket.id)
-  const required = ['execute', 'verify', 'review', 'land']
-  for (const stage of required) {
-    const records = stages.filter((record) => record.stage === stage)
-    const passed = records.find(
-      (record) =>
-        (record.status === 'SUCCEEDED' || record.status === 'REUSED') &&
-        record.evidence_digest !== null,
-    )
-    if (passed === undefined)
-      return err(makeError('STAGE_GATE_FAILED', `archive 缺 ${stage} 的完成证据`))
-  }
-  const handoff =
-    ticket.handoff !== null && typeof ticket.handoff === 'object'
-      ? (ticket.handoff as Record<string, unknown>)
-      : {}
-  const head = typeof handoff.head_sha === 'string' ? handoff.head_sha : null
-  if (head === null || !/^[a-f0-9]{40}$/.test(head))
-    return err(makeError('STALE_EVIDENCE', 'archive 缺少准确 head SHA'))
-  const checkGate =
-    handoff.check_gate !== null && typeof handoff.check_gate === 'object'
-      ? (handoff.check_gate as Record<string, unknown>)
-      : null
-  if (workflow.completion_target === 'pr_ready' && checkGate?.status !== 'READY')
-    return err(makeError('STAGE_GATE_FAILED', 'archive 缺 PR_READY check gate 证据'))
-  const gateDigest = sha256Text(routePackage.archive_gate)
-  const target = sha256CanonicalJson({
-    node_id: node.id,
-    ticket_task_id: ticket.id,
-    head_sha: head,
-    check_evidence: checkGate?.evidence_digest ?? null,
-    archive_gate: gateDigest,
-  })
-  const evidence = {
-    projection: 'jstack-managed-v1',
-    node_key: node.node_key,
-    ticket_id: node.ticket_id,
-    ticket_task_id: ticket.id,
-    head_sha: head,
-    pr: checkGate ?? null,
-    archive_gate: gateDigest,
-    stages: stages.map((record) => ({
-      stage: record.stage,
-      status: record.status,
-      input_commit: record.input_commit,
-      output_commit: record.output_commit,
-      evidence_digest: record.evidence_digest,
-      reused_from_evidence_id: record.reused_from_evidence_id,
-    })),
-    note: 'archive 记录关闭门证据；远端 issue 的关闭仍需受控写入口。',
-  }
   try {
-    await asRole('keel_control', async (c) => {
+    return await asRole('keel_control', async (c) => {
+      const lease = await c.query(
+        `SELECT id FROM managed_workflow WHERE id=$1 AND status='RUNNING'
+           AND lease_token=$2 AND lease_until>clock_timestamp() FOR UPDATE`,
+        [workflow.id, claim.token],
+      )
+      if (lease.rowCount !== 1) return err(makeError('CONFLICT', 'archive workflow lease 已失效'))
+      const ticket = (
+        await c.query<ManagedTicketTask>(
+          'SELECT * FROM managed_ticket_task WHERE id=$1 FOR UPDATE',
+          [node.ticket_task_id],
+        )
+      ).rows[0]
+      if (ticket === undefined) return err(makeError('NOT_FOUND', '找不到 ticket task'))
+      const currentNode = (
+        await c.query<ManagedWorkflowNode>(
+          'SELECT * FROM managed_workflow_node WHERE id=$1 FOR UPDATE',
+          [node.id],
+        )
+      ).rows[0]
+      if (currentNode?.status !== 'PR_READY') return ok(false)
+      const canArchive =
+        workflow.completion_target === 'pr_ready'
+          ? ticket.status === 'PR_READY'
+          : ticket.status === 'DONE'
+      if (!canArchive) return ok(false)
+      const stages = (
+        await c.query<ManagedTicketStageRecord>(
+          'SELECT * FROM managed_ticket_stage WHERE task_id=$1 ORDER BY attempt',
+          [ticket.id],
+        )
+      ).rows
+      const handoff =
+        ticket.handoff !== null && typeof ticket.handoff === 'object'
+          ? (ticket.handoff as Record<string, unknown>)
+          : {}
+      const head = typeof handoff.head_sha === 'string' ? handoff.head_sha : null
+      if (head === null || !/^[a-f0-9]{40}$/.test(head))
+        return err(makeError('STALE_EVIDENCE', 'archive 缺少准确 head SHA'))
+      const inspected = await inspectTicketWorktree(ticket.worktree_path)
+      if (!inspected.ok) return inspected
+      if (!inspected.value.clean || inspected.value.head !== head)
+        return err(makeError('STALE_EVIDENCE', 'archive 工作树不再匹配 handoff head'))
+      const diff = await diffDigest(ticket.worktree_path, ticket.baseline_commit, head)
+      if (!diff.ok) return diff
+      if (handoff.diff_digest !== diff.value)
+        return err(makeError('STALE_EVIDENCE', 'archive diff 与 handoff 不一致'))
+      for (const definition of routePackage.stage_templates) {
+        const passed = stages.filter((record) => record.stage === definition.stage).at(-1)
+        const gateDigest = sha256CanonicalJson({
+          content_digest: definition.content_digest,
+          gate: sha256Text(definition.gate),
+          tool_profile: definition.tool_profile,
+        })
+        if (
+          passed === undefined ||
+          !['SUCCEEDED', 'REUSED'].includes(passed.status) ||
+          passed.evidence_digest === null ||
+          passed.output_commit !== head ||
+          passed.package_digest !== ticket.package_digest ||
+          passed.gate_digest !== gateDigest
+        )
+          return err(
+            makeError('STAGE_GATE_FAILED', `archive 缺 ${definition.stage} 的当前完成证据`),
+          )
+        const valid = await c.query(
+          `SELECT id FROM managed_workflow_evidence
+           WHERE workflow_id=$1 AND graph_version=$2 AND stage=$3 AND status='VALID'
+             AND input_commit=$4 AND diff_digest=$5 AND stage_digest=$6 AND evidence_digest=$7
+             AND (node_id=$8 OR id=$9)`,
+          [
+            workflow.id,
+            node.graph_version,
+            definition.stage,
+            head,
+            diff.value,
+            gateDigest,
+            passed.evidence_digest,
+            node.id,
+            passed.reused_from_evidence_id,
+          ],
+        )
+        if (valid.rowCount === 0)
+          return err(
+            makeError('STALE_EVIDENCE', `archive ${definition.stage} 的 workflow 证据已失效`),
+          )
+      }
+      const checkGate =
+        handoff.check_gate !== null && typeof handoff.check_gate === 'object'
+          ? (handoff.check_gate as Record<string, unknown>)
+          : null
+      if (workflow.completion_target === 'pr_ready' && checkGate?.status !== 'READY')
+        return err(makeError('STAGE_GATE_FAILED', 'archive 缺 PR_READY check gate 证据'))
+      if (
+        workflow.completion_target === 'pr_ready' &&
+        (checkGate?.head_sha !== head ||
+          typeof checkGate.evidence_digest !== 'string' ||
+          !/^[a-f0-9]{64}$/.test(checkGate.evidence_digest))
+      )
+        return err(makeError('STALE_EVIDENCE', 'archive check gate 未绑定当前 head SHA 与证据摘要'))
+      const gateDigest = sha256Text(routePackage.archive_gate)
+      const target = sha256CanonicalJson({
+        node_id: node.id,
+        ticket_task_id: ticket.id,
+        head_sha: head,
+        check_evidence: checkGate?.evidence_digest ?? null,
+        archive_gate: gateDigest,
+      })
+      const evidence = {
+        projection: 'jstack-managed-v1',
+        node_key: node.node_key,
+        ticket_id: node.ticket_id,
+        ticket_task_id: ticket.id,
+        head_sha: head,
+        pr: checkGate ?? null,
+        archive_gate: gateDigest,
+        stages: stages.map((record) => ({
+          stage: record.stage,
+          status: record.status,
+          input_commit: record.input_commit,
+          output_commit: record.output_commit,
+          evidence_digest: record.evidence_digest,
+          reused_from_evidence_id: record.reused_from_evidence_id,
+        })),
+        note: 'archive 记录关闭门证据；远端 issue 的关闭仍需受控写入口。',
+      }
       await insertWorkflowEvidence(c, {
         workflow_id: workflow.id,
         graph_version: node.graph_version,
         node_id: node.id,
         stage: 'archive',
         input_commit: head,
-        diff_digest:
-          typeof handoff.diff_digest === 'string'
-            ? handoff.diff_digest
-            : sha256Text('archive-no-diff'),
+        diff_digest: diff.value,
         stage_digest: gateDigest,
         branch: '',
         target_digest: target,
@@ -762,45 +838,65 @@ async function archiveNode(
         headSha: head,
         targetDigest: target,
       })
+      return ok(true)
     })
-    return ok(true)
   } catch (error) {
     return err(errorFrom(error, 'CONFLICT', 'archive 失败'))
   }
 }
 
 async function recomputeWorkflowStatus(
-  workflow: ManagedWorkflow,
+  claim: ManagedWorkflowClaim,
   routePackage: JstackRoutePackage,
-): Promise<ManagedWorkflowStatus> {
+): Promise<Result<{ status: ManagedWorkflowStatus; lastError: string | null }>> {
+  const workflow = claim.workflow
   const nodes = await listWorkflowNodes(workflow.id, workflow.current_graph_version)
   for (const node of nodes) {
-    if (
-      node.status === 'PR_READY' ||
-      (workflow.completion_target === 'branch_ready' && node.status === 'WAITING_GATEWAY')
-    )
-      await archiveNode(workflow, routePackage, node)
-    if (
-      node.ticket_task_id !== null &&
-      !['ARCHIVED', 'FAILED', 'CANCELLED'].includes(node.status)
-    ) {
-      await syncNodeFromTicket(workflow.id, node.id)
+    const synced = await syncNodeFromTicket(workflow.id, node.id)
+    if (!synced.ok) return synced
+    if (synced.value?.status === 'PR_READY') {
+      const archived = await archiveNode(claim, routePackage, synced.value)
+      if (!archived.ok && archived.error.kind === 'CONFLICT') return archived
+      if (archived.ok && !archived.value) {
+        const latest = await syncNodeFromTicket(workflow.id, node.id)
+        if (!latest.ok) return latest
+        if (latest.value?.status !== 'PR_READY') continue
+      }
+      if (!archived.ok || !archived.value) {
+        const detail = archived.ok
+          ? 'archive ticket 未达到固定 completion_target'
+          : `archive ${archived.error.kind}: ${archived.error.detail}`
+        const failed = await withManagedWorkflowClaim(claim, async (c) => {
+          await setNodeStatus(c, node.id, 'FAILED', { lastError: detail })
+          await workflowEvent(c, workflow.id, 'ManagedWorkflowArchiveFailed', {
+            nodeId: node.id,
+            reason: detail,
+          })
+        })
+        if (!failed.ok) return failed
+      }
     }
   }
   const after = await listWorkflowNodes(workflow.id, workflow.current_graph_version)
-  if (after.length === 0) return 'READY'
-  if (after.every((node) => node.status === 'ARCHIVED')) return 'DONE'
+  const result = (status: ManagedWorkflowStatus, lastError: string | null = null) =>
+    ok({
+      status,
+      lastError,
+    })
+  if (after.length === 0) return result('PAUSED', 'workflow 当前图没有节点')
+  if (after.every((node) => node.status === 'ARCHIVED')) return result('DONE')
   const hasReady =
     after.some((node) => node.status === 'READY' || node.status === 'RUNNING') ||
     after.some(
       (node) => node.status === 'PENDING' && node.ticket_task_id === null && depsDone(after, node),
     )
-  if (hasReady) return 'READY'
-  if (after.some((node) => node.status === 'WAITING_HUMAN')) return 'WAITING_HUMAN'
-  if (after.some((node) => node.status === 'WAITING_GATEWAY')) return 'WAITING_GATEWAY'
-  if (after.some((node) => node.status === 'PR_READY')) return 'READY'
-  if (after.some((node) => node.status === 'FAILED')) return 'PAUSED'
-  return 'DONE'
+  if (hasReady) return result('READY')
+  if (after.some((node) => node.status === 'WAITING_HUMAN')) return result('WAITING_HUMAN')
+  if (after.some((node) => node.status === 'WAITING_GATEWAY')) return result('WAITING_GATEWAY')
+  const failed = after.find((node) => node.status === 'FAILED')
+  if (failed !== undefined) return result('PAUSED', failed.last_error)
+  if (after.some((node) => node.status === 'CANCELLED')) return result('CANCELLED')
+  return result('PAUSED', 'workflow 有未归档节点但没有可调度节点')
 }
 
 export async function tickManagedWorkflow(
@@ -809,54 +905,50 @@ export async function tickManagedWorkflow(
 ): Promise<Result<ManagedWorkflowTickResult | null>> {
   const claim = await claimManagedWorkflow(new Date().toISOString(), workflowId)
   if (claim === null) return ok(null)
+  const finish = async (
+    status: ManagedWorkflowStatus,
+    action: ManagedWorkflowTickResult['action'],
+    error: string | null = null,
+    extra: Partial<ManagedWorkflowTickResult> = {},
+  ): Promise<Result<ManagedWorkflowTickResult>> => {
+    const saved = await withManagedWorkflowClaim(claim, async (c) => {
+      await unlockWorkflow(c, claim.workflow.id, status, error)
+      await workflowEvent(c, claim.workflow.id, 'ManagedWorkflowStatusChanged', {
+        from: claim.workflow.status,
+        to: status,
+        action,
+        error,
+      })
+    })
+    if (!saved.ok) return saved
+    return ok({
+      workflowId: claim.workflow.id,
+      status,
+      action,
+      ...(error === null ? {} : { error }),
+      ...extra,
+    })
+  }
   const loaded = await asRole('keel_control', (c) =>
     readRoutePackage(c, claim.workflow.package_digest),
   )
   if (!loaded.ok) {
-    await withManagedWorkflowClaim(claim, async (c) =>
-      unlockWorkflow(c, claim.workflow.id, 'PAUSED', loaded.error.detail),
-    )
-    return ok({
-      workflowId: claim.workflow.id,
-      status: 'PAUSED',
-      action: 'protocol_error',
-      error: loaded.error.detail,
-    })
+    return finish('PAUSED', 'protocol_error', loaded.error.detail)
   }
   const routePackage = loaded.value.package
   if (claim.workflow.current_graph_version === 0) {
     if (worker.plan === undefined) {
-      await withManagedWorkflowClaim(claim, async (c) =>
-        unlockWorkflow(
-          c,
-          claim.workflow.id,
-          'PAUSED',
-          'PLAN_REQUIRED: 需要 jstack route 规划器或导入图计划',
-        ),
+      return finish(
+        'PAUSED',
+        'plan_required',
+        'PLAN_REQUIRED: 需要 jstack route 规划器或导入图计划',
       )
-      return ok({
-        workflowId: claim.workflow.id,
-        status: 'PAUSED',
-        action: 'plan_required',
-        error: 'PLAN_REQUIRED',
-      })
     }
     const repo = await repoLocation(claim.workflow.repo_id)
-    if (!repo.ok)
-      return ok({
-        workflowId: claim.workflow.id,
-        status: 'PAUSED',
-        action: 'workspace_error',
-        error: repo.error.detail,
-      })
+    if (!repo.ok) return finish('PAUSED', 'workspace_error', repo.error.detail)
     const context = await buildPlanContext(claim.workflow, routePackage, repo.value.local_path)
     if (context.total_tokens > 60000)
-      return ok({
-        workflowId: claim.workflow.id,
-        status: 'PAUSED',
-        action: 'context_budget',
-        error: 'context budget exceeded',
-      })
+      return finish('PAUSED', 'context_budget', 'context budget exceeded')
     const planned = await worker.plan({
       attempt_id: claim.token,
       workflow_id: claim.workflow.id,
@@ -868,15 +960,7 @@ export async function tickManagedWorkflow(
       package: routePackage,
     })
     if (!planned.ok) {
-      await withManagedWorkflowClaim(claim, async (c) =>
-        unlockWorkflow(c, claim.workflow.id, 'PAUSED', planned.error.detail),
-      )
-      return ok({
-        workflowId: claim.workflow.id,
-        status: 'PAUSED',
-        action: 'plan_failed',
-        error: planned.error.detail,
-      })
+      return finish('PAUSED', 'plan_failed', planned.error.detail)
     }
     const validated = validateRoutePlan(
       planned.value.output,
@@ -884,15 +968,7 @@ export async function tickManagedWorkflow(
       claim.workflow.scope_paths,
     )
     if (!validated.ok) {
-      await withManagedWorkflowClaim(claim, async (c) =>
-        unlockWorkflow(c, claim.workflow.id, 'PAUSED', validated.error.detail),
-      )
-      return ok({
-        workflowId: claim.workflow.id,
-        status: 'PAUSED',
-        action: 'plan_rejected',
-        error: validated.error.detail,
-      })
+      return finish('PAUSED', 'plan_rejected', validated.error.detail)
     }
     const committed = await commitPlanWithClaim(
       claim,
@@ -908,26 +984,19 @@ export async function tickManagedWorkflow(
     })
   }
 
+  for (const node of await listWorkflowNodes(
+    claim.workflow.id,
+    claim.workflow.current_graph_version,
+  )) {
+    const synced = await syncNodeFromTicket(claim.workflow.id, node.id)
+    if (!synced.ok) return finish('PAUSED', 'protocol_error', synced.error.detail)
+  }
   const materialized = await materializeOneNode(claim, routePackage)
   if (!materialized.ok) {
-    await withManagedWorkflowClaim(claim, async (c) =>
-      unlockWorkflow(c, claim.workflow.id, 'PAUSED', materialized.error.detail),
-    )
-    return ok({
-      workflowId: claim.workflow.id,
-      status: 'PAUSED',
-      action: 'materialize_failed',
-      error: materialized.error.detail,
-    })
+    return finish('PAUSED', 'materialize_failed', materialized.error.detail)
   }
   if (materialized.value !== null) {
-    await withManagedWorkflowClaim(claim, async (c) =>
-      unlockWorkflow(c, claim.workflow.id, 'READY', null),
-    )
-    return ok({
-      workflowId: claim.workflow.id,
-      status: 'READY',
-      action: 'materialized',
+    return finish('READY', 'materialized', null, {
       nodeKey: materialized.value.nodeKey,
     })
   }
@@ -935,43 +1004,19 @@ export async function tickManagedWorkflow(
   const nodes = await listWorkflowNodes(claim.workflow.id, claim.workflow.current_graph_version)
   const ready = nodes.find((node) => node.status === 'READY' && node.ticket_task_id !== null)
   if (ready !== undefined && ready.ticket_task_id !== null) {
-    await withManagedWorkflowClaim(claim, async (c) =>
-      unlockWorkflow(c, claim.workflow.id, 'READY', null),
-    )
     const ticked = await tickManagedTicket(worker, ready.ticket_task_id)
-    if (!ticked.ok) return ticked
-    await syncNodeFromTicket(claim.workflow.id, ready.id)
-    const latest = (
-      await listWorkflowNodes(claim.workflow.id, claim.workflow.current_graph_version)
-    ).find((node) => node.id === ready.id)
-    if (
-      latest !== undefined &&
-      (latest.status === 'PR_READY' ||
-        (claim.workflow.completion_target === 'branch_ready' &&
-          latest.status === 'WAITING_GATEWAY'))
-    ) {
-      await archiveNode(claim.workflow, routePackage, latest)
-    }
-    const status = await recomputeWorkflowStatus(claim.workflow, routePackage)
-    await setWorkflowStatus(claim.workflow.id, status, null)
-    return ok({
-      workflowId: claim.workflow.id,
-      status,
-      action: 'ticketed',
+    if (!ticked.ok) return finish('PAUSED', 'ticketed', ticked.error.detail)
+    const summary = await recomputeWorkflowStatus(claim, routePackage)
+    if (!summary.ok) return summary
+    return finish(summary.value.status, 'ticketed', summary.value.lastError, {
       nodeKey: ready.node_key,
       ...(ticked.value === null ? {} : { ticketStatus: ticked.value.status }),
     })
   }
 
-  const status = await recomputeWorkflowStatus(claim.workflow, routePackage)
-  await withManagedWorkflowClaim(claim, async (c) =>
-    unlockWorkflow(c, claim.workflow.id, status, null),
-  )
-  return ok({
-    workflowId: claim.workflow.id,
-    status,
-    action: 'waiting',
-  })
+  const summary = await recomputeWorkflowStatus(claim, routePackage)
+  if (!summary.ok) return summary
+  return finish(summary.value.status, 'waiting', summary.value.lastError)
 }
 
 export async function getManagedWorkflowProjection(
@@ -1009,7 +1054,7 @@ export async function retryManagedWorkflow(
       )
       const workflow = locked.rows[0]
       if (workflow === undefined) return err(makeError('NOT_FOUND', '找不到 managed workflow'))
-      if (['DONE', 'CANCELLED'].includes(workflow.status))
+      if (['DONE', 'FAILED', 'CANCELLED'].includes(workflow.status))
         return err(makeError('CONFLICT', `workflow 已终止：${workflow.status}`))
       if (workflow.current_graph_version === 0) {
         await c.query(
@@ -1048,14 +1093,17 @@ export async function retryManagedWorkflow(
         const ticket = ticketRow.rows[0]
         if (ticket === undefined)
           return err(makeError('NOT_FOUND', `找不到节点 ${node.node_key} 的 ticket task`))
-        if (!['READY', 'PAUSED', 'FAILED'].includes(ticket.status))
+        const archiveOnly =
+          (workflow.completion_target === 'branch_ready' && ticket.status === 'DONE') ||
+          (workflow.completion_target === 'pr_ready' && ticket.status === 'PR_READY')
+        if (!archiveOnly && !['READY', 'PAUSED', 'FAILED'].includes(ticket.status))
           return err(
             makeError(
               'CONFLICT',
-              `ticket ${ticket.ticket_id} 当前是 ${ticket.status}，只有 READY/PAUSED/FAILED 可重试`,
+              `ticket ${ticket.ticket_id} 当前是 ${ticket.status}，未达到完成目标且不在 READY/PAUSED/FAILED`,
             ),
           )
-        if (ticket.attempts >= ticket.max_attempts)
+        if (!archiveOnly && ticket.attempts >= ticket.max_attempts)
           return err(
             makeError('CONFLICT', `ticket ${ticket.ticket_id} 尝试预算已耗尽，需人工调整预算`),
           )
@@ -1063,7 +1111,7 @@ export async function retryManagedWorkflow(
       }
       const retried: string[] = []
       for (const { node, ticket } of prepared) {
-        if (ticket.status !== 'READY')
+        if (ticket.status === 'PAUSED' || ticket.status === 'FAILED')
           await c.query(
             `UPDATE managed_ticket_task SET status='READY',last_error=NULL,
                lease_token=NULL,lease_until=NULL,updated_at=now() WHERE id=$1`,

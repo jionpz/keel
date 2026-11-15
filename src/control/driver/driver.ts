@@ -20,6 +20,7 @@ import { asRole } from '../../fact/db.js'
 import { branchFor } from '../../fact/git-workspace.js'
 import { ensureTraceId } from '../../fact/trace.js'
 import type { ControlMode, TaskStatus } from '../../shared/ids.js'
+import { lockIssueOwnership } from '../issue-ownership.js'
 import { enqueueIssueWriteback } from '../issue-writeback.js'
 import { transition } from '../transition/index.js'
 import { TASK_TRANSITIONS } from '../transition/table.js'
@@ -136,6 +137,13 @@ export class WorkflowDriver {
     opts: IntakeOptions = {},
   ): Promise<Result<IntakeOutcome>> {
     return asRole('keel_control', async (c) => {
+      const source = (
+        await c.query<{ external_ref: string | null }>(
+          "SELECT external_ref FROM feedback WHERE id=$1 AND source='github'",
+          [input.feedbackId],
+        )
+      ).rows[0]?.external_ref
+      if (source != null) await lockIssueOwnership(c, input.repoId, source)
       const redrive = opts.redrive
       let linked: { task_id: string } | undefined
 
@@ -230,6 +238,15 @@ export class WorkflowDriver {
         })
       }
 
+      if (source != null) {
+        const managed = await c.query(
+          `SELECT 1 FROM managed_issue_claim
+           WHERE repo_id=$1 AND issue_ref=$2 AND status='ACTIVE' LIMIT 1`,
+          [input.repoId, source],
+        )
+        if (managed.rowCount === 1)
+          return err(makeError('CONFLICT', `issue 已被 managed 引擎占用：${source}`))
+      }
       const taskId = randomUUID()
       const title =
         input.title.length > TITLE_MAX_LEN ? input.title.slice(0, TITLE_MAX_LEN) : input.title
