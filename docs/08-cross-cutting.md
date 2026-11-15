@@ -1,5 +1,8 @@
 # 08 · 跨切面关注点
 
+> 范围：本文保留 `legacy-v01` 的契约、机制与历史验收。当前 jstack managed 主路径见
+> [managed 状态机](./managed-state-machine.md)；旧 Task/Run 阶段与完成条件不适用于 managed。
+
 > 满足 PRD `R7`；关闭缺口 `G9`（git 隔离与凭据）、`G12`（安全模型缺失）、
 > `G13`（可观测/成本/审计缺失）、`G14`（并发模型缺失）。
 >

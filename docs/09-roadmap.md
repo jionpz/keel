@@ -1,5 +1,8 @@
 # 09 · 范围与路线
 
+> 范围：本文保留 `legacy-v01` 的契约、机制与历史验收。当前 jstack managed 主路径见
+> [managed 状态机](./managed-state-machine.md)；旧 Task/Run 阶段与完成条件不适用于 managed。
+
 > 满足 PRD `R8`；关闭缺口 `G15`（无 MVP 验收定义）、`G16`（无 Non-Goals）。
 
 ---

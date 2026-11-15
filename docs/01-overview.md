@@ -1,7 +1,7 @@
 # 01 · 总览
 
-> 满足 PRD `R8`（部分）、`R10`。
-> **本文最后成稿** —— 它是对已定稿内容的摘要。先写会变成又一份 vision doc。
+> 当前主路径为 jstack managed，定义源与运行职责见 ADR-0011。
+> 本文中的旧 PM/RFC 闭环仅解释 `legacy-v01`，不定义 managed 的阶段或完成条件。
 
 ---
 
@@ -10,13 +10,25 @@
 > 让 AI、人工、多个 Agent、多个模型、多个 Harness
 > 在**同一套软件研发流程**中长期协作的运行层。
 
-它驱动这样一个闭环：
+当前产品由 jstack 定义路线、ticket、provider、工具策略和门禁，由 Keel 持久推进：
+
+```
+需求 → route/依赖图 → ticket(execute → verify → review → land) → 受控网关 → archive
+```
+
+`branch_ready` 交付本地分支与准确 commit；`pr_ready` 要求受控 push/PR 和准确 head 的
+required checks 成功。工作流全部节点 archive 才到 `DONE`，不自动 merge 或部署。
+天问先处理持久决策请求，确定性接纳器依据有效证据和委托决定是否继续或升级人工。
+详细状态与失败路径见 [managed 状态机](./managed-state-machine.md)。
+
+以下是保留旧任务和审计的 `legacy-v01` 闭环：
 
 ```
 用户反馈 → PM 判断 → Brainstorm → RFC → 开发 → QA → Review → PR → CI → 完成
 ```
 
-其中每个阶段由一个 LLM Agent 会话执行，而**任何阶段人都可以接管，然后交还**。
+其中推理阶段由 Harness 会话执行；驾驶权控制与接管交还属于旧 Task 的独立维度。
+managed 使用 ticket 控制代次、租约与 DecisionRequest，不复用旧 `control_mode`。
 
 Keel **不是**"又一个 Claude Code" —— 它在编排层之上，把 Claude Code 这类工具当作可替换的执行层。
 
@@ -26,10 +38,11 @@ Keel **不是**"又一个 Claude Code" —— 它在编排层之上，把 Claude
 
 整个架构由一条不变量推导而来：
 
-> **能在进程崩溃后存活的，只有 Artifact。其余一切都是 Session。**
+> **事实必须持久化；Session 只是临时计算资源，不是事实来源。**
 
-这条不变量把初稿的口号 "Session inside, State outside" 变成了可执行的判据：
-任何一个字段，问一句"它崩溃后还在吗"，就能确定它归谁管。
+旧路径的事实存于 task/run/artifact/event；managed 还包括固定包、图、阶段证据、
+决策台账、outbox 与 permit 等持久记录。`artifact` 表不是这些记录的统称，
+不能因为某条事实不在该表就把它当作 Session 数据。
 
 ---
 
@@ -119,18 +132,21 @@ Workflow → Agent Role → HarnessAdapter → Harness ─┬─▶ Model（Harn
 | | 负责 | 与 Keel |
 |---|---|---|
 | Claude Code / 各 Harness | 单次会话内的推理与代码修改 | Keel 的执行层 |
-| Trellis | 单人单仓库的开发会话流程 | 作用域不同，v0.1 并存不整合 |
+| jstack | 路线、阶段、provider、工具策略与门禁定义 | Keel 消费内容寻址固定包；工程会话也按同一流程工作 |
+| Trellis | 历史开发会话流程 | 已退役，见 [ADR-0010](./adr/0010-workflow-jstack.md) |
 | CI | 代码验证 | Keel 的外部事实源 |
 | git | 版本与隔离 | Keel 的工作区机制 |
 
 ---
 
-## 7. v0.1 完成判据
+## 7. 历史 v0.1 完成判据
 
 > **一条真实的用户反馈进入系统后，在无人干预的情况下走完 `S-NEW → S-DONE`，
-> 产出一个通过 CI 的 PR；且 `readEvents(task_id, 0)` 能完整重建这个 Task 的全过程。**
+> 产出一个已合并的 PR；且 `readEvents(task_id, 0)` 能完整重建这个 Task 的全过程。**
 
-详见 [`09-roadmap.md`](./09-roadmap.md) §1。
+当前 legacy 的 `S-DONE` 以真实 PR merge 为准（ADR-0012），CI 通过只在
+`S-PR_OPEN` 自环。历史验收发生时的完成条件不替代现行条件。
+managed 的 `DONE` 是其固定 completion target 下全部节点归档，不能等同旧 `S-DONE`。
 
 ---
 
@@ -143,6 +159,7 @@ Workflow → Agent Role → HarnessAdapter → Harness ─┬─▶ Model（Harn
 | Workflow engine（ADR-0003） | ✅ **Accepted**（2026-08-26 查证通过） |
 | Harness 接口调研 | ⏳ 完成 Claude Code 与 OMP（见 ADR-0005 修订）；其余属阶段二 |
 | 代码 | ✅ v0.1 核心闭环已跑通；✅ 真实 GitHub PR/CI 已接入（`GitHubProvider` + 编排器 `opts.ci`，验收见 `src/acceptance/`） |
+| 当前 managed 主路径 | JT-01～JT-06 已实现；JT-07 readiness 已实现，真实持续试运行与生产准入未完成；见 [实施进度](./plans/jstack-tianwen/implementation.md) |
 
 ---
 

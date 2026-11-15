@@ -1,6 +1,8 @@
 # 04 · 状态机（State Machine）
 
 > 满足 PRD `R3`；关闭缺口 `G8`（无形式化转移表、无失败/超时/取消/回滚路径、无幂等语义）。
+> 本文仅定义 `legacy-v01` Task/Run；当前 jstack managed 主路径读
+> [`managed-state-machine.md`](./managed-state-machine.md)，完成语义与状态不可混用。
 
 ---
 
@@ -76,7 +78,9 @@
 
 ## 2. Task 级转移表
 
-记法：`guard` 为真才可转移；`side-effect` 与状态变更**在同一事务内**完成（不变量 `I4`）。
+记法：`guard` 为真才可转移；状态变更与持久副作用或执行意图**在同一事务内**提交（不变量 `I4`）。
+外部动作是否真正执行需看执行器证据；例如 `CancelRun` 当前只记录意图，
+不能凭 Task 取消事件推断另一个进程中的 Session 已被中断。
 所有转移隐含前置条件 **`control_mode = 'auto'`**（见 §3），
 **`T-040`（取消）与 `T-041`（不可恢复错误）除外** —— 这两条无论谁在驾驶都必须生效。
 
@@ -257,11 +261,11 @@ CONFLICT；暂停后等待当前轮次收尾，再接管。暂停期间已完成
 
 控制台与 CLI 的 C-006 要求提交人工交接说明，经 Proposal 校验后追加到新版 A-State，
 模式变更与产物提交同一事务，保留原有事实、决定和问题。该入口只交还驾驶权，
-不宣布任何阶段完成；需要提交人工阶段结论的完整 Human Harness 流程仍走下节协议。
+不宣布任何阶段完成；完整 Human Harness 阶段提交的保留设计见下节协议。
 
-### 3.2.1 人工被建模为一种 Harness
+### 3.2.1 保留设计协议：人工被建模为一种 Harness
 
-为了让第 2 点自然成立，人工接管时控制平面**创建一个正常的 `run`**，
+这一协议要求在人工执行阶段时，控制平面**创建一个正常的 `run`**，
 其 `harness_id = "human"`：
 
 | | AI 执行 | 人工执行 |
@@ -278,6 +282,9 @@ CONFLICT；暂停后等待当前轮次收尾，再接管。暂停期间已完成
 > 也是"人工与 AI 使用同一套工程规范"（初稿原则七）**唯一可强制的形式**：
 > 人和 AI 受同一条约束 —— **你的工作成果必须落成 Artifact，否则系统当它没发生过**。
 
+当前 `controlTask(takeover)` 只安全切换驾驶权，不创建人工 Run；交还入口只提交
+交接说明。上述完整阶段协议不构成该入口已实现人工阶段提交的声明。
+
 ---
 
 ## 4. Run 级状态机
@@ -286,30 +293,37 @@ CONFLICT；暂停后等待当前轮次收尾，再接管。暂停期间已完成
 
 | 状态 | 终态 | 含义 |
 |---|---|---|
-| `PENDING` | | 已创建，尚未启动 Session |
-| `RUNNING` | | Session 已启动 |
+| `PENDING` | | 已创建，尚未认领执行 |
+| `RUNNING` | | 已认领执行；Session 可能尚未启动 |
 | `SUCCEEDED` | ★ | Proposal 通过校验并提交 |
 | `FAILED` | ★ | Harness 报错，或 Proposal 反复校验失败 |
 | `TIMEOUT` | ★ | 超过该 stage 的硬上限，或进展沉默达到阈值（`error_kind='RUN_STALLED'`） |
-| `CANCELLED` | ★ | 被人工接管、Task 取消或预算耗尽中止 |
+| `CANCELLED` | ★ | Adapter 返回撤回结果，由编排器结算；接管或预算暂停本身不产生该状态 |
 
 ### 4.2 转移表
 
 | ID | from | event | guard | to | side-effect |
 |---|---|---|---|---|---|
 | `R-001` | ∅ | `RunCreated` | — | `PENDING` | 分配 `idempotency_key` |
-| `R-002` | `PENDING` | `SessionStarted` | — | `RUNNING` | 记录 `session_ref`、`harness_tier` |
-| `R-003` | `PENDING` | `SessionStartFailed` | — | `FAILED` ★ | 记 `error_kind` |
-| `R-004` | `PENDING` | `Cancelled` | — | `CANCELLED` ★ | — |
+| `R-002` | `PENDING` | `ExecutionClaimed` | `control_mode=auto ∧ 并发守卫通过` | `RUNNING` | 写 `started_at`、harness 身份；随后才尝试启动 Session |
+| `R-003` | `RUNNING` | `SessionStartFailed` | — | `FAILED` ★ | 记 `error_kind`，随后走 Task 重试/升人工 |
+| `R-004` | `PENDING` | `Cancelled` | 预留契约，当前无执行入口 | `CANCELLED` ★ | 不作为已实现能力 |
 | `R-005` | `RUNNING` | `ProposalAccepted` | — | `SUCCEEDED` ★ | 提交 Artifact；销毁 Session；结算成本 |
 | `R-006` | `RUNNING` | `ProposalRejected` | `retries ≥ max` | `FAILED` ★ | 记录全部拒绝理由 |
 | `R-007` | `RUNNING` | `ProposalRejected` | `retries < max` | `RUNNING` ⟲ | 把拒绝理由回灌给 Session |
 | `R-008` | `RUNNING` | `HarnessError` | — | `FAILED` ★ | 销毁 Session；结算成本 |
-| `R-009` | `RUNNING` | `TimerFired(wall_clock)` | — | `TIMEOUT` ★ | 强制销毁 Session；结算成本 |
-| `R-010` | `RUNNING` | `Cancelled` | — | `CANCELLED` ★ | 强制销毁 Session；结算成本 |
+| `R-009` | `RUNNING` | `TimerFired(wall_clock)` | — | `TIMEOUT` ★ | 收割 DB 状态；进程清理与成本按可得证据记录 |
+| `R-010` | `RUNNING` | `Cancelled` | — | `CANCELLED` ★ | Adapter 撤回后结算已上报成本，pipeline 关闭 Session |
 
-**所有终态的共同 side-effect**：
-销毁 Session → 若 Adapter 声明 `CAP-RESUME` 则落 `A-Checkpoint` → 结算 `cost_usd` / `tokens_*` → 发 Event。
+表中 event 表示生命周期触发条件，不保证存在同名持久事件。Run 没有共享纯转移表；
+实际写入分散在认领、Proposal pipeline、编排失败结算与 timer/patrol。
+`R-004` 保留原设计编号；当前 Task 的 `CancelRun` 仅记录意图，不能把它当作
+`PENDING → CANCELLED` 已执行的证据。
+
+成功由 pipeline 在提交 Artifact 的同一事务中把 Run 置为 `SUCCEEDED`；
+失败结算只更新仍为 `RUNNING` 的行，并按实际 usage 入账。已打开的 pipeline
+在 `finally` 关闭 Session；独立 timer/patrol 收割不等于进程内清理已经执行。
+目前没有“所有终态自动保存 `A-Checkpoint`”的统一路径。
 
 > `R-007` 是 Proposal 机制的关键一环：校验失败**不等于** Run 失败。
 > 结构化产物写错了，先把错误告诉 Session 让它改 —— 这比直接判死重跑整个阶段便宜得多。
@@ -321,6 +335,12 @@ CONFLICT；暂停后等待当前轮次收尾，再接管。暂停期间已完成
 > `UPDATE ... WHERE status='RUNNING'` 与 `rowCount` 检查仍是最终裁判。
 > 详情见 `adr/0009-liveness-by-progress.md`。
 
+实现核对：`concurrency/limits.test.ts` 验证认领与拒绝后仍为 `PENDING`；
+`orchestrator/run-failure.test.ts` 验证提案重试、启动失败、撤回、超时与成本结算；
+`task-control.test.ts` 验证接管要等执行收尾；`src/timer/reap.test.ts`、
+`src/timer/patrol.test.ts` 与 `liveness/` 测试验证收割和进展判定。
+它们是行为证据，C4 不静态比较本表。
+
 ---
 
 ## 5. 幂等与重放语义
@@ -331,7 +351,7 @@ CONFLICT；暂停后等待当前轮次收尾，再接管。暂停期间已完成
 ### 5.1 幂等键
 
 ```
-idempotency_key = hash(task_id, stage, attempt)
+idempotency_key = `${task_id}/${stage}/${attempt}`
 ```
 
 由 `run` 表的 `UNIQUE (idempotency_key)` 强制（不变量 `I3`）。

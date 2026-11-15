@@ -6,6 +6,10 @@
 > **完成判据**：一个没参与过讨论的开发者拿到本文档集，能直接开始写阶段一代码，
 > 不需要再自己发明任何 schema、接口签名或状态转移。
 
+**当前主路径是 jstack managed。** 先读总览、术语表和
+[`managed-state-machine.md`](./managed-state-machine.md)，再按链接进入实现规范。
+下表中的 `03`–`09` 保留了 `legacy-v01` 架构与验收契约，不用于定义新 managed 阶段。
+
 ---
 
 ## 建议阅读顺序
@@ -17,16 +21,17 @@
 | 1 | [`01-overview.md`](./01-overview.md) | 定位、中心不变量、三平面模型、Non-Goals 摘要 | `G16` `G17` |
 | 2 | [`02-glossary.md`](./02-glossary.md) | **术语表 + 废弃词对照** | `G1` |
 | 3 | [`03-domain-model.md`](./03-domain-model.md) | 实体、逻辑 schema、**写权限矩阵** | `G11` |
-| 4 | [`04-state-machine.md`](./04-state-machine.md) | Task 级 + Run 级转移表、幂等与重放 | `G8` |
+| 4 | [`managed-state-machine.md`](./managed-state-machine.md) | 当前 Workflow/Ticket/Stage、决策、动作、归档与完成边界 | — |
+| — | [`04-state-machine.md`](./04-state-machine.md) | legacy Task/Run 与驾驶权表、幂等与重放 | `G8` |
 | 5 | [`06-artifacts.md`](./06-artifacts.md) | 8 类产物的语义与示例 | `G4` `G6` |
 | 6 | [`05-contracts/`](./05-contracts/) | 7 个核心接口契约 | `G3` `G5` `G7` `G10` |
 | 7 | [`07-flows.md`](./07-flows.md) | 3 条端到端流程（**骨架的证伪测试**） | — |
 | 8 | [`08-cross-cutting.md`](./08-cross-cutting.md) | 安全 / 可观测 / 成本 / 并发 | `G9` `G12` `G13` `G14` |
 | 9 | [`09-roadmap.md`](./09-roadmap.md) | Non-Goals、v0.1 判据、阶段触发条件 | `G15` `G16` `G17` |
-| — | [`adr/`](./adr/) | 11 份架构决策记录（ADR-0001～0011） | `G2` |
-| — | [`schemas/`](./schemas/) | 11 份机器可读 JSON Schema（含 `managed/` 3 份） | — |
+| — | [`adr/`](./adr/) | 架构决策及采用状态 | `G2` |
+| — | [`schemas/`](./schemas/) | legacy 与 managed 协议的机器可读 JSON Schema | — |
 
-**赶时间只读三篇**：`01-overview` → `02-glossary` → `04-state-machine`。
+**赶时间只读三篇**：`01-overview` → `02-glossary` → `managed-state-machine`。
 
 ### 下一版生产方案与实施进度
 
@@ -112,7 +117,7 @@ pnpm keel --help               # 完整命令清单以 src/cli/run.ts 的 HELP �
 | `C1` | 重新生成后与 `HEAD` 比对 | `docs/schemas/` 是产物类型的唯一事实来源 |
 | `C2` | dependency-cruiser | Execution Plane 不得写 Fact Plane（不变量 `I5`） |
 | `C3` | dependency-cruiser + 禁用全局扫描 + 确定性测试 | 转移函数必须是纯函数（`ADR-0003`） |
-| `C4` | 解析本目录 `04-state-machine.md` 的转移表并与代码比对 | **改了文档不改代码（或反之）会红** |
+| `C4` | 比对 `04-state-machine.md` 的 legacy Task 与驾驶权转移表 | Task 的 id/from/event/to/guard 和共享控制转移必须一致；Run 与 managed 不在该静态检查内 |
 
 `C4` 意味着：**修改 `04-state-machine.md` §2 的转移表后，
 必须同步 `src/control/transition/table.ts`，否则 CI 不过。**

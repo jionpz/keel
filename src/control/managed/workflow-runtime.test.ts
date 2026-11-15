@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
@@ -15,7 +15,8 @@ import type { JstackRoutePlan } from '../../generated/managed.js'
 import { sha256CanonicalJson, sha256Text } from '../../shared/canonical-json.js'
 import { answerManagedTicketDecision } from './decision-store.js'
 import { fixtureRoutePackage, fixtureRoutePlan } from './route-test-utils.js'
-import type { ManagedTicketWorker } from './ticket-runtime.js'
+import { cancelManagedTicket, pauseManagedTicket } from './ticket-control.js'
+import { type ManagedTicketWorker, tickManagedTicket } from './ticket-runtime.js'
 import { diffDigest } from './ticket-workspace.js'
 import {
   commitManagedWorkflowPlan,
@@ -160,6 +161,7 @@ async function seedWorkflow(
   options: {
     readonly completionTarget?: 'branch_ready' | 'pr_ready'
     readonly externalIssue?: string
+    readonly importPlan?: boolean
   } = {},
 ): Promise<SeededWorkflow> {
   const base = await mkdtemp(join(tmpdir(), 'keel-workflow-'))
@@ -197,8 +199,10 @@ async function seedWorkflow(
     ...(options.externalIssue === undefined ? {} : { externalIssue: options.externalIssue }),
   })
   if (!created.ok) throw new Error(created.error.detail)
-  const committed = await commitManagedWorkflowPlan(created.value, plan)
-  if (!committed.ok) throw new Error(committed.error.detail)
+  if (options.importPlan !== false) {
+    const committed = await commitManagedWorkflowPlan(created.value, plan)
+    if (!committed.ok) throw new Error(committed.error.detail)
+  }
   return { workflowId: created.value, repoId, repo, worktreeRoot }
 }
 
@@ -246,6 +250,245 @@ beforeEach(async () => {
 afterAll(closePool)
 
 describe('managed workflow runtime', () => {
+  it('does not materialize a dependent ticket before its predecessor passes archive', async () => {
+    const seeded = await seedWorkflow(fixtureRoutePlan('M', 2), {
+      completionTarget: 'branch_ready',
+    })
+    await tickUntil(seeded.workflowId, happyWorker(), (r) => r.action === 'materialized')
+    const node = await nodeRow(seeded.workflowId, 'ticket-1')
+    for (let index = 0; index < 4; index += 1) {
+      const ticked = await tickManagedTicket(happyWorker(), node.ticket_task_id)
+      if (!ticked.ok) throw new Error(ticked.error.detail)
+    }
+    await asRole('keel_control', (c) =>
+      c.query(
+        `UPDATE managed_workflow_evidence SET status='INVALIDATED',
+           invalidated_at=now(),invalidated_reason='invalid predecessor evidence'
+         WHERE node_id=$1 AND stage='verify'`,
+        [node.id],
+      ),
+    )
+    const result = await tickManagedWorkflow(happyWorker(), seeded.workflowId)
+    if (!result.ok) throw new Error(result.error.detail)
+    expect(result.value?.status).toBe('PAUSED')
+    expect((await nodeRow(seeded.workflowId, 'ticket-2')).status).toBe('PENDING')
+  })
+
+  it.each(['invalidated_verify', 'dirty_worktree', 'wrong_check_head'] as const)(
+    'refuses archive with %s even when all four stages succeeded',
+    async (problem) => {
+      const seeded = await seedWorkflow(fixtureRoutePlan('S', 1), {
+        completionTarget: problem === 'wrong_check_head' ? 'pr_ready' : 'branch_ready',
+      })
+      await tickUntil(seeded.workflowId, happyWorker(), (r) => r.action === 'materialized')
+      const node = await nodeRow(seeded.workflowId, 'ticket-1')
+      const worker = workerWith(async (input) => {
+        const result = await happyWorker().run(input)
+        if (!result.ok) throw new Error(result.error.detail)
+        const output = { ...result.value.output } as Record<string, unknown>
+        delete output.requested_action
+        return output
+      })
+      for (let index = 0; index < 4; index += 1) {
+        const ticked = await tickManagedTicket(worker, node.ticket_task_id)
+        if (!ticked.ok) throw new Error(ticked.error.detail)
+      }
+      const worktree = join(seeded.worktreeRoot, `${seeded.workflowId.slice(0, 8)}-ticket-1`)
+      if (problem === 'invalidated_verify') {
+        await asRole('keel_control', (c) =>
+          c.query(
+            `UPDATE managed_workflow_evidence SET status='INVALIDATED',
+               invalidated_at=now(),invalidated_reason='operator invalidated proof'
+             WHERE node_id=$1 AND stage='verify'`,
+            [node.id],
+          ),
+        )
+      } else if (problem === 'dirty_worktree') {
+        await writeFile(join(worktree, 'src', 'unverified.txt'), 'drift\n')
+      } else {
+        const current = await head(worktree)
+        const baseline = await git(seeded.repo, 'rev-parse', 'HEAD')
+        const diff = await diffDigest(worktree, baseline, current)
+        if (!diff.ok) throw new Error(diff.error.detail)
+        await asOwner((c) =>
+          c.query(
+            `UPDATE managed_ticket_task SET status='PR_READY',handoff=$2::jsonb WHERE id=$1`,
+            [
+              node.ticket_task_id,
+              JSON.stringify({
+                head_sha: current,
+                diff_digest: diff.value,
+                check_gate: {
+                  status: 'READY',
+                  head_sha: '0'.repeat(40),
+                  evidence_digest: sha256Text('stale checks'),
+                },
+              }),
+            ],
+          ),
+        )
+      }
+      const result = await tickManagedWorkflow(worker, seeded.workflowId)
+      if (!result.ok) throw new Error(result.error.detail)
+      expect(result.value?.status).toBe('PAUSED')
+      const projection = await getManagedWorkflowProjection(seeded.workflowId)
+      if (!projection.ok) throw new Error(projection.error.detail)
+      expect(projection.value.workflow.last_error).toContain('archive')
+      expect(projection.value.evidence.some((e) => e.stage === 'archive')).toBe(false)
+      const idle = await tickManagedWorkflow(worker, seeded.workflowId)
+      expect(idle).toEqual({ ok: true, value: null })
+      if (problem === 'dirty_worktree') {
+        await unlink(join(worktree, 'src', 'unverified.txt'))
+        const retried = await retryManagedWorkflow(seeded.workflowId, 'ticket-1')
+        expect(retried.ok).toBe(true)
+        const archived = await tickManagedWorkflow(worker, seeded.workflowId)
+        if (!archived.ok) throw new Error(archived.error.detail)
+        expect(archived.value?.status).toBe('DONE')
+        const attempts = await asRole('keel_control', (c) =>
+          c.query('SELECT id FROM managed_ticket_stage WHERE task_id=$1', [node.ticket_task_id]),
+        )
+        expect(attempts.rowCount).toBe(4)
+      }
+    },
+  )
+
+  it('persists planning workspace failures before reporting PAUSED', async () => {
+    const seeded = await seedWorkflow(fixtureRoutePlan('S', 1), { importPlan: false })
+    await asOwner((c) =>
+      c.query('UPDATE repo SET local_path=$2 WHERE id=$1', [
+        seeded.repoId,
+        join(seeded.repo, 'missing'),
+      ]),
+    )
+    const result = await tickManagedWorkflow(
+      {
+        ...happyWorker(),
+        plan: async () => {
+          throw new Error('planner must not run')
+        },
+      },
+      seeded.workflowId,
+    )
+    if (!result.ok) throw new Error(result.error.detail)
+    expect(result.value).toMatchObject({ status: 'PAUSED', action: 'workspace_error' })
+    const projection = await getManagedWorkflowProjection(seeded.workflowId)
+    if (!projection.ok) throw new Error(projection.error.detail)
+    expect(projection.value.workflow).toMatchObject({
+      status: 'PAUSED',
+      lease_token: null,
+      lease_until: null,
+      last_error: result.value?.error,
+    })
+  })
+
+  it('holds its workflow lease while a ticket stage is executing', async () => {
+    const seeded = await seedWorkflow(fixtureRoutePlan('S', 1), {
+      completionTarget: 'branch_ready',
+    })
+    await tickUntil(seeded.workflowId, happyWorker(), (r) => r.action === 'materialized')
+    const worker = workerWith(async (input) => {
+      const concurrent = await tickManagedWorkflow(happyWorker(), seeded.workflowId)
+      expect(concurrent).toEqual({ ok: true, value: null })
+      const result = await happyWorker().run(input)
+      if (!result.ok) throw new Error(result.error.detail)
+      return result.value.output as unknown as Record<string, unknown>
+    })
+    const ticked = await tickManagedWorkflow(worker, seeded.workflowId)
+    if (!ticked.ok) throw new Error(ticked.error.detail)
+    expect(ticked.value?.action).toBe('ticketed')
+  })
+
+  it.each(['execute', 'land'] as const)(
+    'returns CONFLICT when its workflow lease expires during %s',
+    async (stage) => {
+      const seeded = await seedWorkflow(fixtureRoutePlan('S', 1), {
+        completionTarget: 'branch_ready',
+      })
+      await tickUntil(seeded.workflowId, happyWorker(), (r) => r.action === 'materialized')
+      if (stage === 'land') {
+        for (let index = 0; index < 3; index += 1) {
+          const advanced = await tickManagedWorkflow(happyWorker(), seeded.workflowId)
+          if (!advanced.ok) throw new Error(advanced.error.detail)
+        }
+      }
+      const worker = workerWith(async (input) => {
+        await asOwner((c) =>
+          c.query(`UPDATE managed_workflow SET lease_until=now()-interval '1 second' WHERE id=$1`, [
+            seeded.workflowId,
+          ]),
+        )
+        const result = await happyWorker().run(input)
+        if (!result.ok) throw new Error(result.error.detail)
+        return result.value.output as unknown as Record<string, unknown>
+      })
+      const result = await tickManagedWorkflow(worker, seeded.workflowId)
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.error.kind).toBe('CONFLICT')
+      const projection = await getManagedWorkflowProjection(seeded.workflowId)
+      if (!projection.ok) throw new Error(projection.error.detail)
+      expect(projection.value.evidence.some((e) => e.stage === 'archive')).toBe(false)
+    },
+  )
+
+  it('reports cancellation instead of completion when a dependency is cancelled', async () => {
+    const seeded = await seedWorkflow(fixtureRoutePlan('M', 2), {
+      completionTarget: 'branch_ready',
+    })
+    await tickUntil(seeded.workflowId, happyWorker(), (r) => r.action === 'materialized')
+    const node = await nodeRow(seeded.workflowId, 'ticket-1')
+    const cancelled = await cancelManagedTicket(
+      node.ticket_task_id,
+      'operator cancelled',
+      new Date().toISOString(),
+    )
+    expect(cancelled.ok).toBe(true)
+
+    const result = await tickManagedWorkflow(happyWorker(), seeded.workflowId)
+    if (!result.ok) throw new Error(result.error.detail)
+    expect(result.value?.status).toBe('CANCELLED')
+    expect((await nodeRow(seeded.workflowId, 'ticket-2')).status).toBe('PENDING')
+  })
+
+  it('synchronizes a resumed ticket before choosing the next stage', async () => {
+    const seeded = await seedWorkflow(fixtureRoutePlan('S', 1), {
+      completionTarget: 'branch_ready',
+    })
+    await tickUntil(seeded.workflowId, happyWorker(), (r) => r.action === 'materialized')
+    const node = await nodeRow(seeded.workflowId, 'ticket-1')
+    await asOwner((c) =>
+      c.query(`UPDATE managed_workflow_node SET status='WAITING_HUMAN' WHERE id=$1`, [node.id]),
+    )
+    const result = await tickManagedWorkflow(happyWorker(), seeded.workflowId)
+    if (!result.ok) throw new Error(result.error.detail)
+    expect(result.value?.action).toBe('ticketed')
+    const stages = await asRole('keel_control', (c) =>
+      c.query('SELECT stage,status FROM managed_ticket_stage WHERE task_id=$1', [
+        node.ticket_task_id,
+      ]),
+    )
+    expect(stages.rows).toEqual([{ stage: 'execute', status: 'SUCCEEDED' }])
+  })
+
+  it('does not keep an old PR_READY node after its ticket is paused', async () => {
+    const seeded = await seedWorkflow(fixtureRoutePlan('S', 1))
+    await tickUntil(seeded.workflowId, happyWorker(), (r) => r.action === 'materialized')
+    const node = await nodeRow(seeded.workflowId, 'ticket-1')
+    await asOwner((c) =>
+      c.query(`UPDATE managed_workflow_node SET status='PR_READY' WHERE id=$1`, [node.id]),
+    )
+    const paused = await pauseManagedTicket(
+      node.ticket_task_id,
+      'operator paused',
+      new Date().toISOString(),
+    )
+    expect(paused.ok).toBe(true)
+
+    const result = await tickManagedWorkflow(happyWorker(), seeded.workflowId)
+    if (!result.ok) throw new Error(result.error.detail)
+    expect(result.value?.status).toBe('PAUSED')
+    expect((await nodeRow(seeded.workflowId, 'ticket-1')).status).toBe('FAILED')
+  })
+
   it('materializes and completes a dependent multi-ticket graph', async () => {
     const seeded = await seedWorkflow(fixtureRoutePlan('M', 2), {
       completionTarget: 'branch_ready',
@@ -350,6 +593,15 @@ describe('managed workflow runtime', () => {
     expect(secondNode.status).not.toBe('PENDING')
     firstNode = await nodeRow(seeded.workflowId, 'ticket-1')
     expect(firstNode.status).toBe('WAITING_HUMAN')
+    const completed = await tickUntil(
+      seeded.workflowId,
+      worker,
+      (result) => result.status === 'WAITING_HUMAN',
+    )
+    expect(completed.at(-1)?.status).toBe('WAITING_HUMAN')
+    expect((await nodeRow(seeded.workflowId, 'ticket-2')).status).toBe('ARCHIVED')
+    const idle = await tickManagedWorkflow(worker, seeded.workflowId)
+    expect(idle).toEqual({ ok: true, value: null })
   })
 
   it('resumes the workflow after a human answers the ticket decision', async () => {
@@ -640,8 +892,10 @@ describe('managed workflow runtime', () => {
     expect(result.ok).toBe(true)
     const projection = await getManagedWorkflowProjection(seeded.workflowId)
     if (!projection.ok) throw new Error(projection.error.detail)
-    expect(projection.value.workflow.status).not.toBe('DONE')
-    expect(projection.value.nodes[0]?.status).toBe('PR_READY')
+    expect(projection.value.workflow.status).toBe('PAUSED')
+    expect(projection.value.workflow.last_error).toContain('archive')
+    expect(projection.value.nodes[0]?.status).toBe('FAILED')
+    expect(projection.value.nodes[0]?.last_error).toContain('archive')
     expect(projection.value.evidence.some((evidence) => evidence.stage === 'archive')).toBe(false)
   })
 

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { PoolClient } from 'pg'
 import { err, makeError, ok, type Result } from '../../contracts/errors.js'
 import type {
+  ManagedTicketStatus,
   ManagedTicketTask,
   ManagedWorkflow,
   ManagedWorkflowEvidence,
@@ -12,11 +13,27 @@ import type {
 } from '../../contracts/managed.js'
 import { asRole } from '../../fact/db.js'
 import { MANAGED_EXECUTION_LEASE_SECONDS } from '../../shared/managed-limits.js'
+import { lockIssueOwnership } from '../issue-ownership.js'
 
 export interface ManagedWorkflowClaim {
   readonly workflow: ManagedWorkflow
   readonly token: string
   readonly attempt: number
+}
+
+const TICKET_NODE_STATUS: Readonly<Record<ManagedTicketStatus, ManagedWorkflowNodeStatus>> = {
+  READY: 'READY',
+  RUNNING: 'READY',
+  WAITING_HUMAN: 'WAITING_HUMAN',
+  WAITING_GATEWAY: 'WAITING_GATEWAY',
+  PR_OPENED: 'WAITING_GATEWAY',
+  CHECKING: 'WAITING_GATEWAY',
+  PR_READY: 'PR_READY',
+  DONE: 'PR_READY',
+  PAUSED: 'FAILED',
+  PR_CHECKS_FAILED: 'FAILED',
+  FAILED: 'FAILED',
+  CANCELLED: 'CANCELLED',
 }
 
 export async function workflowEvent(
@@ -120,25 +137,14 @@ export async function claimManagedWorkflow(
            AND (
              candidate.status IN ('ROUTING','READY')
              OR (candidate.status='RUNNING' AND candidate.lease_until <= clock_timestamp())
-             OR (candidate.status='WAITING_HUMAN' AND EXISTS (
+             OR (candidate.status IN ('WAITING_HUMAN','WAITING_GATEWAY') AND EXISTS (
                SELECT 1 FROM managed_workflow_node n
                JOIN managed_ticket_task t ON t.id=n.ticket_task_id
                WHERE n.workflow_id=candidate.id
                  AND n.graph_version=candidate.current_graph_version
-                 AND t.status IN (
-                   'READY','RUNNING','PR_READY','DONE','PAUSED','PR_CHECKS_FAILED',
-                   'FAILED','CANCELLED'
-                 )
-             ))
-             OR (candidate.status='WAITING_GATEWAY' AND EXISTS (
-               SELECT 1 FROM managed_workflow_node n
-               JOIN managed_ticket_task t ON t.id=n.ticket_task_id
-               WHERE n.workflow_id=candidate.id
-                 AND n.graph_version=candidate.current_graph_version
-                 AND (
-                   t.status IN ('PR_READY','DONE','PAUSED','PR_CHECKS_FAILED','FAILED','CANCELLED')
-                   OR (candidate.completion_target='branch_ready' AND t.status='WAITING_GATEWAY')
-                 )
+                 AND n.status NOT IN ('ARCHIVED','CANCELLED')
+                 AND n.status IS DISTINCT FROM ($2::jsonb ->> t.status)
+                 AND (n.status<>'FAILED' OR ($2::jsonb ->> t.status)='READY')
              ))
            )
          ORDER BY candidate.repo_id,candidate.updated_at,candidate.id
@@ -146,7 +152,7 @@ export async function claimManagedWorkflow(
        ORDER BY w.updated_at,w.id
        FOR UPDATE OF w SKIP LOCKED
        LIMIT 1`,
-      [workflowId ?? null],
+      [workflowId ?? null, JSON.stringify(TICKET_NODE_STATUS)],
     )
     const workflow = candidates.rows[0]
     if (workflow === undefined) return null
@@ -217,14 +223,6 @@ export async function unlockWorkflow(
   )
 }
 
-export async function setWorkflowStatus(
-  workflowId: string,
-  status: ManagedWorkflowStatus,
-  lastError: string | null = null,
-): Promise<void> {
-  await asRole('keel_control', (c) => unlockWorkflow(c, workflowId, status, lastError))
-}
-
 export async function attachNodeTicket(
   c: PoolClient,
   nodeId: string,
@@ -266,40 +264,15 @@ export function nodeStatusForTicket(task: ManagedTicketTask): {
   readonly outputCommit: string | null
   readonly lastError: string | null
 } {
-  switch (task.status) {
-    case 'READY':
-    case 'RUNNING':
-      return { status: 'READY', outputCommit: null, lastError: task.last_error }
-    case 'WAITING_HUMAN':
-      return { status: 'WAITING_HUMAN', outputCommit: null, lastError: task.last_error }
-    case 'WAITING_GATEWAY':
-    case 'PR_OPENED':
-    case 'CHECKING':
-      return { status: 'WAITING_GATEWAY', outputCommit: null, lastError: task.last_error }
-    case 'PR_READY':
-      return {
-        status: 'PR_READY',
-        outputCommit:
-          typeof task.handoff === 'object' && task.handoff !== null && 'head_sha' in task.handoff
-            ? String((task.handoff as { head_sha?: unknown }).head_sha)
-            : null,
-        lastError: null,
-      }
-    case 'DONE':
-      return {
-        status: 'PR_READY',
-        outputCommit:
-          typeof task.handoff === 'object' && task.handoff !== null && 'head_sha' in task.handoff
-            ? String((task.handoff as { head_sha?: unknown }).head_sha)
-            : null,
-        lastError: null,
-      }
-    case 'PAUSED':
-    case 'PR_CHECKS_FAILED':
-      return { status: 'FAILED', outputCommit: null, lastError: task.last_error }
-    case 'FAILED':
-    case 'CANCELLED':
-      return { status: task.status, outputCommit: null, lastError: task.last_error }
+  const status = TICKET_NODE_STATUS[task.status]
+  const head =
+    typeof task.handoff === 'object' && task.handoff !== null && 'head_sha' in task.handoff
+      ? task.handoff.head_sha
+      : null
+  return {
+    status,
+    outputCommit: status === 'PR_READY' && typeof head === 'string' ? head : null,
+    lastError: status === 'PR_READY' ? null : task.last_error,
   }
 }
 
@@ -417,6 +390,15 @@ export async function claimIssue(
     readonly owner_id: string
   },
 ): Promise<Result<true>> {
+  await lockIssueOwnership(c, input.repo_id, input.issue_ref)
+  const legacy = await c.query(
+    `SELECT 1 FROM task t
+     JOIN task_feedback tf ON tf.task_id=t.id JOIN feedback f ON f.id=tf.feedback_id
+     WHERE t.repo_id=$1 AND f.source='github' AND f.external_ref=$2 LIMIT 1`,
+    [input.repo_id, input.issue_ref],
+  )
+  if (legacy.rowCount === 1)
+    return err(makeError('CONFLICT', `issue 已在 legacy-v01 引擎运行：${input.issue_ref}`))
   try {
     await c.query(
       `INSERT INTO managed_issue_claim(id,repo_id,issue_ref,owner_kind,owner_id)
