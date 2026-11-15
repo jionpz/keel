@@ -28,6 +28,7 @@
     "check:purity": "tsx scripts/check-purity.ts",
     "check:isolation": "pnpm exec vitest run --config vitest.isolation.config.ts && pnpm exec tsx scripts/jt02a/isolation-probe.ts",
     "check:agents": "pnpm exec tsx scripts/jt02a/agent-negative-probe.ts",
+    "check:isolated": "tsx scripts/check-isolated.ts",
     "check": "pnpm run lint && pnpm run typecheck && pnpm run boundaries && pnpm run check:generated && pnpm run check:transitions && pnpm run check:purity && pnpm run test"
   },
   "devDependencies": {

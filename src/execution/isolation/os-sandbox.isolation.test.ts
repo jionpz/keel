@@ -1,9 +1,10 @@
-import { execFile, execFileSync } from 'node:child_process'
+import { execFile, execFileSync, spawn } from 'node:child_process'
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it } from 'vitest'
+import { inspectProcess } from '../../timer/patrol.js'
 import { buildMacSandboxProfile, prepareManagedOsSandbox } from './os-sandbox.js'
 
 const execFileAsync = promisify(execFile)
@@ -272,4 +273,24 @@ describe('prepareManagedOsSandbox', () => {
     const after = await runGit(['rev-parse', 'HEAD'])
     expect(after.stdout.trim()).not.toBe(before.stdout.trim())
   })
+})
+
+// 宿主巡检使用 ps 核验 PID 身份；被测沙箱无权充当宿主探针。
+it('宿主探针能读取真实子进程启动时间，退出后不再报告存活', async () => {
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+    stdio: 'ignore',
+  })
+  const pid = child.pid
+  if (pid === undefined) throw new Error('spawn 没拿到 pid')
+  const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()))
+  try {
+    const info = inspectProcess(pid)
+    expect(info.alive).toBe(true)
+    expect(info.startedAt).not.toBeNull()
+    expect(Math.abs((info.startedAt?.getTime() ?? 0) - Date.now())).toBeLessThan(10_000)
+  } finally {
+    child.kill('SIGKILL')
+    await exited
+  }
+  expect(inspectProcess(pid).alive).toBe(false)
 })

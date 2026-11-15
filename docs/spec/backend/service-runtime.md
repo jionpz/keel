@@ -9,7 +9,7 @@
 | 角色 | 职责 |
 |---|---|
 | `ingress` | 扫描已注册 GitHub repo 的 issue，驱动 legacy-v01；`--no-ingress` 关闭 |
-| `managed` | 天问决策、调查、ticket 与 workflow 交替推进 |
+| `managed` | 天问决策、调查、ticket 与 workflow 四类工作轮转推进 |
 | `memory` | 只生成项目摘要 DRAFT，不自动发布 |
 | `maintenance` | timer drain、人工 TTL 与停滞 run 巡检 |
 | `outbox` | 回查 `UNCERTAIN` 动作并运行受控 action gateway |
@@ -45,6 +45,10 @@ ingress 时通过会话锁互斥。
 - 长 tick 期间由 `withPeriodicHeartbeat` 刷新该组件心跳；
 - `service` 自身另有周期心跳，避免它的长时间运行被误判为 `STALE`；
 - 健康写入失败只记日志，不改变已开始的业务 tick。
+
+managed 的四类队列共享轮转游标；有决策待办不意味着可以饿死 ticket/workflow。
+可预期的单队列错误保留在 `failed_phases`，该组件仍尝试其他队列，并以
+`DEGRADED` 上报，直到失败队列自身恢复。未预期异常仍走组件退避。
 
 `keel service-status` / `keel service-health` 只读 `worker_health` 与队列表；
 查询本身不认领、不调用模型、不访问 GitHub。必需组件为
@@ -95,6 +99,8 @@ keel backup --out /path/to/backup \
 
 备份目录不允许覆盖。manifest、DB dump、blob 任一摘要不一致即 fail-closed。
 凭据不进入备份正文；连接串只拆成 libpq 环境变量，不放进子进程 argv。
+URL 查询参数中的 `host`（含 Unix socket 目录）、`port`、`user`、`password`
+优先于 authority；`pg_dump` 和 `pg_restore` 必须与应用连接同一数据库。
 
 工作流包的 `digest` 按其协议计算：ticket/route 排除自身 `content_digest` 字段，
 调查包使用整包摘要。manifest 另存完整正文的 `body_sha256`，两者不能混用。

@@ -14,6 +14,7 @@ const SOURCE: NodeJS.ProcessEnv = {
   TERM: 'dumb',
   NO_COLOR: '1',
   HOME: '/Users/operator',
+  KEEL_HOME: '/Users/operator/.keel',
   TMPDIR: '/var/folders/operator',
   KEEL_GITHUB_TOKEN: 'sentinel-keel',
   GITHUB_TOKEN: 'sentinel-github',
@@ -50,6 +51,7 @@ describe('buildExecutorEnv', () => {
       TERM: 'dumb',
       NO_COLOR: '1',
       HOME: '/tmp/executor-home',
+      KEEL_HOME: '/tmp/executor-home/.keel',
       TMPDIR: '/tmp',
     })
     expect(env.GH_TOKEN).toBeUndefined()
@@ -70,6 +72,7 @@ describe('buildExecutorEnv', () => {
 
     expect(env.HOME).toBe('/tmp/executor-home')
     expect(env.TMPDIR).toBe('/tmp')
+    expect(env.KEEL_HOME).toBe('/tmp/executor-home/.keel')
     expect(SOURCE).toEqual(before)
   })
 
@@ -127,5 +130,12 @@ describe('findExecutorEnvViolations', () => {
     expect(violations.some((v) => v.includes('GITHUB_TOKEN'))).toBe(true)
     expect(violations.some((v) => v.includes('CLAUDECODE'))).toBe(true)
     expect(violations.some((v) => v.includes('HOME'))).toBe(true)
+  })
+
+  it('拒绝指向另一个目录的 KEEL_HOME', () => {
+    const env = buildExecutorEnv(SOURCE, { home: '/tmp/task/home', tmpdir: '/tmp/task/tmp' })
+    expect(findExecutorEnvViolations({ ...env, KEEL_HOME: '/tmp/other/.keel' })).toContain(
+      'KEEL_HOME：必须使用隔离 HOME 下的 .keel',
+    )
   })
 })

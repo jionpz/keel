@@ -12,7 +12,7 @@ export interface ManagedExecutorEnv {
   readonly root: string
   readonly home: string
   readonly tmpdir: string
-  /** 只含 allowlist、HOME、TMPDIR 的子进程环境。 */
+  /** 只含 allowlist 与隔离 HOME、TMPDIR、KEEL_HOME 的子进程环境。 */
   readonly env: NodeJS.ProcessEnv
   /** Pi 子代理扩展的隔离副本；没有安装时为空。 */
   readonly piExtensions: readonly string[]

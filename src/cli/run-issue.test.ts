@@ -1,3 +1,4 @@
+import { listenTestServer } from '../test-support/http-server.js'
 /**
  * run-issue 的组合语义 —— 确定性部分。
  *
@@ -12,7 +13,6 @@
 
 import { randomUUID } from 'node:crypto'
 import { createServer, type Server } from 'node:http'
-import type { AddressInfo } from 'node:net'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ok } from '../contracts/errors.js'
 import { asOwner, closePool } from '../fact/db.js'
@@ -35,6 +35,7 @@ const savedAuthToken = process.env.ANTHROPIC_AUTH_TOKEN
 
 let server: Server
 let baseUrl: string
+let http: Awaited<ReturnType<typeof listenTestServer>>
 let requestCount = 0
 
 beforeEach(async () => {
@@ -67,12 +68,12 @@ beforeEach(async () => {
       }),
     )
   })
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-  baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  http = await listenTestServer(server)
+  baseUrl = http.baseUrl
 })
 
 afterEach(async () => {
-  await new Promise<void>((resolve) => server.close(() => resolve()))
+  await http?.close()
 })
 
 afterAll(async () => {
@@ -117,7 +118,11 @@ afterAll(async () => {
 })
 
 function github(): GitHubProvider {
-  return new GitHubProvider({ apiRoot: baseUrl, token: 'test' })
+  return new GitHubProvider({
+    apiRoot: baseUrl,
+    fetchFn: (input, init) => http.fetch(input, init),
+    token: 'test',
+  })
 }
 
 async function countRows(table: 'feedback' | 'task'): Promise<number> {

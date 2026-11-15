@@ -1,3 +1,4 @@
+import { listenTestServer } from '../test-support/http-server.js'
 /**
  * ingest-issue 集成测试 —— AC1–AC4。
  *
@@ -6,7 +7,6 @@
  */
 
 import { createServer, type Server } from 'node:http'
-import type { AddressInfo } from 'node:net'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { WorkflowDriver } from '../control/driver/driver.js'
 import { RuleBasedPolicyEngine } from '../control/policy/engine.js'
@@ -40,6 +40,7 @@ const OPEN_LABELED: IssuePayload = {
 
 let server: Server
 let baseUrl: string
+let http: Awaited<ReturnType<typeof listenTestServer>>
 /** 每个用例可改写 stub 返回的 Issue,不必重开 server */
 let issuePayload: IssuePayload
 
@@ -55,18 +56,22 @@ beforeEach(async () => {
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify(issuePayload))
   })
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-  baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  http = await listenTestServer(server)
+  baseUrl = http.baseUrl
 })
 
 afterEach(async () => {
-  await new Promise<void>((resolve) => server.close(() => resolve()))
+  await http?.close()
 })
 
 afterAll(closePool)
 
 function github(): GitHubProvider {
-  return new GitHubProvider({ apiRoot: baseUrl, token: 'test' })
+  return new GitHubProvider({
+    apiRoot: baseUrl,
+    fetchFn: (input, init) => http.fetch(input, init),
+    token: 'test',
+  })
 }
 
 async function countRows(table: 'feedback' | 'task'): Promise<number> {

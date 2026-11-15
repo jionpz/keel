@@ -37,6 +37,7 @@ export function buildExecutorEnv(
   if (options.home !== undefined) {
     assertTmpPath(options.home, 'home', false)
     env.HOME = options.home
+    env.KEEL_HOME = posix.join(options.home, '.keel')
   }
   if (options.tmpdir !== undefined) {
     assertTmpPath(options.tmpdir, 'tmpdir', true)
@@ -50,7 +51,7 @@ export function buildExecutorEnv(
 }
 
 export function findExecutorEnvViolations(env: NodeJS.ProcessEnv): readonly string[] {
-  const allowed = new Set<string>([...EXECUTOR_ENV_ALLOWLIST, 'HOME', 'TMPDIR'])
+  const allowed = new Set<string>([...EXECUTOR_ENV_ALLOWLIST, 'HOME', 'TMPDIR', 'KEEL_HOME'])
   const violations: string[] = []
   const presentKeys = new Set<string>()
 
@@ -70,6 +71,9 @@ export function findExecutorEnvViolations(env: NodeJS.ProcessEnv): readonly stri
     }
     if ((key === 'HOME' || key === 'TMPDIR') && !isTmpPath(value, key === 'TMPDIR')) {
       violations.push(`${key}：必须位于容器 /tmp`)
+    }
+    if (key === 'KEEL_HOME' && value !== posix.join(env.HOME ?? '', '.keel')) {
+      violations.push('KEEL_HOME：必须使用隔离 HOME 下的 .keel')
     }
   }
 

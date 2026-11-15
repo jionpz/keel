@@ -1,6 +1,6 @@
 import { createServer, type Server } from 'node:http'
-import type { AddressInfo } from 'node:net'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { listenTestServer } from '../test-support/http-server.js'
 import { extractKeywords, GitHubRepoSignals } from './github-repo-signals.js'
 
 const REMOTE = 'https://github.com/acme/widget.git'
@@ -9,6 +9,7 @@ const SHA_OTHER = 'b'.repeat(40)
 
 let server: Server
 let baseUrl: string
+let http: Awaited<ReturnType<typeof listenTestServer>>
 let requests: string[]
 
 type Handler = (url: URL) => { status: number; json: unknown }
@@ -24,16 +25,20 @@ beforeEach(async () => {
     res.writeHead(out.status, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify(out.json))
   })
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-  baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  http = await listenTestServer(server)
+  baseUrl = http.baseUrl
 })
 
 afterEach(async () => {
-  await new Promise<void>((resolve) => server.close(() => resolve()))
+  await http?.close()
 })
 
 function source(): GitHubRepoSignals {
-  return new GitHubRepoSignals({ apiRoot: baseUrl, token: 'test-token' })
+  return new GitHubRepoSignals({
+    apiRoot: baseUrl,
+    fetchFn: (input, init) => http.fetch(input, init),
+    token: 'test-token',
+  })
 }
 
 function query(over: Record<string, unknown> = {}) {

@@ -341,6 +341,20 @@ export async function runService(options: RunServiceOptions): Promise<void> {
           state.checkpoint,
         )
         if (result.checkpoint !== undefined) state.checkpoint = result.checkpoint
+        if (result.reasonCode != null) {
+          if (result.worked) state.lastSuccessAt = now()
+          await write(component.name, 'DEGRADED', {
+            reasonCode: result.reasonCode,
+            detail:
+              result.detail === undefined || result.detail === null
+                ? null
+                : errorDetail(result.detail),
+            checkpoint: state.checkpoint,
+            lastSuccessAt: state.lastSuccessAt,
+          })
+          if (!stop.requested) await interruptibleSleep(component.intervalMs, stop)
+          continue
+        }
         if (result.worked) {
           state.failures = 0
           state.lastSuccessAt = now()

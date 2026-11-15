@@ -11,7 +11,8 @@ afterEach(async () => {
 })
 
 async function tempRoot(): Promise<string> {
-  const root = await mkdtemp('/tmp/keel-managed-env-test-')
+  const base = process.env.TMPDIR?.startsWith('/tmp/') ? process.env.TMPDIR : '/tmp'
+  const root = await mkdtemp(join(base, 'keel-managed-env-test-'))
   cleanups.push(() => rm(root, { recursive: true, force: true }))
   return root
 }

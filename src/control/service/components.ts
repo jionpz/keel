@@ -1,5 +1,6 @@
 /** JT-06 内置服务角色：决策、执行、摘要、巡检、outbox 与 checks。 */
 
+import type { KeelError, Result } from '../../contracts/errors.js'
 import type { ManagedInference } from '../../contracts/managed.js'
 import { asRole } from '../../fact/db.js'
 import type { WorkerDeps } from '../../timer/worker.js'
@@ -26,86 +27,117 @@ export interface ManagedComponentOptions {
   readonly workflowId?: string
 }
 
-/**
- * managed 组件先处理天问，再交替领取 ticket / workflow。
- *
- * 交替是进程内公平性；数据库侧 claim 还按项目取最久未推进的一条，
- * 防止一个项目长期占满所有机会。某个角色空闲时立即尝试另一个。
- */
+/** 四类工作轮转；单条业务冲突保留为降级信号，不阻断其他队列。 */
 export function createManagedComponent(options: ManagedComponentOptions): ServiceComponent {
-  let next: 'ticket' | 'workflow' = 'ticket'
+  const phases = ['decision', 'investigation', 'ticket', 'workflow'] as const
+  type Phase = (typeof phases)[number]
+  let next = 0
+  const failures = new Map<Phase, KeelError>()
+  const attempt = async (phase: Phase): Promise<Result<ServiceTickResult | null>> => {
+    switch (phase) {
+      case 'decision': {
+        if (options.worker.decide === undefined) return { ok: true, value: null }
+        const result = await tickPendingTicketTianwen(options.worker.decide, options.ticketTaskId)
+        if (!result.ok) return result
+        if (result.value === null) return { ok: true, value: null }
+        return {
+          ok: true,
+          value: {
+            worked: true,
+            checkpoint: {
+              phase,
+              task_id: result.value.taskId,
+              request_id: result.value.requestId,
+              status: result.value.status,
+            },
+          },
+        }
+      }
+      case 'investigation': {
+        const result = await tickManaged(options.infer, options.taskId)
+        if (!result.ok) return result
+        if (result.value === null) return { ok: true, value: null }
+        return {
+          ok: true,
+          value: {
+            worked: true,
+            checkpoint: {
+              phase,
+              task_id: result.value.taskId,
+              status: result.value.status,
+            },
+          },
+        }
+      }
+      case 'ticket': {
+        const result = await tickManagedTicket(options.worker, options.ticketTaskId)
+        if (!result.ok) return result
+        if (result.value === null) return { ok: true, value: null }
+        return {
+          ok: true,
+          value: {
+            worked: true,
+            checkpoint: {
+              phase,
+              task_id: result.value.taskId,
+              stage: result.value.stage,
+              status: result.value.status,
+            },
+          },
+        }
+      }
+      case 'workflow': {
+        const result = await tickManagedWorkflow(options.worker, options.workflowId)
+        if (!result.ok) return result
+        if (result.value === null) return { ok: true, value: null }
+        return {
+          ok: true,
+          value: {
+            worked: true,
+            checkpoint: {
+              phase,
+              workflow_id: result.value.workflowId,
+              status: result.value.status,
+              action: result.value.action,
+            },
+          },
+        }
+      }
+    }
+  }
   return {
     name: 'managed',
     intervalMs: 1_000,
     async tick(context): Promise<ServiceTickResult> {
-      await context.heartbeat({ phase: 'managed', next })
-      if (options.worker.decide !== undefined) {
-        const pending = await tickPendingTicketTianwen(options.worker.decide, options.ticketTaskId)
-        if (!pending.ok) throw pending.error
-        if (pending.value !== null) {
-          return {
-            worked: true,
-            checkpoint: {
-              phase: 'decision',
-              task_id: pending.value.taskId,
-              request_id: pending.value.requestId,
-              status: pending.value.status,
-            },
-          }
+      await context.heartbeat({ phase: 'managed', next: phases[next] ?? 'decision' })
+      const start = next
+      let worked: ServiceTickResult = { worked: false, checkpoint: { phase: 'idle' } }
+      for (let offset = 0; offset < phases.length; offset++) {
+        const index = (start + offset) % phases.length
+        const phase = phases[index]
+        if (phase === undefined) continue
+        next = (index + 1) % phases.length
+        const result = await attempt(phase)
+        if (!result.ok) {
+          failures.set(phase, result.error)
+          continue
+        }
+        failures.delete(phase)
+        if (result.value !== null) {
+          worked = result.value
+          break
         }
       }
-
-      const investigation = await tickManaged(options.infer, options.taskId)
-      if (!investigation.ok) throw investigation.error
-      if (investigation.value !== null) {
-        return {
-          worked: true,
-          checkpoint: {
-            phase: 'investigation',
-            task_id: investigation.value.taskId,
-            status: investigation.value.status,
-          },
-        }
+      const errors = [...failures.entries()]
+      return {
+        ...worked,
+        reasonCode: errors[0]?.[1].kind ?? null,
+        detail:
+          errors.length === 0
+            ? null
+            : errors.map(([phase, error]) => `${phase}: ${error.detail}`).join('; '),
+        checkpoint: { ...worked.checkpoint, failed_phases: errors.map(([phase]) => phase) },
       }
-
-      const order: readonly ('ticket' | 'workflow')[] = [
-        next,
-        next === 'ticket' ? 'workflow' : 'ticket',
-      ]
-      for (const kind of order) {
-        if (kind === 'ticket') {
-          const ticket = await tickManagedTicket(options.worker, options.ticketTaskId)
-          if (!ticket.ok) throw ticket.error
-          if (ticket.value !== null) {
-            next = 'workflow'
-            return {
-              worked: true,
-              checkpoint: {
-                phase: 'ticket',
-                task_id: ticket.value.taskId,
-                stage: ticket.value.stage,
-                status: ticket.value.status,
-              },
-            }
-          }
-        } else {
-          const workflow = await tickManagedWorkflow(options.worker, options.workflowId)
-          if (!workflow.ok) throw workflow.error
-          if (workflow.value !== null) {
-            next = 'ticket'
-            return {
-              worked: true,
-              checkpoint: {
-                phase: 'workflow',
-                workflow_id: workflow.value.workflowId,
-                status: workflow.value.status,
-                action: workflow.value.action,
-              },
-            }
-          }
-        }
-      }
-      return { worked: false, checkpoint: { phase: 'idle', next } }
     },
   }
 }

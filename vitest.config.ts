@@ -14,6 +14,7 @@ export default defineConfig({
     //
     // 这**不是**「不可用就跳过」：它们没有被静默跳过，而是移到了
     // `pnpm run test:acceptance`，条件不满足时明确失败。
-    exclude: [...BASE_EXCLUDE, ACCEPTANCE_GLOB],
+    // 宿主沙箱探针需要在沙箱外证明隔离边界，由 check:isolation 单独执行。
+    exclude: [...BASE_EXCLUDE, ACCEPTANCE_GLOB, '**/*.isolation.test.ts'],
   },
 })

@@ -210,7 +210,7 @@ describe('inspectWorkspaceIsolation', () => {
   })
 
   it('接受共享临时根下的真实 git 顶层', async () => {
-    const sharedRoot = mkdtempSync(join('/tmp', 'keel-jt02a-shared-'))
+    const sharedRoot = mkdtempSync(join(tmpdir(), 'keel-jt02a-shared-'))
     try {
       const workspace = join(sharedRoot, 'repo')
       initRepo(workspace)

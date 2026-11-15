@@ -1,3 +1,4 @@
+import { listenTestServer } from '../test-support/http-server.js'
 /**
  * GitHubProvider 单测 —— stub HTTP server 模拟 GitHub API。
  *
@@ -12,7 +13,6 @@
  */
 
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http'
-import type { AddressInfo } from 'node:net'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   apiRootForHost,
@@ -26,6 +26,7 @@ import {
 
 let server: Server
 let baseUrl: string
+let http: Awaited<ReturnType<typeof listenTestServer>>
 
 /** 每个用例自己注册路由;未命中路由返回 500 以暴露测试缺口 */
 type Handler = (
@@ -70,18 +71,23 @@ beforeEach(async () => {
       res.end(JSON.stringify(out.json))
     })
   })
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-  baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  http = await listenTestServer(server)
+  baseUrl = http.baseUrl
 })
 
 afterEach(async () => {
-  await new Promise<void>((resolve) => server.close(() => resolve()))
+  await http?.close()
 })
 
 const REMOTE = 'https://github.com/acme/widget.git'
 
 function provider(opts: ConstructorParameters<typeof GitHubProvider>[0] = {}): GitHubProvider {
-  return new GitHubProvider({ apiRoot: baseUrl, token: 'test-token', ...opts })
+  return new GitHubProvider({
+    apiRoot: baseUrl,
+    fetchFn: (input, init) => http.fetch(input, init),
+    token: 'test-token',
+    ...opts,
+  })
 }
 
 describe('IssueGateway', () => {
@@ -271,7 +277,11 @@ describe('错误映射(design.md §7)', () => {
     })
   }
   it('缺 token 时 AUTH_FAILED,不发请求 —— 凭据纪律', async () => {
-    const p = new GitHubProvider({ apiRoot: baseUrl, token: null })
+    const p = new GitHubProvider({
+      apiRoot: baseUrl,
+      fetchFn: (input, init) => http.fetch(input, init),
+      token: null,
+    })
     const r = await p.createPullRequest({
       repoId: 'r1',
       remoteUrl: REMOTE,
@@ -312,6 +322,7 @@ describe('token 解析（按 host）', () => {
 
     const p = new GitHubProvider({
       apiRoot: baseUrl,
+      fetchFn: (input, init) => http.fetch(input, init),
       tokenResolver: async (host) => {
         hosts.push(host)
         return 'resolved-token'
@@ -333,6 +344,7 @@ describe('token 解析（按 host）', () => {
 
     const p = new GitHubProvider({
       apiRoot: baseUrl,
+      fetchFn: (input, init) => http.fetch(input, init),
       tokenResolver: async (host) => {
         hosts.push(host)
         return `token-for-${host}`
@@ -355,6 +367,7 @@ describe('token 解析（按 host）', () => {
 
     const p = new GitHubProvider({
       apiRoot: baseUrl,
+      fetchFn: (input, init) => http.fetch(input, init),
       token: 'explicit-token',
       tokenResolver: resolver,
     })
@@ -366,6 +379,7 @@ describe('token 解析（按 host）', () => {
   it('resolver 抛错 → AUTH_FAILED，不炸也不泄漏错误内容', async () => {
     const p = new GitHubProvider({
       apiRoot: baseUrl,
+      fetchFn: (input, init) => http.fetch(input, init),
       tokenResolver: async () => {
         throw new Error('gh exploded: token=sekret')
       },

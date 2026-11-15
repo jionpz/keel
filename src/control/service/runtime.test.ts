@@ -55,6 +55,33 @@ function tickComponent(
 }
 
 describe('runService', () => {
+  it('局部失败时保留工作结果及降级状态，不把已完成其他队列工作误报为健康', async () => {
+    const stop = createStopToken()
+    const health = recordingHealth()
+    await runService({
+      components: [
+        {
+          name: 'managed',
+          intervalMs: 1,
+          tick: async () => {
+            stop.request()
+            return { worked: true, reasonCode: 'CONFLICT', detail: 'decision: wrong identity' }
+          },
+        },
+      ],
+      externalStop: stop,
+      signals: new FakeSignals(),
+      recordHealth: health.record,
+    })
+    expect(health.records).toContainEqual(
+      expect.objectContaining({
+        component: 'managed',
+        status: 'DEGRADED',
+        reasonCode: 'CONFLICT',
+        lastSuccessAt: expect.any(String),
+      }),
+    )
+  })
   it('一个组件失败只降级自己，其他组件继续运行并能在停止后收尾', async () => {
     const signals = new FakeSignals()
     const stop = createStopToken()
