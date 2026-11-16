@@ -32,9 +32,13 @@ function git(path: string, ...args: string[]): string {
 class DeveloperAdapter implements HarnessAdapter {
   readonly developerPrompts: string[] = []
   private current: RunSpec | undefined
+  private baseline: string | null = null
   private rejectedTurns = 0
 
-  constructor(private readonly badTurns: number) {}
+  constructor(
+    private readonly badTurns: number,
+    private readonly selfCommit = false,
+  ) {}
 
   describe(): HarnessDescriptor {
     return {
@@ -48,12 +52,28 @@ class DeveloperAdapter implements HarnessAdapter {
   }
   async startRun(spec: RunSpec): Promise<Result<RunHandle>> {
     this.current = spec
+    this.baseline = git(spec.workspace.path, 'rev-parse', 'HEAD')
     if (spec.run.stage === 'develop') {
       this.developerPrompts.push(spec.context.sections.map((s) => s.content).join('\n'))
       writeFileSync(
         join(spec.workspace.path, 'feature.txt'),
         `修改 ${this.developerPrompts.length}\n`,
       )
+      if (this.selfCommit) {
+        git(spec.workspace.path, 'add', 'feature.txt')
+        git(
+          spec.workspace.path,
+          '-c',
+          'user.name=机器人',
+          '-c',
+          'user.email=bot@example.com',
+          '-c',
+          'commit.gpgsign=false',
+          'commit',
+          '-qm',
+          `feat(fact): 不合规的自行提交\n\nKeel-Run: ${spec.run.run_id} stage=develop`,
+        )
+      }
     }
     return ok({ run_id: spec.run.run_id, harness_id: 'scripted-developer' })
   }
@@ -105,7 +125,7 @@ class DeveloperAdapter implements HarnessAdapter {
   }
   async collectChanges(): Promise<Result<WorkspaceDiff>> {
     if (this.current === undefined) throw new Error('缺少当前 run')
-    return collectGitDiff(this.current.workspace.path)
+    return collectGitDiff(this.current.workspace.path, { since: this.baseline })
   }
   async interrupt(): Promise<Result<void>> {
     return ok(undefined)
@@ -137,7 +157,7 @@ beforeEach(async () => {
 afterEach(() => rmSync(root, { recursive: true, force: true }))
 afterAll(closePool)
 
-async function setup(check: string, badTurns: number) {
+async function setup(check: string, badTurns: number, selfCommit = false) {
   const repoId = randomUUID()
   const taskId = randomUUID()
   const remoteUrl = `file://${origin}`
@@ -166,7 +186,7 @@ async function setup(check: string, badTurns: number) {
       { mode: 0o755 },
     )
   }
-  const adapter = new DeveloperAdapter(badTurns)
+  const adapter = new DeveloperAdapter(badTurns, selfCommit)
   let pullRequests = 0
   const deps = {
     driver: new WorkflowDriver(
@@ -260,6 +280,30 @@ describe('仓库提交门禁的真实编排', () => {
     const facts = await evidence(fixture.taskId)
     expect(facts.runs.map((run) => run.status)).toEqual(['FAILED', 'SUCCEEDED'])
     expect(fixture.pullRequests()).toBe(1)
+  })
+
+  it('Harness 自行提交后工作树干净，历史门禁仍回灌并在重试耗尽后阻止交付', async () => {
+    const fixture = await setup('^fix\\(fact\\): .+$', 0, true)
+    const result = await runTaskToCompletion(fixture.taskId, fixture.deps)
+    expect(result.ok, result.ok ? '' : result.error.detail).toBe(true)
+    expect(result.ok && result.value.finalStatus).toBe('S-HUMAN_REVIEW')
+    const facts = await evidence(fixture.taskId)
+    expect(facts.runs).toHaveLength(3)
+    expect(facts.runs.every((run) => run.status === 'FAILED')).toBe(true)
+    expect(facts.rejected).toHaveLength(9)
+    expect(fixture.adapter.developerPrompts).toHaveLength(9)
+    expect(fixture.adapter.developerPrompts[1]).toContain('header 不匹配正则')
+    expect(facts.notified).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({ reason: 'commit_message_rejected' }),
+      }),
+    ])
+    const path = fixture.workspaceGit.preservePath(fixture.taskId)
+    expect(git(path, 'status', '--porcelain')).toBe('')
+    expect(git(path, 'rev-parse', 'HEAD')).not.toBe(fixture.project.baseSha)
+    expect(git(path, 'rev-list', '--count', `${fixture.project.baseSha}..HEAD`)).toBe('9')
+    expect(fixture.pullRequests()).toBe(0)
+    expect(git(origin, 'for-each-ref', `refs/heads/${branchFor(fixture.taskId)}`)).toBe('')
   })
 
   it.each(['^fix\\(fact\\): .+$', 'hook'])(

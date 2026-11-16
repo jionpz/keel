@@ -50,6 +50,8 @@ await this.execGit([
 
 来源是 `repo` 的可选列，schema 为 `docs/schemas/managed/repo-commit-policy.schema.json`。
 它是管理员配置，不是工作流包或权限授予；运行时角色对 `repo` 的授权保持不变。
+当前接入 `legacy-v01` 的 Task/Run 编排与 Developer 提案流水线；managed ticket 的
+独立阶段执行、提交与受控交付仍遵循其固定包，本配置不覆盖该执行链路。
 
 ```sh
 pnpm keel register-repo https://github.com/owner/repo.git \
@@ -93,7 +95,8 @@ R-007 将具体原因反馈给 Developer；单 run 默认最多 3 轮提案，�
 
 测试锚点：`shared/commit-policy.test.ts`（纯校验）、`cli/register-repo.test.ts`（真实 DB
 保留语义）、`fact/git-workspace.test.ts`（真实 git 身份/签名/消息与拒绝），以及
-`e2e/repo-commit-policy.test.ts`（真实 DB + worktree 的回灌、跨 run 重试、超限人工及零推送）。
+`e2e/repo-commit-policy.test.ts`（真实 DB + worktree 的回灌、跨 run 重试、超限人工、
+零推送，以及 Harness 自行留下不合规提交后，干净工作树仍无法绕过历史门禁）。
 
 ## 测试夹具同样要关签名
 
