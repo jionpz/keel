@@ -573,13 +573,20 @@ describe('仓库提交身份与消息校验', () => {
     })
   })
   it('Harness 自行提交的坏 header 不能通过干净工作树或下一轮绕过', async () => {
-    const { g, p, taskId } = await setup()
-    expect((await g.commitAll(taskId, 'bad')).ok).toBe(true)
+    const { g, p, taskId, path } = await setup()
+    const rejected = await g.commitAll(taskId, 'bad')
+    expect(rejected.ok).toBe(true)
     expect(await g.isDirty(taskId)).toEqual({ ok: true, value: false })
     expect(
       (await g.validateCommitHistory(taskId, p.baseSha, { commit_message_check: '^fix:' })).ok,
     ).toBe(false)
-    expect((await g.commitAll(taskId, 'fix: followup')).ok).toBe(true)
+    writeFileSync(join(path, 'feature.txt'), '后续合规改动\n')
+    const followup = await g.commitAll(taskId, 'fix: followup', {
+      commit_message_check: '^fix:',
+    })
+    expect(followup.ok && followup.value).toMatch(/^[a-f0-9]{40}$/)
+    expect(followup.ok && followup.value).not.toBe(rejected.ok && rejected.value)
+    expect(await g.isDirty(taskId)).toEqual({ ok: true, value: false })
     expect(
       (await g.validateCommitHistory(taskId, p.baseSha, { commit_message_check: '^fix:' })).ok,
     ).toBe(false)
