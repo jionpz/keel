@@ -116,7 +116,34 @@ branch。`verify` / `review` 若找到同 workflow、同 stage、同 target 的 
 review 要求 rework 时，后续 verify/review/land 证据失效；重新 execute 产生新 commit
 后 target 改变，旧证据不能复活。缺 gate、旧 SHA、旧 diff、伪造摘要均被拒绝。
 
-## 6. archive
+## 6. 取消与静止边界
+
+`managed workflow-cancel --workflow <workflow-uuid> --graph-version <N> --reason '...'`
+只能取消命令指定的准确图版本。版本必须等于 workflow 当前图版本（未提交图时为 0）；
+缺失、过期或不匹配时返回冲突且不写入任何取消副作用。
+
+取消只在静止边界提交，并在同一事务中先锁定、复核再写入。workflow 或任一 ticket
+仍为 `RUNNING`，或任一未归档节点关联的 outbox 仍为 `EXECUTING`、`UNCERTAIN`、
+`SUCCEEDED` 时，整体拒绝取消；这些事实必须先结算、回查或归档。通过检查后：
+
+- workflow 置为 `CANCELLED`，清除 workflow lease；
+- 非终态 ticket 与待答 decision 置为 `CANCELLED`，ticket 递增
+  `control_generation` 并清除 lease；
+- 本流程的 `PENDING` / `LEASED` outbox 置为 `BLOCKED`，`VALID` permit 置为
+  `REVOKED`；
+- `ARCHIVED` 节点及其 claim 保持原样，`FAILED` 节点与 `DONE` / `FAILED` /
+  `CANCELLED` ticket 保留原状态；其余未归档节点置为 `CANCELLED`，释放本流程持有
+  且不属于归档节点的 `ACTIVE` claim，允许新 workflow 认领。
+
+所有历史 stage、graph、evidence、worktree 与 claim 记录都保留，取消不删除或改写
+历史事实。成功取消的同一 `workflow_id + graph_version` 可幂等重试：再次返回成功，
+不重复递增代次，也不释放已转交给新 owner 的 claim。`CANCELLED` workflow 是终态，
+`workflow-retry` 必须拒绝。
+
+新基线或新固定包必须创建新 workflow。已执行的图不能 `replan`，旧 workflow 的
+stage/evidence 也不能跨 workflow 冒充新图通过。
+
+## 7. archive
 
 `archive` 是工作流完成门，不是远程 Issue 自动关闭器。归档要求：
 
@@ -131,7 +158,7 @@ review 要求 rework 时，后续 verify/review/land 证据失效；重新 execu
 workflow 为 `PAUSED`，修复后用 `workflow-retry` 重新尝试完成门。`archive` 证据明确注明“远端 issue 的关闭仍需受控写入口”，
 不把本地归档冒充远程关闭。
 
-## 7. 两套投影
+## 8. 两套投影
 
 - legacy：`task / run / event`，`legacy-v01`；
 - managed workflow：`managed_workflow*`，`jstack-managed-v1`。
@@ -145,6 +172,8 @@ pnpm keel managed workflow-plan --workflow <uuid> --plan <plan.json>
 pnpm keel managed workflow-status <uuid>
 pnpm keel managed workflow-list
 pnpm keel managed workflow-retry --workflow <uuid> [--node <node-key>]
+pnpm keel managed workflow-cancel --workflow <workflow-uuid> --graph-version 2 \
+  --reason '停止已到静止边界的工作流'
 pnpm keel managed workflow-tick --harness pi --model <id>
 pnpm keel managed workflow-worker --harness pi --model <id>
 ```
@@ -161,7 +190,7 @@ ticket 已达到完成目标时只重试 archive，不改写已结束 ticket、�
 
 两套投影不共享状态机；旧 poller/driver 不认领 `managed_workflow`。
 
-## 8. 未覆盖
+## 9. 未覆盖
 
 - 真实 L 多 ticket 模型 E2E 已通过（Pi + `opencode-go/deepseek-v4.1-flash`，2 个
   依赖 ticket、两节点 archive、outbox 为空）；XL 复用同一路径，但未单独跑真实模型 E2E。

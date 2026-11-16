@@ -12,7 +12,11 @@ jstack 导出的固定包，两者共用工作流定义，但不共用会话状�
 - `branch_ready` 交付本地 commit；`pr_ready` 交付准确 head 的 required checks 成功。
   `PR_READY` 不等于 merge，workflow `DONE` 不等于 legacy `S-DONE`。
 - workflow 只有全部当前图节点 `ARCHIVED` 才到 `DONE`。取消、失败和缺证据都不算成功。
+- `workflow-cancel` 是 workflow 的显式取消与所有权释放入口；节点取消也可使父流程
+  汇总为 `CANCELLED`，但不会自动释放其他节点的 claim。终态不可 `workflow-retry`。
 - 包版本由创建时的 digest 固定。更新工程侧 jstack 不替换进行中任务的包。
+  新基线或新固定包必须新建 workflow；已执行的图不能 replan，旧证据不能跨
+  workflow 复用。
 
 协议枚举见 `src/contracts/managed.ts`，数据库约束见 `migrations/`；以下列出各自的
 宿主与执行入口。相同的 `READY`、`FAILED` 等名称不表示相同的生命周期。
@@ -50,6 +54,13 @@ workflow `PR_READY`，ticket 的执行状态按现有节点映射处理。枚举
 一个节点等人、失败或取消不阻塞其他独立节点；依赖未满足的节点保持 `PENDING`。
 没有节点的已提交图不能被解释为完成。
 
+`workflow-cancel` 必须携带当前准确 `graph_version`。workflow 或任一 ticket 为
+`RUNNING`，或未归档节点仍有 `EXECUTING` / `UNCERTAIN` / `SUCCEEDED` 外部动作时，
+取消整体拒绝。只在静止边界把 workflow 置为 `CANCELLED`，取消非终态 ticket 与
+待答 decision，递增 `control_generation`、清空 lease、阻断 `PENDING` / `LEASED`
+outbox 并撤销 `VALID` permit。详细约束见
+[workflow-routing](./spec/backend/workflow-routing.md#6-取消与静止边界)。
+
 ## Ticket 与阶段
 
 | 宿主 | 状态集合 | 边界 |
@@ -66,6 +77,11 @@ workflow `PR_READY`，ticket 的执行状态按现有节点映射处理。枚举
 执行的外部动作必须回查，不能把本地暂停声称为外部副作用撤销。
 人工恢复只接受可恢复状态，终态不复活；archive 修复后的重试可以只重试完成门，
 不改写已完成的 ticket、不重跑四阶段，也不消耗新的执行尝试预算。
+
+workflow 取消保留 `ARCHIVED` 节点及 claim；`FAILED` 节点和 `DONE` / `FAILED` /
+`CANCELLED` ticket 保留原状态，其余未归档节点取消并释放本 workflow 持有的
+`ACTIVE` claim。历史 stage、graph、evidence、worktree 全部保留；同一成功取消可
+幂等重试，且不得释放新 owner 的 claim。
 
 ## Archive 是完成门
 

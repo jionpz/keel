@@ -50,6 +50,7 @@ import {
 } from '../control/managed/ticket-runtime.js'
 import { listManagedTicketStages } from '../control/managed/ticket-store.js'
 import { runTicketTianwen, tickPendingTicketTianwen } from '../control/managed/ticket-tianwen.js'
+import { cancelManagedWorkflow } from '../control/managed/workflow-control.js'
 import {
   commitManagedWorkflowPlan,
   createManagedWorkflow,
@@ -221,6 +222,7 @@ workflow-plan --workflow UUID --plan FILE [--replan]
 workflow-status WORKFLOW_UUID
 workflow-list
 workflow-retry --workflow UUID [--node NODE_KEY]
+workflow-cancel --workflow UUID --graph-version N --reason TEXT
 workflow-tick [--workflow UUID] [--harness omp|claude|pi] [--model ID]
 workflow-worker [--once] [--interval MS] [--workflow UUID] [--harness omp|claude|pi] [--model ID]
 action-list [--task TASK_UUID]
@@ -500,6 +502,20 @@ execute→verify→review→land；阶段执行器不 push，
       case 'workflow-list':
         printJson(await listManagedWorkflowProjections())
         return
+      case 'workflow-cancel': {
+        const flags = parseFlags(rest, ['workflow', 'graph-version', 'reason'])
+        const version = required(flags, 'graph-version')
+        if (!/^(0|[1-9]\d*)$/.test(version)) throw new Error('graph-version 必须是非负整数')
+        const result = await cancelManagedWorkflow(
+          uuid(required(flags, 'workflow'), 'workflow ID'),
+          Number(version),
+          required(flags, 'reason'),
+          new Date().toISOString(),
+        )
+        if (!result.ok) throw new Error(result.error.detail)
+        printJson(result.value)
+        return
+      }
       case 'workflow-retry': {
         const flags = parseFlags(rest, ['workflow', 'node'])
         const nodeKey = optional(flags, 'node')
