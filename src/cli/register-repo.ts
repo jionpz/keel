@@ -23,6 +23,11 @@ import { asOwner, asOwnerTx } from '../fact/db.js'
 import { validateAttachedDir } from '../fact/project-root.js'
 import { normalizeRemoteUrl } from '../fact/remote-url.js'
 import { workspaceError } from '../fact/workspace-error.js'
+import {
+  COMMIT_POLICY_COLUMNS,
+  commitPolicyFromRow,
+  validateCommitPolicy,
+} from '../shared/commit-policy.js'
 import { parseArgs } from './argv.js'
 
 const PG_UNIQUE_VIOLATION = '23505'
@@ -58,6 +63,10 @@ export async function registerRepoMain(argv: readonly string[]): Promise<void> {
   if (flags.help === true) {
     console.log(`用法: keel register-repo <remoteUrl> [--default-branch <name>] [--local-path <dir>]
                           [--issue-label <name>] [--issue-writeback off|comment|comment_and_close]
+                          [--commit-author 'Name <email>']
+                          [--commit-message-template '{type}({scope}): {summary}']
+                          [--commit-types feat,fix] [--commit-scopes control,fact]
+                          [--commit-message-check '<header 正则>|hook']
 
 按 remote_url 幂等注册 repo。remoteUrl 示例:
   https://github.com/owner/repo.git
@@ -94,6 +103,23 @@ export async function registerRepoMain(argv: readonly string[]): Promise<void> {
     process.exitCode = 1
     return
   }
+  const commitFlags: Record<string, unknown> = {}
+  for (const column of COMMIT_POLICY_COLUMNS) {
+    const flag = column.replace(/_/g, '-')
+    // 通用解析器会把 001 / 1e3 等正则转成数字；文本配置必须保留原始 argv。
+    const raw =
+      typeof flags[flag] === 'number' ? argv[argv.lastIndexOf(`--${flag}`) + 1] : flags[flag]
+    if (raw === undefined) continue
+    if (typeof raw !== 'string' || raw.trim() === '') {
+      console.error(`register-repo: --${flag} 需要非空字符串`)
+      process.exitCode = 1
+      return
+    }
+    commitFlags[column] =
+      column === 'commit_types' || column === 'commit_scopes'
+        ? raw.split(',').map((value) => value.trim())
+        : raw
+  }
   const localPathFlag = typeof flags['local-path'] === 'string' ? flags['local-path'] : undefined
 
   // 空白 label 会让 poller 列出该仓库全部 open issue，跨过 label 闸门。
@@ -115,7 +141,7 @@ export async function registerRepoMain(argv: readonly string[]): Promise<void> {
     }
   }
 
-  // ── 校验全部在事务外完成：失败时零写入，也不占用事务 ──
+  // 目录校验在事务外完成；提交配置须在锁定存量值、合并参数后且写入前校验。
   let canonicalPath: string | undefined
   if (localPathFlag !== undefined) {
     const validated = await validateAttachedDir(localPathFlag, remoteUrl)
@@ -133,23 +159,36 @@ export async function registerRepoMain(argv: readonly string[]): Promise<void> {
 
   try {
     const repoId = await asOwnerTx(async (c) => {
-      const existing = await c.query<{
-        id: string
-        local_path: string | null
-        issue_label: string
-      }>(
-        `SELECT id, local_path, issue_label FROM repo
+      const existing = await c.query<
+        {
+          id: string
+          local_path: string | null
+          issue_label: string
+        } & Record<string, unknown>
+      >(
+        `SELECT id, local_path, issue_label, ${COMMIT_POLICY_COLUMNS.join(', ')} FROM repo
          WHERE regexp_replace(regexp_replace(remote_url, '/+$', ''), '\\.git$', '', 'i') = $1
          FOR UPDATE`,
         [normalized],
       )
       const row = existing.rows[0]
+      const storedPolicy = commitPolicyFromRow(row ?? {})
+      const commitPolicy = storedPolicy.ok
+        ? validateCommitPolicy({ ...storedPolicy.value, ...commitFlags })
+        : storedPolicy
+      if (!commitPolicy.ok) {
+        console.error(`register-repo: ${commitPolicy.error.detail}`)
+        process.exitCode = 1
+        return null
+      }
+      const commitValues = COMMIT_POLICY_COLUMNS.map((column) => commitPolicy.value[column] ?? null)
 
       if (row === undefined) {
         const id = randomUUID()
         await c.query(
-          `INSERT INTO repo (id, provider, remote_url, default_branch, local_path, issue_label, issue_writeback)
-           VALUES ($1, 'github', $2, $3, $4, $5, $6)`,
+          `INSERT INTO repo (id, provider, remote_url, default_branch, local_path, issue_label, issue_writeback,
+             ${COMMIT_POLICY_COLUMNS.join(', ')})
+           VALUES ($1, 'github', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
           [
             id,
             remoteUrl,
@@ -157,6 +196,7 @@ export async function registerRepoMain(argv: readonly string[]): Promise<void> {
             canonicalPath ?? null,
             issueLabel ?? 'keel',
             issueWriteback ?? 'off',
+            ...commitValues,
           ],
         )
         return id
@@ -166,7 +206,9 @@ export async function registerRepoMain(argv: readonly string[]): Promise<void> {
       // 只改 label 的调用不能被 local_path 的缺省值顺带覆盖，反之亦然。
       const nextPath = canonicalPath !== undefined && row.local_path !== canonicalPath
       const nextLabel = issueLabel !== undefined && row.issue_label !== issueLabel
-      if (!nextPath && !nextLabel && issueWriteback === undefined) return row.id
+      const nextCommitPolicy = Object.keys(commitFlags).length > 0
+      if (!nextPath && !nextLabel && issueWriteback === undefined && !nextCommitPolicy)
+        return row.id
 
       updatingRepoId = row.id
       if (nextPath) {
@@ -178,9 +220,16 @@ export async function registerRepoMain(argv: readonly string[]): Promise<void> {
       if (issueWriteback !== undefined) {
         await c.query('UPDATE repo SET issue_writeback=$1 WHERE id=$2', [issueWriteback, row.id])
       }
+      if (nextCommitPolicy) {
+        await c.query(
+          `UPDATE repo SET ${COMMIT_POLICY_COLUMNS.map((column, i) => `${column}=$${i + 1}`).join(', ')} WHERE id=$6`,
+          [...commitValues, row.id],
+        )
+      }
       return row.id
     })
 
+    if (repoId === null) return
     console.log(`repoId: ${repoId}`)
     if (canonicalPath !== undefined) console.log(`localPath: ${canonicalPath}`)
     if (issueLabel !== undefined) console.log(`issueLabel: ${issueLabel}`)

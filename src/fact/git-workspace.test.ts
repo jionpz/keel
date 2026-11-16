@@ -26,6 +26,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { type RepoCommitPolicy, renderCommitMessage } from '../shared/commit-policy.js'
 import {
   branchFor,
   type GitExec,
@@ -393,6 +394,195 @@ describe('并发 · 同一 repo 的共享 git 状态', () => {
     expect([a.value.created, b.value.created].filter(Boolean)).toHaveLength(1)
     expect([a.value.branchCreated, b.value.branchCreated].filter(Boolean)).toHaveLength(1)
     expect(a.value.path).toBe(b.value.path)
+  })
+})
+
+describe('仓库提交身份与消息校验', () => {
+  async function setup() {
+    const g = ws()
+    const p = await prepare(g)
+    const taskId = randomUUID()
+    const wt = await g.ensureWorktree(p, taskId)
+    if (!wt.ok) throw new Error(wt.error.detail)
+    writeFileSync(join(wt.value.path, 'feature.txt'), '修复\n')
+    return { g, p, taskId, path: wt.value.path }
+  }
+  function log(path: string, format: string) {
+    return execFileSync('git', ['-C', path, 'log', '-1', `--format=${format}`], {
+      encoding: 'utf8',
+    })
+  }
+  function hook(path: string, script: string) {
+    const dir = join(path, '.hooks')
+    mkdirSync(dir)
+    writeFileSync(join(dir, 'commit-msg'), `#!/bin/sh\n${script}\n`, { mode: 0o755 })
+    execFileSync('git', ['-C', path, 'config', 'core.hooksPath', dir])
+  }
+
+  it('默认作者、提交者、无签名、完整消息逐字不变', async () => {
+    const { g, taskId, path } = await setup()
+    expect((await g.commitAll(taskId, 'develop: run 12345678')).ok).toBe(true)
+    expect(log(path, '%an <%ae>|%cn <%ce>|%G?%n%B')).toBe(
+      'Keel <keel@localhost>|Keel <keel@localhost>|N\ndevelop: run 12345678\n\n',
+    )
+  })
+  it('未配置时 git commit 的 argv 与环境参数逐字保持旧调用', async () => {
+    const { taskId, path } = await setup()
+    const calls: { args: readonly string[]; env: unknown }[] = []
+    const g = new GitWorkspace({
+      root,
+      exec: async (file, args, opts) => {
+        calls.push({ args, env: opts?.env })
+        return realExecAsync(file, [...args], { encoding: 'utf8', ...opts })
+      },
+    })
+    expect((await g.commitAll(taskId, 'develop: run 12345678')).ok).toBe(true)
+    expect(calls.find((call) => call.args.includes('commit'))).toEqual({
+      args: [
+        '-C',
+        path,
+        '-c',
+        'user.email=keel@localhost',
+        '-c',
+        'user.name=Keel',
+        '-c',
+        'commit.gpgsign=false',
+        'commit',
+        '-m',
+        'develop: run 12345678',
+      ],
+      env: undefined,
+    })
+  })
+  it('指定身份覆盖环境与仓库配置；作者和提交者相同且关闭签名', async () => {
+    const { g, taskId, path } = await setup()
+    execFileSync('git', ['-C', path, 'config', 'commit.gpgsign', 'true'])
+    execFileSync('git', ['-C', path, 'config', 'gpg.program', '/no-such-signer'])
+    const previous = { ...process.env }
+    try {
+      process.env.GIT_AUTHOR_NAME = 'Host'
+      process.env.GIT_AUTHOR_EMAIL = 'host@test'
+      process.env.GIT_COMMITTER_NAME = 'Host'
+      process.env.GIT_COMMITTER_EMAIL = 'host@test'
+      const result = await g.commitAll(taskId, 'fix: 中文', {
+        commit_author: '机器人 <bot@example.com>',
+      })
+      expect(result.ok, result.ok ? '' : result.error.detail).toBe(true)
+      expect(log(path, '%an <%ae>|%cn <%ce>|%G?')).toBe(
+        '机器人 <bot@example.com>|机器人 <bot@example.com>|N\n',
+      )
+    } finally {
+      process.env = previous
+    }
+  })
+  it('模板保留普通 Keel-Run 正文，不被全局 cleanup 配置剥去', async () => {
+    const { g, taskId, path, p } = await setup()
+    execFileSync('git', ['-C', path, 'config', 'commit.cleanup', 'strip'])
+    execFileSync('git', ['-C', path, 'config', 'core.commentChar', 'K'])
+    const policy: RepoCommitPolicy = {
+      commit_message_template: '{type}({scope}): {summary}',
+      commit_types: ['fix'],
+      commit_scopes: ['fact'],
+    }
+    const rendered = renderCommitMessage(policy, 'develop', taskId, {
+      commit_message: { type: 'fix', scope: 'fact', summary: '修复身份' },
+    })
+    if (!rendered.ok) throw new Error(rendered.error.detail)
+    const result = await g.commitAll(taskId, rendered.value, policy)
+    expect(result.ok, result.ok ? '' : result.error.detail).toBe(true)
+    expect(log(path, '%B')).toBe(`${rendered.value}\n\n`)
+    expect((await g.validateCommitHistory(taskId, p.baseSha, policy)).ok).toBe(true)
+  })
+  it('非法模板消息在提交前拒绝，HEAD 不前进且可用正确消息重试', async () => {
+    const { g, taskId, path } = await setup()
+    const before = headOf(path)
+    const policy: RepoCommitPolicy = {
+      commit_message_template: '{type}({scope}): {summary}',
+      commit_types: ['fix'],
+      commit_scopes: ['fact'],
+    }
+    for (const message of [
+      'fix(fact): 缺少正文',
+      `feat(fact): 越过枚举\n\nKeel-Run: ${taskId} stage=develop`,
+      `fix(fact): ${'中'.repeat(73)}\n\nKeel-Run: ${taskId} stage=develop`,
+    ]) {
+      expect(await g.commitAll(taskId, message, policy)).toMatchObject({
+        ok: false,
+        error: { detail: expect.stringContaining('commit_message_rejected:') },
+      })
+      expect(headOf(path)).toBe(before)
+      expect(await g.isDirty(taskId)).toEqual({ ok: true, value: true })
+    }
+    expect(
+      (await g.commitAll(taskId, `fix(fact): 修复\n\nKeel-Run: ${taskId} stage=develop`, policy))
+        .ok,
+    ).toBe(true)
+  })
+  it('header 正则只看首行；拒绝时 HEAD 不前进且改动保留', async () => {
+    const { g, taskId, path } = await setup()
+    const before = headOf(path)
+    const rejected = await g.commitAll(taskId, 'wrong\n\nfix(fact): body', {
+      commit_message_check: '^fix\\(fact\\): .+$',
+    })
+    expect(rejected).toMatchObject({
+      ok: false,
+      error: { detail: expect.stringContaining('header 不匹配正则') },
+    })
+    expect(headOf(path)).toBe(before)
+    expect(await g.isDirty(taskId)).toEqual({ ok: true, value: true })
+    expect(
+      (
+        await g.commitAll(taskId, 'fix(fact): 修复', {
+          commit_message_check: '^fix\\(fact\\): .+$',
+        })
+      ).ok,
+    ).toBe(true)
+  })
+  it('commit-msg hook 在 ticket worktree 执行，拒绝原因可回灌，成功后才提交', async () => {
+    const { g, taskId, path } = await setup()
+    hook(
+      path,
+      'test -f feature.txt || exit 9\ngrep -q "^fix(fact):" "$1" || { echo "需要 fix(fact) header" >&2; exit 1; }',
+    )
+    const before = headOf(path)
+    const result = await g.commitAll(taskId, 'bad', { commit_message_check: 'hook' })
+    expect(result).toMatchObject({
+      ok: false,
+      error: { detail: expect.stringContaining('需要 fix(fact) header') },
+    })
+    expect(headOf(path)).toBe(before)
+    expect(
+      (await g.commitAll(taskId, 'fix(fact): 修复', { commit_message_check: 'hook' })).ok,
+    ).toBe(true)
+  })
+  it('commit-msg hook 能读取即将提交的暂存区', async () => {
+    const { g, taskId, path } = await setup()
+    hook(path, 'git diff --cached --name-only | grep -q "^feature.txt$" || exit 7')
+    const result = await g.commitAll(taskId, 'fix: 修复', { commit_message_check: 'hook' })
+    expect(result.ok, result.ok ? '' : result.error.detail).toBe(true)
+    expect(log(path, '%s')).toBe('fix: 修复\n')
+  })
+  it('缺 hook 和改写消息均拒绝，不能静默通过', async () => {
+    const { g, taskId, path } = await setup()
+    expect((await g.commitAll(taskId, 'fix: x', { commit_message_check: 'hook' })).ok).toBe(false)
+    hook(path, 'echo "changed" >> "$1"')
+    const result = await g.commitAll(taskId, 'fix: x', { commit_message_check: 'hook' })
+    expect(result).toMatchObject({
+      ok: false,
+      error: { detail: expect.stringContaining('hook 修改了消息') },
+    })
+  })
+  it('Harness 自行提交的坏 header 不能通过干净工作树或下一轮绕过', async () => {
+    const { g, p, taskId } = await setup()
+    expect((await g.commitAll(taskId, 'bad')).ok).toBe(true)
+    expect(await g.isDirty(taskId)).toEqual({ ok: true, value: false })
+    expect(
+      (await g.validateCommitHistory(taskId, p.baseSha, { commit_message_check: '^fix:' })).ok,
+    ).toBe(false)
+    expect((await g.commitAll(taskId, 'fix: followup')).ok).toBe(true)
+    expect(
+      (await g.validateCommitHistory(taskId, p.baseSha, { commit_message_check: '^fix:' })).ok,
+    ).toBe(false)
   })
 })
 

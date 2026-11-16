@@ -125,7 +125,7 @@
 | ID | from | event | guard | to | side-effect |
 |---|---|---|---|---|---|
 | `T-030` | 任一阶段态 | `RunFailed` \| `RunTimeout` \| `RunStalled` | `attempt < max_attempts(stage)` | 同状态 ⟲ | 创建 `run(stage, n+1)`，附失败原因 |
-| `T-031` | 任一阶段态 | `RunFailed` \| `RunTimeout` \| `RunStalled` | `attempt ≥ max_attempts(stage)` | `S-HUMAN_REVIEW` | 通知人工，附全部失败记录；启动 `human_review_ttl` 定时器 |
+| `T-031` | 任一阶段态 | `RunFailed` \| `RunTimeout` \| `RunStalled` | `attempt ≥ max_attempts(stage)` | `S-HUMAN_REVIEW` | 通知人工，附全部失败记录（提交校验拒绝时理由为 `commit_message_rejected`，否则 `stage_retries_exhausted`）；启动 `human_review_ttl` 定时器 |
 
 > `RunTimeout` 与 `RunCancelled` 是 **Run 级**的区分。在 Task 级，
 > 超时与失败走同一条路 —— Task 只关心"这次没成"，原因留在 `run.error_kind`。

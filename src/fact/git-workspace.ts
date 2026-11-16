@@ -28,10 +28,16 @@
 
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdir, rename, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rename, rm, rmdir, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { err, makeError, ok, type Result } from '../contracts/errors.js'
+import {
+  commitMessageRejection,
+  type RepoCommitPolicy,
+  validateStoredCommitMessage,
+} from '../shared/commit-policy.js'
 import { withFileLock } from './file-lock.js'
 import {
   authEnvFor,
@@ -250,33 +256,182 @@ export class GitWorkspace {
    * 人的身份加到 Agent 产物上；且签名程序可能交互提示或变慢，
    * 在无人干预的编排循环里等同于挂起。
    */
-  async commitAll(taskId: string, message: string): Promise<Result<string | null>> {
+  async commitAll(
+    taskId: string,
+    message: string,
+    policy: RepoCommitPolicy = {},
+  ): Promise<Result<string | null>> {
     const wt = this.worktreePath(taskId)
     if (!existsSync(wt)) {
       return err(makeError('WORKSPACE_ERROR', `worktree 不存在：${wt}`))
     }
     try {
       const { stdout: status } = await this.execGit(['-C', wt, 'status', '--porcelain'])
+      // 在产生 commit 之前核对模板，避免先留下坏提交再让下一轮修复历史。
+      const formatted = validateStoredCommitMessage(policy, message)
+      if (!formatted.ok) return formatted
+      // hook 与真正 git commit 一样看到待提交的暂存区；缺省路径的 argv 顺序不变。
+      if (policy.commit_message_check === 'hook' && status.trim() !== '') {
+        await this.execGit(['-C', wt, 'add', '-A'])
+      }
+      // 无配置时保留旧 noop 路径；有校验时即使干净也不能用 noop 绕过消息检查。
+      const checked = await this.checkCommitMessage(taskId, message, policy.commit_message_check)
+      if (!checked.ok) return checked
       if (status.trim() === '') return ok(null)
 
-      await this.execGit(['-C', wt, 'add', '-A'])
-      await this.execGit([
+      if (policy.commit_message_check !== 'hook') await this.execGit(['-C', wt, 'add', '-A'])
+      const authorName = policy.commit_author?.replace(/ <[^<>]+>$/, '')
+      const authorEmail = policy.commit_author?.match(/<([^<>]+)>$/)?.[1]
+      const args = [
         '-C',
         wt,
         '-c',
-        'user.email=keel@localhost',
+        `user.email=${authorEmail ?? 'keel@localhost'}`,
         '-c',
-        'user.name=Keel',
+        `user.name=${authorName ?? 'Keel'}`,
         '-c',
         'commit.gpgsign=false',
+        ...(policy.commit_author === undefined
+          ? []
+          : [
+              '-c',
+              `author.name=${authorName}`,
+              '-c',
+              `author.email=${authorEmail}`,
+              '-c',
+              `committer.name=${authorName}`,
+              '-c',
+              `committer.email=${authorEmail}`,
+            ]),
         'commit',
+        ...(policy.commit_message_template === undefined ? [] : ['--cleanup=verbatim']),
         '-m',
         message,
-      ])
+      ]
+      await this.exec(
+        'git',
+        args,
+        policy.commit_author === undefined
+          ? undefined
+          : {
+              env: {
+                ...process.env,
+                GIT_AUTHOR_NAME: authorName,
+                GIT_AUTHOR_EMAIL: authorEmail,
+                GIT_COMMITTER_NAME: authorName,
+                GIT_COMMITTER_EMAIL: authorEmail,
+              },
+            },
+      )
       const { stdout: sha } = await this.execGit(['-C', wt, 'rev-parse', 'HEAD'])
+      if (Object.keys(policy).length > 0) {
+        const actual = await this.validateCommit(taskId, sha.trim(), policy, false)
+        if (!actual.ok) return actual
+      }
       return ok(sha.trim())
     } catch (e) {
-      return err(makeError('WORKSPACE_ERROR', `提交失败：${this.redact(e)}`))
+      return err(
+        policy.commit_message_check === undefined
+          ? makeError('WORKSPACE_ERROR', `提交失败：${this.redact(e)}`)
+          : commitMessageRejection(`提交或 hook 拒绝：${this.redact(e)}`),
+      )
+    }
+  }
+
+  /** 交付前核对分支全部新增提交；拒绝的本地 commit 不会因换 run 而漏检。 */
+  async validateCommitHistory(
+    taskId: string,
+    baseSha: string,
+    policy: RepoCommitPolicy,
+  ): Promise<Result<void>> {
+    try {
+      const { stdout } = await this.execGit([
+        '-C',
+        this.worktreePath(taskId),
+        'rev-list',
+        `${baseSha}..HEAD`,
+      ])
+      for (const sha of stdout.trim().split('\n').filter(Boolean)) {
+        const checked = await this.validateCommit(taskId, sha, policy, true)
+        if (!checked.ok) return checked
+      }
+      return ok(undefined)
+    } catch (e) {
+      return err(makeError('WORKSPACE_ERROR', `读取提交历史失败：${this.redact(e)}`))
+    }
+  }
+
+  private async validateCommit(
+    taskId: string,
+    sha: string,
+    policy: RepoCommitPolicy,
+    runHook: boolean,
+  ): Promise<Result<void>> {
+    const { stdout } = await this.execGit([
+      '-C',
+      this.worktreePath(taskId),
+      'show',
+      '-s',
+      '--format=%an%n%ae%n%cn%n%ce%n%B',
+      sha,
+    ])
+    const [authorName, authorEmail, committerName, committerEmail, ...body] = stdout.split('\n')
+    if (
+      policy.commit_author !== undefined &&
+      (`${authorName} <${authorEmail}>` !== policy.commit_author ||
+        `${committerName} <${committerEmail}>` !== policy.commit_author)
+    ) {
+      return err(commitMessageRejection(`提交 ${sha} 的作者/提交者不符合 commit_author`))
+    }
+    const raw = await this.execGit(['-C', this.worktreePath(taskId), 'cat-file', 'commit', sha])
+    if (/^gpgsig(?:-sha256)? /m.test(raw.stdout.split('\n\n')[0] ?? '')) {
+      return err(commitMessageRejection(`提交 ${sha} 含签名；Keel 提交不启用签名`))
+    }
+    const message = body.join('\n').replace(/\n+$/, '')
+    const formatted = validateStoredCommitMessage(policy, message)
+    if (!formatted.ok) return formatted
+    return policy.commit_message_check === 'hook' && !runHook
+      ? ok(undefined)
+      : this.checkCommitMessage(taskId, message, policy.commit_message_check)
+  }
+
+  async isDirty(taskId: string): Promise<Result<boolean>> {
+    try {
+      const result = await this.execGit(['-C', this.worktreePath(taskId), 'status', '--porcelain'])
+      return ok(result.stdout.trim() !== '')
+    } catch (e) {
+      return err(makeError('WORKSPACE_ERROR', `读取工作区失败：${this.redact(e)}`))
+    }
+  }
+
+  /** 显式 hook 在 ticket worktree 运行；失败或修改模板消息均回灌，不容许假绿。 */
+  async checkCommitMessage(taskId: string, message: string, check?: string): Promise<Result<void>> {
+    if (check === undefined) return ok(undefined)
+    if (check !== 'hook') {
+      try {
+        return new RegExp(check, 'u').test(message.split('\n')[0] ?? '')
+          ? ok(undefined)
+          : err(commitMessageRejection(`header 不匹配正则 ${check}`))
+      } catch (e) {
+        return err(commitMessageRejection(`header 正则无效：${this.redact(e)}`))
+      }
+    }
+    const dir = await mkdtemp(join(tmpdir(), 'keel-commit-msg-'))
+    const file = join(dir, 'COMMIT_EDITMSG')
+    try {
+      await writeFile(file, `${message}\n`)
+      await this.execGit(['-C', this.worktreePath(taskId), 'hook', 'run', 'commit-msg', '--', file])
+      if ((await readFile(file, 'utf8')) !== `${message}\n`) {
+        return err(
+          commitMessageRejection('commit-msg hook 修改了消息；请由 Developer 更新提交字段后重试'),
+        )
+      }
+      return ok(undefined)
+    } catch (e) {
+      return err(commitMessageRejection(`commit-msg hook 拒绝：${this.redact(e)}`))
+    } finally {
+      await rm(file, { force: true })
+      await rmdir(dir)
     }
   }
 

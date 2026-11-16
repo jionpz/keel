@@ -336,6 +336,14 @@ run_id: string
 stage: "develop"
 verdict: ("implemented" | "blocked")
 reason: string
+/**
+ * 仅配置 header 模板时需要；type/scope 还须通过仓库闭合枚举校验，summary 语言跟随 issue。
+ */
+commit_message?: {
+type: string
+scope: string
+summary: string
+}
 details?: {
 
 }

@@ -46,6 +46,55 @@ await this.execGit([
 推广规则：**新增任何 git 子进程调用时，凡是会改变行为的配置
 （身份、签名、hook、编辑器）都要显式钉死，不假设操作者的全局配置是中性的。**
 
+## 可选仓库提交规范（#134）
+
+来源是 `repo` 的可选列，schema 为 `docs/schemas/managed/repo-commit-policy.schema.json`。
+它是管理员配置，不是工作流包或权限授予；运行时角色对 `repo` 的授权保持不变。
+
+```sh
+pnpm keel register-repo https://github.com/owner/repo.git \
+  --commit-author '项目机器人 <bot@example.com>' \
+  --commit-message-template '{type}({scope}): {summary}' \
+  --commit-types feat,fix \
+  --commit-scopes control,fact \
+  --commit-message-check '^fix\(fact\): .+$'
+```
+
+- 不传新参数时所有新列缺省为 `NULL`。重复注册按字段合并，未传参数保留已有值；
+  非法身份、模板、正则或枚举整次拒绝，不写入部分配置。
+- `commit_author` 的格式是 `Name <email>`，姓名非空；姓名和邮箱不能有 Git 会裁剪的首尾
+  空白或标点，避免落盘身份不一致。配置后 author 和 committer 都取该身份，
+  显式环境变量覆盖宿主身份；始终传 `-c commit.gpgsign=false`，不启用 GPG/SSH 签名。
+- 模板必须各含一次 `{type}`、`{scope}`、`{summary}`，并同时配置非空、无重复的
+  `commit_types` / `commit_scopes`。type 为小写字母开头的字母/数字/连字符（最多 32 字符），
+  scope 另允许 `/`（最多 64 字符）；实际字段必须属于各自的闭合枚举。
+- Developer 的 `stage_outcome` 顶层提供 `commit_message: {type, scope, summary}`。
+  summary 按来源 issue 语言写，1–72 个 Unicode 字符，无换行、NUL 或首尾空白；
+  header 最多 100 个 Unicode 字符。语言由 Developer 根据上下文选择，运行时不猜测自然语言。
+- 模板示例生成 `fix(fact): 修复提交规范`。消息以空行分隔正文，加入普通行
+  `Keel-Run: <完整 runId> stage=<stage>`；使用 `--cleanup=verbatim`，避免注释字符/cleanup
+  配置剥掉这行。没有模板时仍精确保留 `<stage>: run <runId 前 8 位>`，没有额外正文。
+- `commit_message_check` 为 JavaScript Unicode 正则（只匹配 header，完整匹配需自行加 `^…$`）
+  或字面量 `hook`。提交前先暂存全部改动，再通过 `git hook run commit-msg` 在 ticket worktree 中执行，
+  遵从仓库 `core.hooksPath`；缺少 hook、hook 非零退出或改写待校验消息均拒绝。
+  正常 `git commit` 自身的 hooks 仍生效。hook 应保持可重复执行。
+
+配置仓库的提交与校验发生在 run 的 `RUNNING` 围栏内，早于 `SUCCEEDED` 和 artifact 落库。
+模板、枚举、长度和普通正文行在创建提交前核对；拒绝时 HEAD 不前进，改动保留以便重试。
+提交前检查任务基线以来的全部新增 commit（包括 Harness 自行提交的 commit），验证身份、
+无签名、模板、枚举、正文和正则/hook，避免用干净工作树或后续 commit 绕过拒绝。
+无配置仓库沿用原提交时机、argv 和环境参数。
+
+提交消息拒绝使用 `SCHEMA_VIOLATION`，detail 前缀为 `commit_message_rejected:`。
+R-007 将具体原因反馈给 Developer；单 run 默认最多 3 轮提案，耗尽后走 T-030 重新派发，
+新 run 仍可读到前次原因。阶段重试上限仍由现有策略决定（默认 3），耗尽后 T-031 进入
+`S-HUMAN_REVIEW`，`NotifyHuman.reason=commit_message_rejected`。拒绝不会推进 QA/review
+或触发交付推送；不自动合并。
+
+测试锚点：`shared/commit-policy.test.ts`（纯校验）、`cli/register-repo.test.ts`（真实 DB
+保留语义）、`fact/git-workspace.test.ts`（真实 git 身份/签名/消息与拒绝），以及
+`e2e/repo-commit-policy.test.ts`（真实 DB + worktree 的回灌、跨 run 重试、超限人工及零推送）。
+
 ## 测试夹具同样要关签名
 
 每个用 `git init` 铺夹具的测试，seed 提交前都要：
@@ -257,7 +306,8 @@ detail 会漏掉它。
   否则认证静默失效。`URL.host` 同时省掉 443/80，与 git 语义一致。
 - **合并**：已有 `GIT_CONFIG_COUNT` 时**追加**，不覆盖操作者配置；非数字值按 0。
 - **注入点**：只有 `ensureGitDir`（clone）、`syncBase`（fetch）、`push` 传 `{ auth }`。
-  worktree / commit / status / remove / rev-parse 是本地操作，**不传 env**（连空 env 都不传）。
+worktree / status / remove / rev-parse 是本地操作，不注入传输认证环境。
+`commitAll` 缺省不传 env；仅显式 `commit_author` 时传递该次提交的身份环境变量。
 
 ### 4. Validation & Error Matrix
 

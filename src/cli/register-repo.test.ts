@@ -99,6 +99,82 @@ async function defaultBranchOf(remoteUrl: string): Promise<string> {
   return row.default_branch
 }
 
+describe('仓库提交配置注册', () => {
+  async function policy(url: string) {
+    return asOwner(
+      async (c) =>
+        (
+          await c.query(
+            'SELECT commit_author, commit_message_template, commit_message_check, commit_types, commit_scopes FROM repo WHERE remote_url=$1',
+            [url],
+          )
+        ).rows[0],
+    )
+  }
+  it('未配置时全部 NULL；完整设置、局部更新和无参数重注册保留所有已有值', async () => {
+    const url = remote('commit-policy')
+    expect((await run([url])).exitCode).toBeUndefined()
+    expect(await policy(url)).toEqual({
+      commit_author: null,
+      commit_message_template: null,
+      commit_message_check: null,
+      commit_types: null,
+      commit_scopes: null,
+    })
+    const configured = await run([
+      url,
+      '--commit-author',
+      '机器人 <bot@example.com>',
+      '--commit-message-template',
+      '{type}({scope}): {summary}',
+      '--commit-message-check',
+      '^fix',
+      '--commit-types',
+      'feat,fix',
+      '--commit-scopes',
+      'control,fact',
+    ])
+    expect(configured.exitCode, configured.stderr).toBeUndefined()
+    const before = await policy(url)
+    expect(before).toEqual({
+      commit_author: '机器人 <bot@example.com>',
+      commit_message_template: '{type}({scope}): {summary}',
+      commit_message_check: '^fix',
+      commit_types: ['feat', 'fix'],
+      commit_scopes: ['control', 'fact'],
+    })
+    await run([url])
+    await run([url, '--issue-label', 'ready'])
+    expect(await policy(url)).toEqual(before)
+    expect((await run([url, '--commit-message-check', 'hook'])).exitCode).toBeUndefined()
+    expect(await policy(url)).toEqual({ ...before, commit_message_check: 'hook' })
+  })
+  it.each(['123', '001', '1e3'])('数字形式的正则逐字保存：%s', async (pattern) => {
+    const url = remote('numeric-policy')
+    const result = await run([url, '--commit-message-check', pattern])
+    expect(result.exitCode, result.stderr).toBeUndefined()
+    expect((await policy(url)).commit_message_check).toBe(pattern)
+    expect((await run([url])).exitCode).toBeUndefined()
+    expect((await policy(url)).commit_message_check).toBe(pattern)
+  })
+  it.each([
+    ['--commit-author', 'bad'],
+    ['--commit-author'],
+    ['--commit-types', 'fix,fix'],
+    ['--commit-scopes', ''],
+    ['--commit-message-check', '['],
+    ['--commit-message-template', '{type}({scope}): {summary}'],
+  ])('非法参数零写入且不破坏已有配置：%j', async (...flags) => {
+    const url = remote('invalid-policy')
+    expect((await run([url, ...flags])).exitCode).toBe(1)
+    expect(await repoCount()).toBe(0)
+    await run([url, '--commit-author', 'Bot <bot@example.com>'])
+    const before = await policy(url)
+    expect((await run([url, ...flags])).exitCode).toBe(1)
+    expect(await policy(url)).toEqual(before)
+  })
+})
+
 describe('首次注册与绑定', () => {
   it('Issue 回写默认 off，显式更新并在不传参数时保留，非法值零写入', async () => {
     const url = remote('writeback')

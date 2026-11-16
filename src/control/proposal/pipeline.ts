@@ -12,6 +12,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import type { PoolClient } from 'pg'
 import type { PersistedArtifactKind } from '../../contracts/artifact-store.js'
 import { type KeelError, makeError } from '../../contracts/errors.js'
 import type { WorkspaceDiff } from '../../contracts/harness-adapter.js'
@@ -65,6 +66,8 @@ export interface PipelineOptions {
    * 返回 `null` 放行；返回错误则整个 run 失败，且不触碰 run 状态。
    */
   readonly preCommitGate?: (candidate: PreCommitCandidate) => KeelError | null
+  /** schema 与归属通过后、RUNNING 围栏锁定内校验/提交 git；拒绝走 R-007 回灌。 */
+  readonly validateCandidate?: (body: unknown, client: PoolClient) => Promise<KeelError | null>
   /**
    * 进程内沉默监管。传入后由 supervisor 负责「是否还在动」；
    * 默认的 stage 硬上限由 DB timer 负责，因此调用方不再传 `wallClockMs`。
@@ -188,6 +191,7 @@ export async function runSessionUntilValid(
   /** 最后一轮的采集结果；每轮覆盖，不回退（见 PipelineOutcome.diff） */
   let diff: WorkspaceDiff | null = null
   let diffError: string | null = null
+  let candidateRejection: KeelError | null = null
 
   const liveness = opts.liveness
   const supervisor =
@@ -310,6 +314,24 @@ export async function runSessionUntilValid(
           }
         }
 
+        if (opts.validateCandidate !== undefined) {
+          const current = await c.query<{ status: string }>(
+            `SELECT status FROM run WHERE id=$1 FOR UPDATE`,
+            [runId],
+          )
+          if (current.rows[0]?.status !== 'RUNNING') {
+            return {
+              ok: false as const,
+              fenceError: makeError(
+                current.rows[0]?.status === 'CANCELLED' ? 'RUN_CANCELLED' : 'RUN_TIMEOUT',
+                `run ${runId} 已不是 RUNNING，拒绝提交 git`,
+              ),
+            }
+          }
+          const rejection = await opts.validateCandidate(proposal.body, c)
+          if (rejection !== null) return { ok: false as const, candidateError: rejection }
+        }
+
         // 围栏：只有仍处于 RUNNING 的 run 才能成功。
         // 巡检 / 人工撤回可能已把 run 收走；影响 0 行时本事务不得写任何东西。
         const fenced = await c.query(
@@ -379,7 +401,16 @@ export async function runSessionUntilValid(
       }
 
       // R-007：把具体的拒绝理由回灌，让它改
-      feedback = violationsToFeedback(committed.verdict.violations)
+      if ('candidateError' in committed) {
+        // 只有消息拒绝能靠 Developer 改字段修正；git/文件系统故障仍走正常 run 失败。
+        if (!committed.candidateError.detail.startsWith('commit_message_rejected:')) {
+          return { ok: false, error: committed.candidateError, usage }
+        }
+        candidateRejection = committed.candidateError
+        feedback = [committed.candidateError.detail]
+      } else {
+        feedback = violationsToFeedback(committed.verdict.violations)
+      }
       rejections.push(feedback)
 
       await asRole('keel_control', async (c) => {
@@ -390,7 +421,12 @@ export async function runSessionUntilValid(
           [
             proposal.task_id,
             proposal.produced_by_run,
-            JSON.stringify({ attempt, violations: committed.verdict.violations }),
+            JSON.stringify({
+              attempt,
+              ...('candidateError' in committed
+                ? { reason: committed.candidateError.detail }
+                : { violations: committed.verdict.violations }),
+            }),
             traceId,
             requireNow(opts),
           ],
@@ -403,7 +439,7 @@ export async function runSessionUntilValid(
       ok: false,
       error: makeError(
         'SCHEMA_VIOLATION',
-        `连续 ${maxRetries} 次提案均未通过校验：${rejections.at(-1)?.join('；') ?? ''}`,
+        `${candidateRejection === null ? '' : 'commit_message_rejected: '}连续 ${maxRetries} 次提案均未通过校验：${rejections.at(-1)?.join('；') ?? ''}`,
       ),
       usage,
     }

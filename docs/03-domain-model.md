@@ -59,6 +59,10 @@ Task 作用的目标仓库。
 | `remote_url` | `text` | |
 | `default_branch` | `text` | PR 的目标分支 |
 | `credential_ref` | `text` | **指向密钥管理的引用，绝不存明文凭据** |
+| `commit_author` | `text NULL` | 可选 `Name <email>`，同时用于作者与提交者；仍禁用签名 |
+| `commit_message_template` | `text NULL` | 可选单行 header 模板，包含 `{type}`、`{scope}`、`{summary}` |
+| `commit_message_check` | `text NULL` | 可选 header 正则或 `hook`，在交付前拒绝不合规提交 |
+| `commit_types` / `commit_scopes` | `text[] NULL` | 模板所需的仓库闭合枚举，注册未传参数时保留存量值 |
 | `created_at` | `timestamptz` | |
 
 > `credential_ref` 是引用而非凭据本身 —— 见 `08-cross-cutting.md` 安全模型。

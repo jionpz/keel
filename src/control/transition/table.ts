@@ -416,6 +416,7 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
     id: 'T-031',
     from: 'ANY_STAGE',
     on: ['RunFailed', 'RunTimeout', 'RunStalled'],
+    // 提交消息拒绝的 RunFailed 携带闭合 reason；transition() 保留该人工审查理由。
     guard: (f) => f.stage_attempts >= f.max_stage_attempts,
     guardText: 'attempt ≥ max_attempts(stage)',
     to: 'S-HUMAN_REVIEW',

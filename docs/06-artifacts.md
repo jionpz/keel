@@ -382,6 +382,18 @@ Task 进入 `S-RFC_READY`（转移 `T-011`）时，当前 version 的 RFC 冻结
 
 `qa` 与 `review` 的结论形状相同，故在 schema 中合为一支（`VerificationOutcome`）。
 
+配置仓库 header 模板时，`develop` 结论另提供可选顶层字段：
+
+```json
+"commit_message": { "type": "fix", "scope": "fact", "summary": "修复提交规范" }
+```
+
+该字段是提交描述数据，不能改变协议、阶段或权限。type/scope 必须属于仓库配置的闭合枚举；
+summary 使用来源 issue 的语言，单行 1–72 个 Unicode 字符。Control 按模板渲染最多 100 字符的
+header，将 run/stage 记录为普通 `Keel-Run:` 正文行，在成功落库前校验。失败通过 R-007 回灌
+Developer，阶段重试耗尽时以 `commit_message_rejected` 升人工。未配置模板时不要求该字段，
+旧提交身份及消息格式保持不变。具体 CLI 与 hook 规则见 [Git 工作区纪律](./spec/backend/git-workspace.md)。
+
 ### 8.2 为什么它是独立产物而不是塞进 `A-State`
 
 因为**守卫必须读结构化枚举，不能读自由文本**。
