@@ -10,14 +10,17 @@ import type {
   ManagedWorkflowTickResult,
 } from '../../contracts/managed.js'
 import { ZERO_USAGE } from '../../contracts/types.js'
-import { asOwner, asRole, closePool } from '../../fact/db.js'
-import type { JstackRoutePlan } from '../../generated/managed.js'
+import { asOwner, asRole, closePool, getPool } from '../../fact/db.js'
+import type { DelegationPolicyVersion, JstackRoutePlan } from '../../generated/managed.js'
 import { sha256CanonicalJson, sha256Text } from '../../shared/canonical-json.js'
-import { answerManagedTicketDecision } from './decision-store.js'
+import { claimActionOutbox, enqueueActionIntent, issuePermit, retryAction } from './action-store.js'
+import { answerManagedTicketDecision, recordDelegationPolicy } from './decision-store.js'
 import { fixtureRoutePackage, fixtureRoutePlan } from './route-test-utils.js'
 import { cancelManagedTicket, pauseManagedTicket } from './ticket-control.js'
 import { type ManagedTicketWorker, tickManagedTicket } from './ticket-runtime.js'
+import { claimManagedTicketTask, withManagedTicketClaim } from './ticket-store.js'
 import { diffDigest } from './ticket-workspace.js'
+import { cancelManagedWorkflow } from './workflow-control.js'
 import {
   commitManagedWorkflowPlan,
   createManagedWorkflow,
@@ -25,7 +28,11 @@ import {
   retryManagedWorkflow,
   tickManagedWorkflow,
 } from './workflow-runtime.js'
-import { insertWorkflowEvidence } from './workflow-store.js'
+import {
+  claimManagedWorkflow,
+  insertWorkflowEvidence,
+  withManagedWorkflowClaim,
+} from './workflow-store.js'
 
 const run = promisify(execFile)
 
@@ -248,6 +255,379 @@ beforeEach(async () => {
 })
 
 afterAll(closePool)
+
+describe('managed workflow cancellation', () => {
+  const now = () => new Date().toISOString()
+  const reason = 'owner confirmed replacement workflow'
+
+  function issuePlan(): JstackRoutePlan {
+    const plan = fixtureRoutePlan('M', 2)
+    return {
+      ...plan,
+      tickets: plan.tickets.map((ticket, index) => ({
+        ...ticket,
+        external_issue: `fixture/repo#${index + 1}`,
+      })),
+    } as JstackRoutePlan
+  }
+
+  async function materialized() {
+    const seeded = await seedWorkflow(issuePlan(), { externalIssue: 'fixture/repo#parent' })
+    await tickUntil(seeded.workflowId, happyWorker(), (r) => r.action === 'materialized')
+    return { ...seeded, node: await nodeRow(seeded.workflowId, 'ticket-1') }
+  }
+
+  async function actionFor(taskId: string, repoId: string) {
+    return asRole('keel_control', (c) =>
+      enqueueActionIntent(c, {
+        task_id: taskId,
+        project_id: repoId,
+        repo_id: repoId,
+        remote_url: 'https://github.com/fixture/repo.git',
+        base_branch: 'main',
+        head_branch: 'ai/fixture',
+        head_sha: 'a'.repeat(40),
+        diff_digest: 'b'.repeat(64),
+        environment: 'local',
+        reversibility: 'reversible',
+        affected_resources: ['fixture branch'],
+        pr_title: 'fixture',
+        pr_body: 'fixture',
+        created_at: now(),
+      }),
+    )
+  }
+
+  it('取消待答和依赖节点，保留失败证据，交接全部 claim，重复取消不释放新 owner', async () => {
+    const seeded = await materialized()
+    const stopWorker = workerWith(async (input) =>
+      success(input.stage, { status: 'must_stop', summary: 'verify environment requires owner' }),
+    )
+    await tickManagedWorkflow(stopWorker, seeded.workflowId)
+    const before = await asRole('keel_control', async (c) => ({
+      task: (
+        await c.query('SELECT * FROM managed_ticket_task WHERE id=$1', [seeded.node.ticket_task_id])
+      ).rows[0],
+      stages: (await c.query('SELECT * FROM managed_ticket_stage ORDER BY id')).rows,
+    }))
+    expect(before.task.status).toBe('WAITING_HUMAN')
+    const replacement = await createManagedWorkflow(
+      seeded.repoId,
+      join(dirname(seeded.repo), 'route-package.json'),
+      'replacement',
+      { scopePaths: ['src'], worktreeRoot: join(seeded.worktreeRoot, 'replacement') },
+    )
+    if (!replacement.ok) throw new Error(replacement.error.detail)
+    expect((await commitManagedWorkflowPlan(replacement.value, issuePlan())).ok).toBe(false)
+
+    const cancelled = await cancelManagedWorkflow(seeded.workflowId, 1, reason, now())
+    if (!cancelled.ok) throw new Error(cancelled.error.detail)
+    expect(cancelled.value.cancelledTaskIds).toEqual([seeded.node.ticket_task_id])
+    expect(cancelled.value.releasedClaimIds).toHaveLength(3)
+    const after = await asRole('keel_control', async (c) => ({
+      task: (
+        await c.query('SELECT * FROM managed_ticket_task WHERE id=$1', [seeded.node.ticket_task_id])
+      ).rows[0],
+      request: (
+        await c.query('SELECT status FROM managed_decision_request WHERE id=$1', [
+          before.task.pending_decision_id,
+        ])
+      ).rows[0],
+      stages: (await c.query('SELECT * FROM managed_ticket_stage ORDER BY id')).rows,
+    }))
+    expect(after.task).toMatchObject({
+      status: 'CANCELLED',
+      control_generation: before.task.control_generation + 1,
+      baseline_commit: before.task.baseline_commit,
+      package_digest: before.task.package_digest,
+      attempts: before.task.attempts,
+      pending_decision_id: null,
+      pending_decision_revision: null,
+      lease_token: null,
+    })
+    expect(after.request.status).toBe('CANCELLED')
+    expect(after.stages).toEqual(before.stages)
+    expect(await git(before.task.worktree_path, 'status', '--porcelain')).toBe('')
+    expect((await commitManagedWorkflowPlan(replacement.value, issuePlan())).ok).toBe(true)
+    expect(await cancelManagedWorkflow(seeded.workflowId, 1, reason, now())).toMatchObject({
+      ok: true,
+      value: cancelled.value,
+    })
+    const active = await asRole('keel_control', (c) =>
+      c.query(`SELECT * FROM managed_issue_claim WHERE status='ACTIVE'`),
+    )
+    expect(active.rows).toHaveLength(2)
+    const old = await getManagedWorkflowProjection(seeded.workflowId)
+    if (!old.ok) throw new Error(old.error.detail)
+    expect(old.value.workflow.status).toBe('CANCELLED')
+    expect(old.value.nodes.every((node) => node.status === 'CANCELLED')).toBe(true)
+    expect((await retryManagedWorkflow(seeded.workflowId)).ok).toBe(false)
+    expect(await tickManagedWorkflow(happyWorker(), seeded.workflowId)).toMatchObject({
+      ok: true,
+      value: null,
+    })
+  })
+
+  it('拒绝错误图版本、无效参数与不存在流程，不改 claim', async () => {
+    const seeded = await materialized()
+    expect(await cancelManagedWorkflow(seeded.workflowId, 2, reason, now())).toMatchObject({
+      ok: false,
+      error: { kind: 'CONFLICT' },
+    })
+    expect((await cancelManagedWorkflow(seeded.workflowId, -1, reason, now())).ok).toBe(false)
+    expect((await cancelManagedWorkflow(seeded.workflowId, 1, '', now())).ok).toBe(false)
+    expect((await cancelManagedWorkflow(seeded.workflowId, 1, reason, 'bad')).ok).toBe(false)
+    expect(await cancelManagedWorkflow(randomUUID(), 1, reason, now())).toMatchObject({
+      ok: false,
+      error: { kind: 'NOT_FOUND' },
+    })
+    const claims = await asRole('keel_control', (c) =>
+      c.query(`SELECT id FROM managed_issue_claim WHERE status='ACTIVE'`),
+    )
+    expect(claims.rowCount).toBe(3)
+  })
+
+  it('拒绝正在执行的 workflow 或 ticket，保留原租约', async () => {
+    const seeded = await materialized()
+    const workflowClaim = await claimManagedWorkflow(now(), seeded.workflowId)
+    if (workflowClaim === null) throw new Error('missing workflow claim')
+    expect((await cancelManagedWorkflow(seeded.workflowId, 1, reason, now())).ok).toBe(false)
+    expect((await withManagedWorkflowClaim(workflowClaim, async () => true)).ok).toBe(true)
+    await asRole('keel_control', (c) =>
+      c.query(`UPDATE managed_workflow SET status='READY',lease_token=NULL WHERE id=$1`, [
+        seeded.workflowId,
+      ]),
+    )
+    const ticketClaim = await claimManagedTicketTask(now(), seeded.node.ticket_task_id)
+    if (ticketClaim === null) throw new Error('missing ticket claim')
+    expect((await cancelManagedWorkflow(seeded.workflowId, 1, reason, now())).ok).toBe(false)
+    expect((await withManagedTicketClaim(ticketClaim, async () => true)).ok).toBe(true)
+  })
+
+  it('完成静止交接后拒绝旧 ticket 和 workflow 的迟到结果', async () => {
+    const seeded = await materialized()
+    const workflowClaim = await claimManagedWorkflow(now(), seeded.workflowId)
+    const ticketClaim = await claimManagedTicketTask(now(), seeded.node.ticket_task_id)
+    if (workflowClaim === null || ticketClaim === null) throw new Error('missing claim')
+    await pauseManagedTicket(seeded.node.ticket_task_id, 'quiesce', now())
+    await asRole('keel_control', (c) =>
+      c.query(
+        `UPDATE managed_workflow SET status='PAUSED',lease_token=NULL,lease_until=NULL WHERE id=$1`,
+        [seeded.workflowId],
+      ),
+    )
+    expect((await cancelManagedWorkflow(seeded.workflowId, 1, reason, now())).ok).toBe(true)
+    expect((await withManagedTicketClaim(ticketClaim, async () => true)).ok).toBe(false)
+    expect((await withManagedWorkflowClaim(workflowClaim, async () => true)).ok).toBe(false)
+  })
+
+  it('保留 FAILED 节点原状态，取消父流程后不可重试', async () => {
+    const seeded = await materialized()
+    await pauseManagedTicket(seeded.node.ticket_task_id, 'failed verification', now())
+    await tickManagedWorkflow(happyWorker(), seeded.workflowId)
+    expect((await nodeRow(seeded.workflowId, 'ticket-1')).status).toBe('FAILED')
+    expect((await cancelManagedWorkflow(seeded.workflowId, 1, reason, now())).ok).toBe(true)
+    expect((await nodeRow(seeded.workflowId, 'ticket-1')).status).toBe('FAILED')
+    expect((await retryManagedWorkflow(seeded.workflowId, 'ticket-1')).ok).toBe(false)
+  })
+
+  it('保留已归档前驱及其 claim，只释放未完成后继', async () => {
+    const seeded = await seedWorkflow(issuePlan(), { completionTarget: 'branch_ready' })
+    for (let tick = 0; tick < 10; tick += 1) {
+      await tickManagedWorkflow(happyWorker(), seeded.workflowId)
+      if ((await nodeRow(seeded.workflowId, 'ticket-1')).status === 'ARCHIVED') break
+    }
+    const first = await nodeRow(seeded.workflowId, 'ticket-1')
+    expect(first.status).toBe('ARCHIVED')
+    const cancelled = await cancelManagedWorkflow(seeded.workflowId, 1, reason, now())
+    if (!cancelled.ok) throw new Error(cancelled.error.detail)
+    expect(cancelled.value.releasedClaimIds).toHaveLength(1)
+    expect((await nodeRow(seeded.workflowId, 'ticket-1')).status).toBe('ARCHIVED')
+    const active = await asRole('keel_control', (c) =>
+      c.query(`SELECT owner_id FROM managed_issue_claim WHERE status='ACTIVE'`),
+    )
+    expect(active.rows).toEqual([{ owner_id: first.id }])
+  })
+
+  it('并发持有 ticket 锁时快速返回冲突，事务没有部分取消', async () => {
+    const seeded = await materialized()
+    const client = await getPool().connect()
+    try {
+      await client.query('BEGIN')
+      await client.query('SELECT id FROM managed_ticket_task WHERE id=$1 FOR UPDATE', [
+        seeded.node.ticket_task_id,
+      ])
+      expect(await cancelManagedWorkflow(seeded.workflowId, 1, reason, now())).toMatchObject({
+        ok: false,
+        error: { kind: 'CONFLICT' },
+      })
+    } finally {
+      await client.query('ROLLBACK')
+      client.release()
+    }
+    expect((await cancelManagedWorkflow(seeded.workflowId, 1, reason, now())).ok).toBe(true)
+  })
+
+  it('阻断尚未执行的 outbox，重试不能复活动作', async () => {
+    const seeded = await materialized()
+    const action = await actionFor(seeded.node.ticket_task_id, seeded.repoId)
+    const cancelled = await cancelManagedWorkflow(seeded.workflowId, 1, reason, now())
+    if (!cancelled.ok) throw new Error(cancelled.error.detail)
+    expect(cancelled.value.blockedOutboxIds).toEqual([action.outboxId])
+    const outbox = await asRole('keel_control', (c) =>
+      c.query('SELECT status FROM managed_action_outbox WHERE id=$1', [action.outboxId]),
+    )
+    expect(outbox.rows[0].status).toBe('BLOCKED')
+    await expect(retryAction(action.outboxId, now())).rejects.toThrow(
+      'managed ticket terminal record is immutable',
+    )
+    const after = await asRole('keel_control', (c) =>
+      c.query('SELECT status FROM managed_action_outbox WHERE id=$1', [action.outboxId]),
+    )
+    expect(after.rows[0].status).toBe('BLOCKED')
+  })
+
+  it('许可被 gateway 共享锁定时立即冲突且零副作用，释放锁后撤销许可并完成交接', async () => {
+    const seeded = await materialized()
+    const action = await actionFor(seeded.node.ticket_task_id, seeded.repoId)
+    const at = now()
+    const policy: DelegationPolicyVersion = {
+      schema_version: '1.0',
+      id: randomUUID(),
+      policy_id: 'fixture-delivery',
+      version: 1,
+      project_id: seeded.repoId,
+      approved_by_owner: 'owner',
+      approved_at: at,
+      valid_from: at,
+      created_at: at,
+      rules: [
+        {
+          id: 'push-pr',
+          decision_kinds: ['approval'],
+          actions: ['push_and_pr'],
+          resource_selectors: ['*'],
+          environments: ['local'],
+          reversibility: 'reversible',
+          impact_limits: {
+            environments: ['local'],
+            reversibilities: ['reversible'],
+            max_affected_resources: 8,
+          },
+          budget_limits: {},
+          required_evidence: [],
+          required_checks: [],
+          mode: 'delegated',
+        },
+      ],
+    }
+    const recorded = await recordDelegationPolicy(policy)
+    if (!recorded.ok) throw new Error(recorded.error.detail)
+    const claim = await claimActionOutbox(at)
+    if (claim === null) throw new Error('missing action claim')
+    const permit = await issuePermit(
+      claim,
+      {
+        ok: true,
+        kind: 'delegation_policy',
+        policy_id: policy.id,
+        policy_version: 1,
+        rule_id: 'push-pr',
+        digest: 'a'.repeat(64),
+        required_checks: [],
+        budget: {},
+      },
+      at,
+    )
+    const snapshot = () =>
+      asRole('keel_control', async (c) => ({
+        workflow: (await c.query('SELECT * FROM managed_workflow')).rows,
+        tasks: (await c.query('SELECT * FROM managed_ticket_task')).rows,
+        outbox: (await c.query('SELECT * FROM managed_action_outbox')).rows,
+        permits: (await c.query('SELECT * FROM managed_execution_permit')).rows,
+        claims: (await c.query('SELECT * FROM managed_issue_claim ORDER BY id')).rows,
+        events: (await c.query('SELECT * FROM managed_workflow_event ORDER BY seq')).rows,
+      }))
+    const before = await snapshot()
+    const client = await getPool().connect()
+    try {
+      await client.query('BEGIN')
+      await client.query('SELECT id FROM managed_execution_permit WHERE id=$1 FOR SHARE', [
+        permit.id,
+      ])
+      await expect(
+        cancelManagedWorkflow(seeded.workflowId, 1, reason, now()),
+      ).resolves.toMatchObject({ ok: false, error: { kind: 'CONFLICT' } })
+      expect(await snapshot()).toEqual(before)
+    } finally {
+      await client.query('ROLLBACK')
+      client.release()
+    }
+    const cancelled = await cancelManagedWorkflow(seeded.workflowId, 1, reason, now())
+    expect(cancelled).toMatchObject({
+      ok: true,
+      value: { blockedOutboxIds: [action.outboxId] },
+    })
+    const after = await snapshot()
+    expect(after.permits[0].status).toBe('REVOKED')
+    expect(after.outbox[0].status).toBe('BLOCKED')
+  })
+
+  it('并发人工答复持有 decision 锁时不死锁，也不留下部分取消', async () => {
+    const seeded = await materialized()
+    await tickManagedWorkflow(
+      workerWith(async (input) => success(input.stage, { status: 'must_stop' })),
+      seeded.workflowId,
+    )
+    const client = await getPool().connect()
+    try {
+      await client.query('BEGIN')
+      await client.query(
+        'SELECT id FROM managed_decision_request WHERE managed_ticket_task_id=$1 FOR UPDATE',
+        [seeded.node.ticket_task_id],
+      )
+      expect(await cancelManagedWorkflow(seeded.workflowId, 1, reason, now())).toMatchObject({
+        ok: false,
+        error: { kind: 'CONFLICT' },
+      })
+    } finally {
+      await client.query('ROLLBACK')
+      client.release()
+    }
+    expect((await nodeRow(seeded.workflowId, 'ticket-1')).status).toBe('WAITING_HUMAN')
+    expect((await cancelManagedWorkflow(seeded.workflowId, 1, reason, now())).ok).toBe(true)
+  })
+
+  it.each(['EXECUTING', 'UNCERTAIN', 'SUCCEEDED'])(
+    '%s 外部动作阻止所有权交接，原状态和 claim 不变',
+    async (status) => {
+      const seeded = await materialized()
+      const action = await actionFor(seeded.node.ticket_task_id, seeded.repoId)
+      await asRole('keel_control', async (c) => {
+        await c.query(`UPDATE managed_action_outbox SET status='LEASED' WHERE id=$1`, [
+          action.outboxId,
+        ])
+        await c.query(`UPDATE managed_action_outbox SET status='EXECUTING' WHERE id=$1`, [
+          action.outboxId,
+        ])
+        if (status !== 'EXECUTING') {
+          await c.query(`UPDATE managed_action_outbox SET status=$2 WHERE id=$1`, [
+            action.outboxId,
+            status,
+          ])
+        }
+      })
+      expect(await cancelManagedWorkflow(seeded.workflowId, 1, reason, now())).toMatchObject({
+        ok: false,
+        error: { kind: 'CONFLICT' },
+      })
+      const active = await asRole('keel_control', (c) =>
+        c.query(`SELECT id FROM managed_issue_claim WHERE status='ACTIVE'`),
+      )
+      expect(active.rowCount).toBe(3)
+    },
+  )
+})
 
 describe('managed workflow runtime', () => {
   it('does not materialize a dependent ticket before its predecessor passes archive', async () => {
