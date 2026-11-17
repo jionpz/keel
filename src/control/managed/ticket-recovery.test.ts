@@ -13,6 +13,8 @@ import type { ManagedTicketStageResult } from '../../generated/managed.js'
 import { sha256Text } from '../../shared/canonical-json.js'
 import {
   answerManagedTicketDecision,
+  overrideManagedTicketDecision,
+  readDecisionResolution,
   recordDelegationPolicy,
   revokeDelegationPolicy,
 } from './decision-store.js'
@@ -100,7 +102,10 @@ afterAll(closePool)
 async function checkpoint(
   mode: 'human' | 'delegated' = 'human',
   beforeBlocked?: (root: string) => Promise<void>,
+  action?: 'requested' | 'must-stop',
+  commitCheckpoint = true,
 ) {
+  const optionId = action === undefined ? 'option-1' : 'option-2'
   const base = await mkdtemp(join(tmpdir(), 'ticket-recovery-'))
   roots.push(base)
   const root = join(base, 'repo')
@@ -149,14 +154,14 @@ async function checkpoint(
     )
   })
 
-  let head = ''
+  let head = baseline
   expect(
     await tickManagedTicket(
       {
         harness: 'pi',
         toolInventory: tools,
         run: async () => {
-          head = await commit(root, 'approved checkpoint\n')
+          if (commitCheckpoint) head = await commit(root, 'approved checkpoint\n')
           return {
             ok: false,
             error: makeError('RUN_TIMEOUT', 'fixture committed then timed out'),
@@ -198,7 +203,7 @@ async function checkpoint(
             required_evidence: [],
             required_checks: [],
             mode: 'delegated',
-            default_option_id: 'option-1',
+            default_option_id: optionId,
           },
         ],
         created_at: time,
@@ -215,6 +220,14 @@ async function checkpoint(
       status: 'blocked',
       commit: head,
       worktree_head: head,
+      ...(action === undefined
+        ? {}
+        : {
+            requested_action: {
+              action: action === 'must-stop' ? 'sudo fixture' : '修复测试夹具后重新验证',
+              reason: 'fixture requested recovery action',
+            },
+          }),
       checks: [
         {
           command: 'fixture checkpoint check',
@@ -249,7 +262,7 @@ async function checkpoint(
               usage: ZERO_USAGE,
               output: {
                 recommendation: 'answer',
-                answer_option_id: 'option-1',
+                answer_option_id: optionId,
                 rationale: 'fixture exact delegation',
                 basis_refs: [{ kind: 'delegation_policy', id: policyId, version: 1 }],
                 assumptions: [],
@@ -281,12 +294,249 @@ async function checkpoint(
   const answered = await answerManagedTicketDecision(
     requestId,
     waiting.value.pending_decision_revision,
-    'option-1',
+    optionId,
     now(),
   )
   expect(answered).toMatchObject({ ok: true, value: { taskStatus: 'READY' } })
   return { root, baseline, head, taskId, requestId, policyId }
 }
+
+it.each(['answer', 'override'] as const)(
+  '人工明确批准请求动作后的恢复点可继续：%s',
+  async (entrypoint) => {
+    const fixture = await checkpoint('human', undefined, 'requested')
+    const reason = '只修复测试夹具使用隔离临时目录，保持权限、沙箱与超时不变'
+    if (entrypoint === 'override')
+      expect(
+        await overrideManagedTicketDecision(fixture.requestId, 2, 'option-2', reason, now()),
+      ).toMatchObject({ ok: true, value: { taskStatus: 'READY' } })
+    let ran = false
+    const outcome = await tickManagedTicket(
+      worker(async (input) => {
+        ran = true
+        expect(input.input_commit).toBe(fixture.head)
+        if (entrypoint === 'override') {
+          expect(input.human_decisions).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ rationale: expect.stringContaining(reason) }),
+            ]),
+          )
+          expect(JSON.stringify(input.context)).toContain(reason)
+        }
+        return result({ commit: fixture.head, worktree_head: fixture.head })
+      }),
+      fixture.taskId,
+    )
+    expect(outcome).toMatchObject({ ok: true, value: { status: 'READY' } })
+    expect(ran).toBe(true)
+    if (entrypoint === 'override') {
+      const resolution = await readDecisionResolution(fixture.requestId, 3)
+      expect(resolution).not.toBeNull()
+      const event = await asOwner((c) =>
+        c.query(
+          `SELECT payload FROM managed_ticket_event
+           WHERE task_id=$1 AND type='ManagedTicketDecisionRecovery'`,
+          [fixture.taskId],
+        ),
+      )
+      expect(event.rows[0]?.payload).toMatchObject({
+        requestId: fixture.requestId,
+        requestRevision: 3,
+        resolutionId: resolution?.id,
+        contextDigest: resolution?.context_digest,
+      })
+    }
+  },
+)
+
+it('委托决定不能接纳请求动作后的恢复点', async () => {
+  const fixture = await checkpoint('delegated', undefined, 'requested')
+  let ran = false
+  const outcome = await tickManagedTicket(
+    worker(async () => {
+      ran = true
+      return result({ commit: fixture.head, worktree_head: fixture.head })
+    }),
+    fixture.taskId,
+  )
+  expect(outcome).toMatchObject({ ok: true, value: { status: 'PAUSED' } })
+  expect(ran).toBe(false)
+})
+
+it('无改动恢复点按精确人工批准启动', async () => {
+  const fixture = await checkpoint('human', undefined, 'requested', false)
+  let ran = false
+  const outcome = await tickManagedTicket(
+    worker(async (input) => {
+      ran = true
+      expect(input.input_commit).toBe(fixture.baseline)
+      expect(input.context).toMatchObject({
+        decision_recovery: {
+          decisionRequestId: fixture.requestId,
+          decisionRequestRevision: 2,
+          changedFiles: [],
+        },
+      })
+      const head = await commit(fixture.root, 'post-approval implementation\n')
+      return result({ commit: head, worktree_head: head })
+    }),
+    fixture.taskId,
+  )
+  expect(outcome).toMatchObject({ ok: true, value: { status: 'READY' } })
+  expect(ran).toBe(true)
+  const resolution = await readDecisionResolution(fixture.requestId, 2)
+  expect(resolution).not.toBeNull()
+  const event = await asOwner((c) =>
+    c.query(
+      `SELECT payload FROM managed_ticket_event
+       WHERE task_id=$1 AND type='ManagedTicketDecisionRecovery'`,
+      [fixture.taskId],
+    ),
+  )
+  expect(event.rows[0]?.payload).toMatchObject({
+    requestId: fixture.requestId,
+    requestRevision: 2,
+    resolutionId: resolution?.id,
+    contextDigest: resolution?.context_digest,
+  })
+})
+
+it('无改动恢复点在暂停并恢复后不能复用旧批准', async () => {
+  const fixture = await checkpoint('human', undefined, 'requested', false)
+  expect(
+    await pauseManagedTicket(fixture.taskId, 'revoke old requested-action approval', now()),
+  ).toMatchObject({ ok: true })
+  expect(await resumeManagedTicket(fixture.taskId, now())).toMatchObject({ ok: true })
+
+  let ran = false
+  const outcome = await tickManagedTicket(
+    worker(async () => {
+      ran = true
+      return result({ commit: fixture.baseline, worktree_head: fixture.baseline })
+    }),
+    fixture.taskId,
+  )
+  expect(outcome).toMatchObject({ ok: true, value: { status: 'PAUSED' } })
+  expect(ran, '控制代次变化后，无改动恢复也不能复用旧批准').toBe(false)
+})
+
+it('无改动恢复点在决议过期后不能启动', async () => {
+  const fixture = await checkpoint('human', undefined, 'requested', false)
+  await asOwner((c) =>
+    c.query('UPDATE managed_decision_request SET expires_at=$2 WHERE id=$1', [
+      fixture.requestId,
+      '2000-01-01T00:00:00.000Z',
+    ]),
+  )
+
+  let ran = false
+  const outcome = await tickManagedTicket(
+    worker(async () => {
+      ran = true
+      return result({ commit: fixture.baseline, worktree_head: fixture.baseline })
+    }),
+    fixture.taskId,
+  )
+  expect(outcome).toMatchObject({ ok: true, value: { status: 'PAUSED' } })
+  expect(ran, '过期决定不能授权无改动恢复').toBe(false)
+})
+
+it('无改动恢复点仍拒绝委托批准', async () => {
+  const fixture = await checkpoint('delegated', undefined, 'requested', false)
+  let ran = false
+  const outcome = await tickManagedTicket(
+    worker(async () => {
+      ran = true
+      return result({ commit: fixture.baseline, worktree_head: fixture.baseline })
+    }),
+    fixture.taskId,
+  )
+  expect(outcome).toMatchObject({ ok: true, value: { status: 'PAUSED' } })
+  expect(ran, '请求动作的恢复通道不能接受委托').toBe(false)
+})
+
+it.each(['descendant', 'dirty', 'index-hidden'] as const)(
+  '无改动恢复批准后拒绝现场漂移：%s',
+  async (kind) => {
+    const fixture = await checkpoint('human', undefined, 'requested', false)
+    if (kind === 'descendant') await commit(fixture.root, 'unapproved descendant\n')
+    if (kind === 'dirty') await writeFile(join(fixture.root, 'feature.txt'), 'unapproved WIP\n')
+    if (kind === 'index-hidden') {
+      await git(fixture.root, 'update-index', '--assume-unchanged', 'README.md')
+      await writeFile(join(fixture.root, 'README.md'), 'hidden unapproved WIP\n')
+    }
+
+    let ran = false
+    const outcome = await tickManagedTicket(
+      worker(async () => {
+        ran = true
+        return result({ commit: fixture.baseline, worktree_head: fixture.baseline })
+      }),
+      fixture.taskId,
+    )
+    expect(outcome).toMatchObject({ ok: true, value: { status: 'PAUSED' } })
+    expect(ran, '批准后出现的现场变化不能借用无改动恢复点').toBe(false)
+  },
+)
+
+it('无改动恢复必须产生新的实现提交', async () => {
+  const fixture = await checkpoint('human', undefined, 'requested', false)
+  let ran = false
+  const outcome = await tickManagedTicket(
+    worker(async () => {
+      ran = true
+      return result({ commit: fixture.baseline, worktree_head: fixture.baseline })
+    }),
+    fixture.taskId,
+  )
+  expect(outcome).toMatchObject({ ok: true, value: { status: 'PAUSED' } })
+  expect(ran).toBe(true)
+})
+
+it.each(['HARNESS_UNAVAILABLE', 'PROTOCOL_ERROR', 'RUN_TIMEOUT'] as const)(
+  '请求动作的一次批准在执行失败 %s 后不能复用',
+  async (kind) => {
+    const fixture = await checkpoint('human', undefined, 'requested')
+    expect(
+      await tickManagedTicket(
+        {
+          harness: 'pi',
+          toolInventory: tools,
+          run: async () => ({
+            ok: false,
+            error: makeError(kind, 'fixture attempted approved action then failed'),
+            usage: ZERO_USAGE,
+          }),
+        },
+        fixture.taskId,
+      ),
+    ).toMatchObject({ ok: true, value: { status: 'READY' } })
+    let ran = false
+    const outcome = await tickManagedTicket(
+      worker(async () => {
+        ran = true
+        return result({ commit: fixture.head, worktree_head: fixture.head })
+      }),
+      fixture.taskId,
+    )
+    expect(outcome).toMatchObject({ ok: true, value: { status: 'PAUSED' } })
+    expect(ran, '未知动作结果不能隐式重用一次批准').toBe(false)
+  },
+)
+
+it('人工决定不能将 MUST_STOP 纳入普通恢复通道', async () => {
+  const fixture = await checkpoint('human', undefined, 'must-stop')
+  let ran = false
+  const outcome = await tickManagedTicket(
+    worker(async () => {
+      ran = true
+      return result({ commit: fixture.head, worktree_head: fixture.head })
+    }),
+    fixture.taskId,
+  )
+  expect(outcome).toMatchObject({ ok: true, value: { status: 'PAUSED' } })
+  expect(ran).toBe(false)
+})
 
 it.each(['HARNESS_UNAVAILABLE', 'PROTOCOL_ERROR'] as const)(
   '临时错误 %s 未改变恢复点时仍可重试',
@@ -366,6 +616,40 @@ it('恢复续跑超时后不能回退并丢弃已批准的提交', async () => {
   )
   expect(outcome).toMatchObject({ ok: true, value: { status: 'PAUSED' } })
   expect(ran, '超时不能授权丢弃已批准的 checkpoint').toBe(false)
+})
+
+it('无改动决定恢复后的超时提交进入 timeout recovery', async () => {
+  const fixture = await checkpoint('human', undefined, undefined, false)
+  let timedOutHead = fixture.baseline
+  expect(
+    await tickManagedTicket(
+      {
+        harness: 'pi',
+        toolInventory: tools,
+        run: async () => {
+          timedOutHead = await commit(fixture.root, 'implementation before timeout\n')
+          return {
+            ok: false,
+            error: makeError('RUN_TIMEOUT', 'fixture committed after decision then timed out'),
+            usage: ZERO_USAGE,
+          }
+        },
+      },
+      fixture.taskId,
+    ),
+  ).toMatchObject({ ok: true, value: { status: 'READY' } })
+
+  let ran = false
+  const outcome = await tickManagedTicket(
+    worker(async (input) => {
+      ran = true
+      expect(input.input_commit).toBe(timedOutHead)
+      return result({ commit: timedOutHead, worktree_head: timedOutHead })
+    }),
+    fixture.taskId,
+  )
+  expect(outcome).toMatchObject({ ok: true, value: { status: 'READY' } })
+  expect(ran).toBe(true)
 })
 
 it.each([false, true])('恢复续跑超时后保留原提交或其后代可以继续：新增提交=%s', async (advance) => {

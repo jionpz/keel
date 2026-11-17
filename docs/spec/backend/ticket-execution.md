@@ -114,6 +114,18 @@ result/evidence 摘要仍有效，全部改动仍在节点 scope 内。决定后
 仍包含已批准提交，再交由上述超时恢复校验 WIP 和 scope；即使回退后的 HEAD 恰好
 等于 baseline，也不能跳过这道检查。
 
+同一 `blocked` / `kind=recovery` 结果若包含 `requested_action`，控制层保留
+`UNAUTHORIZED_ACTION` 与仅人工可继续的请求。只有该请求精确版本的
+`human_confirmed` 决议选择“批准本次继续（仅一次）”，才可在上述全部现场校验后
+恢复 execute；委托决定不能启用此路径，`MUST_STOP` 也不纳入普通恢复。
+这次批准只允许启动一次 execute，失败后不能因 Harness 错误或超时隐式重试，
+必须重新确认。恢复本身不执行请求动作、不增加工具权限。阶段上下文同步下发持久决议的
+`rationale`，使人工覆盖的具体理由与限制不会只留在台账中；它不替代固定包、
+scope、权限和阶段门禁。恢复阶段的 input digest 与事件还绑定精确的 request
+revision、resolution id 与 context digest；即使恢复点没有 Git 改动，也必须先通过
+同一控制代次、请求有效期与授权重检。无改动恢复还要求实时工作树干净、HEAD 精确
+等于原输入且索引没有隐藏改动；批准后出现的同分支后代或 WIP 都按现场漂移拒绝。
+
 结构化阶段结果通过 schema 校验后，先保留 result 与实际 git/检查 evidence，再做
 阶段门禁；验证失败也必须能够回查命令、退出码与输出摘要。FAILED 行的结果只用于
 诊断，没有成功摘要，不能作为成功阶段或可复用证明。

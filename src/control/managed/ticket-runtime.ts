@@ -92,6 +92,7 @@ interface HumanDecision {
   readonly revision: number
   readonly question: string
   readonly answer: string
+  readonly rationale: string
   readonly disposition: string
   readonly resolvedAt: string
 }
@@ -378,11 +379,12 @@ async function humanDecisions(c: PoolClient, taskId: string): Promise<readonly H
     request_revision: number
     question: string
     answer: string
+    rationale: string
     disposition: string
     resolved_at: Date | string
   }>(
     `SELECT r.id AS request_id,r.revision AS request_revision,r.question,
-       res.answer,res.disposition,res.resolved_at
+       res.answer,res.rationale,res.disposition,res.resolved_at
      FROM managed_decision_request r
      JOIN managed_decision_resolution res
        ON res.request_id=r.id AND res.request_revision=r.revision
@@ -395,6 +397,7 @@ async function humanDecisions(c: PoolClient, taskId: string): Promise<readonly H
     revision: row.request_revision,
     question: row.question,
     answer: row.answer,
+    rationale: row.rationale,
     disposition: row.disposition,
     resolvedAt: row.resolved_at instanceof Date ? row.resolved_at.toISOString() : row.resolved_at,
   }))
@@ -489,12 +492,16 @@ async function buildTicketContext(
               ? '上一轮 execute 因 RUN_TIMEOUT 中断，当前工作区保留了该 ticket 的恢复点'
               : '上一轮 execute 等待的恢复决定已接纳，当前工作区与已记录的恢复点一致') +
               `（${recovery.worktreeState}）。` +
-              '先检查这些改动并基于它们继续，不要 reset、checkout 或丢弃；' +
+              '先检查当前工作区并基于已接纳的边界继续，不要 reset、checkout 或丢弃；' +
               (recovery.worktreeState === 'committed'
-                ? '恢复点已经提交且工作树干净；若实现完整，可直接确认当前 commit 完成，无需空提交，随后仍须正式 verify。'
+                ? recovery.changedFiles.length === 0
+                  ? '恢复点没有 Git 改动且工作树干净；必须完成实现提交，随后仍须正式 verify。'
+                  : '恢复点已经提交且工作树干净；若实现完整，可直接确认当前 commit 完成，无需空提交，随后仍须正式 verify。'
                 : '仍有未提交改动，必须完成并提交，不能丢弃 WIP 后确认旧 HEAD。') +
-              `完成实现后提交全部预期改动，最终工作树必须干净。改动必须限定在 scope_paths 内。` +
-              `保留的路径：${recovery.changedFiles.join(', ')}`,
+              '完成实现后提交全部预期改动，最终工作树必须干净。改动必须限定在 scope_paths 内。' +
+              (recovery.changedFiles.length === 0
+                ? ''
+                : `保留的路径：${recovery.changedFiles.join(', ')}`),
             recovery.decisionRequestId === undefined
               ? 'fixed:ticket/timeout-recovery-v1'
               : 'fixed:ticket/decision-recovery-v1',
@@ -572,6 +579,9 @@ interface ExecuteRecovery {
   readonly changedFiles: readonly string[]
   readonly dirtyDigest: string
   readonly decisionRequestId?: string
+  readonly decisionRequestRevision?: number
+  readonly decisionResolutionId?: string
+  readonly decisionContextDigest?: string
 }
 
 const STAGE_PREFLIGHT_CLEAN_DETAIL = 'ticket worktree 在阶段开始前必须干净'
@@ -736,15 +746,16 @@ async function decisionRecoveryForExecute(
     claim.task.current_stage !== 'execute' ||
     blocked?.stage !== 'execute' ||
     blocked.status !== 'MUST_STOP' ||
-    blocked.error !== 'DECISION_REQUIRED' ||
+    !['DECISION_REQUIRED', 'UNAUTHORIZED_ACTION'].includes(blocked.error ?? '') ||
     decision === undefined
   )
     return ok(null)
   const result = eventPayload(blocked.result)
   if (result.status !== 'blocked' || eventPayload(result.decision).kind !== 'recovery')
     return ok(null)
+  if (blocked.error === 'UNAUTHORIZED_ACTION' && blockedIndex !== previous.length - 1)
+    return err(makeError('PERMISSION_DENIED', '请求动作的一次批准已使用，失败后需重新确认'))
   const recordedGit = eventPayload(eventPayload(blocked.evidence).git)
-  if (recordedGit.clean === true && recordedGit.output_commit === expectedInput) return ok(null)
   if (
     eventPayload(eventPayload(claim.task.handoff).last_decision).control_generation !==
       Number(claim.task.control_generation) ||
@@ -762,7 +773,9 @@ async function decisionRecoveryForExecute(
          AND r.id=$3 AND r.revision=$4 AND r.status='RESOLVED'
          AND r.managed_ticket_task_id=$1 AND r.workflow_digest=$5
          AND res.id=$6 AND res.context_digest=$7
-         AND res.disposition IN ('human_confirmed','delegated')`,
+         AND res.disposition IN ('human_confirmed','delegated')
+         AND ($8::text <> 'UNAUTHORIZED_ACTION'
+           OR (res.disposition='human_confirmed' AND res.answer_option_id='option-2'))`,
       [
         claim.task.id,
         blocked.id,
@@ -771,11 +784,18 @@ async function decisionRecoveryForExecute(
         claim.task.package_digest,
         decision.resolution_id,
         decision.digest,
+        blocked.error,
       ],
     ),
   )
   if (accepted.rowCount !== 1)
     return err(makeError('WORKSPACE_ERROR', '恢复点缺少对应阶段已接纳的恢复决定'))
+  const decisionBinding = {
+    decisionRequestId: decision.request_id,
+    decisionRequestRevision: decision.request_revision,
+    decisionResolutionId: decision.resolution_id,
+    decisionContextDigest: decision.digest,
+  } as const
   const checkpointHead = recordedGit.output_commit
   if (typeof checkpointHead !== 'string')
     return err(makeError('WORKSPACE_ERROR', '恢复决定缺少已记录的 HEAD'))
@@ -796,6 +816,26 @@ async function decisionRecoveryForExecute(
     if (!(await isAncestor(worktree.path, checkpointHead, worktree.head)))
       return err(makeError('WORKSPACE_ERROR', '超时恢复不能丢弃已批准的恢复提交'))
     return ok(null)
+  }
+  if (recordedGit.clean === true && checkpointHead === expectedInput) {
+    const liveChanged = await workingTreeChangedFiles(worktree.path, expectedInput)
+    if (!liveChanged.ok) return liveChanged
+    if (!worktree.clean || worktree.head !== expectedInput || liveChanged.value.length > 0)
+      return err(
+        makeError(
+          'WORKSPACE_ERROR',
+          'RECOVERY_DRIFT: 无改动恢复批准后出现了未获批准的工作区或提交变化',
+        ),
+      )
+    return ok({
+      previousAttempt: blocked.attempt,
+      previousInputCommit: expectedInput,
+      inputCommit: expectedInput,
+      worktreeState: 'committed',
+      changedFiles: [],
+      dirtyDigest: sha256CanonicalJson({ head: expectedInput, changed_files: [] }),
+      ...decisionBinding,
+    })
   }
   if (
     !worktree.clean ||
@@ -819,7 +859,7 @@ async function decisionRecoveryForExecute(
     worktreeState: 'committed',
     changedFiles: changed.value,
     dirtyDigest: sha256CanonicalJson({ head: worktree.head, changed_files: changed.value }),
-    decisionRequestId: decision.request_id,
+    ...decisionBinding,
   })
 }
 
@@ -1310,7 +1350,12 @@ export async function tickManagedTicket(
           dirtyDigest: recovery.dirtyDigest,
           ...(recovery.decisionRequestId === undefined
             ? {}
-            : { requestId: recovery.decisionRequestId }),
+            : {
+                requestId: recovery.decisionRequestId,
+                requestRevision: recovery.decisionRequestRevision,
+                resolutionId: recovery.decisionResolutionId,
+                contextDigest: recovery.decisionContextDigest,
+              }),
         },
       )
     }
