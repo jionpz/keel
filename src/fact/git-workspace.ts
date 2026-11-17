@@ -27,8 +27,18 @@
  */
 
 import { execFile } from 'node:child_process'
-import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, readFile, rename, rm, rmdir, writeFile } from 'node:fs/promises'
+import { constants, existsSync } from 'node:fs'
+import {
+  appendFile,
+  cp,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  rmdir,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -391,7 +401,10 @@ export class GitWorkspace {
     const formatted = validateStoredCommitMessage(policy, message)
     if (!formatted.ok) return formatted
     if (policy.commit_message_check === 'hook') {
-      if (expectedMessage === undefined) return this.checkHistoricalCommitHook(taskId, sha, message)
+      if (expectedMessage === undefined) {
+        const parent = /^parent ([a-f0-9]+)$/m.exec(raw.stdout.split('\n\n')[0] ?? '')?.[1]
+        return this.checkHistoricalCommitHook(taskId, sha, message, parent)
+      }
       // 真正的 git commit 还会再次运行 hook；必须比对落盘消息，不能只信预检。
       const storedMessage = raw.stdout.slice(raw.stdout.indexOf('\n\n') + 2)
       if (storedMessage !== `${expectedMessage.replace(/\n*$/, '')}\n`) {
@@ -404,56 +417,93 @@ export class GitWorkspace {
     return this.checkCommitMessage(taskId, message, policy.commit_message_check)
   }
 
-  /** 在独立快照中还原 HEAD=父提交、index/文件=被检提交，不触碰当前暂存区。 */
+  /** 独立 Git 快照保留任务分支、历史暂存区及本地工具，不触碰原工作树。 */
   private async checkHistoricalCommitHook(
     taskId: string,
     sha: string,
     message: string,
+    parent?: string,
   ): Promise<Result<void>> {
     const wt = this.worktreePath(taskId)
     const dir = await mkdtemp(join(tmpdir(), 'keel-history-hook-'))
     const snapshot = join(dir, 'worktree')
-    let added = false
     try {
-      const { stdout: hooks } = await this.execGit([
+      const { stdout: metadata } = await this.execGit([
         '-C',
         wt,
         'rev-parse',
         '--path-format=absolute',
         '--git-path',
         'hooks',
+        '--git-path',
+        'objects',
+        '--git-path',
+        'config',
+        '--symbolic-full-name',
+        'HEAD',
       ])
-      const { stdout: parents } = await this.execGit([
-        '-C',
-        wt,
-        'rev-list',
-        '--parents',
-        '-n',
-        '1',
-        sha,
+      const [hooks, objects, config, branch] = metadata.trimEnd().split('\n')
+      if (
+        hooks === undefined ||
+        objects === undefined ||
+        config === undefined ||
+        branch === undefined
+      ) {
+        throw new Error('历史 hook 缺少仓库路径或分支信息')
+      }
+      // refs/index 独立，只读复用对象；同名分支指向父提交也不会移动原任务分支。
+      await this.execGit([
+        'init',
+        '--quiet',
+        ...(branch === 'HEAD' ? [] : [`--initial-branch=${branch.replace(/^refs\/heads\//, '')}`]),
+        snapshot,
       ])
-      const parent = parents.trim().split(' ')[1]
-      await this.execGit(['-C', wt, 'worktree', 'add', '--detach', '--no-checkout', snapshot, sha])
-      added = true
-      if (parent === undefined) {
-        // 根提交没有父提交，使用未出生的 HEAD，使 cached diff 与首次提交一致。
+      // 保留原 linked worktree 可读的仓库配置，但工作树路径与 bare 标记属于快照。
+      await appendFile(
+        join(snapshot, '.git', 'config'),
+        `\n[include]\n\tpath = ${JSON.stringify(config.trim())}\n` +
+          `[core]\n\tbare = false\n\tworktree = ${JSON.stringify(snapshot)}\n`,
+      )
+      await writeFile(
+        join(snapshot, '.git', 'objects', 'info', 'alternates'),
+        `${JSON.stringify(objects.trim())}\n`,
+      )
+      // 根提交保持未出生的同名分支；普通提交还原提交前的 HEAD。
+      if (parent !== undefined) {
         await this.execGit([
           '-C',
           snapshot,
-          'symbolic-ref',
+          'update-ref',
+          ...(branch === 'HEAD' ? ['--no-deref'] : []),
           'HEAD',
-          `refs/heads/${dir.split('/').pop()}`,
+          parent,
         ])
-      } else {
-        await this.execGit(['-C', snapshot, 'update-ref', '--no-deref', 'HEAD', parent])
       }
       await this.execGit(['-C', snapshot, 'read-tree', '--reset', '-u', sha])
+      const { stdout: ignored } = await this.execGit([
+        '-C',
+        wt,
+        'ls-files',
+        '--others',
+        '--ignored',
+        '--exclude-standard',
+        '--directory',
+        '-z',
+      ])
+      // 复制而非链接依赖目录，避免 hook 的写入污染原工作树；历史跟踪内容优先。
+      for (const path of ignored.split('\0').filter(Boolean)) {
+        await cp(join(wt, path), join(snapshot, path), {
+          recursive: true,
+          force: false,
+          verbatimSymlinks: true,
+          mode: constants.COPYFILE_FICLONE,
+        })
+      }
       return await this.runCommitMessageHook(snapshot, message, hooks.trim())
     } catch (e) {
       return err(commitMessageRejection(`历史 commit-msg hook 复检失败：${this.redact(e)}`))
     } finally {
-      if (added) await this.execGit(['-C', wt, 'worktree', 'remove', '--force', snapshot])
-      await rmdir(dir)
+      await rm(dir, { recursive: true })
     }
   }
 
