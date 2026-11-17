@@ -20,7 +20,7 @@ import { prBodyWithIssueReferences } from './pr-body.js'
 export interface PullRequestSection {
   readonly heading: string
   readonly content: string
-  /** 事实来源，例如 artifact:rfc@2 或 managed-ticket-stage:verify:<id>。 */
+  /** 事实来源，例如 artifact:rfc@2 或 managed-ticket-stage:<stage row id>。 */
   readonly source: string
 }
 

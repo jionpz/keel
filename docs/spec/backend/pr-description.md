@@ -23,24 +23,53 @@
 
 ## 2. 正文
 
-正文以固定兼容行 `Keel Task <task id>` 开头，随后按章节渲染：
+正文以固定兼容行 `Keel Task <task id>` 开头，随后按章节渲染。两条路径共用同一个
+渲染器与同一套“缺就整节省略”的规则，但章节的事实来源不同，各自成表。
+
+缺失产物只省略对应章节，不写“无”“待补充”等占位文字。正文主体超过上限时先截断
+主体，再追加 issue 引用与机器标记，避免截掉 `Closes` / `keel:v1`。
+
+### 2.1 legacy Task/Run
 
 | 章节 | 事实来源 | 缺失时 |
 |---|---|---|
 | 问题 | 来源 issue / ticket 标题 | 不退场：来源标题始终存在 |
-| 根因 | legacy `A-RFC.problem` | 整节省略 |
+| 根因 | `A-RFC.problem` | 整节省略 |
 | 改动 | `A-RFC.proposed_change` + `stage_outcome/develop.reason` | 退回分支与基线事实 |
 | 验证 | `stage_outcome/qa` / `stage_outcome/review` 的 verdict 与 reason | 整节省略 |
 | 风险与未做 | `A-State.risks`、Review `verdict=fail` 的 failed criteria | 整节省略 |
 
-每个章节末尾写 `来源：<ref>`，可回查 Fact Plane：
+来源标识（`来源：<ref>`，可回查 Fact Plane）：
 
+- 问题：`ticket:<task id>`；
 - RFC / State：`artifact:rfc@<version>`、`artifact:state@<version>`；
-- 阶段产物：`artifact:stage_outcome/<key>@<version>`；
-- managed：`managed-ticket:<ticket id>`、`managed-ticket-stage:<stage>:<stage row id>`。
+- 阶段产物：`artifact:stage_outcome/<key>@<version>`，`改动` 节会并列写出 RFC 与
+  develop 两个来源，用 `, ` 连接；
+- 改动退回分支与基线事实时：`git:<task id>`。
 
-缺失产物只省略对应章节，不写“无”“待补充”等占位文字。正文主体超过上限时先截断
-主体，再追加 issue 引用与机器标记，避免截掉 `Closes` / `keel:v1`。
+### 2.2 managed ticket
+
+章节固定按 managed ticket 的阶段记录生成，不读 legacy 的 artifact：
+
+| 章节 | 事实来源 | 缺失时 |
+|---|---|---|
+| 问题 | managed ticket 标题（`ticket_title`） | 不退场：标题始终存在 |
+| 改动 | 最近一次 SUCCEEDED / REUSED 的 `execute` 阶段记录摘要 + 当前 HEAD 的 7 位短 sha | 不退场：至少写出短 sha |
+| 验证 | 最近一次 SUCCEEDED / REUSED 的 `verify` 阶段记录摘要 + `result.checks` 逐条命令、exit code 与通过与否 | 整节省略 |
+| 交付证据 | land 时的基线 commit、HEAD commit 与 diff 摘要 | 不退场：固定追加 |
+
+`交付证据` 是 managed 独有章节，legacy 正文没有。managed 不产出 `根因` 与
+`风险与未做`：review 仍有 open finding 时不会进入 land，风险在 land 之前已消化。
+
+来源标识：
+
+- 问题：`managed-ticket:<ticket id>`；
+- 改动 / 验证：`managed-ticket-stage:<stage row id>`（阶段行的主键，不带 stage 名，
+  stage 由它所在的章节给出）；
+- 交付证据：`managed-ticket:<ticket id>/evidence`。
+
+`managed-ticket-stage:<stage row id>` 可直接回查 `managed_ticket_stage` 的行，
+配合章节即可确定是 execute 还是 verify。
 
 ## 3. 兼容契约
 
