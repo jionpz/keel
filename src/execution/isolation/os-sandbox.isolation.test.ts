@@ -28,7 +28,6 @@ describe('buildMacSandboxProfile', () => {
       tmpdir: '/private/tmp/keel/root/tmp',
       workspace: '/private/tmp/keel/workspace',
       hostHome: '/Users/operator',
-      gitDirs: ['/Users/operator/mycode/repo/.git'],
       runtimePaths: ['/Users/operator/.nvm/versions/node/v24.14.1'],
       networkPorts: [3425],
     })
@@ -40,7 +39,9 @@ describe('buildMacSandboxProfile', () => {
     )
     expect(profile).toContain('(deny file-read* file-write* (subpath "/Users"))')
     expect(profile).toContain('(subpath "/private/tmp/keel/workspace")')
-    expect(profile).toContain('(subpath "/Users/operator/mycode/repo/.git")')
+    expect(profile).not.toContain('(subpath "/Users/operator/mycode/repo/.git")')
+    expect(profile).toContain('(deny signal)')
+    expect(profile).toContain('(allow signal (target same-sandbox))')
     expect(profile).toContain('(deny mach-lookup (global-name "com.apple.securityd"))')
     expect(profile).toContain('(deny process-exec (literal "/usr/bin/security"))')
     expect(profile).not.toContain('(allow file-read* file-write* (subpath "/Users"))')
@@ -219,60 +220,142 @@ describe('prepareManagedOsSandbox', () => {
     expect(realRoot).toContain('/private/tmp/')
   })
 
-  it.skipIf(process.platform !== 'darwin')('linked worktree 的 git 元数据可读写', async () => {
-    const base = await tempDir()
-    const mainRepo = join(base, 'main')
-    const linked = join(base, 'linked')
-    const root = join(base, 'root')
-    const home = join(root, 'home')
-    const tmpdir = join(root, 'tmp')
-    const hostHome = join(base, 'host')
-    await Promise.all([
-      mkdir(mainRepo, { recursive: true }),
-      mkdir(home, { recursive: true }),
-      mkdir(tmpdir, { recursive: true }),
-      mkdir(hostHome, { recursive: true }),
-    ])
-    const git = (cwd: string, args: readonly string[]) =>
-      execFileSync('git', args, { cwd, stdio: 'pipe' })
-    git(mainRepo, ['init', '-q', '-b', 'main'])
-    git(mainRepo, ['config', 'user.email', 'test@keel.invalid'])
-    git(mainRepo, ['config', 'user.name', 'keel test'])
-    await writeFile(join(mainRepo, 'README.md'), '# main\n')
-    git(mainRepo, ['add', 'README.md'])
-    git(mainRepo, ['commit', '-q', '-m', 'base'])
-    git(mainRepo, ['worktree', 'add', '-q', '-b', 'linked-branch', linked])
-    await writeFile(join(home, '.gitconfig'), '[user]\n\tname = test\n\temail = t@invalid\n')
+  it.skipIf(process.platform !== 'darwin')(
+    '私有副本可提交，宿主 worktree 管理目录和 refs 不可写',
+    async () => {
+      const base = await tempDir()
+      const mainRepo = join(base, 'main')
+      const linked = join(base, 'linked')
+      const copy = join(base, 'copy')
+      const root = join(base, 'root')
+      const home = join(root, 'home')
+      const tmpdir = join(root, 'tmp')
+      const hostHome = join(base, 'host')
+      await Promise.all([
+        mkdir(mainRepo, { recursive: true }),
+        mkdir(home, { recursive: true }),
+        mkdir(tmpdir, { recursive: true }),
+        mkdir(hostHome, { recursive: true }),
+      ])
+      const git = (cwd: string, args: readonly string[]) =>
+        execFileSync('git', args, { cwd, stdio: 'pipe' })
+      git(mainRepo, ['init', '-q', '-b', 'main'])
+      git(mainRepo, ['config', 'user.email', 'test@keel.invalid'])
+      git(mainRepo, ['config', 'user.name', 'keel test'])
+      await writeFile(join(mainRepo, 'README.md'), '# main\n')
+      git(mainRepo, ['add', 'README.md'])
+      git(mainRepo, ['commit', '-q', '-m', 'base'])
+      git(mainRepo, ['worktree', 'add', '-q', '-b', 'linked-branch', linked])
+      git(mainRepo, ['clone', '--no-local', '--no-checkout', mainRepo, copy])
+      git(copy, ['checkout', '-q', '-b', 'ai/private', 'HEAD'])
+      const refs = git(mainRepo, ['show-ref']).toString()
+      const worktrees = git(mainRepo, ['worktree', 'list', '--porcelain']).toString()
+      await writeFile(join(home, '.gitconfig'), '[user]\n\tname = test\n\temail = t@invalid\n')
 
-    const prepared = await prepareManagedOsSandbox({
-      root,
-      home,
-      tmpdir,
-      workspace: linked,
-      hostHome,
-      networkPorts: [3425],
-    })
-    expect(prepared.ok).toBe(true)
-    if (!prepared.ok) return
-
-    const env = {
-      PATH: process.env.PATH ?? '/usr/bin:/bin',
-      HOME: await realpath(home),
-      TMPDIR: await realpath(tmpdir),
-      LANG: 'C.UTF-8',
-    }
-    const runGit = async (args: readonly string[]) =>
-      execFileAsync(
-        prepared.value.executable,
-        [...prepared.value.prefixArgs, '/usr/bin/git', ...args],
-        { cwd: await realpath(linked), env, timeout: 5000 },
+      const rejected = await prepareManagedOsSandbox({
+        root,
+        home,
+        tmpdir,
+        workspace: linked,
+        hostHome,
+      })
+      expect(rejected).toMatchObject({
+        ok: false,
+        error: { detail: expect.stringContaining('独立 Git 副本') },
+      })
+      const readOnly = await prepareManagedOsSandbox({
+        root,
+        home,
+        tmpdir,
+        workspace: linked,
+        hostHome,
+        readOnlyWorkspace: true,
+      })
+      if (!readOnly.ok) throw new Error(readOnly.error.detail)
+      const readEnv = {
+        PATH: process.env.PATH,
+        HOME: await realpath(home),
+        TMPDIR: await realpath(tmpdir),
+      }
+      const read = await execFileAsync(
+        readOnly.value.executable,
+        [...readOnly.value.prefixArgs, '/usr/bin/git', 'rev-parse', 'HEAD'],
+        { cwd: linked, env: readEnv, timeout: 5000 },
       )
+      expect(read.stdout.trim()).toBe(git(mainRepo, ['rev-parse', 'HEAD']).toString().trim())
+      for (const target of [
+        join(linked, 'README.md'),
+        join(mainRepo, '.git', 'config'),
+        join(mainRepo, '.git', 'refs', 'heads', 'main'),
+      ]) {
+        await expect(
+          execFileAsync(
+            readOnly.value.executable,
+            [
+              ...readOnly.value.prefixArgs,
+              process.execPath,
+              '-e',
+              `require('node:fs').writeFileSync(${JSON.stringify(target)},'corrupted')`,
+            ],
+            { cwd: linked, env: readEnv, timeout: 5000 },
+          ),
+        ).rejects.toThrow(/EPERM|Operation not permitted/)
+      }
+      // 每次构造的 profile 路径相同，下面重新写入正常可写副本的 profile。
+      await rm(readOnly.value.profilePath)
+      const prepared = await prepareManagedOsSandbox({
+        root,
+        home,
+        tmpdir,
+        workspace: copy,
+        hostHome,
+        networkPorts: [3425],
+      })
+      expect(prepared.ok).toBe(true)
+      if (!prepared.ok) return
 
-    const before = await runGit(['rev-parse', 'HEAD'])
-    await runGit(['commit', '--allow-empty', '-q', '-m', 'sandbox commit'])
-    const after = await runGit(['rev-parse', 'HEAD'])
-    expect(after.stdout.trim()).not.toBe(before.stdout.trim())
-  })
+      const env = {
+        PATH: process.env.PATH ?? '/usr/bin:/bin',
+        HOME: await realpath(home),
+        TMPDIR: await realpath(tmpdir),
+        LANG: 'C.UTF-8',
+      }
+      const runGit = async (args: readonly string[]) =>
+        execFileAsync(
+          prepared.value.executable,
+          [...prepared.value.prefixArgs, '/usr/bin/git', ...args],
+          { cwd: await realpath(copy), env, timeout: 5000 },
+        )
+
+      const before = await runGit(['rev-parse', 'HEAD'])
+      await writeFile(join(copy, 'README.md'), 'implementation\n')
+      await runGit(['add', 'README.md'])
+      await runGit(['commit', '-q', '-m', 'sandbox commit'])
+      const after = await runGit(['rev-parse', 'HEAD'])
+      expect(after.stdout.trim()).not.toBe(before.stdout.trim())
+      for (const target of [
+        join(mainRepo, '.git', 'config'),
+        join(mainRepo, '.git', 'refs', 'heads', 'main'),
+        join(mainRepo, '.git', 'worktrees', 'linked', 'sentinel'),
+      ]) {
+        await expect(
+          execFileAsync(
+            prepared.value.executable,
+            [
+              ...prepared.value.prefixArgs,
+              process.execPath,
+              '-e',
+              `require('node:fs').writeFileSync(${JSON.stringify(target)},'corrupted')`,
+            ],
+            { cwd: copy, env, timeout: 5000 },
+          ),
+        ).rejects.toThrow(/EPERM|Operation not permitted/)
+      }
+      await runGit(['worktree', 'prune', '--verbose'])
+      expect(git(mainRepo, ['show-ref']).toString()).toBe(refs)
+      expect(git(mainRepo, ['worktree', 'list', '--porcelain']).toString()).toBe(worktrees)
+    },
+  )
 })
 
 // 宿主巡检使用 ps 核验 PID 身份；被测沙箱无权充当宿主探针。

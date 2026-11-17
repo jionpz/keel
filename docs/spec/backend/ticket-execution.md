@@ -34,7 +34,8 @@ Keel 在绑定时读取一次包并保存到 `managed_package`；运行期只按
 `createManagedTicketTask` 校验：
 
 - 包 schema、阶段顺序、阶段/provider/tool profile 交叉引用、所有内容摘要；
-- worktree 是真实路径、非符号链接、独立 git 顶层；
+- workspace 是真实路径、非符号链接、私有 git 顶层；`.git` 不外置，不共享
+  commondir、alternates、符号链接或硬链接，旧 linked worktree 保留并拒绝绑定/执行；
 - 复用 JT-02A 的 `inspectWorkspaceIsolation` 检查受保护路径与共享临时目录边界；
 - worktree 干净；
 - baseline commit 存在且精确等于绑定时的 HEAD。
@@ -90,8 +91,10 @@ ticket 与 workflow 的租约为 965 秒，比执行上限和清理等待多 60 
 续跑与 stage 启动在同一事务中写入 `ManagedTicketTimeoutRecovery`，记录保留路径、
 attempt、恢复前后的 HEAD、`worktreeState` 与 `dirtyDigest`；上下文明确要求模型基于
 恢复点继续而不是丢弃。即使超时发生在 agent 已提交但 stage 尚未确认时，也仍会把该
-commit 当作未确认输入，而不是误判为 drift。续跑不会绕过完成门禁：`execute` 仍必须
-在恢复输入之上产生新 commit，最终工作树必须干净。普通脏工作区、没有 scope、非绑定
+commit 当作未确认输入，而不是误判为 drift。续跑不会绕过完成门禁：`execute` 结束时
+工作树必须干净，输出必须等于 HEAD 且为恢复输入的后代。恢复前已经干净且有范围内
+已提交改动时，执行器可以确认该恢复 commit 完成，无须制造新提交，随后仍走正式
+verify；恢复前有 WIP 则不能丢弃 WIP 后重复确认旧 HEAD。普通脏工作区、没有 scope、非绑定
 输入后代的 HEAD、超时后出现其他阶段事件以及 scope 外改动都 fail-closed。
 
 结构化阶段结果通过 schema 校验后，先保留 result 与实际 git/检查 evidence，再做
@@ -106,7 +109,7 @@ verify 的 `checks` 每项都是硬门禁，只包含当前阶段必需的验收
 
 | 阶段 | 门禁 |
 |---|---|
-| `execute` | 必须产生新 commit，commit 等于当前 HEAD，与输入 commit 不同，工作树干净 |
+| `execute` | 输出等于 HEAD 且为输入后代，工作树干净；通常必须产生新 commit，只有上述已提交完整恢复点允许重新确认 |
 | `verify` | 至少一条 check；每条必须有 command、exit code、passed、输出摘要/摘录；`output_digest` 必须与实际摘录一致；HEAD 不能变化 |
 | `review` | `reviewed_commit` 必须等于当前 HEAD；`diff_digest` 必须等于 Keel 重新计算的 baseline..HEAD diff；open finding 只能进入 rework |
 | `land` | `land.commit` 必须等于当前 HEAD；branch 必须是 `ai/*` 且不等于 base；只登记 `push_and_pr` intent/outbox，不执行 push/PR |

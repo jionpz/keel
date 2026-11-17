@@ -31,6 +31,8 @@ export interface PrepareManagedEnvOptions {
   readonly rootBase?: string
   /** 任务 worktree；提供时强制建立操作系统沙箱。 */
   readonly workspace?: string
+  /** 规划、调查、天问只读源工作区，绝不开放其 Git 管理目录的写权限。 */
+  readonly readOnlyWorkspace?: boolean
   /** 沙箱允许访问的本机端口；默认 3425（模型网关）。 */
   readonly sandboxNetworkPorts?: readonly number[]
   /** 测试注入；默认读宿主 ~/.pi/agent/models.json。 */
@@ -126,6 +128,7 @@ export async function prepareManagedExecutorEnv(
         home,
         tmpdir,
         hostHome: options.hostHome ?? homedir(),
+        readOnlyWorkspace: options.readOnlyWorkspace ?? false,
         ...(options.sandboxNetworkPorts === undefined
           ? {}
           : { networkPorts: options.sandboxNetworkPorts }),

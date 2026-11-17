@@ -49,20 +49,28 @@ export interface ManagedTicketWorkerAdapter {
 export async function awaitTicketResult(
   adapter: Pick<HarnessAdapter, 'awaitResult' | 'interrupt'>,
   handle: RunHandle,
+  signal?: AbortSignal,
 ): Promise<Result<RunResult> | null> {
   let timer: ReturnType<typeof setTimeout> | undefined
   let cleanupTimer: ReturnType<typeof setTimeout> | undefined
+  let onAbort: (() => void) | undefined
   const timeout = new Promise<null>((resolve) => {
-    timer = setTimeout(() => {
-      void adapter.interrupt(handle, 'timeout').catch(() => undefined)
+    const interrupt = (reason: 'timeout' | 'cancelled') => {
+      if (cleanupTimer !== undefined) return
+      void adapter.interrupt(handle, reason).catch(() => undefined)
       cleanupTimer = setTimeout(() => resolve(null), MANAGED_STAGE_CLEANUP_MS)
-    }, MANAGED_STAGE_TIMEOUT_MS)
+    }
+    timer = setTimeout(() => interrupt('timeout'), MANAGED_STAGE_TIMEOUT_MS)
+    onAbort = () => interrupt('cancelled')
+    signal?.addEventListener('abort', onAbort, { once: true })
+    if (signal?.aborted) onAbort()
   })
   try {
     return await Promise.race([adapter.awaitResult(handle), timeout])
   } finally {
     if (timer !== undefined) clearTimeout(timer)
     if (cleanupTimer !== undefined) clearTimeout(cleanupTimer)
+    if (onAbort !== undefined) signal?.removeEventListener('abort', onAbort)
   }
 }
 
@@ -72,15 +80,19 @@ async function runStructured<T>(
   spec: RunSpec,
   label: string,
   hooks?: RunHooks,
+  signal?: AbortSignal,
 ): Promise<ResultWithUsage<{ output: T; usage: Usage }>> {
   const started = await adapter.startRun(spec, hooks)
   if (!started.ok) return { ok: false, error: started.error, usage: ZERO_USAGE }
   try {
-    const result = await awaitTicketResult(adapter, started.value)
+    const result = await awaitTicketResult(adapter, started.value, signal)
     if (result === null)
       return {
         ok: false,
-        error: makeError('RUN_TIMEOUT', `${label} wall clock`),
+        error: makeError(
+          signal?.aborted ? 'PROTOCOL_ERROR' : 'RUN_TIMEOUT',
+          signal?.aborted ? `${label} 控制层已撤回执行` : `${label} wall clock`,
+        ),
         usage: ZERO_USAGE,
       }
     if (!result.ok) return { ok: false, error: result.error, usage: ZERO_USAGE }
@@ -138,6 +150,7 @@ export function ticketWorkerFromAdapter(adapter: HarnessAdapter): ManagedTicketW
       },
       'managed ticket stage',
       input.onProgress === undefined ? undefined : { onProgress: input.onProgress },
+      input.signal,
     )
   const decide: ManagedTicketDecisionRunner = (input) =>
     runStructured<TianwenDecision>(

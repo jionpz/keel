@@ -32,9 +32,10 @@ import {
   tickManagedTicket,
 } from './ticket-runtime.js'
 import {
-  addWorktree,
   commitExists,
+  createTicketRepository,
   diffDigest,
+  inspectRepositorySource,
   inspectTicketWorktree,
   isAncestor,
   resolveCommit,
@@ -205,7 +206,7 @@ export async function createManagedWorkflow(
   if (!repo.ok) return repo
   const root = await prepareWorktreeRoot(options.worktreeRoot, repo.value.local_path)
   if (!root.ok) return root
-  const head = await inspectTicketWorktree(repo.value.local_path)
+  const head = await inspectRepositorySource(repo.value.local_path)
   if (!head.ok) return head
   const baseline = options.baselineCommit ?? head.value.head
   const resolvedBaseline = await resolveCommit(repo.value.local_path, baseline)
@@ -506,22 +507,26 @@ async function nodeBaseCommit(
   workflow: ManagedWorkflow,
   nodes: readonly ManagedWorkflowNode[],
   node: ManagedWorkflowNode,
-): Promise<Result<string>> {
-  if (node.depends_on.length === 0) return ok(workflow.baseline_commit)
+): Promise<Result<{ readonly commit: string; readonly sourcePath: string }>> {
+  if (node.depends_on.length === 0)
+    return ok({ commit: workflow.baseline_commit, sourcePath: repoPath })
   const byKey = new Map(nodes.map((entry) => [entry.node_key, entry]))
-  const commits: string[] = []
+  const commits: { commit: string; sourcePath: string }[] = []
   for (const key of node.depends_on) {
     const dependency = byKey.get(key)
-    if (dependency === undefined || dependency.output_commit === null)
+    if (
+      dependency === undefined ||
+      dependency.output_commit === null ||
+      dependency.worktree_path === null
+    )
       return err(makeError('CONFLICT', `依赖 ${key} 没有可用的输出 commit`))
-    commits.push(dependency.output_commit)
+    commits.push({ commit: dependency.output_commit, sourcePath: dependency.worktree_path })
   }
-  if (commits.length === 1) return ok(commits[0] as string)
   for (const candidate of commits) {
     let covers = true
     for (const other of commits) {
-      if (other === candidate) continue
-      if (!(await isAncestor(repoPath, other, candidate))) {
+      if (other.commit === candidate.commit) continue
+      if (!(await isAncestor(candidate.sourcePath, other.commit, candidate.commit))) {
         covers = false
         break
       }
@@ -560,7 +565,7 @@ async function ensureWorktree(
   }
   await mkdir(dirname(path), { recursive: true })
   try {
-    await addWorktree(repoPath, path, branch, baseCommit)
+    await createTicketRepository(repoPath, path, branch, baseCommit)
   } catch (error) {
     return err(errorFrom(error, 'WORKSPACE_ERROR', '无法创建 ticket worktree'))
   }
@@ -591,9 +596,14 @@ async function materializeOneNode(
       if (node === undefined) return null
       const base = await nodeBaseCommit(repo.value.local_path, claim.workflow, nodes, node)
       if (!base.ok) throw base.error
-      if (!(await commitExists(repo.value.local_path, base.value)))
+      if (!(await commitExists(base.value.sourcePath, base.value.commit)))
         throw makeError('CONFLICT', '图节点基线 commit 不存在')
-      const worktree = await ensureWorktree(repo.value.local_path, claim.workflow, node, base.value)
+      const worktree = await ensureWorktree(
+        base.value.sourcePath,
+        claim.workflow,
+        node,
+        base.value.commit,
+      )
       if (!worktree.ok) throw worktree.error
       const plan = await c.query<{ plan: JstackRoutePlan }>(
         'SELECT plan FROM managed_workflow_graph WHERE workflow_id=$1 AND version=$2',
@@ -609,19 +619,19 @@ async function materializeOneNode(
         claim.workflow.repo_id,
         ticketPackage.value,
         worktree.value.path,
-        { baselineCommit: base.value, taskId: node.id },
+        { baselineCommit: base.value.commit, taskId: node.id },
       )
       if (!created.ok) throw created.error
       await attachNodeTicket(c, node.id, {
         task_id: created.value,
-        base_commit: base.value,
+        base_commit: base.value.commit,
         worktree_path: worktree.value.path,
       })
       await workflowEvent(c, claim.workflow.id, 'ManagedWorkflowNodeMaterialized', {
         nodeId: node.id,
         nodeKey: node.node_key,
         ticketTaskId: created.value,
-        baseCommit: base.value,
+        baseCommit: base.value.commit,
         worktreePath: worktree.value.path,
         branch: worktree.value.branch,
       })

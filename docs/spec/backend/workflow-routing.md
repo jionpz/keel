@@ -88,8 +88,13 @@ PENDING → READY → RUNNING → WAITING_HUMAN / WAITING_GATEWAY
 
 ## 4. scope 与工作树
 
-每个节点有独立 worktree，分支名 `ai/wf-<workflow8>-<node-key>`，基线来自
-workflow baseline 或依赖节点输出 commit。工作树必须干净，HEAD 必须等于绑定输入。
+每个节点有独立 Git 副本，分支名 `ai/wf-<workflow8>-<node-key>`，基线来自
+workflow baseline 或已归档依赖节点输出 commit。根节点从注册源仓库复制，
+下游从覆盖全部依赖的前驱私有仓库复制，不向宿主写回 refs 或对象。
+Control Plane 使用 `clone --no-local --no-checkout`，不借用源对象库或硬链接；
+旧 linked worktree 拒绝执行并保留原现场。数据库 `worktree_path` 与 CLI
+`--worktree-root` 沿用名称，仅表示存储路径。工作树必须干净，HEAD 必须等于绑定输入；
+有证据的超时恢复例外见 [ticket-execution.md](./ticket-execution.md)。
 
 `execute` 成功后，Keel 用 `git diff --name-only baseline..HEAD` 重新计算改动文件；
 每个路径必须落在节点 `scope_paths` 的某个前缀下。越界改动使阶段失败，

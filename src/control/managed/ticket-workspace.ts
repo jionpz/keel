@@ -3,8 +3,13 @@ import { lstat, realpath } from 'node:fs/promises'
 import { promisify } from 'node:util'
 import { err, makeError, ok, type Result } from '../../contracts/errors.js'
 import { sha256Text } from '../../shared/canonical-json.js'
+import { assertPrivateGitDirectory } from '../../shared/private-git.js'
+import { withTrustedGitDirectory } from '../../shared/trusted-git.js'
 
 const run = promisify(execFile)
+
+// 宿主只读检查不得执行由不可信工作区配置的监控器、hooks 或 diff 驱动。
+const SAFE_GIT_ARGS = ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null'] as const
 
 export interface TicketWorktreeState {
   readonly path: string
@@ -14,13 +19,15 @@ export interface TicketWorktreeState {
 }
 
 async function git(path: string, args: readonly string[]): Promise<string> {
-  const result = await run('git', ['-C', path, ...args], {
+  const result = await run('git', [...SAFE_GIT_ARGS, '-C', path, ...args], {
     encoding: 'utf8',
     env: {
       PATH: process.env.PATH ?? '/usr/bin:/bin',
       GIT_CONFIG_GLOBAL: '/dev/null',
       GIT_CONFIG_NOSYSTEM: '1',
       GIT_TERMINAL_PROMPT: '0',
+      GIT_NO_REPLACE_OBJECTS: '1',
+      GIT_OPTIONAL_LOCKS: '0',
     },
     maxBuffer: 8 * 1024 * 1024,
     timeout: 15000,
@@ -29,6 +36,18 @@ async function git(path: string, args: readonly string[]): Promise<string> {
 }
 
 export async function inspectTicketWorktree(path: string): Promise<Result<TicketWorktreeState>> {
+  return inspectGitWorktree(path, true)
+}
+
+/** 控制层只读源仓库；它不会成为执行器的可写 workspace。 */
+export async function inspectRepositorySource(path: string): Promise<Result<TicketWorktreeState>> {
+  return inspectGitWorktree(path, false)
+}
+
+async function inspectGitWorktree(
+  path: string,
+  privateGit: boolean,
+): Promise<Result<TicketWorktreeState>> {
   if (!path.startsWith('/'))
     return err(makeError('WORKSPACE_ERROR', 'ticket worktree 必须是绝对路径'))
   const link = await lstat(path).catch(() => null)
@@ -46,12 +65,18 @@ export async function inspectTicketWorktree(path: string): Promise<Result<Ticket
   let branch: string
   let status: string
   try {
+    if (privateGit) await assertPrivateGitDirectory(canonical)
     topLevel = await git(canonical, ['rev-parse', '--show-toplevel'])
     head = await git(canonical, ['rev-parse', 'HEAD'])
     branch = await git(canonical, ['rev-parse', '--abbrev-ref', 'HEAD'])
     status = await git(canonical, ['status', '--porcelain', '--untracked-files=normal'])
-  } catch {
-    return err(makeError('WORKSPACE_ERROR', 'ticket worktree 必须是可读的 git 顶层'))
+  } catch (error) {
+    return err(
+      makeError(
+        'WORKSPACE_ERROR',
+        `ticket workspace 必须是私有 git 顶层：${error instanceof Error ? error.message : String(error)}`,
+      ),
+    )
   }
   if (topLevel !== canonical)
     return err(makeError('WORKSPACE_ERROR', 'ticket worktree 必须是独立 git 顶层'))
@@ -88,26 +113,20 @@ export async function isAncestor(
   }
 }
 
-export async function branchExists(path: string, branch: string): Promise<boolean> {
-  try {
-    const resolved = await git(path, ['rev-parse', '--verify', `refs/heads/${branch}`])
-    return /^[a-f0-9]{40}$/.test(resolved)
-  } catch {
-    return false
-  }
-}
-
-export async function addWorktree(
+export async function createTicketRepository(
   repoPath: string,
   path: string,
   branch: string,
   base: string,
 ): Promise<void> {
-  if (await branchExists(repoPath, branch)) {
-    await git(repoPath, ['worktree', 'add', path, branch])
-    return
-  }
-  await git(repoPath, ['worktree', 'add', '-b', branch, path, base])
+  // --no-local 走 Git 对象传输，不复制源仓库的硬链接、alternates、配置或 hooks。
+  await withTrustedGitDirectory((gitDir) =>
+    git(gitDir, ['clone', '--no-local', '--no-checkout', '--', repoPath, path]),
+  )
+  await git(path, ['checkout', '-b', branch, base])
+  await git(path, ['config', 'user.name', 'Keel Managed Executor'])
+  await git(path, ['config', 'user.email', 'keel-managed@invalid'])
+  await git(path, ['config', 'commit.gpgsign', 'false'])
 }
 
 export async function diffDigest(
@@ -118,17 +137,32 @@ export async function diffDigest(
   if (!(await commitExists(path, baseline)) || !(await commitExists(path, head)))
     return err(makeError('WORKSPACE_ERROR', 'diff 基线或目标 commit 不存在'))
   try {
-    const output = await run('git', ['-C', path, 'diff', '--binary', `${baseline}..${head}`], {
-      encoding: 'utf8',
-      env: {
-        PATH: process.env.PATH ?? '/usr/bin:/bin',
-        GIT_CONFIG_GLOBAL: '/dev/null',
-        GIT_CONFIG_NOSYSTEM: '1',
-        GIT_TERMINAL_PROMPT: '0',
+    const output = await run(
+      'git',
+      [
+        ...SAFE_GIT_ARGS,
+        '-C',
+        path,
+        'diff',
+        '--no-ext-diff',
+        '--no-textconv',
+        '--binary',
+        `${baseline}..${head}`,
+      ],
+      {
+        encoding: 'utf8',
+        env: {
+          PATH: process.env.PATH ?? '/usr/bin:/bin',
+          GIT_CONFIG_GLOBAL: '/dev/null',
+          GIT_CONFIG_NOSYSTEM: '1',
+          GIT_TERMINAL_PROMPT: '0',
+          GIT_NO_REPLACE_OBJECTS: '1',
+          GIT_OPTIONAL_LOCKS: '0',
+        },
+        maxBuffer: 32 * 1024 * 1024,
+        timeout: 15000,
       },
-      maxBuffer: 32 * 1024 * 1024,
-      timeout: 15000,
-    })
+    )
     return ok(sha256Text(output.stdout))
   } catch {
     return err(makeError('WORKSPACE_ERROR', '无法读取 ticket diff'))
@@ -145,6 +179,8 @@ export async function changedFiles(
   try {
     const output = await git(path, [
       'diff',
+      '--no-ext-diff',
+      '--no-textconv',
       '--name-only',
       '--no-renames',
       '-z',
@@ -171,7 +207,16 @@ export async function workingTreeChangedFiles(
     return err(makeError('WORKSPACE_ERROR', 'working-tree changed-files 基线不存在'))
   try {
     const [tracked, untracked] = await Promise.all([
-      git(path, ['diff', '--name-only', '--no-renames', '-z', baseline, '--']),
+      git(path, [
+        'diff',
+        '--no-ext-diff',
+        '--no-textconv',
+        '--name-only',
+        '--no-renames',
+        '-z',
+        baseline,
+        '--',
+      ]),
       git(path, ['ls-files', '--others', '--exclude-standard', '-z']),
     ])
     return ok(

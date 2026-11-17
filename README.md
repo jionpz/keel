@@ -102,6 +102,10 @@ pnpm run console     # http://127.0.0.1:4321（口令见启动终端）
 
 ## 本地项目绑定
 
+当前 jstack managed 工作流要求注册本地源仓库；每个节点复制独立 Git 仓库执行，
+不共享宿主 Git 管理目录，详见 [工作区规范](docs/spec/backend/workflow-routing.md)。
+下面的 managed/attached 是 `legacy-v01` 的 Git 存储模式，供旧任务使用。
+
 默认是 **managed** 模式：Keel 自己克隆裸仓库到 `$KEEL_HOME/repos/<repoId>.git`。
 要把某个 repo 绑到你本机已有的项目目录（**attached** 模式），注册时给出路径：
 

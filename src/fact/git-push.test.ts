@@ -1,12 +1,16 @@
 import { execFile } from 'node:child_process'
-import { mkdtemp, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { GitCliPushGateway } from './git-push.js'
 
 const run = promisify(execFile)
+const roots: string[] = []
+afterEach(async () => {
+  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true })
+})
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
   const result = await run('git', ['-C', cwd, ...args], {
@@ -27,6 +31,7 @@ async function fixture(): Promise<{
   head: string
 }> {
   const base = await mkdtemp(join(tmpdir(), 'keel-push-'))
+  roots.push(base)
   const remote = join(base, 'remote.git')
   const root = join(base, 'work')
   await run('git', ['init', '--bare', remote])
@@ -44,6 +49,47 @@ async function fixture(): Promise<{
 }
 
 describe('git push gateway', () => {
+  it('受控网关不采纳 workspace 的 URL 重写和传输命令', async () => {
+    const { root, remote, head } = await fixture()
+    const marker = join(root, '.git', 'transport-ran')
+    const script = join(root, '.git', 'transport')
+    await writeFile(script, `#!/bin/sh\nprintf escaped > '${marker}'\nexit 1\n`)
+    await chmod(script, 0o700)
+    await git(root, 'config', 'protocol.ext.allow', 'always')
+    await git(root, 'config', `url.ext::${script}.insteadOf`, remote)
+    const gateway = new GitCliPushGateway(null)
+    expect(
+      await gateway.inspect({
+        worktreePath: root,
+        remoteUrl: remote,
+        headBranch: 'ai/ticket-push',
+      }),
+    ).toMatchObject({ ok: true, value: { state: 'absent' } })
+    expect(
+      await gateway.push({
+        worktreePath: root,
+        remoteUrl: remote,
+        headBranch: 'ai/ticket-push',
+        headSha: head,
+      }),
+    ).toMatchObject({ ok: true, value: { headSha: head } })
+    expect(await readFile(marker, 'utf8').catch(() => 'ABSENT')).toBe('ABSENT')
+  })
+  it('受控推送不执行 workspace 中的 pre-push hook', async () => {
+    const { root, remote, head } = await fixture()
+    const marker = join(root, '.git', 'hook-ran')
+    const hook = join(root, '.git', 'hooks', 'pre-push')
+    await writeFile(hook, `#!/bin/sh\nprintf escaped > '${marker}'\nexit 1\n`)
+    await chmod(hook, 0o700)
+    const pushed = await new GitCliPushGateway(null).push({
+      worktreePath: root,
+      remoteUrl: remote,
+      headBranch: 'ai/ticket-push',
+      headSha: head,
+    })
+    expect(pushed).toMatchObject({ ok: true, value: { headSha: head } })
+    expect(await readFile(marker, 'utf8').catch(() => 'ABSENT')).toBe('ABSENT')
+  })
   it('推送准确 SHA，重复投递幂等，不覆盖已存在的不同 SHA', async () => {
     const { root, remote, head } = await fixture()
     const gateway = new GitCliPushGateway(null)
@@ -78,6 +124,20 @@ describe('git push gateway', () => {
     })
     expect(conflict.ok).toBe(false)
     if (!conflict.ok) expect(conflict.error.kind).toBe('CONFLICT')
+  })
+
+  it('受控推送仍可读取 legacy linked worktree 的对象库', async () => {
+    const { root, remote, head } = await fixture()
+    const linked = join(root, '..', 'linked')
+    await git(root, 'worktree', 'add', '-b', 'ai/legacy', linked, head)
+    expect(
+      await new GitCliPushGateway(null).push({
+        worktreePath: linked,
+        remoteUrl: remote,
+        headBranch: 'ai/legacy',
+        headSha: head,
+      }),
+    ).toMatchObject({ ok: true, value: { headSha: head, created: true } })
   })
 
   it('拒绝非 ai/* 分支与短 SHA', async () => {

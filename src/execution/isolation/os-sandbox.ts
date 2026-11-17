@@ -3,6 +3,7 @@ import { access, lstat, readFile, realpath, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { err, makeError, ok, type Result } from '../../contracts/errors.js'
+import { assertPrivateGitDirectory } from '../../shared/private-git.js'
 
 export type OsSandboxBackend = 'macos-sandbox-exec'
 
@@ -15,6 +16,7 @@ export interface ManagedOsSandbox {
 }
 
 export interface PrepareOsSandboxOptions {
+  readonly readOnlyWorkspace?: boolean
   readonly workspace: string
   readonly root: string
   readonly home: string
@@ -26,12 +28,13 @@ export interface PrepareOsSandboxOptions {
 }
 
 export interface MacSandboxProfileOptions {
+  readonly readOnlyWorkspace?: boolean
+  readonly readOnlyGitDirs?: readonly string[]
   readonly root: string
   readonly home: string
   readonly tmpdir: string
   readonly workspace: string
   readonly hostHome: string
-  readonly gitDirs: readonly string[]
   readonly runtimePaths: readonly string[]
   readonly networkPorts: readonly number[]
 }
@@ -102,7 +105,8 @@ export async function prepareManagedOsSandbox(
       canonicalPath(options.workspace),
       canonicalPath(options.hostHome ?? homedir()),
     ])
-    const gitDirs = await resolveGitDirs(workspace)
+    const readOnlyGitDirs = options.readOnlyWorkspace ? await resolveReadOnlyGitDirs(workspace) : []
+    if (!options.readOnlyWorkspace) await assertPrivateGitDirectory(workspace)
     const runtimePaths = await resolveRuntimePaths(hostHome)
     const networkPorts = normalizePorts(options.networkPorts ?? [DEFAULT_MODEL_GATEWAY_PORT])
     const profilePath = join(options.root, 'sandbox.sb')
@@ -112,9 +116,10 @@ export async function prepareManagedOsSandbox(
       tmpdir,
       workspace,
       hostHome,
-      gitDirs,
       runtimePaths,
       networkPorts,
+      readOnlyWorkspace: options.readOnlyWorkspace ?? false,
+      readOnlyGitDirs,
     })
     await writeFile(profilePath, profile, { mode: 0o400 })
     return ok({
@@ -135,8 +140,14 @@ export async function prepareManagedOsSandbox(
 
 export function buildMacSandboxProfile(options: MacSandboxProfileOptions): string {
   const rootPaths = uniquePaths([options.root, options.home, options.tmpdir, options.workspace])
-  const readWritePaths = uniquePaths([...rootPaths, ...options.gitDirs])
-  const readOnlyPaths = uniquePaths([...SYSTEM_READ_PATHS, ...options.runtimePaths])
+  const readWritePaths = options.readOnlyWorkspace
+    ? uniquePaths([options.root, options.home, options.tmpdir])
+    : rootPaths
+  const readOnlyPaths = uniquePaths([
+    ...SYSTEM_READ_PATHS,
+    ...options.runtimePaths,
+    ...(options.readOnlyWorkspace ? [options.workspace, ...(options.readOnlyGitDirs ?? [])] : []),
+  ])
   const metadataPaths = uniquePaths([
     ...rootPaths,
     ...readWritePaths,
@@ -170,6 +181,8 @@ export function buildMacSandboxProfile(options: MacSandboxProfileOptions): strin
     ...KEYCHAIN_MACH_SERVICES.map(
       (service) => `(deny mach-lookup (global-name ${sbplString(service)}))`,
     ),
+    '(deny signal)',
+    '(allow signal (target same-sandbox))',
     '(deny process-exec (literal "/usr/bin/security"))',
     '(deny file-read* (literal "/usr/bin/security"))',
     '(deny network*)',
@@ -203,32 +216,21 @@ async function canonicalPath(path: string): Promise<string> {
   return realpath(path)
 }
 
-async function resolveGitDirs(workspace: string): Promise<readonly string[]> {
+async function resolveReadOnlyGitDirs(workspace: string): Promise<readonly string[]> {
   const dotGit = join(workspace, '.git')
-  let info: Awaited<ReturnType<typeof lstat>>
-  try {
-    info = await lstat(dotGit)
-  } catch {
-    throw new Error(`workspace 必须是 git 仓库：${workspace}`)
-  }
-
+  const info = await lstat(dotGit)
   if (info.isDirectory()) return [await realpath(dotGit)]
-  if (!info.isFile()) throw new Error(`无法识别 workspace 的 .git：${dotGit}`)
-
+  if (!info.isFile()) throw new Error('只读源仓库的 .git 无法识别')
   const pointer = /^gitdir:\s*(.+?)\s*$/m.exec(await readFile(dotGit, 'utf8'))
-  if (pointer?.[1] === undefined) throw new Error(`workspace 的 .git 文件缺少 gitdir 指针`)
+  if (pointer?.[1] === undefined) throw new Error('只读源仓库缺少 gitdir 指针')
   const gitDir = await realpath(resolve(workspace, pointer[1]))
-  const commonDir = await readCommonDir(gitDir)
-  return uniquePaths([gitDir, commonDir])
-}
-
-async function readCommonDir(gitDir: string): Promise<string> {
-  try {
-    const pointer = (await readFile(join(gitDir, 'commondir'), 'utf8')).trim()
-    return await realpath(resolve(gitDir, pointer))
-  } catch {
-    return gitDir
-  }
+  const commonPointer = await readFile(join(gitDir, 'commondir'), 'utf8').catch(
+    (error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return '.'
+      throw error
+    },
+  )
+  return uniquePaths([gitDir, await realpath(resolve(gitDir, commonPointer.trim()))])
 }
 
 async function resolveRuntimePaths(hostHome: string): Promise<readonly string[]> {

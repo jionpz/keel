@@ -19,6 +19,7 @@
 | [0011](./0011-jstack-tianwen-runtime.md) | jstack 为主工作流，天问作为项目用户代表 | **Accepted** — 产品方向与职责边界已采用；持续试运行与生产准入未完成 |
 | [0012](./0012-pr-merge-completion.md) | S-DONE 以 PR 合并为准，未合并关闭可重驱动 | **Accepted** — 2026-11-12，issue #132 方案 A |
 | [0013](./0013-console-work-item-projection.md) | 控制台唯一 WorkItem 投影，底层事实分离 | **Accepted** — 2026-11-14，消融实验后落地 |
+| [0014](./0014-managed-private-git.md) | managed 私有 Git 副本与沙箱成员回收 | **Accepted** — 2026-11-17，issue #144 |
 
 ## Status 语义
 
