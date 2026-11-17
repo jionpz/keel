@@ -40,7 +40,7 @@ export const HELP = `keel — AI Engineering Runtime CLI
 用法:
   keel <command> [args]
 
-命令:
+当前工作流:
   serve [--harness omp|claude|pi] [--no-ingress]   统一常驻服务（JT-06）
   service-status [--stale-ms <ms>]             只读角色、队列与恢复状态
   service-health [--json]                      无副作用健康检查（非健康时退出 1）
@@ -52,6 +52,9 @@ export const HELP = `keel — AI Engineering Runtime CLI
   backup --out <目录> [--blob-dir <目录>]      一致性备份数据库与 blob
   restore-verify --backup <目录> [--keep-database]   隔离恢复并校验备份
   console                          观测与人工控制面板(默认 http://127.0.0.1:4321)
+  register-repo <remoteUrl> [--default-branch <name>] [--local-path <dir>] [--issue-label <name>]   注册 repo；可绑定本地项目目录、配置扫描 label
+
+legacy-v01（旧 Task/Run 独立驱动，不创建 managed 工作流）:
   timer-worker [--interval <ms>]   到期收割 timer(默认单次;--interval 常驻)
   run-task <taskId> [--max-steps N] [--ci passed|failed|real] [--model <id>] [--harness omp|claude|pi] [--wall-clock <秒>]   驱动单 task 到终态
   status <taskId> [--events N]     查 task / run / 事件摘要
@@ -60,11 +63,13 @@ export const HELP = `keel — AI Engineering Runtime CLI
   pause <taskId>                 暂停新轮次派发，当前轮次继续收尾
   resume <taskId> [--note <text>]  恢复自动派发；人工交回需交接说明
   takeover <taskId>              执行收尾后安全接管
-  register-repo <remoteUrl> [--default-branch <name>] [--local-path <dir>] [--issue-label <name>]   注册 repo；可绑定本地项目目录、配置扫描 label
   ingest-issue <issueUrl> [--label <name>] [--repo <uuid>]   GitHub Issue → task
   run-issue <issueUrl> [--label <name>] [--max-steps N] [--ci passed|failed|real] [--model <id>] [--harness omp|claude|pi] [--wall-clock <秒>]   Issue → task → 驱动到终态
   poller [--interval <ms>] [--concurrency <n>] [--ci passed|failed|real] [--model <id>] [--harness omp|claude|pi] [--wall-clock <秒>]   常驻扫描各仓库 label 下的 open issue 并驱动
   unlock <repoId> [--force]        清理 SIGKILL 留下的 per-repo 锁（无 --force 只报告持有者）
+
+模拟 --ci passed 只提供 CI 结果，不能充当 PR 合并事实。
+serve 启用 ingress 时仍驱动 legacy issue；仅处理 managed 工作可用 --no-ingress。
 
 选项:
   --help, -h   显示帮助

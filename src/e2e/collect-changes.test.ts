@@ -156,6 +156,7 @@ describe('collectChanges 接进编排（真实工作树 · L0 Harness）', () =>
     const project = prepared.value
 
     const binding = { git, repoId, project } as const
+    let ciObserved = false
     try {
       const result = await runTaskToCompletion(
         taskId,
@@ -166,7 +167,18 @@ describe('collectChanges 接进编排（真实工作树 · L0 Harness）', () =>
           workspace: { mode: 'worktree', ...binding },
           now: () => '2026-10-26T00:00:00Z',
         },
-        { maxSteps: 25, externalCi: async () => 'passed' },
+        {
+          maxSteps: 25,
+          externalCi: async () => {
+            ciObserved = true
+            return 'passed'
+          },
+          externalPr: async () => ({
+            state: ciObserved ? 'merged' : 'open',
+            mergedAt: '2026-10-26T00:00:00Z',
+            mergeSha: null,
+          }),
+        },
       )
       expect(result.ok, result.ok ? '' : `编排失败：${result.error.detail}`).toBe(true)
       if (!result.ok) return

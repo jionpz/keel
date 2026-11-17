@@ -69,6 +69,11 @@ request 的 `attempt_id` 指向产生问题的 `managed_attempt`，把决策尝�
 对决策台账没有任何读写权限。`keel_control` 只有 request 状态列的直接 UPDATE 权限；
 `RESOLVED` 必须有同 revision 决议，身份/输入列不可改。
 
+调查链与 ticket 链都以 DecisionRequest 为唯一决策入口。调查链不再接纳 JT-01
+旧 `TianwenSuggestion`，也不允许人工绕过台账直接写入答案。历史问题、建议与事件
+仍可读取；缺少 request 的天问结算写入 `DECISION_REQUEST_MISSING` 并将调查置为
+`FAILED`，人工答复返回 `CONFLICT`，不会自动迁移、补造授权或唤醒任务。
+
 ## 并发语义
 
 接纳在单个 `keel_control` 事务内重新读取当前项目决定与全部当前策略并调用纯函数。

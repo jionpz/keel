@@ -16,7 +16,8 @@ import type {
   RepoSignalsSource,
 } from '../contracts/repo-signals.js'
 import type { TokenResolver } from './github-auth.js'
-import { GitHubProvider, parseRemoteUrl } from './github-provider.js'
+import { GitHubProvider } from './github-provider.js'
+import { parseRemoteUrl } from './github-remote.js'
 
 const COMMIT_PAGE_SIZE = 100
 const COMMIT_MAX_PAGES = 2

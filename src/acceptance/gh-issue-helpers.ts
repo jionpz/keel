@@ -6,7 +6,8 @@
 import { execFileSync } from 'node:child_process'
 import { appendFileSync } from 'node:fs'
 import { branchFor } from '../fact/git-workspace.js'
-import { GitHubProvider, readTokenFromEnv } from '../fact/github-provider.js'
+import { readTokenFromEnv } from '../fact/github-auth.js'
+import { GitHubProvider } from '../fact/github-provider.js'
 
 export const KEEL_LABEL = 'keel'
 

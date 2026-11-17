@@ -147,16 +147,6 @@ export class GitWorkspace {
   }
 
   /**
-   * 兼容入口：只准备托管模式的裸仓库，不做 fetch。
-   *
-   * 保留它是为了测试装置先建仓库、再单独验证 prepare 的增量部分。
-   * 生产入口一律用 `prepareProject` —— 它保证 fetch 与基线解析。
-   */
-  async ensureBareRepo(repoId: string, remoteUrl: string): Promise<Result<string>> {
-    return this.withRepoLock(repoId, 'clone', () => this.ensureGitDir(repoId, remoteUrl))
-  }
-
-  /**
    * 准备项目：确定 git 目录、同步基线、返回锚点。
    *
    * 全程持 per-repo 锁：clone / fetch 是共享 git 状态，并发执行会互相破坏。

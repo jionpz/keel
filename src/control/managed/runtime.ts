@@ -22,7 +22,6 @@ import {
   packageDigest,
   validateInvestigation,
   validatePackage,
-  validateTianwen,
   validateTianwenDecision,
 } from './protocol.js'
 import { claimManagedTask, type ManagedClaim, managedEvent, withManagedClaim } from './store.js'
@@ -206,31 +205,17 @@ async function settleTianwen(
     const request = await loadDecisionRequestForQuestionInTx(c, questionId)
     const parsed = failure === null ? validateTianwenDecision(value) : null
     if (request === null) {
-      const legacy = failure === null ? validateTianwen(value) : null
-      const suggestion = legacy?.ok
-        ? legacy.value
-        : { unavailable: true, reason: failure ?? 'SCHEMA_VIOLATION' }
-      await endAttempt(
-        c,
-        claim,
-        suggestion,
-        usage,
-        legacy?.ok ? null : (failure ?? 'SCHEMA_VIOLATION'),
-      )
+      const reason = 'DECISION_REQUEST_MISSING'
+      await endAttempt(c, claim, { unavailable: true, reason }, usage, reason)
       await c.query(
-        `UPDATE managed_question SET status='WAITING_HUMAN',suggestion=$2::jsonb WHERE id=$1 AND task_id=$3 AND status='OPEN'`,
-        [questionId, JSON.stringify(suggestion), claim.task.id],
+        `UPDATE managed_task SET status='FAILED',error=$2,lease_token=NULL,lease_until=NULL,updated_at=now() WHERE id=$1`,
+        [claim.task.id, reason],
       )
-      await managedEvent(c, claim.task.id, legacy?.ok ? 'TianwenSuggested' : 'TianwenUnavailable', {
+      await managedEvent(c, claim.task.id, 'ManagedDecisionFailed', {
         questionId,
-        suggestion,
+        reason,
       })
-      await managedEvent(c, claim.task.id, 'HumanAttentionRequested', {
-        questionId,
-        reason: 'JT-01-shadow-mode',
-      })
-      await unlock(c, claim, 'WAITING_HUMAN', 'investigate')
-      return { taskId: claim.task.id, status: 'WAITING_HUMAN' }
+      return { taskId: claim.task.id, status: 'FAILED' }
     }
 
     const reason = failure ?? 'SCHEMA_VIOLATION'

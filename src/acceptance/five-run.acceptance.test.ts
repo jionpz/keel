@@ -17,7 +17,8 @@ import { registerRepoMain } from '../cli/register-repo.js'
 import { runIssue } from '../cli/run-issue.js'
 import { PgArtifactStore } from '../fact/artifact-store.js'
 import { asOwner, closePool } from '../fact/db.js'
-import { ownerRepo, readTokenFromEnv } from '../fact/github-provider.js'
+import { readTokenFromEnv } from '../fact/github-auth.js'
+import { ownerRepo } from '../fact/github-provider.js'
 import {
   appendFiveRunJsonl,
   cleanupAcceptanceRun,

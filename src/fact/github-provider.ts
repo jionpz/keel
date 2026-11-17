@@ -33,15 +33,8 @@ import type {
   RequiredCheckObservationInput,
   RequiredCheckSnapshot,
 } from '../contracts/required-checks.js'
-import { readTokenFromEnv, resolveGitHubToken, type TokenResolver } from './github-auth.js'
+import { resolveGitHubToken, type TokenResolver } from './github-auth.js'
 import { isGitHubHost, type ParsedRemote, parseRemoteUrl } from './github-remote.js'
-
-/**
- * 兼容 re-export：现有调用点(run-task / ingest-issue / 验收测试)
- * 继续从本模块 import，不因模块拆分而改动。
- */
-export type { ParsedRemote } from './github-remote.js'
-export { isGitHubHost, parseRemoteUrl, readTokenFromEnv }
 
 /** 公网 GitHub 的 API 根。企业 host 由 apiRootForHost 推导。 */
 export const DEFAULT_API_ROOT = 'https://api.github.com'

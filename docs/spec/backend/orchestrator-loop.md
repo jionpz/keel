@@ -48,9 +48,10 @@ CLI 把 `finalStatus`（走到哪）与 `stopReason`（为什么停）分行打�
 | `state=closed ∧ merged=false` | `PRClosed(reason=pr_closed_unmerged)` | `T-027` → `S-ABANDONED` |
 | `state=open` | 不推进 | 停 `awaiting-pr-merge` |
 
-真实路径通过 `PullRequestStateGateway` 读取 PR；模拟路径在只给 `externalCi`、
-没给 `externalPr` 时把 PR 视为已合并，仅用于无远程依赖的本地闭环测试。
-真实 `--ci real` 不允许合成合并事实。`merged=true` 但缺少 `merged_at` 是
+真实路径通过 `PullRequestStateGateway` 读取 PR；模拟测试必须通过 `externalPr`
+显式提供 PR 状态。只给 `externalCi` 时，CI 成功后停在 `awaiting-pr-merge`，
+不会合成合并事实；CLI 的 `--ci passed` 也遵守此边界。
+`merged=true` 但缺少 `merged_at` 是
 `PROTOCOL_ERROR`，不是可自动放行的终态。
 每轮先读取真实 PR 终态；即使 CI 失败或未结束，已合并/未合并关闭也先收口，
 避免对已关闭 PR 继续返工。CI 结论按当前 head SHA 复用。

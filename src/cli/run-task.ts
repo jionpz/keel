@@ -618,6 +618,7 @@ export async function runTaskMain(
     console.log(`用法: keel run-task <taskId> [--max-steps N] [--ci passed|failed|real] [--model <id>] [--harness omp|claude|pi] [--wall-clock <秒>]
 
 驱动单 task 到终态(真实 harness + worktree)。--ci 缺省 passed(模拟 CI 结果);
+模拟 CI 成功后仍等待 PR 合并，不会合成 PRMerged 或自动到 S-DONE。
 --ci real 接真实 GitHub PR / CI,需要 GitHub 凭据（KEEL_GITHUB_TOKEN / GITHUB_TOKEN / gh auth login）。
 --harness 缺省 omp，也可设 KEEL_HARNESS；非法值拒绝（不静默回退）。
 --model 对 omp 缺省 ${DEFAULT_OMP_MODEL}，也可设 KEEL_MODEL；空白值拒绝（不静默回退）。

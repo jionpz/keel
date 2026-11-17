@@ -302,7 +302,7 @@ describe('编排器 CI 接线(opts.ci 优先)', () => {
     })
   })
 
-  it('externalCi 注入（模拟）→ payload.source=simulated，note 标模拟', async () => {
+  it('模拟 CI 成功只记录 CI 事实，缺少 PR 观察时仍等待合并', async () => {
     const { taskId, repoId } = await seedTaskAtPrOpen()
     const git = new GitWorkspace({ root })
     const project = await prepareFor(git, repoId)
@@ -313,7 +313,8 @@ describe('编排器 CI 接线(opts.ci 优先)', () => {
     })
     expect(result.ok, result.ok ? '' : result.error.detail).toBe(true)
     if (!result.ok) return
-    expect(result.value.finalStatus).toBe('S-DONE')
+    expect(result.value.finalStatus).toBe('S-PR_OPEN')
+    expect(result.value.stopReason).toBe('awaiting-pr-merge')
     expect(result.value.steps.map((s) => s.note).join('|')).toContain('外部 CI（模拟）：passed')
 
     const events = await asOwner((c) =>
@@ -324,6 +325,10 @@ describe('编排器 CI 接线(opts.ci 优先)', () => {
       ),
     )
     expect(events.rows[0]?.payload).toMatchObject({ event: 'CIPassed', source: 'simulated' })
+    const merged = await asOwner((c) =>
+      c.query(`SELECT seq FROM event WHERE task_id=$1 AND payload->>'event'='PRMerged'`, [taskId]),
+    )
+    expect(merged.rows).toHaveLength(0)
   })
 
   it('PR closed 未合并先于失败 CI 收口 → T-027 → S-ABANDONED，理由可查', async () => {

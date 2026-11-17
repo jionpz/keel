@@ -39,7 +39,8 @@ import { HarnessSessionManager } from '../execution/session/manager.js'
 import { PgArtifactStore } from '../fact/artifact-store.js'
 import { asOwner, closePool } from '../fact/db.js'
 import { branchFor, GitWorkspace } from '../fact/git-workspace.js'
-import { GitHubProvider, readTokenFromEnv } from '../fact/github-provider.js'
+import { readTokenFromEnv } from '../fact/github-auth.js'
+import { GitHubProvider } from '../fact/github-provider.js'
 import { ownerRepoSlug, preflightGitHub, preflightOmp } from './preflight.js'
 
 const store = new PgArtifactStore()

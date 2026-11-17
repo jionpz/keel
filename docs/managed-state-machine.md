@@ -132,6 +132,8 @@ JT-01 调查仍有独立的 `managed_task` 与 `managed_question`：
   `FAILED`、`CANCELLED`，phase 为 `investigate` / `tianwen`。
 - question 为 `OPEN`、`WAITING_HUMAN`、`RESOLVED`，由 `runtime.ts` / `store.ts`
   推进；调查 `DONE` 只表示报告完成，不代表 ticket 代码已交付。
+- 调查决策只走 DecisionRequest 台账；缺台账的旧天问结算明确失败
+  `DECISION_REQUEST_MISSING`，人工答复拒绝。历史建议和问题保留查询，不再运行旧建议协议。
 - `managed_issue_claim` 的 `ACTIVE` / `RELEASED` 表示 issue 所有权，不是执行完成态。
 - service 角色健康、trial 窗口与备份恢复各有生命周期，分别见
   [service-runtime](./spec/backend/service-runtime.md) 和

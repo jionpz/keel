@@ -188,7 +188,7 @@ export interface RunOptions {
   readonly pullRequests?: PullRequestStateGateway
   /**
    * 模拟 PR 状态（确定性测试 / 本地闭环）。
-   * 给了 `externalCi` 却没给本回调时，沿用旧测试语义把模拟 PR 视作已合并。
+   * 缺省时停在 `awaiting-pr-merge`；模拟 CI 成功不构成合并事实。
    */
   readonly externalPr?: (taskId: string) => Promise<ExternalPrObservation>
 }
@@ -330,7 +330,7 @@ export async function runTaskToCompletion(
         opts.pullRequests !== undefined ||
         opts.externalPr !== undefined ||
         knownCi?.result === 'passed'
-          ? await observePullRequest(taskId, deps, opts, repoId, remoteUrl)
+          ? await observePullRequest(taskId, opts, repoId, remoteUrl)
           : ok(null)
       if (!observation.ok) return observation
       const prSource =
@@ -1086,23 +1086,16 @@ async function readPullRequestRef(
  * 观察 PR 最终状态。
  *
  * 三种来源互斥：注入回调（测试）、真实网关（生产）、无（只能停在等合并）。
- * 模拟 CI 的历史语义是「跑完即闭环」，没有注入 PR 回调时合成 merged，
- * 让本地/验收测试仍能走到 S-DONE；真实路径绝不这样做。
+ * 模拟 CI 与 PR 状态分别注入；缺少 PR 观察时不能合成 merged。
  */
 async function observePullRequest(
   taskId: string,
-  deps: OrchestratorDeps,
   opts: RunOptions,
   repoId: string | undefined,
   remoteUrl: string | undefined,
 ): Promise<Result<ExternalPrObservation | null>> {
   if (opts.externalPr !== undefined) return ok(await opts.externalPr(taskId))
-  if (opts.pullRequests === undefined) {
-    if (opts.ci === undefined && opts.externalCi !== undefined) {
-      return ok({ state: 'merged', mergedAt: deps.now(), mergeSha: null })
-    }
-    return ok(null)
-  }
+  if (opts.pullRequests === undefined) return ok(null)
   if (repoId === undefined || remoteUrl === undefined) {
     return err(makeError('WORKSPACE_ERROR', '观察 PR 需要 worktree 模式才能读取仓库信息'))
   }

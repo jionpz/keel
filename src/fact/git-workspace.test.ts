@@ -628,7 +628,11 @@ describe('git 传输认证 · https 注入', () => {
     const g = new GitWorkspace({ root, exec: fake })
 
     await withToken(async () => {
-      const r = await g.ensureBareRepo(repoId, 'https://github.com/acme/widget.git')
+      const r = await g.prepareProject(
+        { mode: 'managed', repoId },
+        'https://github.com/acme/widget.git',
+        'main',
+      )
       expect(r.ok).toBe(false)
       if (r.ok) return
       // 错误 detail 必须已脱敏：明文与 base64 都不许出现
@@ -769,7 +773,11 @@ describe('git 传输认证 · https 注入', () => {
     })
 
     await withNoToken(async () => {
-      const r = await g.ensureBareRepo(repoId, 'https://github.com/acme/widget.git')
+      const r = await g.prepareProject(
+        { mode: 'managed', repoId },
+        'https://github.com/acme/widget.git',
+        'main',
+      )
       expect(r.ok).toBe(false)
       if (r.ok) return
       // gh 来源的 token 不在 process.env 里 —— 不缓存进 secrets() 就脱敏不到

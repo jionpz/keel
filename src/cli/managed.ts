@@ -1,4 +1,4 @@
-/** JT-01 managed 影子模式的薄 CLI 接线。 */
+/** managed 调查、ticket、workflow、决策与动作网关的 CLI 接线。 */
 
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
