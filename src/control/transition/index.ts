@@ -100,7 +100,16 @@ export function transition(
       id: rule.id,
       from: status,
       next_status: next,
-      effects: rule.effects,
+      effects:
+        rule.id === 'T-031' &&
+        event.type === 'RunFailed' &&
+        event.reason === 'commit_message_rejected'
+          ? rule.effects.map((effect) =>
+              effect.kind === 'NotifyHuman'
+                ? { ...effect, reason: 'commit_message_rejected' }
+                : effect,
+            )
+          : rule.effects,
     }
   }
 

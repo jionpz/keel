@@ -964,6 +964,34 @@ export const SCHEMAS = {
           "reason": {
             "type": "string"
           },
+          "commit_message": {
+            "description": "仅配置 header 模板时需要；type/scope 还须通过仓库闭合枚举校验，summary 语言跟随 issue。",
+            "type": "object",
+            "required": [
+              "type",
+              "scope",
+              "summary"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "maxLength": 32,
+                "pattern": "^[a-z][a-z0-9-]*$"
+              },
+              "scope": {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[a-z][a-z0-9/-]*$"
+              },
+              "summary": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 72,
+                "pattern": "^[^\\r\\n]+$"
+              }
+            }
+          },
           "details": {
             "type": "object"
           }

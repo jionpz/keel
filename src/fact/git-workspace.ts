@@ -27,11 +27,33 @@
  */
 
 import { execFile } from 'node:child_process'
-import { existsSync } from 'node:fs'
-import { mkdir, rename, rm } from 'node:fs/promises'
-import { join } from 'node:path'
+import { constants, existsSync, type Stats } from 'node:fs'
+import {
+  appendFile,
+  cp,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  readlink,
+  realpath,
+  rename,
+  rm,
+  rmdir,
+  symlink,
+  unlink,
+  writeFile,
+} from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 import { err, makeError, ok, type Result } from '../contracts/errors.js'
+import {
+  commitMessageRejection,
+  type RepoCommitPolicy,
+  validateStoredCommitMessage,
+} from '../shared/commit-policy.js'
 import { withFileLock } from './file-lock.js'
 import {
   authEnvFor,
@@ -46,6 +68,32 @@ import { resolveKeelHome, validateAttachedDir } from './project-root.js'
 import { workspaceError } from './workspace-error.js'
 
 type ExecResult = { readonly stdout: string; readonly stderr: string }
+
+type CommitIdentity = {
+  readonly authorName: string
+  readonly authorEmail: string
+  readonly committerName: string
+  readonly committerEmail: string
+}
+
+const DEFAULT_COMMIT_IDENTITY: CommitIdentity = {
+  authorName: 'Keel',
+  authorEmail: 'keel@localhost',
+  committerName: 'Keel',
+  committerEmail: 'keel@localhost',
+}
+
+function commitIdentityFor(commitAuthor: string | undefined): CommitIdentity {
+  if (commitAuthor === undefined) return DEFAULT_COMMIT_IDENTITY
+  const authorName = commitAuthor.replace(/ <[^<>]+>$/, '')
+  const authorEmail = commitAuthor.match(/<([^<>]+)>$/)?.[1] ?? DEFAULT_COMMIT_IDENTITY.authorEmail
+  return {
+    authorName,
+    authorEmail,
+    committerName: authorName,
+    committerEmail: authorEmail,
+  }
+}
 
 /**
  * git 子进程执行器。
@@ -250,33 +298,496 @@ export class GitWorkspace {
    * 人的身份加到 Agent 产物上；且签名程序可能交互提示或变慢，
    * 在无人干预的编排循环里等同于挂起。
    */
-  async commitAll(taskId: string, message: string): Promise<Result<string | null>> {
+  async commitAll(
+    taskId: string,
+    message: string,
+    policy: RepoCommitPolicy = {},
+  ): Promise<Result<string | null>> {
     const wt = this.worktreePath(taskId)
     if (!existsSync(wt)) {
       return err(makeError('WORKSPACE_ERROR', `worktree 不存在：${wt}`))
     }
     try {
       const { stdout: status } = await this.execGit(['-C', wt, 'status', '--porcelain'])
+      // 在产生 commit 之前核对模板，避免先留下坏提交再让下一轮修复历史。
+      const formatted = validateStoredCommitMessage(policy, message)
+      if (!formatted.ok) return formatted
+      // 干净工作树没有待提交内容；历史校验已覆盖现存提交。hook 依赖暂存区，
+      // 不能在合规的 no-op 上运行并被误判为 commit_message_rejected；不依赖
+      // 暂存区的消息校验保持原语义。
+      if (status.trim() === '' && policy.commit_message_check === 'hook') return ok(null)
+      // hook 与真正 git commit 一样看到待提交的暂存区；缺省路径的 argv 顺序不变。
+      if (policy.commit_message_check === 'hook') {
+        await this.execGit(['-C', wt, 'add', '-A'])
+      }
+      const identity = commitIdentityFor(policy.commit_author)
+      const checked = await this.checkCommitMessage(
+        taskId,
+        message,
+        policy.commit_message_check,
+        identity,
+      )
+      if (!checked.ok) return checked
       if (status.trim() === '') return ok(null)
 
-      await this.execGit(['-C', wt, 'add', '-A'])
-      await this.execGit([
+      if (policy.commit_message_check !== 'hook') await this.execGit(['-C', wt, 'add', '-A'])
+      const args = [
         '-C',
         wt,
         '-c',
-        'user.email=keel@localhost',
+        `user.email=${identity.authorEmail}`,
         '-c',
-        'user.name=Keel',
+        `user.name=${identity.authorName}`,
         '-c',
         'commit.gpgsign=false',
+        ...(policy.commit_author === undefined
+          ? []
+          : [
+              '-c',
+              `author.name=${identity.authorName}`,
+              '-c',
+              `author.email=${identity.authorEmail}`,
+              '-c',
+              `committer.name=${identity.committerName}`,
+              '-c',
+              `committer.email=${identity.committerEmail}`,
+            ]),
         'commit',
+        ...(policy.commit_message_template === undefined ? [] : ['--cleanup=verbatim']),
         '-m',
         message,
-      ])
+      ]
+      await this.exec(
+        'git',
+        args,
+        policy.commit_author === undefined
+          ? undefined
+          : {
+              env: {
+                ...process.env,
+                GIT_AUTHOR_NAME: identity.authorName,
+                GIT_AUTHOR_EMAIL: identity.authorEmail,
+                GIT_COMMITTER_NAME: identity.committerName,
+                GIT_COMMITTER_EMAIL: identity.committerEmail,
+              },
+            },
+      )
       const { stdout: sha } = await this.execGit(['-C', wt, 'rev-parse', 'HEAD'])
+      if (Object.keys(policy).length > 0) {
+        const actual = await this.validateCommit(taskId, sha.trim(), policy, message)
+        if (!actual.ok) return actual
+      }
       return ok(sha.trim())
     } catch (e) {
-      return err(makeError('WORKSPACE_ERROR', `提交失败：${this.redact(e)}`))
+      return err(
+        policy.commit_message_check === undefined
+          ? makeError('WORKSPACE_ERROR', `提交失败：${this.redact(e)}`)
+          : commitMessageRejection(`提交或 hook 拒绝：${this.redact(e)}`),
+      )
+    }
+  }
+
+  /** 交付前核对分支全部新增提交；拒绝的本地 commit 不会因换 run 而漏检。 */
+  async validateCommitHistory(
+    taskId: string,
+    baseSha: string,
+    policy: RepoCommitPolicy,
+  ): Promise<Result<void>> {
+    try {
+      const { stdout } = await this.execGit([
+        '-C',
+        this.worktreePath(taskId),
+        'rev-list',
+        `${baseSha}..HEAD`,
+      ])
+      for (const sha of stdout.trim().split('\n').filter(Boolean)) {
+        const checked = await this.validateCommit(taskId, sha, policy)
+        if (!checked.ok) return checked
+      }
+      return ok(undefined)
+    } catch (e) {
+      return err(makeError('WORKSPACE_ERROR', `读取提交历史失败：${this.redact(e)}`))
+    }
+  }
+
+  private async validateCommit(
+    taskId: string,
+    sha: string,
+    policy: RepoCommitPolicy,
+    expectedMessage?: string,
+  ): Promise<Result<void>> {
+    const { stdout } = await this.execGit([
+      '-C',
+      this.worktreePath(taskId),
+      'show',
+      '-s',
+      '--format=%an%n%ae%n%cn%n%ce%n%B',
+      sha,
+    ])
+    const [authorName, authorEmail, committerName, committerEmail, ...body] = stdout.split('\n')
+    if (
+      policy.commit_author !== undefined &&
+      (`${authorName} <${authorEmail}>` !== policy.commit_author ||
+        `${committerName} <${committerEmail}>` !== policy.commit_author)
+    ) {
+      return err(commitMessageRejection(`提交 ${sha} 的作者/提交者不符合 commit_author`))
+    }
+    const raw = await this.execGit(['-C', this.worktreePath(taskId), 'cat-file', 'commit', sha])
+    if (/^gpgsig(?:-sha256)? /m.test(raw.stdout.split('\n\n')[0] ?? '')) {
+      return err(commitMessageRejection(`提交 ${sha} 含签名；Keel 提交不启用签名`))
+    }
+    const message = body.join('\n').replace(/\n+$/, '')
+    const formatted = validateStoredCommitMessage(policy, message)
+    if (!formatted.ok) return formatted
+    if (policy.commit_message_check === 'hook') {
+      if (expectedMessage === undefined) {
+        const parent = /^parent ([a-f0-9]+)$/m.exec(raw.stdout.split('\n\n')[0] ?? '')?.[1]
+        return this.checkHistoricalCommitHook(
+          taskId,
+          sha,
+          message,
+          {
+            authorName: authorName ?? '',
+            authorEmail: authorEmail ?? '',
+            committerName: committerName ?? '',
+            committerEmail: committerEmail ?? '',
+          },
+          parent,
+        )
+      }
+      // 真正的 git commit 还会再次运行 hook；必须比对落盘消息，不能只信预检。
+      const storedMessage = raw.stdout.slice(raw.stdout.indexOf('\n\n') + 2)
+      if (storedMessage !== `${expectedMessage.replace(/\n*$/, '')}\n`) {
+        return err(
+          commitMessageRejection('commit-msg hook 修改了消息；请由 Developer 更新提交字段后重试'),
+        )
+      }
+      return ok(undefined)
+    }
+    return this.checkCommitMessage(taskId, message, policy.commit_message_check)
+  }
+
+  /** 独立 Git 快照保留任务分支、历史暂存区及本地工具，不触碰原工作树。 */
+  private async checkHistoricalCommitHook(
+    taskId: string,
+    sha: string,
+    message: string,
+    identity: CommitIdentity,
+    parent?: string,
+  ): Promise<Result<void>> {
+    const wt = this.worktreePath(taskId)
+    const dir = await mkdtemp(join(tmpdir(), 'keel-history-hook-'))
+    const snapshot = join(dir, 'worktree')
+    try {
+      const { stdout: metadata } = await this.execGit([
+        '-C',
+        wt,
+        'rev-parse',
+        '--path-format=absolute',
+        '--git-path',
+        'hooks',
+        '--git-path',
+        'objects',
+        '--git-path',
+        'config',
+        '--git-path',
+        'config.worktree',
+        '--symbolic-full-name',
+        'HEAD',
+      ])
+      const [hooks, objects, config, worktreeConfig, branch] = metadata.trimEnd().split('\n')
+      if (
+        hooks === undefined ||
+        objects === undefined ||
+        config === undefined ||
+        worktreeConfig === undefined ||
+        branch === undefined
+      ) {
+        throw new Error('历史 hook 缺少仓库路径或分支信息')
+      }
+      const { stdout: worktreeConfigEnabled } = await this.execGit([
+        '-C',
+        wt,
+        'config',
+        '--type=bool',
+        '--default=false',
+        '--get',
+        'extensions.worktreeConfig',
+      ])
+      const configs = [config]
+      if (worktreeConfigEnabled.trim() === 'true' && existsSync(worktreeConfig)) {
+        configs.push(worktreeConfig)
+      }
+      // refs/index 独立，只读复用对象；同名分支指向父提交也不会移动原任务分支。
+      await this.execGit([
+        'init',
+        '--quiet',
+        ...(branch === 'HEAD' ? [] : [`--initial-branch=${branch.replace(/^refs\/heads\//, '')}`]),
+        snapshot,
+      ])
+      // 公共配置在前，启用的 worktree 配置在后；最后钉住快照路径与 bare 标记。
+      await appendFile(
+        join(snapshot, '.git', 'config'),
+        configs.map((path) => `\n[include]\n\tpath = ${JSON.stringify(path)}\n`).join('') +
+          `[core]\n\tbare = false\n\tworktree = ${JSON.stringify(snapshot)}\n`,
+      )
+      await writeFile(
+        join(snapshot, '.git', 'objects', 'info', 'alternates'),
+        `${JSON.stringify(objects.trim())}\n`,
+      )
+      // 根提交保持未出生的同名分支；普通提交还原提交前的 HEAD。
+      if (parent !== undefined) {
+        await this.execGit([
+          '-C',
+          snapshot,
+          'update-ref',
+          ...(branch === 'HEAD' ? ['--no-deref'] : []),
+          'HEAD',
+          parent,
+        ])
+      }
+      await this.execGit(['-C', snapshot, 'read-tree', '--reset', '-u', sha])
+      const { stdout: ignored } = await this.execGit([
+        '-C',
+        wt,
+        'ls-files',
+        '--others',
+        '--ignored',
+        '--exclude-standard',
+        '--directory',
+        '-z',
+      ])
+      const snapshotRoot = await realpath(snapshot)
+      const worktreeRoot = await realpath(wt)
+      // 先本地化 read-tree 还原的历史链接，后续 ignored 复制才不会沿外部链接写出快照。
+      const { stdout: tracked } = await this.execGit(['-C', snapshot, 'ls-files', '--stage', '-z'])
+      for (const entry of tracked.split('\0').filter((entry) => entry.startsWith('120000 '))) {
+        await this.localizeTrackedSnapshotLink(
+          snapshotRoot,
+          worktreeRoot,
+          entry.slice(entry.indexOf('\t') + 1),
+        )
+      }
+      // 保留相对目标仍在被复制子树内的链接；npm 风格的 .bin shim 依赖原链接解析模块。
+      // 指向子树外的链接在复制时实体化，历史跟踪内容优先，复制冲突直接失败。
+      for (const path of ignored.split('\0').filter(Boolean)) {
+        await this.copySnapshotTree(
+          join(worktreeRoot, path),
+          join(snapshotRoot, path),
+          undefined,
+          snapshotRoot,
+        )
+      }
+      return await this.runCommitMessageHook(snapshot, message, hooks.trim(), identity)
+    } catch (e) {
+      return err(commitMessageRejection(`历史 commit-msg hook 复检失败：${this.redact(e)}`))
+    } finally {
+      await rm(dir, { recursive: true })
+    }
+  }
+
+  private inside(root: string, path: string): boolean {
+    return path === root || path.startsWith(`${root}${sep}`)
+  }
+
+  /** 逐级确认复制目标的祖先目录；内部链接可跟随，外部链接必须在写入前拒绝。 */
+  private async ensureSnapshotDirectory(directory: string, snapshotRoot: string): Promise<void> {
+    const rel = relative(snapshotRoot, directory)
+    if (rel.startsWith('..') || isAbsolute(rel))
+      throw new Error(`依赖复制目标越过快照边界：${directory}`)
+    let current = snapshotRoot
+    for (const part of rel.split(sep).filter(Boolean)) {
+      current = join(current, part)
+      let stat: Stats | undefined
+      try {
+        stat = await lstat(current)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        await mkdir(current)
+        continue
+      }
+      if (stat.isSymbolicLink()) {
+        const target = await realpath(current)
+        if (!this.inside(snapshotRoot, target))
+          throw new Error(`依赖复制目标经符号链接越过快照边界：${current}`)
+        if (!(await lstat(target)).isDirectory())
+          throw new Error(`依赖复制目标的祖先不是目录：${current}`)
+        continue
+      }
+      if (!stat.isDirectory()) throw new Error(`依赖复制目标的祖先不是目录：${current}`)
+    }
+  }
+
+  /**
+   * 复制一棵依赖树：相对目标仍在树内的链接原样保留，其余链接（外部/绝对/歧义）实体化。
+   * 实体化子树继续递归，因此外部依赖内部的相对链接仍按原结构解析，写入只落在快照内。
+   */
+  private async copySnapshotTree(
+    source: string,
+    dest: string,
+    subtreeRoot?: string,
+    snapshotRoot?: string,
+  ): Promise<void> {
+    const stat = await lstat(source)
+    const root = subtreeRoot ?? (stat.isDirectory() ? await realpath(source) : resolve(source))
+    if (snapshotRoot === undefined) await mkdir(dirname(dest), { recursive: true })
+    else await this.ensureSnapshotDirectory(dirname(dest), snapshotRoot)
+    let existing: Stats | undefined
+    try {
+      existing = await lstat(dest)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+    // 历史跟踪条目优先：同名文件、链接或目录都不能被当前 ignored 内容覆盖。
+    // 两边都是目录时继续合并，补齐历史提交中不存在、仅当前工作树有的本地文件。
+    if (existing !== undefined && (!stat.isDirectory() || !existing.isDirectory())) return
+    if (stat.isSymbolicLink()) {
+      const text = await readlink(source)
+      const lexical = isAbsolute(text) ? text : resolve(dirname(source), text)
+      const target = await realpath(source)
+      if (!isAbsolute(text) && this.inside(root, lexical) && this.inside(root, target)) {
+        await symlink(text, dest)
+        return
+      }
+      await this.copySnapshotTree(target, dest, undefined, snapshotRoot)
+      return
+    }
+    if (stat.isDirectory()) {
+      if (existing === undefined) await mkdir(dest)
+      for (const entry of await readdir(source)) {
+        await this.copySnapshotTree(join(source, entry), join(dest, entry), root, snapshotRoot)
+      }
+      return
+    }
+    if (!stat.isFile()) throw new Error(`无法复制依赖：${source}`)
+    await cp(source, dest, { force: false, mode: constants.COPYFILE_FICLONE })
+  }
+
+  /** 历史跟踪链接优先按被检提交解析；目标在当前工作树删除不应影响历史有效性。 */
+  private async localizeTrackedSnapshotLink(
+    snapshotRoot: string,
+    worktreeRoot: string,
+    path: string,
+  ): Promise<void> {
+    const link = join(snapshotRoot, path)
+    const text = await readlink(link)
+    const lexical = isAbsolute(text) ? text : resolve(dirname(link), text)
+    let snapshotTarget: string | undefined
+    try {
+      snapshotTarget = await realpath(link)
+    } catch {
+      snapshotTarget = undefined
+    }
+    if (
+      !isAbsolute(text) &&
+      this.inside(snapshotRoot, lexical) &&
+      snapshotTarget !== undefined &&
+      this.inside(snapshotRoot, snapshotTarget)
+    )
+      return
+    const intended = isAbsolute(text) ? text : resolve(dirname(join(worktreeRoot, path)), text)
+    const target = await realpath(intended)
+    const dir = await mkdtemp(join(tmpdir(), 'keel-history-link-'))
+    try {
+      const copy = join(dir, 'copy')
+      await this.copySnapshotTree(target, copy)
+      await unlink(link)
+      await rename(copy, link)
+    } finally {
+      await rm(dir, { recursive: true })
+    }
+  }
+
+  async isDirty(taskId: string): Promise<Result<boolean>> {
+    try {
+      const result = await this.execGit(['-C', this.worktreePath(taskId), 'status', '--porcelain'])
+      return ok(result.stdout.trim() !== '')
+    } catch (e) {
+      return err(makeError('WORKSPACE_ERROR', `读取工作区失败：${this.redact(e)}`))
+    }
+  }
+
+  /** 显式 hook 在 ticket worktree 运行；失败或修改模板消息均回灌，不容许假绿。 */
+  async checkCommitMessage(
+    taskId: string,
+    message: string,
+    check?: string,
+    identity?: CommitIdentity,
+  ): Promise<Result<void>> {
+    if (check === undefined) return ok(undefined)
+    if (check !== 'hook') {
+      try {
+        return new RegExp(check, 'u').test(message.split('\n')[0] ?? '')
+          ? ok(undefined)
+          : err(commitMessageRejection(`header 不匹配正则 ${check}`))
+      } catch (e) {
+        return err(commitMessageRejection(`header 正则无效：${this.redact(e)}`))
+      }
+    }
+    return this.runCommitMessageHook(this.worktreePath(taskId), message, undefined, identity)
+  }
+
+  private async runCommitMessageHook(
+    wt: string,
+    message: string,
+    hooksPath?: string,
+    identity?: CommitIdentity,
+  ): Promise<Result<void>> {
+    const dir = await mkdtemp(join(tmpdir(), 'keel-commit-msg-'))
+    const file = join(dir, 'COMMIT_EDITMSG')
+    try {
+      await writeFile(file, `${message}\n`)
+      const args = [
+        '-C',
+        wt,
+        ...(hooksPath === undefined ? [] : ['-c', `core.hooksPath=${hooksPath}`]),
+        ...(identity === undefined
+          ? []
+          : [
+              '-c',
+              `user.name=${identity.authorName}`,
+              '-c',
+              `user.email=${identity.authorEmail}`,
+              '-c',
+              `author.name=${identity.authorName}`,
+              '-c',
+              `author.email=${identity.authorEmail}`,
+              '-c',
+              `committer.name=${identity.committerName}`,
+              '-c',
+              `committer.email=${identity.committerEmail}`,
+            ]),
+        'hook',
+        'run',
+        'commit-msg',
+        '--',
+        file,
+      ]
+      await this.execGit(
+        args,
+        identity === undefined
+          ? {}
+          : {
+              env: {
+                ...process.env,
+                GIT_AUTHOR_NAME: identity.authorName,
+                GIT_AUTHOR_EMAIL: identity.authorEmail,
+                GIT_COMMITTER_NAME: identity.committerName,
+                GIT_COMMITTER_EMAIL: identity.committerEmail,
+              },
+            },
+      )
+      if ((await readFile(file, 'utf8')) !== `${message}\n`) {
+        return err(
+          commitMessageRejection('commit-msg hook 修改了消息；请由 Developer 更新提交字段后重试'),
+        )
+      }
+      return ok(undefined)
+    } catch (e) {
+      return err(commitMessageRejection(`commit-msg hook 拒绝：${this.redact(e)}`))
+    } finally {
+      await rm(file, { force: true })
+      await rmdir(dir)
     }
   }
 
@@ -524,13 +1035,15 @@ export class GitWorkspace {
    */
   private async execGit(
     args: readonly string[],
-    opts: { readonly auth?: string } = {},
+    opts: { readonly auth?: string; readonly env?: NodeJS.ProcessEnv } = {},
   ): Promise<ExecResult> {
-    if (opts.auth === undefined) return this.exec('git', args)
-    const token = await this.tokenForRemoteHost(opts.auth)
-    const auth = authEnvFor(opts.auth, token)
-    if (Object.keys(auth).length === 0) return this.exec('git', args)
-    return this.exec('git', args, { env: { ...process.env, ...auth } })
+    let env = opts.env
+    if (opts.auth !== undefined) {
+      const token = await this.tokenForRemoteHost(opts.auth)
+      const auth = authEnvFor(opts.auth, token)
+      if (Object.keys(auth).length > 0) env = { ...(env ?? process.env), ...auth }
+    }
+    return env === undefined ? this.exec('git', args) : this.exec('git', args, { env })
   }
 
   /**

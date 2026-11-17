@@ -4,7 +4,7 @@ import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
-import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { makeError } from '../../contracts/errors.js'
 import type { ManagedTicketStageRunner } from '../../contracts/managed.js'
 import { ZERO_USAGE } from '../../contracts/types.js'
@@ -28,6 +28,10 @@ import { claimManagedTicketTask, listManagedTicketStages } from './ticket-store.
 import { fixtureTicketPackage } from './ticket-test-utils.js'
 import { tickPendingTicketTianwen } from './ticket-tianwen.js'
 import { diffDigest } from './ticket-workspace.js'
+
+// 这些用例会真实启动 PostgreSQL、Git 子进程并执行多阶段编排；5 秒默认预算在隔离环境中会截断正常执行。
+// 仅把本文件预算提高到 30 秒，不改变产品逻辑或整仓默认值。
+vi.setConfig({ testTimeout: 30_000 })
 
 const run = promisify(execFile)
 

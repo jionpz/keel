@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RepoCommitPolicy",
+  "description": "仓库管理员可选的提交规范；不是 Artifact 或固定工作流包。缺省字段不改变旧提交行为。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "commit_author": { "type": "string", "maxLength": 320, "pattern": "^[^<>\\u0000\\r\\n]+ <[^<>\\u0000\\s@]+@[^<>\\u0000\\s@]+>$" },
+    "commit_message_template": { "type": "string", "minLength": 1, "maxLength": 100, "pattern": "^[^\\u0000\\r\\n]+$" },
+    "commit_message_check": { "type": "string", "minLength": 1, "maxLength": 1000 },
+    "commit_types": {
+      "type": "array", "minItems": 1, "uniqueItems": true,
+      "items": { "type": "string", "maxLength": 32, "pattern": "^[a-z][a-z0-9-]*$" }
+    },
+    "commit_scopes": {
+      "type": "array", "minItems": 1, "uniqueItems": true,
+      "items": { "type": "string", "maxLength": 64, "pattern": "^[a-z][a-z0-9/-]*$" }
+    }
+  },
+  "dependentRequired": { "commit_message_template": ["commit_types", "commit_scopes"] }
+}

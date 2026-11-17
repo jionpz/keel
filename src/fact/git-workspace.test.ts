@@ -20,12 +20,14 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { type RepoCommitPolicy, renderCommitMessage } from '../shared/commit-policy.js'
 import {
   branchFor,
   type GitExec,
@@ -393,6 +395,783 @@ describe('并发 · 同一 repo 的共享 git 状态', () => {
     expect([a.value.created, b.value.created].filter(Boolean)).toHaveLength(1)
     expect([a.value.branchCreated, b.value.branchCreated].filter(Boolean)).toHaveLength(1)
     expect(a.value.path).toBe(b.value.path)
+  })
+})
+
+describe('仓库提交身份与消息校验', () => {
+  async function setup() {
+    const g = ws()
+    const p = await prepare(g)
+    const taskId = randomUUID()
+    const wt = await g.ensureWorktree(p, taskId)
+    if (!wt.ok) throw new Error(wt.error.detail)
+    writeFileSync(join(wt.value.path, 'feature.txt'), '修复\n')
+    return { g, p, taskId, path: wt.value.path }
+  }
+  function log(path: string, format: string) {
+    return execFileSync('git', ['-C', path, 'log', '-1', `--format=${format}`], {
+      encoding: 'utf8',
+    })
+  }
+  function hook(path: string, script: string) {
+    const dir = join(path, '.hooks')
+    mkdirSync(dir)
+    writeFileSync(join(dir, 'commit-msg'), `#!/bin/sh\n${script}\n`, { mode: 0o755 })
+    execFileSync('git', ['-C', path, 'config', 'core.hooksPath', dir])
+  }
+
+  it('默认作者、提交者、无签名、完整消息逐字不变', async () => {
+    const { g, taskId, path } = await setup()
+    expect((await g.commitAll(taskId, 'develop: run 12345678')).ok).toBe(true)
+    expect(log(path, '%an <%ae>|%cn <%ce>|%G?%n%B')).toBe(
+      'Keel <keel@localhost>|Keel <keel@localhost>|N\ndevelop: run 12345678\n\n',
+    )
+  })
+  it('未配置时 git commit 的 argv 与环境参数逐字保持旧调用', async () => {
+    const { taskId, path } = await setup()
+    const calls: { args: readonly string[]; env: unknown }[] = []
+    const g = new GitWorkspace({
+      root,
+      exec: async (file, args, opts) => {
+        calls.push({ args, env: opts?.env })
+        return realExecAsync(file, [...args], { encoding: 'utf8', ...opts })
+      },
+    })
+    expect((await g.commitAll(taskId, 'develop: run 12345678')).ok).toBe(true)
+    expect(calls.find((call) => call.args.includes('commit'))).toEqual({
+      args: [
+        '-C',
+        path,
+        '-c',
+        'user.email=keel@localhost',
+        '-c',
+        'user.name=Keel',
+        '-c',
+        'commit.gpgsign=false',
+        'commit',
+        '-m',
+        'develop: run 12345678',
+      ],
+      env: undefined,
+    })
+  })
+  it('指定身份覆盖环境与仓库配置；作者和提交者相同且关闭签名', async () => {
+    const { g, taskId, path } = await setup()
+    execFileSync('git', ['-C', path, 'config', 'commit.gpgsign', 'true'])
+    execFileSync('git', ['-C', path, 'config', 'gpg.program', '/no-such-signer'])
+    const previous = { ...process.env }
+    try {
+      process.env.GIT_AUTHOR_NAME = 'Host'
+      process.env.GIT_AUTHOR_EMAIL = 'host@test'
+      process.env.GIT_COMMITTER_NAME = 'Host'
+      process.env.GIT_COMMITTER_EMAIL = 'host@test'
+      const result = await g.commitAll(taskId, 'fix: 中文', {
+        commit_author: '机器人 <bot@example.com>',
+      })
+      expect(result.ok, result.ok ? '' : result.error.detail).toBe(true)
+      expect(log(path, '%an <%ae>|%cn <%ce>|%G?')).toBe(
+        '机器人 <bot@example.com>|机器人 <bot@example.com>|N\n',
+      )
+    } finally {
+      process.env = previous
+    }
+  })
+  it('模板保留普通 Keel-Run 正文，不被全局 cleanup 配置剥去', async () => {
+    const { g, taskId, path, p } = await setup()
+    execFileSync('git', ['-C', path, 'config', 'commit.cleanup', 'strip'])
+    execFileSync('git', ['-C', path, 'config', 'core.commentChar', 'K'])
+    const policy: RepoCommitPolicy = {
+      commit_message_template: '{type}({scope}): {summary}',
+      commit_types: ['fix'],
+      commit_scopes: ['fact'],
+    }
+    const rendered = renderCommitMessage(policy, 'develop', taskId, {
+      commit_message: { type: 'fix', scope: 'fact', summary: '修复身份' },
+    })
+    if (!rendered.ok) throw new Error(rendered.error.detail)
+    const result = await g.commitAll(taskId, rendered.value, policy)
+    expect(result.ok, result.ok ? '' : result.error.detail).toBe(true)
+    expect(log(path, '%B')).toBe(`${rendered.value}\n\n`)
+    expect((await g.validateCommitHistory(taskId, p.baseSha, policy)).ok).toBe(true)
+  })
+  it('非法模板消息在提交前拒绝，HEAD 不前进且可用正确消息重试', async () => {
+    const { g, taskId, path } = await setup()
+    const before = headOf(path)
+    const policy: RepoCommitPolicy = {
+      commit_message_template: '{type}({scope}): {summary}',
+      commit_types: ['fix'],
+      commit_scopes: ['fact'],
+    }
+    for (const message of [
+      'fix(fact): 缺少正文',
+      `feat(fact): 越过枚举\n\nKeel-Run: ${taskId} stage=develop`,
+      `fix(fact): ${'中'.repeat(73)}\n\nKeel-Run: ${taskId} stage=develop`,
+    ]) {
+      expect(await g.commitAll(taskId, message, policy)).toMatchObject({
+        ok: false,
+        error: { detail: expect.stringContaining('commit_message_rejected:') },
+      })
+      expect(headOf(path)).toBe(before)
+      expect(await g.isDirty(taskId)).toEqual({ ok: true, value: true })
+    }
+    expect(
+      (await g.commitAll(taskId, `fix(fact): 修复\n\nKeel-Run: ${taskId} stage=develop`, policy))
+        .ok,
+    ).toBe(true)
+  })
+  it('header 正则只看首行；拒绝时 HEAD 不前进且改动保留', async () => {
+    const { g, taskId, path } = await setup()
+    const before = headOf(path)
+    const rejected = await g.commitAll(taskId, 'wrong\n\nfix(fact): body', {
+      commit_message_check: '^fix\\(fact\\): .+$',
+    })
+    expect(rejected).toMatchObject({
+      ok: false,
+      error: { detail: expect.stringContaining('header 不匹配正则') },
+    })
+    expect(headOf(path)).toBe(before)
+    expect(await g.isDirty(taskId)).toEqual({ ok: true, value: true })
+    expect(
+      (
+        await g.commitAll(taskId, 'fix(fact): 修复', {
+          commit_message_check: '^fix\\(fact\\): .+$',
+        })
+      ).ok,
+    ).toBe(true)
+    const committed = headOf(path)
+    expect(await g.isDirty(taskId)).toEqual({ ok: true, value: false })
+    expect(
+      await g.commitAll(taskId, 'wrong', { commit_message_check: '^fix\\(fact\\): .+$' }),
+    ).toMatchObject({
+      ok: false,
+      error: { detail: expect.stringContaining('header 不匹配正则') },
+    })
+    expect(headOf(path)).toBe(committed)
+  })
+  it('commit-msg hook 在 ticket worktree 执行，拒绝原因可回灌，成功后才提交', async () => {
+    const { g, taskId, path } = await setup()
+    hook(
+      path,
+      'test -f feature.txt || exit 9\ngrep -q "^fix(fact):" "$1" || { echo "需要 fix(fact) header" >&2; exit 1; }',
+    )
+    const before = headOf(path)
+    const result = await g.commitAll(taskId, 'bad', { commit_message_check: 'hook' })
+    expect(result).toMatchObject({
+      ok: false,
+      error: { detail: expect.stringContaining('需要 fix(fact) header') },
+    })
+    expect(headOf(path)).toBe(before)
+    expect(
+      (await g.commitAll(taskId, 'fix(fact): 修复', { commit_message_check: 'hook' })).ok,
+    ).toBe(true)
+  })
+  it('commit-msg hook 能读取即将提交的暂存区', async () => {
+    const { g, taskId, path } = await setup()
+    hook(path, 'git diff --cached --name-only | grep -q "^feature.txt$" || exit 7')
+    const result = await g.commitAll(taskId, 'fix: 修复', { commit_message_check: 'hook' })
+    expect(result.ok, result.ok ? '' : result.error.detail).toBe(true)
+    expect(log(path, '%s')).toBe('fix: 修复\n')
+  })
+  it('无改动时不运行依赖暂存区的 commit-msg hook', async () => {
+    const { g, taskId, path } = await setup()
+    const hookDir = join(root, 'clean-hook')
+    mkdirSync(hookDir)
+    writeFileSync(
+      join(hookDir, 'commit-msg'),
+      '#!/bin/sh\ngit diff --cached --name-only | grep -q "^feature.txt$" || exit 7\n',
+      { mode: 0o755 },
+    )
+    execFileSync('git', ['-C', path, 'config', 'core.hooksPath', hookDir])
+    rmSync(join(path, 'feature.txt'))
+    const before = headOf(path)
+    const result = await g.commitAll(taskId, 'fix: clean', { commit_message_check: 'hook' })
+    expect(result).toEqual({ ok: true, value: null })
+    expect(headOf(path)).toBe(before)
+    expect(await g.isDirty(taskId)).toEqual({ ok: true, value: false })
+  })
+  it('commit-msg hook 预检看到实际提交的 commit_author 身份', async () => {
+    const { g, taskId, path } = await setup()
+    execFileSync('git', ['-C', path, 'config', 'user.name', 'Fixture'])
+    execFileSync('git', ['-C', path, 'config', 'user.email', 'fixture@example.test'])
+    hook(
+      path,
+      'case "$(git var GIT_AUTHOR_IDENT)" in "Bot <bot@example.test> "*) ;; *) echo "wrong author: $(git var GIT_AUTHOR_IDENT)" >&2; exit 7 ;; esac\n' +
+        'case "$(git var GIT_COMMITTER_IDENT)" in "Bot <bot@example.test> "*) ;; *) echo "wrong committer: $(git var GIT_COMMITTER_IDENT)" >&2; exit 8 ;; esac\n' +
+        'test "$(git config user.name)" = Bot || exit 9\n' +
+        'test "$(git config user.email)" = bot@example.test || exit 10\n' +
+        'test "$(git config author.name)" = Bot || exit 11\n' +
+        'test "$(git config committer.email)" = bot@example.test || exit 12',
+    )
+    const result = await g.commitAll(taskId, 'fix: identity', {
+      commit_author: 'Bot <bot@example.test>',
+      commit_message_check: 'hook',
+    })
+    expect(result.ok, result.ok ? '' : result.error.detail).toBe(true)
+    expect(log(path, '%an <%ae>|%cn <%ce>|%G?')).toBe(
+      'Bot <bot@example.test>|Bot <bot@example.test>|N\n',
+    )
+  })
+  it('历史 hook 看到每个被检提交的 author/committer 身份', { timeout: 30_000 }, async () => {
+    const { g, p, taskId, path } = await setup()
+    hook(
+      path,
+      'case "$(cat "$1")" in\n' +
+        '  *first*) author_name=Bot; author_email=bot@example.test; committer_name=Bot; committer_email=bot@example.test ;;\n' +
+        '  *second*) author_name=Author; author_email=author@example.test; committer_name=Committer; committer_email=committer@example.test ;;\n' +
+        '  *) exit 6 ;;\n' +
+        'esac\n' +
+        'author="$author_name <$author_email>"; committer="$committer_name <$committer_email>"\n' +
+        'case "$(git var GIT_AUTHOR_IDENT)" in "$author "*) ;; *) echo "wrong author: $(git var GIT_AUTHOR_IDENT), expected $author" >&2; exit 7 ;; esac\n' +
+        'case "$(git var GIT_COMMITTER_IDENT)" in "$committer "*) ;; *) echo "wrong committer: $(git var GIT_COMMITTER_IDENT), expected $committer" >&2; exit 8 ;; esac\n' +
+        'test "$(git config user.name)" = "$author_name" || exit 9\n' +
+        'test "$(git config user.email)" = "$author_email" || exit 10\n' +
+        'test "$(git config author.name)" = "$author_name" || exit 11\n' +
+        'test "$(git config committer.name)" = "$committer_name" || exit 12\n' +
+        'test "$(git config committer.email)" = "$committer_email" || exit 13',
+    )
+    writeFileSync(join(path, 'feature.txt'), 'first\n')
+    execFileSync('git', ['-C', path, 'add', '-A'])
+    execFileSync(
+      'git',
+      [
+        '-C',
+        path,
+        '-c',
+        'commit.gpgsign=false',
+        '-c',
+        'user.name=Bot',
+        '-c',
+        'user.email=bot@example.test',
+        '-c',
+        'author.name=Bot',
+        '-c',
+        'author.email=bot@example.test',
+        '-c',
+        'committer.name=Bot',
+        '-c',
+        'committer.email=bot@example.test',
+        'commit',
+        '-q',
+        '-m',
+        'fix: first',
+      ],
+      {
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: 'Bot',
+          GIT_AUTHOR_EMAIL: 'bot@example.test',
+          GIT_COMMITTER_NAME: 'Bot',
+          GIT_COMMITTER_EMAIL: 'bot@example.test',
+        },
+      },
+    )
+    writeFileSync(join(path, 'feature.txt'), 'second\n')
+    execFileSync('git', ['-C', path, 'add', '-A'])
+    execFileSync(
+      'git',
+      [
+        '-C',
+        path,
+        '-c',
+        'commit.gpgsign=false',
+        '-c',
+        'user.name=Author',
+        '-c',
+        'user.email=author@example.test',
+        '-c',
+        'author.name=Author',
+        '-c',
+        'author.email=author@example.test',
+        '-c',
+        'committer.name=Committer',
+        '-c',
+        'committer.email=committer@example.test',
+        'commit',
+        '-q',
+        '-m',
+        'fix: second',
+      ],
+      {
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: 'Author',
+          GIT_AUTHOR_EMAIL: 'author@example.test',
+          GIT_COMMITTER_NAME: 'Committer',
+          GIT_COMMITTER_EMAIL: 'committer@example.test',
+        },
+      },
+    )
+    expect(
+      await g.validateCommitHistory(taskId, p.baseSha, { commit_message_check: 'hook' }),
+    ).toEqual({ ok: true, value: undefined })
+    expect(log(path, '%an <%ae>|%cn <%ce>|%s')).toBe(
+      'Author <author@example.test>|Committer <committer@example.test>|fix: second\n',
+    )
+  })
+  it('历史 hook 按各提交的父提交、暂存区和文件视图复检，不受当前改动影响', {
+    timeout: 30_000,
+  }, async () => {
+    const { g, p, taskId, path } = await setup()
+    const policy = { commit_message_check: 'hook' }
+    hook(
+      path,
+      'git diff --cached --name-only | grep -q "^feature.txt$" || exit 7\n' +
+        'test "$(git show :feature.txt)" = "$(cat feature.txt)" || exit 8\n' +
+        'grep -q "^fix:" "$1" || exit 9',
+    )
+    execFileSync('git', ['-C', path, 'config', 'core.hooksPath', '.hooks'])
+    expect((await g.commitAll(taskId, 'fix: first', policy)).ok).toBe(true)
+    expect(await g.validateCommitHistory(taskId, p.baseSha, policy)).toEqual({
+      ok: true,
+      value: undefined,
+    })
+    writeFileSync(join(path, 'feature.txt'), '后续合规改动\n')
+    expect((await g.commitAll(taskId, 'fix: second', policy)).ok).toBe(true)
+    writeFileSync(join(path, 'feature.txt'), '暂存但未提交\n')
+    execFileSync('git', ['-C', path, 'add', 'feature.txt'])
+    writeFileSync(join(path, 'feature.txt'), '工作区尚未暂存\n')
+    const before = headOf(path)
+    const index = execFileSync('git', ['-C', path, 'show', ':feature.txt'], { encoding: 'utf8' })
+    const worktrees = execFileSync('git', ['-C', path, 'worktree', 'list', '--porcelain'])
+    expect(await g.validateCommitHistory(taskId, p.baseSha, policy)).toEqual({
+      ok: true,
+      value: undefined,
+    })
+    expect(headOf(path)).toBe(before)
+    expect(execFileSync('git', ['-C', path, 'show', ':feature.txt'], { encoding: 'utf8' })).toBe(
+      index,
+    )
+    expect(readFileSync(join(path, 'feature.txt'), 'utf8')).toBe('工作区尚未暂存\n')
+    expect(execFileSync('git', ['-C', path, 'worktree', 'list', '--porcelain'])).toEqual(worktrees)
+  })
+  it('历史 hook 使用已安装且被忽略的本地工具，副作用不会写回原依赖', async () => {
+    const { g, p, taskId, path } = await setup()
+    writeFileSync(join(path, '.gitignore'), 'node_modules/\n')
+    const bin = join(path, 'node_modules', '.bin')
+    const pkg = join(path, 'node_modules', 'validator')
+    mkdirSync(bin, { recursive: true })
+    mkdirSync(pkg)
+    writeFileSync(join(pkg, 'data'), 'installed\n')
+    const tool =
+      '#!/bin/sh\ntest "$(cat node_modules/validator/data)" = installed || exit 7\ngrep -q "^fix:" "$1"\n'
+    writeFileSync(join(pkg, 'cli'), tool, { mode: 0o755 })
+    symlinkSync('../validator/cli', join(bin, 'commitlint'))
+    hook(path, 'exec ./node_modules/.bin/commitlint "$1"')
+    const policy = { commit_message_check: 'hook' }
+    expect((await g.commitAll(taskId, 'fix: local tool', policy)).ok).toBe(true)
+    const before = headOf(path)
+    const snapshots = readdirSync(tmpdir()).filter((name) => name.startsWith('keel-history-hook-'))
+    writeFileSync(
+      join(pkg, 'cli'),
+      `${tool}printf 'snapshot write\\n' > node_modules/validator/data\n`,
+    )
+    expect(await g.validateCommitHistory(taskId, p.baseSha, policy)).toEqual({
+      ok: true,
+      value: undefined,
+    })
+    expect(readFileSync(join(pkg, 'data'), 'utf8')).toBe('installed\n')
+    writeFileSync(join(pkg, 'cli'), '#!/bin/sh\necho "local tool rejected" >&2\nexit 6\n')
+    expect(await g.validateCommitHistory(taskId, p.baseSha, policy)).toMatchObject({
+      ok: false,
+      error: { detail: expect.stringContaining('local tool rejected') },
+    })
+    expect(headOf(path)).toBe(before)
+    expect(await g.isDirty(taskId)).toEqual({ ok: true, value: false })
+    expect(readdirSync(tmpdir()).filter((name) => name.startsWith('keel-history-hook-'))).toEqual(
+      snapshots,
+    )
+  })
+  it('历史 hook 保留 npm 可执行链接的相对模块解析，同时隔离依赖写入', async () => {
+    const { g, p, taskId, path } = await setup()
+    writeFileSync(join(path, '.gitignore'), 'node_modules/\n')
+    const modules = join(path, 'node_modules')
+    const bin = join(modules, '.bin')
+    mkdirSync(bin, { recursive: true })
+    mkdirSync(join(modules, 'validator', 'bin'), { recursive: true })
+    mkdirSync(join(modules, 'validator', 'lib'))
+    writeFileSync(join(modules, 'validator', 'lib', 'validate.cjs'), 'module.exports = () => 0\n')
+    writeFileSync(
+      join(modules, 'validator', 'bin', 'cli.cjs'),
+      '#!/usr/bin/env node\n' +
+        "const { lstatSync, writeFileSync } = require('node:fs')\n" +
+        "const { join } = require('node:path')\n" +
+        "if (!lstatSync(join(__dirname, '..', '..', '.bin', 'validator')).isSymbolicLink())\n" +
+        '  process.exit(7)\n' +
+        "require('../lib/validate.cjs')\n" +
+        "writeFileSync(join(__dirname, '..', 'data'), 'snapshot\\n')\n",
+      { mode: 0o755 },
+    )
+    writeFileSync(join(modules, 'validator', 'data'), 'installed\n')
+    symlinkSync('../validator/bin/cli.cjs', join(bin, 'validator'))
+    hook(path, 'exec ./node_modules/.bin/validator "$1"')
+    const policy = { commit_message_check: 'hook' }
+    expect((await g.commitAll(taskId, 'fix: npm tool', policy)).ok).toBe(true)
+    // 真实提交允许写本地依赖；历史复检必须只写快照副本。
+    writeFileSync(join(modules, 'validator', 'data'), 'installed\n')
+    expect(await g.validateCommitHistory(taskId, p.baseSha, policy)).toEqual({
+      ok: true,
+      value: undefined,
+    })
+    expect(readFileSync(join(modules, 'validator', 'data'), 'utf8')).toBe('installed\n')
+  })
+  it('历史内部链接按被检提交解析，不受当前目标删除影响', async () => {
+    const { g, p, taskId, path } = await setup()
+    hook(path, 'grep -q "^fix:" "$1"')
+    const policy = { commit_message_check: 'hook' }
+    writeFileSync(join(path, 'target.txt'), 'historically valid\n')
+    symlinkSync('target.txt', join(path, 'link.txt'))
+    expect((await g.commitAll(taskId, 'fix: add internal link', policy)).ok).toBe(true)
+    expect(await g.validateCommitHistory(taskId, p.baseSha, policy)).toEqual({
+      ok: true,
+      value: undefined,
+    })
+    rmSync(join(path, 'link.txt'))
+    rmSync(join(path, 'target.txt'))
+    expect((await g.commitAll(taskId, 'fix: remove internal link', policy)).ok).toBe(true)
+    expect(await g.validateCommitHistory(taskId, p.baseSha, policy)).toEqual({
+      ok: true,
+      value: undefined,
+    })
+  })
+  it('历史目录链接先本地化，ignored 复制不写回外部目录', async () => {
+    const { g, p, taskId, path } = await setup()
+    const external = join(root, 'external-cache')
+    mkdirSync(external)
+    writeFileSync(join(external, 'data'), 'original\n')
+    writeFileSync(join(path, '.gitignore'), '*.tmp\n')
+    symlinkSync(external, join(path, 'cache'))
+    hook(path, 'grep -q "^fix:" "$1"')
+    const policy = { commit_message_check: 'hook' }
+    expect((await g.commitAll(taskId, 'fix: add external cache', policy)).ok).toBe(true)
+    rmSync(join(path, 'cache'))
+    mkdirSync(join(path, 'cache'))
+    writeFileSync(join(path, 'cache', 'README'), 'tracked\n')
+    expect((await g.commitAll(taskId, 'fix: replace external cache', policy)).ok).toBe(true)
+    writeFileSync(join(path, 'cache', 'extra.tmp'), 'ignored local content\n')
+    expect(await g.validateCommitHistory(taskId, p.baseSha, policy)).toEqual({
+      ok: true,
+      value: undefined,
+    })
+    expect(existsSync(join(external, 'extra.tmp'))).toBe(false)
+    expect(readFileSync(join(external, 'data'), 'utf8')).toBe('original\n')
+    expect(await g.isDirty(taskId)).toEqual({ ok: true, value: false })
+  })
+  it.each(['absolute directory', 'relative directory', 'external file'])(
+    '历史 hook 复制外部依赖符号链接的内容，成功与拒绝均不写回原依赖：%s',
+    async (kind) => {
+      const { g, p, taskId, path } = await setup()
+      writeFileSync(join(path, '.gitignore'), 'node_modules/\n')
+      const modules = join(path, 'node_modules')
+      const bin = join(modules, '.bin')
+      const external = join(root, 'external-validator')
+      const pkg = kind === 'external file' ? join(modules, 'validator') : external
+      mkdirSync(bin, { recursive: true })
+      mkdirSync(pkg)
+      const data = kind === 'external file' ? join(root, 'external-data') : join(pkg, 'data')
+      writeFileSync(data, 'installed\n')
+      if (kind === 'external file') symlinkSync(data, join(pkg, 'data'))
+      else {
+        symlinkSync(
+          kind === 'absolute directory' ? external : relative(modules, external),
+          join(modules, 'validator'),
+        )
+      }
+      const tool = '#!/bin/sh\ntest "$(cat node_modules/validator/data)" = installed || exit 7\n'
+      writeFileSync(join(pkg, 'cli'), tool, { mode: 0o755 })
+      symlinkSync('../validator/cli', join(bin, 'commitlint'))
+      hook(path, 'exec ./node_modules/.bin/commitlint "$1"')
+      const policy = { commit_message_check: 'hook' }
+      expect((await g.commitAll(taskId, 'fix: external tool', policy)).ok).toBe(true)
+      const before = headOf(path)
+      const snapshots = readdirSync(tmpdir()).filter((name) =>
+        name.startsWith('keel-history-hook-'),
+      )
+      writeFileSync(
+        join(pkg, 'cli'),
+        `${tool}printf 'snapshot write\n' > node_modules/validator/data\n`,
+      )
+      expect(await g.validateCommitHistory(taskId, p.baseSha, policy)).toEqual({
+        ok: true,
+        value: undefined,
+      })
+      expect(readFileSync(data, 'utf8')).toBe('installed\n')
+      writeFileSync(
+        join(pkg, 'cli'),
+        `${tool}printf 'rejected write\n' > node_modules/validator/data\necho 'external tool rejected' >&2\nexit 6\n`,
+      )
+      expect(await g.validateCommitHistory(taskId, p.baseSha, policy)).toMatchObject({
+        ok: false,
+        error: { detail: expect.stringContaining('external tool rejected') },
+      })
+      expect(readFileSync(data, 'utf8')).toBe('installed\n')
+      expect(headOf(path)).toBe(before)
+      expect(await g.isDirty(taskId)).toEqual({ ok: true, value: false })
+      expect(readdirSync(tmpdir()).filter((name) => name.startsWith('keel-history-hook-'))).toEqual(
+        snapshots,
+      )
+    },
+  )
+  it('历史 hook 隔离已跟踪的顶层外部依赖链接，同时保留历史暂存区', async () => {
+    const { g, p, taskId, path } = await setup()
+    writeFileSync(join(path, '.gitignore'), 'node_modules/\n')
+    const external = join(root, 'external-modules')
+    mkdirSync(external)
+    writeFileSync(join(external, 'data'), 'installed\n')
+    symlinkSync(external, join(path, 'node_modules'))
+    hook(path, 'test "$(cat node_modules/data)" = installed || exit 7')
+    const policy = { commit_message_check: 'hook' }
+    expect((await g.commitAll(taskId, 'fix: tracked dependency', policy)).ok).toBe(true)
+    const index = execFileSync('git', ['-C', path, 'ls-files', '--stage'], { encoding: 'utf8' })
+    expect(index).toMatch(/^120000 .*\tnode_modules$/m)
+    const before = headOf(path)
+    for (const exitCode of [0, 6]) {
+      writeFileSync(
+        join(path, '.hooks', 'commit-msg'),
+        '#!/bin/sh\n' +
+          'git ls-files --stage | grep -q "^120000 .*node_modules$" || exit 8\n' +
+          `printf 'snapshot write\\n' > node_modules/data\nexit ${exitCode}\n`,
+      )
+      const checked = await g.validateCommitHistory(taskId, p.baseSha, policy)
+      expect(checked.ok).toBe(exitCode === 0)
+      expect(readFileSync(join(external, 'data'), 'utf8')).toBe('installed\n')
+      expect(headOf(path)).toBe(before)
+      expect(execFileSync('git', ['-C', path, 'ls-files', '--stage'], { encoding: 'utf8' })).toBe(
+        index,
+      )
+    }
+  })
+  it('历史快照无法复制悬空依赖链接时拒绝并清理，不跳过复检', async () => {
+    const { g, p, taskId, path } = await setup()
+    writeFileSync(join(path, '.gitignore'), 'node_modules/\n')
+    expect((await g.commitAll(taskId, 'fix: local dependency')).ok).toBe(true)
+    mkdirSync(join(path, 'node_modules'))
+    symlinkSync(join(root, 'missing-tool'), join(path, 'node_modules', 'tool'))
+    hook(path, 'exit 0')
+    const snapshots = readdirSync(tmpdir()).filter((name) => name.startsWith('keel-history-hook-'))
+    expect(
+      await g.validateCommitHistory(taskId, p.baseSha, { commit_message_check: 'hook' }),
+    ).toMatchObject({
+      ok: false,
+      error: { detail: expect.stringContaining('历史 commit-msg hook 复检失败') },
+    })
+    expect(readdirSync(tmpdir()).filter((name) => name.startsWith('keel-history-hook-'))).toEqual(
+      snapshots,
+    )
+  })
+  it('历史跟踪文件不会被当前同目录下的忽略文件覆盖', async () => {
+    const { g, p, taskId, path } = await setup()
+    writeFileSync(join(path, '.gitignore'), 'generated/\n')
+    mkdirSync(join(path, 'generated'))
+    writeFileSync(join(path, 'generated', 'value'), 'historical\n')
+    execFileSync('git', ['-C', path, 'add', '-f', 'generated/value'])
+    expect((await g.commitAll(taskId, 'fix: historical')).ok).toBe(true)
+    execFileSync('git', ['-C', path, 'rm', '--cached', 'generated/value'])
+    writeFileSync(join(path, 'generated', 'value'), 'current\n')
+    expect((await g.commitAll(taskId, 'fix: current')).ok).toBe(true)
+    hook(
+      path,
+      'if grep -q "^fix: historical" "$1"; then expected=historical; else expected=current; fi\n' +
+        'test "$(cat generated/value)" = "$expected" || exit 7',
+    )
+    expect(
+      await g.validateCommitHistory(taskId, p.baseSha, { commit_message_check: 'hook' }),
+    ).toEqual({ ok: true, value: undefined })
+    expect(readFileSync(join(path, 'generated', 'value'), 'utf8')).toBe('current\n')
+  })
+  it('历史跟踪链接不会被当前同目录下的忽略链接覆盖', async () => {
+    const { g, p, taskId, path } = await setup()
+    writeFileSync(join(path, '.gitignore'), 'generated/\n')
+    mkdirSync(join(path, 'generated'))
+    writeFileSync(join(path, 'generated', 'target'), 'historical\n')
+    symlinkSync('target', join(path, 'generated', 'link'))
+    execFileSync('git', ['-C', path, 'add', '-f', 'generated/target', 'generated/link'])
+    hook(
+      path,
+      'if grep -q "^fix: tracked" "$1"; then expected=historical; else expected=current; fi\n' +
+        'test "$(cat generated/link)" = "$expected" || exit 7',
+    )
+    const policy = { commit_message_check: 'hook' }
+    expect((await g.commitAll(taskId, 'fix: tracked generated link', policy)).ok).toBe(true)
+    execFileSync('git', ['-C', path, 'rm', '--cached', 'generated/target', 'generated/link'])
+    writeFileSync(join(path, 'generated', 'target'), 'current\n')
+    expect((await g.commitAll(taskId, 'fix: ignore generated link', policy)).ok).toBe(true)
+    const before = headOf(path)
+    expect(await g.validateCommitHistory(taskId, p.baseSha, policy)).toEqual({
+      ok: true,
+      value: undefined,
+    })
+    expect(headOf(path)).toBe(before)
+    expect(await g.isDirty(taskId)).toEqual({ ok: true, value: false })
+    expect(readFileSync(join(path, 'generated', 'link'), 'utf8')).toBe('current\n')
+  })
+  it('历史 hook 保留任务分支名与父提交，但不移动原分支', async () => {
+    const { g, p, taskId, path } = await setup()
+    execFileSync('git', ['-C', path, 'config', 'hooks.requiredBranch', branchFor(taskId)])
+    hook(
+      path,
+      'test "$(git branch --show-current)" = "$(git config hooks.requiredBranch)" || exit 7\n' +
+        `test "$(git rev-parse HEAD)" = "${p.baseSha}" || exit 8\n` +
+        'git diff --cached --name-only | grep -q "^feature.txt$" || exit 9',
+    )
+    const policy = { commit_message_check: 'hook' }
+    expect((await g.commitAll(taskId, 'fix: branch context', policy)).ok).toBe(true)
+    const before = headOf(path)
+    writeFileSync(join(path, 'feature.txt'), 'staged\n')
+    execFileSync('git', ['-C', path, 'add', 'feature.txt'])
+    writeFileSync(join(path, 'feature.txt'), 'unstaged\n')
+    expect(await g.validateCommitHistory(taskId, p.baseSha, policy)).toEqual({
+      ok: true,
+      value: undefined,
+    })
+    expect(headOf(path)).toBe(before)
+    expect(
+      execFileSync('git', ['-C', path, 'branch', '--show-current'], { encoding: 'utf8' }),
+    ).toBe(`${branchFor(taskId)}\n`)
+    expect(execFileSync('git', ['-C', path, 'show', ':feature.txt'], { encoding: 'utf8' })).toBe(
+      'staged\n',
+    )
+    expect(readFileSync(join(path, 'feature.txt'), 'utf8')).toBe('unstaged\n')
+  })
+  it('历史 hook 读取 worktree 专用配置及其覆盖值，不改写原配置或暂存区', async () => {
+    const { g, p, taskId, path } = await setup()
+    execFileSync('git', ['-C', path, 'config', 'extensions.worktreeConfig', 'true'])
+    execFileSync('git', ['-C', path, 'config', 'hooks.expectedValue', 'common'])
+    execFileSync('git', ['-C', path, 'config', '--worktree', 'hooks.expectedValue', 'task-only'])
+    execFileSync('git', ['-C', path, 'config', '--worktree', 'hooks.taskValue', taskId])
+    hook(
+      path,
+      'test "$(git config hooks.expectedValue)" = task-only || exit 7\n' +
+        `test "$(git config hooks.taskValue)" = "${taskId}" || exit 8\n` +
+        'test "$(git rev-parse --is-bare-repository)" = false || exit 9\n' +
+        'test "$(git rev-parse --show-toplevel)" = "$(pwd -P)" || exit 10',
+    )
+    execFileSync('git', ['-C', path, 'config', '--worktree', 'core.hooksPath', '.hooks'])
+    // 原 linked worktree 也允许显式指定 core.worktree；快照必须覆盖为自己的路径。
+    execFileSync('git', ['-C', path, 'config', '--worktree', 'core.worktree', path])
+    execFileSync('git', ['-C', path, 'config', '--worktree', 'core.bare', 'false'])
+    const policy = { commit_message_check: 'hook' }
+    const committed = await g.commitAll(taskId, 'fix: worktree config', policy)
+    expect(committed.ok, committed.ok ? '' : committed.error.detail).toBe(true)
+    const configPath = execFileSync(
+      'git',
+      ['-C', path, 'rev-parse', '--path-format=absolute', '--git-path', 'config.worktree'],
+      { encoding: 'utf8' },
+    ).trim()
+    const beforeConfig = readFileSync(configPath, 'utf8')
+    const before = headOf(path)
+    writeFileSync(join(path, 'feature.txt'), 'staged\n')
+    execFileSync('git', ['-C', path, 'add', 'feature.txt'])
+    writeFileSync(join(path, 'feature.txt'), 'unstaged\n')
+    expect(await g.validateCommitHistory(taskId, p.baseSha, policy)).toEqual({
+      ok: true,
+      value: undefined,
+    })
+    expect(readFileSync(configPath, 'utf8')).toBe(beforeConfig)
+    expect(headOf(path)).toBe(before)
+    expect(execFileSync('git', ['-C', path, 'show', ':feature.txt'], { encoding: 'utf8' })).toBe(
+      'staged\n',
+    )
+    expect(readFileSync(join(path, 'feature.txt'), 'utf8')).toBe('unstaged\n')
+  })
+  it('未启用 worktreeConfig 时不加载残留的 config.worktree', async () => {
+    const { g, p, taskId, path } = await setup()
+    hook(path, 'test "$(git config hooks.expectedValue)" = common || exit 7')
+    execFileSync('git', ['-C', path, 'config', 'hooks.expectedValue', 'common'])
+    const configPath = execFileSync(
+      'git',
+      ['-C', path, 'rev-parse', '--path-format=absolute', '--git-path', 'config.worktree'],
+      { encoding: 'utf8' },
+    ).trim()
+    writeFileSync(configPath, '[hooks]\n\texpectedValue = stale\n')
+    const policy = { commit_message_check: 'hook' }
+    expect((await g.commitAll(taskId, 'fix: common config', policy)).ok).toBe(true)
+    expect(await g.validateCommitHistory(taskId, p.baseSha, policy)).toEqual({
+      ok: true,
+      value: undefined,
+    })
+  })
+  it('历史 hook 支持没有父提交的根提交', async () => {
+    const { g, p, taskId, path } = await setup()
+    execFileSync('git', ['-C', path, 'checkout', '--orphan', 'history-root'])
+    hook(
+      path,
+      'test "$(git branch --show-current)" = history-root || exit 6\n' +
+        'if git rev-parse --verify HEAD >/dev/null 2>&1; then exit 7; fi\n' +
+        'git diff --cached --name-only | grep -q "^feature.txt$" || exit 8',
+    )
+    const policy = { commit_message_check: 'hook' }
+    expect((await g.commitAll(taskId, 'fix: root', policy)).ok).toBe(true)
+    expect(await g.validateCommitHistory(taskId, p.baseSha, policy)).toEqual({
+      ok: true,
+      value: undefined,
+    })
+  })
+  it('历史 hook 的拒绝和消息改写仍生效，失败后清理快照', async () => {
+    const { g, p, taskId, path } = await setup()
+    expect((await g.commitAll(taskId, 'bad')).ok).toBe(true)
+    hook(path, 'grep -q "^fix:" "$1" || { echo "历史 header 不合规" >&2; exit 9; }')
+    const before = execFileSync('git', ['-C', path, 'worktree', 'list', '--porcelain'])
+    const policy = { commit_message_check: 'hook' }
+    expect(await g.validateCommitHistory(taskId, p.baseSha, policy)).toMatchObject({
+      ok: false,
+      error: { detail: expect.stringContaining('历史 header 不合规') },
+    })
+    writeFileSync(join(path, '.hooks', 'commit-msg'), '#!/bin/sh\necho "changed" >> "$1"\n')
+    expect(await g.validateCommitHistory(taskId, p.baseSha, policy)).toMatchObject({
+      ok: false,
+      error: { detail: expect.stringContaining('hook 修改了消息') },
+    })
+    expect(execFileSync('git', ['-C', path, 'worktree', 'list', '--porcelain'])).toEqual(before)
+  })
+  it('真实 commit-msg hook 改写为另一条合规模板消息仍拒绝', async () => {
+    const { g, taskId, path } = await setup()
+    const policy: RepoCommitPolicy = {
+      commit_message_check: 'hook',
+      commit_message_template: '{type}({scope}): {summary}',
+      commit_types: ['fix'],
+      commit_scopes: ['fact'],
+    }
+    const original = `fix(fact): original\n\nKeel-Run: ${taskId} stage=develop`
+    hook(
+      path,
+      'case "$1" in *keel-commit-msg-*) exit 0 ;; esac\n' +
+        'sed "s/original/rewritten/" "$1" > "$1.next"\nmv "$1.next" "$1"',
+    )
+    const result = await g.commitAll(taskId, original, policy)
+    expect(result).toMatchObject({
+      ok: false,
+      error: { detail: expect.stringContaining('hook 修改了消息') },
+    })
+    expect(log(path, '%B')).toBe(`${original.replace('original', 'rewritten')}\n\n`)
+  })
+  it('缺 hook 和改写消息均拒绝，不能静默通过', async () => {
+    const { g, taskId, path } = await setup()
+    expect((await g.commitAll(taskId, 'fix: x', { commit_message_check: 'hook' })).ok).toBe(false)
+    hook(path, 'echo "changed" >> "$1"')
+    const result = await g.commitAll(taskId, 'fix: x', { commit_message_check: 'hook' })
+    expect(result).toMatchObject({
+      ok: false,
+      error: { detail: expect.stringContaining('hook 修改了消息') },
+    })
+  })
+  it('Harness 自行提交的坏 header 不能通过干净工作树或下一轮绕过', async () => {
+    const { g, p, taskId, path } = await setup()
+    const rejected = await g.commitAll(taskId, 'bad')
+    expect(rejected.ok).toBe(true)
+    expect(await g.isDirty(taskId)).toEqual({ ok: true, value: false })
+    expect(
+      (await g.validateCommitHistory(taskId, p.baseSha, { commit_message_check: '^fix:' })).ok,
+    ).toBe(false)
+    writeFileSync(join(path, 'feature.txt'), '后续合规改动\n')
+    const followup = await g.commitAll(taskId, 'fix: followup', {
+      commit_message_check: '^fix:',
+    })
+    expect(followup.ok && followup.value).toMatch(/^[a-f0-9]{40}$/)
+    expect(followup.ok && followup.value).not.toBe(rejected.ok && rejected.value)
+    expect(await g.isDirty(taskId)).toEqual({ ok: true, value: false })
+    expect(
+      (await g.validateCommitHistory(taskId, p.baseSha, { commit_message_check: '^fix:' })).ok,
+    ).toBe(false)
   })
 })
 
