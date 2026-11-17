@@ -961,6 +961,32 @@ describe('仓库提交身份与消息校验', () => {
     ).toEqual({ ok: true, value: undefined })
     expect(readFileSync(join(path, 'generated', 'value'), 'utf8')).toBe('current\n')
   })
+  it('历史跟踪链接不会被当前同目录下的忽略链接覆盖', async () => {
+    const { g, p, taskId, path } = await setup()
+    writeFileSync(join(path, '.gitignore'), 'generated/\n')
+    mkdirSync(join(path, 'generated'))
+    writeFileSync(join(path, 'generated', 'target'), 'historical\n')
+    symlinkSync('target', join(path, 'generated', 'link'))
+    execFileSync('git', ['-C', path, 'add', '-f', 'generated/target', 'generated/link'])
+    hook(
+      path,
+      'if grep -q "^fix: tracked" "$1"; then expected=historical; else expected=current; fi\n' +
+        'test "$(cat generated/link)" = "$expected" || exit 7',
+    )
+    const policy = { commit_message_check: 'hook' }
+    expect((await g.commitAll(taskId, 'fix: tracked generated link', policy)).ok).toBe(true)
+    execFileSync('git', ['-C', path, 'rm', '--cached', 'generated/target', 'generated/link'])
+    writeFileSync(join(path, 'generated', 'target'), 'current\n')
+    expect((await g.commitAll(taskId, 'fix: ignore generated link', policy)).ok).toBe(true)
+    const before = headOf(path)
+    expect(await g.validateCommitHistory(taskId, p.baseSha, policy)).toEqual({
+      ok: true,
+      value: undefined,
+    })
+    expect(headOf(path)).toBe(before)
+    expect(await g.isDirty(taskId)).toEqual({ ok: true, value: false })
+    expect(readFileSync(join(path, 'generated', 'link'), 'utf8')).toBe('current\n')
+  })
   it('历史 hook 保留任务分支名与父提交，但不移动原分支', async () => {
     const { g, p, taskId, path } = await setup()
     execFileSync('git', ['-C', path, 'config', 'hooks.requiredBranch', branchFor(taskId)])

@@ -629,6 +629,15 @@ export class GitWorkspace {
     const root = subtreeRoot ?? (stat.isDirectory() ? await realpath(source) : resolve(source))
     if (snapshotRoot === undefined) await mkdir(dirname(dest), { recursive: true })
     else await this.ensureSnapshotDirectory(dirname(dest), snapshotRoot)
+    let existing: Stats | undefined
+    try {
+      existing = await lstat(dest)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+    // 历史跟踪条目优先：同名文件、链接或目录都不能被当前 ignored 内容覆盖。
+    // 两边都是目录时继续合并，补齐历史提交中不存在、仅当前工作树有的本地文件。
+    if (existing !== undefined && (!stat.isDirectory() || !existing.isDirectory())) return
     if (stat.isSymbolicLink()) {
       const text = await readlink(source)
       const lexical = isAbsolute(text) ? text : resolve(dirname(source), text)
@@ -641,14 +650,7 @@ export class GitWorkspace {
       return
     }
     if (stat.isDirectory()) {
-      let existing: Stats | undefined
-      try {
-        existing = await lstat(dest)
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-      }
       if (existing === undefined) await mkdir(dest)
-      else if (!existing.isDirectory()) throw new Error(`历史文件与依赖目录冲突：${dest}`)
       for (const entry of await readdir(source)) {
         await this.copySnapshotTree(join(source, entry), join(dest, entry), root, snapshotRoot)
       }
