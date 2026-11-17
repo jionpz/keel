@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ok, type Result } from '../contracts/errors.js'
 import type {
   DisposeReport,
@@ -24,6 +24,10 @@ import { collectGitDiff } from '../execution/adapters/git-diff.js'
 import { HarnessSessionManager } from '../execution/session/manager.js'
 import { asOwner, closePool } from '../fact/db.js'
 import { branchFor, GitWorkspace } from '../fact/git-workspace.js'
+
+// 这些用例会真实启动 PostgreSQL、Git 子进程并执行多轮编排；5 秒默认预算在隔离环境中会截断正常执行。
+// 仅把本文件预算提高到 30 秒，不改变产品逻辑或整仓默认值。
+vi.setConfig({ testTimeout: 30_000 })
 
 function git(path: string, ...args: string[]): string {
   return execFileSync('git', ['-C', path, ...args], { encoding: 'utf8' }).trim()
