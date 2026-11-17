@@ -17,7 +17,7 @@ import {
   type ManagedHarness,
   prepareManagedExecutorEnv,
 } from './isolation/managed-env.js'
-import { sandboxCommand } from './isolation/os-sandbox.js'
+import { supervisedSandboxCommand } from './isolation/process-supervisor.js'
 import { managedInference } from './managed-inference.js'
 import { ticketWorkerFromAdapter } from './ticket-stage-runner.js'
 
@@ -51,8 +51,11 @@ export function createIsolatedTicketWorker(
   }
   const decide: ManagedTicketDecisionRunner = async (input) => {
     try {
-      return await withIsolatedAdapter(options, input.workspace_path, (adapter) =>
-        ticketWorkerFromAdapter(adapter).decide(input),
+      return await withIsolatedAdapter(
+        options,
+        input.workspace_path,
+        (adapter) => ticketWorkerFromAdapter(adapter).decide(input),
+        true,
       )
     } catch (error) {
       return { ok: false, error: managedEnvError(error), usage: ZERO_USAGE }
@@ -60,8 +63,11 @@ export function createIsolatedTicketWorker(
   }
   const plan: ManagedWorkflowPlanRunner = async (input) => {
     try {
-      return await withIsolatedAdapter(options, input.workspace_path, (adapter) =>
-        ticketWorkerFromAdapter(adapter).plan(input),
+      return await withIsolatedAdapter(
+        options,
+        input.workspace_path,
+        (adapter) => ticketWorkerFromAdapter(adapter).plan(input),
+        true,
       )
     } catch (error) {
       return { ok: false, error: managedEnvError(error), usage: ZERO_USAGE }
@@ -88,6 +94,7 @@ export function createIsolatedManagedInference(
         { harness, descriptor: descriptorFor(harness), ...(model === undefined ? {} : { model }) },
         input.workspace_path,
         (adapter) => managedInference(adapter)(input),
+        true,
       )
     } catch (error) {
       return { ok: false, error: managedEnvError(error), usage: ZERO_USAGE }
@@ -117,17 +124,27 @@ async function withIsolatedAdapter<T>(
   options: IsolatedTicketWorkerOptions,
   workspace: string,
   action: (adapter: HarnessAdapter) => Promise<T>,
+  readOnlyWorkspace = false,
 ): Promise<T> {
   const prepared = await prepareManagedExecutorEnv({
     harness: options.harness,
     workspace,
+    readOnlyWorkspace,
     ...(options.model === undefined ? {} : { model: options.model }),
   })
   if (!prepared.ok) throw prepared.error
+  let cleanupFailed = false
   try {
-    return await action(adapterFor(options.harness, options.model, prepared.value))
+    const result = await action(
+      adapterFor(options.harness, options.model, prepared.value, () => {
+        cleanupFailed = true
+      }),
+    )
+    if (cleanupFailed)
+      throw new Error(`managed supervisor 未确认回收，执行现场保留在 ${prepared.value.root}`)
+    return result
   } finally {
-    await prepared.value.dispose()
+    if (!cleanupFailed) await prepared.value.dispose()
   }
 }
 
@@ -135,8 +152,9 @@ export function adapterFor(
   harness: ManagedHarness,
   model: string | undefined,
   env: ManagedExecutorEnv,
+  onSupervisorFailure?: () => void,
 ): HarnessAdapter {
-  const spawnFn = sandboxedSpawn(env)
+  const spawnFn = sandboxedSpawn(env, onSupervisorFailure)
   const spawnOption = spawnFn === undefined ? {} : { spawnFn }
   switch (harness) {
     case 'pi':
@@ -169,11 +187,23 @@ export function adapterFor(
   }
 }
 
-function sandboxedSpawn(env: ManagedExecutorEnv): typeof spawn | undefined {
+function sandboxedSpawn(
+  env: ManagedExecutorEnv,
+  onSupervisorFailure?: () => void,
+): typeof spawn | undefined {
   const sandbox = env.sandbox
   if (sandbox === undefined) return undefined
   return ((bin: string, args: string[], options: SpawnOptions) => {
-    const command = sandboxCommand(sandbox, bin, args)
-    return spawn(command.command, [...command.args], options)
+    const command = supervisedSandboxCommand(sandbox, bin, args)
+    // 宿主持有 stdin 写端；正常结束、暂停、超时和宿主退出共用 supervisor 回收。
+    const child = spawn(command.command, [...command.args], {
+      ...options,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+    child.once('exit', (code, signal) => {
+      if (code === 125 || signal !== null) onSupervisorFailure?.()
+    })
+    child.once('error', () => onSupervisorFailure?.())
+    return child
   }) as typeof spawn
 }

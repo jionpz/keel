@@ -81,7 +81,7 @@ profile 的关键规则：
 
 - 默认拒绝宿主用户目录（`/Users`、宿主 HOME）、`/Applications`、`/Volumes`、
   `/Network`、`/private/tmp` 的其他子目录、`/private/var/folders` 与 `/private/var/tmp`；
-- 只读写任务 worktree、隔离 HOME/TMPDIR、linked worktree 的 gitdir/common dir；
+- 只读写任务私有 Git 副本和隔离 HOME/TMPDIR；不放行宿主 gitdir/common dir；
 - 只读系统路径、Harness 运行时目录（Node/Pi/Claude/OMP）和 Homebrew；
 - 拒绝所有网络，只放行 `localhost:<模型网关端口>`（默认 `3425`）；探针可显式传入
   stub 端口；
@@ -89,9 +89,22 @@ profile 的关键规则：
   `/usr/bin/security`，避免绕过文件边界读取宿主凭据；
 - 对允许路径的祖先只给 metadata 遍历权限，不把父目录内容变成可读。
 
-linked worktree 的 `.git` 指针会解析到主仓库的 `gitdir` 与 `commondir`，两者必须
-可读写才能执行 `git status/commit/diff`；边界保护的是任务工作树，不是共享 git
-对象库。非 git 目录、无法解析 gitdir 或路径不合规的 workspace 在沙箱构造期失败。
+managed 写执行必须使用仓库内的独立 `.git` 目录，拒绝 linked worktree、
+commondir、alternates，以及管理目录内的符号链接、硬链接和特殊文件。
+节点由 Control Plane 用 `clone --no-local --no-checkout` 建立，依赖从已归档前驱的
+私有仓库按准确输出 commit 传递；不通过宿主共享对象库交接。存量共享工作区只拒绝，
+不自动迁移，见 [ADR-0014](../../adr/0014-managed-private-git.md)。
+规划、调查和天问使用显式只读 workspace 模式；源可以是 linked worktree，但其
+文件及 gitdir/common dir 都只有读权限，不成为节点写执行的例外。
+
+profile 还将信号权限限定为 `same-sandbox`。真实 adapter 启动同一沙箱内的
+supervisor，由宿主持有 stdin 存活管道。正常返回、阶段中断与宿主退出均先停止并
+回收本次内核沙箱的全部成员，包括独立 session、双重 fork 和清空 env 的后台进程，
+再返回结果。`pgrep` 只枚举 PID，SIG0 由内核信号权限筛选成员；不按 cwd/env 猜测
+归属，不对其他沙箱或宿主进程发出有效终止信号。Control Plane 每 500ms 核对阶段
+任务状态、代次和租约，失效时通过 `AbortSignal` 中断真实 adapter。
+supervisor 无法枚举成员时在 Harness 启动前失败；回收失败或 supervisor 被信号杀死
+时暂停并保留执行现场，不作为可自动重试的普通 Harness 故障。
 
 非 macOS 平台、缺少 `/usr/bin/sandbox-exec` 或 profile 构造失败时，
 `prepareManagedExecutorEnv` 返回 `CAPABILITY_UNSUPPORTED`；managed 写执行不会

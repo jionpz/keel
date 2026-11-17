@@ -17,6 +17,7 @@ import {
   recordDelegationPolicy,
   recordProjectDecision,
 } from './decision-store.js'
+import { pauseManagedTicket } from './ticket-control.js'
 import {
   createManagedTicketTask,
   getManagedTicket,
@@ -271,6 +272,43 @@ async function bindWorkflowIssue(
 }
 
 describe('managed ticket runtime', () => {
+  it('人工暂停撤回正在运行的 worker，迟到结果不改变暂停态和证据', async () => {
+    const { taskId } = await seed()
+    let started: (() => void) | undefined
+    const ready = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    let observedAbort = false
+    const worker = workerWith(async (input) => {
+      started?.()
+      await new Promise<void>((resolve) =>
+        input.signal?.addEventListener('abort', () => {
+          observedAbort = true
+          resolve()
+        }),
+      )
+      return success('execute', { commit: input.input_commit })
+    })
+    const pending = tickManagedTicket(worker, taskId)
+    await ready
+    expect(await pauseManagedTicket(taskId, 'owner pause', new Date().toISOString())).toMatchObject(
+      {
+        ok: true,
+      },
+    )
+    expect(await pending).toMatchObject({ ok: false, error: { kind: 'CONFLICT' } })
+    expect(observedAbort).toBe(true)
+    expect(await getManagedTicket(taskId)).toMatchObject({
+      ok: true,
+      value: { status: 'PAUSED' },
+    })
+    expect(await listManagedTicketStages(taskId)).toMatchObject([
+      {
+        status: 'FAILED',
+        error: 'HUMAN_OVERRODE_ACTIVE_STAGE',
+      },
+    ])
+  })
   it('旧请求已解决到 revision 2 后，新请求仍精确绑定并领取自身 revision 1', async () => {
     const { taskId } = await seed()
     const blocked = workerWith(async () => ({
@@ -1123,76 +1161,122 @@ describe('managed ticket runtime', () => {
     )
   })
 
-  it('execute 超时后已提交但尚未确认的 worktree 可以从新 HEAD 继续', async () => {
+  it.each([true, false])(
+    'execute 超时后已提交的恢复点可确认完成；需要补实现=%s',
+    async (needsMoreWork) => {
+      const { repoId, root, taskId } = await seed()
+      await bindWorkflowIssue(repoId, taskId, '#134', ['feature.txt'])
+      const task = await getManagedTicket(taskId)
+      if (!task.ok) throw new Error(task.error.detail)
+
+      let timedOutCommit = ''
+      const timeoutWorker: ManagedTicketWorker = {
+        harness: 'pi',
+        toolInventory: workerTools,
+        run: async () => {
+          timedOutCommit = await commitFile(root, 'feature.txt', 'partial implementation\n')
+          return {
+            ok: false,
+            error: makeError('RUN_TIMEOUT', 'fixture stage timeout after commit'),
+            usage: ZERO_USAGE,
+          }
+        },
+      }
+      const first = await tickManagedTicket(timeoutWorker, taskId)
+      expect(first).toMatchObject({ ok: true, value: { status: 'READY', stage: 'execute' } })
+      expect(await head(root)).toBe(timedOutCommit)
+      expect(await git(root, 'status', '--porcelain')).toBe('')
+
+      expect(
+        await simulatePreflightPause(
+          taskId,
+          'WORKTREE_DRIFT',
+          `worktree HEAD ${timedOutCommit} 与绑定输入 ${task.value.baseline_commit} 不一致`,
+        ),
+      ).toBe(2)
+
+      let observedInput = ''
+      const worker = workerWith(async (input) => {
+        observedInput = input.input_commit
+        if (needsMoreWork) {
+          await writeFile(join(root, 'feature.txt'), 'completed implementation\n')
+          await git(root, 'add', 'feature.txt')
+          await git(root, 'commit', '-m', 'complete timed out implementation')
+        }
+        const commit = await head(root)
+        return success('execute', { commit, worktree_head: commit })
+      })
+      const resumed = await tickManagedTicket(worker, taskId)
+      expect(resumed).toMatchObject({ ok: true, value: { status: 'READY', stage: 'execute' } })
+      expect(observedInput).toBe(timedOutCommit)
+
+      const stages = await listManagedTicketStages(taskId)
+      expect(
+        stages.map((stage) => [stage.attempt, stage.stage, stage.status, stage.error]),
+      ).toEqual([
+        [1, 'execute', 'FAILED', 'RUN_TIMEOUT'],
+        [3, 'execute', 'SUCCEEDED', null],
+      ])
+      expect(stages[1]?.input_commit).toBe(timedOutCommit)
+      expect(stages[1]?.output_commit === timedOutCommit).toBe(!needsMoreWork)
+      const state = await getManagedTicket(taskId)
+      expect(state).toMatchObject({
+        ok: true,
+        value: { status: 'READY', current_stage: 'verify' },
+      })
+
+      const recovery = (
+        await asRole('keel_control', (c) =>
+          c.query<{ payload: unknown }>(
+            `SELECT payload FROM managed_ticket_event
+           WHERE task_id=$1 AND type='ManagedTicketTimeoutRecovery'`,
+            [taskId],
+          ),
+        )
+      ).rows[0]
+      expect(recovery?.payload).toMatchObject({
+        stage: 'execute',
+        previousAttempt: 1,
+        attempt: 3,
+        headCommit: timedOutCommit,
+        previousInputCommit: task.value.baseline_commit,
+        worktreeState: 'committed',
+        changedFiles: ['feature.txt'],
+      })
+    },
+  )
+
+  it('没有提交实现时，重复确认原输入仍不能通过 execute', async () => {
+    const { taskId } = await seed()
+    const worker = workerWith(async (input) => success('execute', { commit: input.input_commit }))
+    await tickManagedTicket(worker, taskId)
+    expect((await listManagedTicketStages(taskId))[0]).toMatchObject({
+      status: 'FAILED',
+      error: 'STAGE_GATE_FAILED',
+    })
+  })
+
+  it('恢复前仍有 WIP 时，丢弃 WIP 后重复确认已有提交不能通过 execute', async () => {
     const { repoId, root, taskId } = await seed()
     await bindWorkflowIssue(repoId, taskId, '#134', ['feature.txt'])
-    const task = await getManagedTicket(taskId)
-    if (!task.ok) throw new Error(task.error.detail)
-
-    let timedOutCommit = ''
     const timeoutWorker: ManagedTicketWorker = {
       harness: 'pi',
       toolInventory: workerTools,
       run: async () => {
-        timedOutCommit = await commitFile(root, 'feature.txt', 'partial implementation\n')
-        return {
-          ok: false,
-          error: makeError('RUN_TIMEOUT', 'fixture stage timeout after commit'),
-          usage: ZERO_USAGE,
-        }
+        await commitFile(root, 'feature.txt', 'committed part\n')
+        await writeFile(join(root, 'feature.txt'), 'uncommitted part\n')
+        return { ok: false, error: makeError('RUN_TIMEOUT', 'fixture'), usage: ZERO_USAGE }
       },
     }
-    const first = await tickManagedTicket(timeoutWorker, taskId)
-    expect(first).toMatchObject({ ok: true, value: { status: 'READY', stage: 'execute' } })
-    expect(await head(root)).toBe(timedOutCommit)
-    expect(await git(root, 'status', '--porcelain')).toBe('')
-
-    expect(
-      await simulatePreflightPause(
-        taskId,
-        'WORKTREE_DRIFT',
-        `worktree HEAD ${timedOutCommit} 与绑定输入 ${task.value.baseline_commit} 不一致`,
-      ),
-    ).toBe(2)
-
-    let observedInput = ''
+    await tickManagedTicket(timeoutWorker, taskId)
     const worker = workerWith(async (input) => {
-      observedInput = input.input_commit
-      await writeFile(join(root, 'feature.txt'), 'completed implementation\n')
-      await git(root, 'add', 'feature.txt')
-      await git(root, 'commit', '-m', 'complete timed out implementation')
-      const commit = await head(root)
-      return success('execute', { commit, worktree_head: commit })
+      await git(root, 'restore', 'feature.txt')
+      return success('execute', { commit: input.input_commit })
     })
-    const resumed = await tickManagedTicket(worker, taskId)
-    expect(resumed).toMatchObject({ ok: true, value: { status: 'READY', stage: 'execute' } })
-    expect(observedInput).toBe(timedOutCommit)
-
-    const stages = await listManagedTicketStages(taskId)
-    expect(stages.map((stage) => [stage.attempt, stage.stage, stage.status, stage.error])).toEqual([
-      [1, 'execute', 'FAILED', 'RUN_TIMEOUT'],
-      [3, 'execute', 'SUCCEEDED', null],
-    ])
-    expect(stages[1]?.input_commit).toBe(timedOutCommit)
-    expect(stages[1]?.output_commit).not.toBe(timedOutCommit)
-
-    const recovery = (
-      await asRole('keel_control', (c) =>
-        c.query<{ payload: unknown }>(
-          `SELECT payload FROM managed_ticket_event
-           WHERE task_id=$1 AND type='ManagedTicketTimeoutRecovery'`,
-          [taskId],
-        ),
-      )
-    ).rows[0]
-    expect(recovery?.payload).toMatchObject({
-      stage: 'execute',
-      previousAttempt: 1,
-      attempt: 3,
-      headCommit: timedOutCommit,
-      previousInputCommit: task.value.baseline_commit,
-      worktreeState: 'committed',
-      changedFiles: ['feature.txt'],
+    await tickManagedTicket(worker, taskId)
+    expect((await listManagedTicketStages(taskId))[1]).toMatchObject({
+      status: 'FAILED',
+      error: 'STAGE_GATE_FAILED',
     })
   })
 

@@ -6,6 +6,18 @@
 
 ---
 
+## jstack managed 的私有副本
+
+当前 jstack managed 节点使用 `src/control/managed/ticket-workspace.ts` 创建的独立
+Git 副本，规则见 [ADR-0014](../../adr/0014-managed-private-git.md) 与
+[workflow-routing.md](./workflow-routing.md)。它不使用下文 `GitWorkspace` 的共享
+裸仓库 / linked worktree。下文的 managed/attached 是 legacy-v01 的**存储模式**
+名称，不是 jstack managed 工作流；原有行为保留供旧任务使用。
+
+节点复制与受控 push 的传输配置来自控制层临时创建的 Git 目录，不加载执行器可写的
+本地配置、refs 或 hooks。push 按准确 SHA 读取源对象库，避免 URL 重写、SSH/helper
+命令、代理与 include 把宿主网关变成执行器脚本的入口；不改注册远端或认证来源。
+
 ## Agent 的 git 提交：行为相关配置一律用 `-c` 钉死，不继承全局
 
 `commitAll` 的实际写法：

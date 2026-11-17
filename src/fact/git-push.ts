@@ -9,6 +9,7 @@ import type {
   GitPushInspectResult,
   GitPushResult,
 } from '../contracts/git-push.js'
+import { withTrustedGitDirectory } from '../shared/trusted-git.js'
 import { authEnvFor, gitAuthSecrets, redactSecrets, resolveGitHubToken } from './github-auth.js'
 import { parseRemoteUrl } from './github-remote.js'
 
@@ -35,6 +36,7 @@ function baseEnv(): NodeJS.ProcessEnv {
     GIT_CONFIG_GLOBAL: '/dev/null',
     GIT_CONFIG_NOSYSTEM: '1',
     GIT_TERMINAL_PROMPT: '0',
+    GIT_NO_REPLACE_OBJECTS: '1',
     GIT_ASKPASS: '/usr/bin/false',
     GIT_ASKPASS_REQUIRE: 'never',
     LANG: 'C',
@@ -45,6 +47,43 @@ function baseEnv(): NodeJS.ProcessEnv {
 function gitEnv(remoteUrl: string, token: string | undefined): NodeJS.ProcessEnv {
   const env = baseEnv()
   return { ...env, ...authEnvFor(remoteUrl, token, env) }
+}
+
+async function transport(
+  input: GitPushInspectInput,
+  token: string | undefined,
+  args: readonly string[],
+  push = false,
+): Promise<string> {
+  // rev-parse 只解析对象库路径，不运行源配置中的传输命令。
+  const objects = push
+    ? (
+        await run(
+          'git',
+          [
+            '-C',
+            input.worktreePath,
+            'rev-parse',
+            '--path-format=absolute',
+            '--git-path',
+            'objects',
+          ],
+          { encoding: 'utf8', env: baseEnv(), timeout: 15_000 },
+        )
+      ).stdout.trim()
+    : undefined
+  return withTrustedGitDirectory(async (gitDir) => {
+    const result = await run('git', ['--git-dir', gitDir, ...args], {
+      encoding: 'utf8',
+      env: {
+        ...gitEnv(input.remoteUrl, token),
+        ...(objects === undefined ? {} : { GIT_OBJECT_DIRECTORY: objects }),
+      },
+      maxBuffer: 8 * 1024 * 1024,
+      timeout: push ? 120_000 : 60_000,
+    })
+    return result.stdout
+  })
 }
 
 function failure(error: unknown, token: string | undefined, fallback: string): Result<never> {
@@ -65,26 +104,12 @@ async function lsRemote(
     return err(makeError('SCHEMA_VIOLATION', `不允许的 head 分支：${input.headBranch}`))
   let stdout: string
   try {
-    const result = await run(
-      'git',
-      [
-        '-C',
-        input.worktreePath,
-        '-c',
-        'credential.helper=',
-        'ls-remote',
-        '--heads',
-        input.remoteUrl,
-        `refs/heads/${input.headBranch}`,
-      ],
-      {
-        encoding: 'utf8',
-        env: gitEnv(input.remoteUrl, token),
-        maxBuffer: 8 * 1024 * 1024,
-        timeout: 60_000,
-      },
-    )
-    stdout = result.stdout
+    stdout = await transport(input, token, [
+      'ls-remote',
+      '--heads',
+      input.remoteUrl,
+      `refs/heads/${input.headBranch}`,
+    ])
   } catch (error) {
     return failure(error, token, 'git ls-remote 失败')
   }
@@ -135,23 +160,11 @@ export class GitCliPushGateway implements GitPushGateway {
         ),
       )
     try {
-      await run(
-        'git',
-        [
-          '-C',
-          input.worktreePath,
-          '-c',
-          'credential.helper=',
-          'push',
-          input.remoteUrl,
-          `${input.headSha}:refs/heads/${input.headBranch}`,
-        ],
-        {
-          encoding: 'utf8',
-          env: gitEnv(input.remoteUrl, token),
-          maxBuffer: 8 * 1024 * 1024,
-          timeout: 120_000,
-        },
+      await transport(
+        input,
+        token,
+        ['push', input.remoteUrl, `${input.headSha}:refs/heads/${input.headBranch}`],
+        true,
       )
     } catch (error) {
       return failure(error, token, 'git push 失败')

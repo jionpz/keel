@@ -485,6 +485,9 @@ async function buildTicketContext(
             '上一轮 execute 因 RUN_TIMEOUT 中断，当前工作区保留了该 ticket 的恢复点' +
               `（${timeoutRecovery.worktreeState}）。` +
               '先检查这些改动并基于它们继续，不要 reset、checkout 或丢弃；' +
+              (timeoutRecovery.worktreeState === 'committed'
+                ? '恢复点已经提交且工作树干净；若实现完整，可直接确认当前 commit 完成，无需空提交，随后仍须正式 verify。'
+                : '仍有未提交改动，必须完成并提交，不能丢弃 WIP 后确认旧 HEAD。') +
               `完成实现后提交全部预期改动，最终工作树必须干净。改动必须限定在 scope_paths 内。` +
               `保留的路径：${timeoutRecovery.changedFiles.join(', ')}`,
             'fixed:ticket/timeout-recovery-v1',
@@ -1190,7 +1193,9 @@ export async function tickManagedTicket(
   let lastProgressAt = 0
   let progressWrite: Promise<unknown> | null = null
   let progressClosed = false
+  const abort = new AbortController()
   const stageInput: ManagedTicketStageInput = {
+    signal: abort.signal,
     onProgress: (event) => {
       const now = Date.now()
       if (progressClosed || progressWrite !== null || now - lastProgressAt < 10_000) return
@@ -1236,12 +1241,34 @@ export async function tickManagedTicket(
       .flatMap((record) => openFindings(record.result)),
     human_decisions: await asRole('keel_control', (c) => humanDecisions(c, claim.task.id)),
   }
+  // 人工暂停/取消不能只封住迟到结果；还必须及时撤回仍在写工作区的执行器。
+  let checkingControl = false
+  const controlTimer = setInterval(() => {
+    if (checkingControl || abort.signal.aborted) return
+    checkingControl = true
+    void asRole('keel_control', (c) =>
+      c.query(
+        `SELECT 1 FROM managed_ticket_task
+         WHERE id=$1 AND status='RUNNING' AND lease_token=$2
+           AND control_generation=$3 AND lease_until > now()`,
+        [claim.task.id, claim.token, claim.task.control_generation],
+      ),
+    )
+      .then((result) => {
+        if (result.rowCount !== 1) abort.abort()
+      })
+      .catch(() => abort.abort())
+      .finally(() => {
+        checkingControl = false
+      })
+  }, 500)
   let outcome: Awaited<ReturnType<ManagedTicketStageRunner>>
   try {
     outcome = await worker.run(stageInput)
   } catch {
     return failStage(claim, stageId, 'HARNESS_UNAVAILABLE', ZERO_USAGE, false)
   } finally {
+    clearInterval(controlTimer)
     progressClosed = true
   }
   if (!outcome.ok) {
@@ -1331,10 +1358,14 @@ export async function tickManagedTicket(
     if (result.status !== 'completed' || result.commit === undefined)
       return failStage(claim, stageId, 'STAGE_GATE_FAILED', usage, true)
     const resolvedCommit = await resolveCommit(claim.task.worktree_path, result.commit)
+    const confirmedRecovery =
+      recovery?.worktreeState === 'committed' &&
+      recovery.inputCommit !== recovery.previousInputCommit
     if (
       resolvedCommit === null ||
       resolvedCommit !== after.value.head ||
-      resolvedCommit === inputCommit
+      (resolvedCommit === inputCommit && !confirmedRecovery) ||
+      !(await isAncestor(claim.task.worktree_path, inputCommit, resolvedCommit))
     )
       return failStage(claim, stageId, 'STAGE_GATE_FAILED', usage, true)
     if (workflowNode !== null) {

@@ -885,6 +885,18 @@ describe('managed workflow runtime', () => {
     if (!projection.ok) throw new Error(projection.error.detail)
     expect(projection.value.nodes).toHaveLength(2)
     expect(projection.value.nodes.every((node) => node.status === 'ARCHIVED')).toBe(true)
+    // 私有提交只存在于各节点副本，串行后继无需先污染宿主对象库或 refs。
+    const [first, second] = projection.value.nodes
+    expect(second?.base_commit).toBe(first?.output_commit)
+    for (const node of projection.value.nodes) {
+      expect(await git(node.worktree_path as string, 'rev-parse', '--git-common-dir')).toBe('.git')
+      await expect(
+        git(seeded.repo, 'cat-file', '-e', `${node.output_commit}^{commit}`),
+      ).rejects.toThrow()
+    }
+    expect(
+      (await git(seeded.repo, 'for-each-ref', '--format=%(refname)', 'refs/heads')).split('\n'),
+    ).toEqual(['refs/heads/main'])
     const stages = projection.value.evidence.reduce<Record<string, string[]>>((acc, evidence) => {
       const key = evidence.node_id
       acc[key] = [...(acc[key] ?? []), evidence.stage]

@@ -113,6 +113,27 @@ describe('managed ticket Harness 生命周期', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
+  it('控制层撤回时中断同一实际句柄，等待回收后释放计时器', async () => {
+    let settle: ((result: Result<RunResult>) => void) | undefined
+    const controller = new AbortController()
+    const pending = new Promise<Result<RunResult>>((resolve) => {
+      settle = resolve
+    })
+    const cancelled: RunResult = { ...timedOut, status: 'CANCELLED' }
+    const adapter = {
+      awaitResult: () => pending,
+      interrupt: vi.fn(async () => {
+        settle?.(ok(cancelled))
+        return ok(undefined)
+      }),
+    }
+    const result = awaitTicketResult(adapter, handle, controller.signal)
+    controller.abort()
+    expect(await result).toEqual(ok(cancelled))
+    expect(adapter.interrupt).toHaveBeenCalledExactlyOnceWith(handle, 'cancelled')
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it('正常返回时不触发中断，也不留下会在后续阶段触发的计时器', async () => {
     const completed: RunResult = { ...timedOut, status: 'SUCCEEDED', text: '{}' }
     const adapter = {

@@ -155,6 +155,8 @@ export interface ManagedTicketToolPlan {
 }
 
 export interface ManagedTicketStageInput {
+  /** 控制代次、暂停或租约变化时撤回当前执行；由 Control Plane 驱动。 */
+  readonly signal?: AbortSignal
   readonly onProgress?: RunHooks['onProgress']
   readonly attempt_id: string
   readonly task_id: string
