@@ -406,7 +406,7 @@ async function buildTicketContext(
   stage: ManagedTicketStageName,
   inputCommit: string,
   plan: ManagedTicketToolPlan,
-  timeoutRecovery: TimeoutRecovery | null,
+  recovery: ExecuteRecovery | null,
 ): Promise<Context> {
   const stages = await listManagedTicketStagesInTx(c, claim.task.id)
   const reworkNotes = stages
@@ -457,7 +457,9 @@ async function buildTicketContext(
     must_stop: ticketPackage.must_stop,
     history,
     workflow_node: workflowNode ?? null,
-    timeout_recovery: timeoutRecovery,
+    ...(recovery?.decisionRequestId === undefined
+      ? { timeout_recovery: recovery }
+      : { decision_recovery: recovery }),
     rework_notes: reworkNotes,
     human_decisions: decisions,
   })
@@ -477,20 +479,24 @@ async function buildTicketContext(
           ),
         ]
       : []),
-    ...(timeoutRecovery === null
+    ...(recovery === null
       ? []
       : [
           section(
-            'timeout_recovery',
-            '上一轮 execute 因 RUN_TIMEOUT 中断，当前工作区保留了该 ticket 的恢复点' +
-              `（${timeoutRecovery.worktreeState}）。` +
+            recovery.decisionRequestId === undefined ? 'timeout_recovery' : 'decision_recovery',
+            (recovery.decisionRequestId === undefined
+              ? '上一轮 execute 因 RUN_TIMEOUT 中断，当前工作区保留了该 ticket 的恢复点'
+              : '上一轮 execute 等待的恢复决定已接纳，当前工作区与已记录的恢复点一致') +
+              `（${recovery.worktreeState}）。` +
               '先检查这些改动并基于它们继续，不要 reset、checkout 或丢弃；' +
-              (timeoutRecovery.worktreeState === 'committed'
+              (recovery.worktreeState === 'committed'
                 ? '恢复点已经提交且工作树干净；若实现完整，可直接确认当前 commit 完成，无需空提交，随后仍须正式 verify。'
                 : '仍有未提交改动，必须完成并提交，不能丢弃 WIP 后确认旧 HEAD。') +
               `完成实现后提交全部预期改动，最终工作树必须干净。改动必须限定在 scope_paths 内。` +
-              `保留的路径：${timeoutRecovery.changedFiles.join(', ')}`,
-            'fixed:ticket/timeout-recovery-v1',
+              `保留的路径：${recovery.changedFiles.join(', ')}`,
+            recovery.decisionRequestId === undefined
+              ? 'fixed:ticket/timeout-recovery-v1'
+              : 'fixed:ticket/decision-recovery-v1',
           ),
         ]),
     ...(stage === 'land' && ticketPackage.completion_target === 'branch_ready'
@@ -557,13 +563,14 @@ interface WorkflowNodeReference {
   readonly external_issue: string | null
 }
 
-interface TimeoutRecovery {
+interface ExecuteRecovery {
   readonly previousAttempt: number
   readonly previousInputCommit: string
   readonly inputCommit: string
   readonly worktreeState: 'dirty' | 'committed' | 'committed_and_dirty'
   readonly changedFiles: readonly string[]
   readonly dirtyDigest: string
+  readonly decisionRequestId?: string
 }
 
 const STAGE_PREFLIGHT_CLEAN_DETAIL = 'ticket worktree 在阶段开始前必须干净'
@@ -607,7 +614,7 @@ async function timeoutRecoveryForExecute(
   workflowNode: WorkflowNodeReference | null,
   expectedInput: string,
   worktree: TicketWorktreeState,
-): Promise<Result<TimeoutRecovery | null>> {
+): Promise<Result<ExecuteRecovery | null>> {
   if (stage !== 'execute') return ok(null)
   const executeHistory = previous
     .filter((record) => record.stage === 'execute')
@@ -703,6 +710,87 @@ async function timeoutRecoveryForExecute(
       head: worktree.head,
       changed_files: changed.value,
     }),
+  })
+}
+
+async function decisionRecoveryForExecute(
+  claim: ManagedTicketClaim,
+  previous: readonly ManagedTicketStageRecord[],
+  node: WorkflowNodeReference | null,
+  expectedInput: string,
+  worktree: TicketWorktreeState,
+): Promise<Result<ExecuteRecovery | null>> {
+  const blocked = previous.at(-1)
+  const decision = lastDecisionFromHandoff(claim.task.handoff)
+  if (
+    claim.task.current_stage !== 'execute' ||
+    blocked?.stage !== 'execute' ||
+    blocked.status !== 'MUST_STOP' ||
+    blocked.error !== 'DECISION_REQUIRED' ||
+    decision === undefined
+  )
+    return ok(null)
+  const result = eventPayload(blocked.result)
+  if (result.status !== 'blocked' || eventPayload(result.decision).kind !== 'recovery')
+    return ok(null)
+  const accepted = await asRole('keel_control', (c) =>
+    c.query(
+      `SELECT e.seq FROM managed_ticket_event e
+       JOIN managed_decision_request r ON r.id::text=e.payload->>'requestId'
+       JOIN managed_decision_resolution res ON res.request_id=r.id
+         AND res.request_revision=r.revision
+       WHERE e.task_id=$1 AND e.type='ManagedTicketDecisionRequested'
+         AND e.payload->>'stageId'=$2
+         AND r.id=$3 AND r.revision=$4 AND r.status='RESOLVED'
+         AND r.managed_ticket_task_id=$1 AND r.workflow_digest=$5
+         AND res.id=$6 AND res.context_digest=$7
+         AND res.disposition IN ('human_confirmed','delegated')`,
+      [
+        claim.task.id,
+        blocked.id,
+        decision.request_id,
+        decision.request_revision,
+        claim.task.package_digest,
+        decision.resolution_id,
+        decision.digest,
+      ],
+    ),
+  )
+  if (accepted.rowCount !== 1)
+    return err(makeError('WORKSPACE_ERROR', '恢复点缺少对应阶段已接纳的恢复决定'))
+  const recordedGit = eventPayload(eventPayload(blocked.evidence).git)
+  const diff = await diffDigest(worktree.path, claim.task.baseline_commit, worktree.head)
+  if (
+    !worktree.clean ||
+    recordedGit.clean !== true ||
+    recordedGit.input_commit !== blocked.input_commit ||
+    recordedGit.baseline_commit !== claim.task.baseline_commit ||
+    recordedGit.output_commit !== worktree.head ||
+    recordedGit.branch !== worktree.branch ||
+    blocked.evidence_digest !== sha256CanonicalJson(blocked.evidence) ||
+    blocked.output_digest !== sha256CanonicalJson(blocked.result) ||
+    !diff.ok ||
+    diff.value !== recordedGit.diff_digest ||
+    !(await isAncestor(worktree.path, expectedInput, worktree.head))
+  )
+    return err(makeError('WORKSPACE_ERROR', '恢复决定后的现场与已记录 HEAD/diff 不一致'))
+  const changed = await workingTreeChangedFiles(worktree.path, expectedInput)
+  if (!changed.ok) return changed
+  if (
+    node === null ||
+    node.scope_paths.length === 0 ||
+    changed.value.length === 0 ||
+    changed.value.some((path) => !node.scope_paths.some((scope) => scopeAllows(scope, path)))
+  )
+    return err(makeError('WORKSPACE_ERROR', 'SCOPE_VIOLATION: 决策恢复点无法证明 scope 边界'))
+  return ok({
+    previousAttempt: blocked.attempt,
+    previousInputCommit: expectedInput,
+    inputCommit: worktree.head,
+    worktreeState: 'committed',
+    changedFiles: changed.value,
+    dirtyDigest: sha256CanonicalJson({ head: worktree.head, changed_files: changed.value }),
+    decisionRequestId: decision.request_id,
   })
 }
 
@@ -1101,7 +1189,18 @@ export async function tickManagedTicket(
     : null
   if (timeoutRecovery !== null && !timeoutRecovery.ok)
     return pauseTicketWithError(claim, timeoutRecovery.error.kind, timeoutRecovery.error.detail)
-  const recovery = timeoutRecovery?.ok ? timeoutRecovery.value : null
+  let recovery = timeoutRecovery?.ok ? timeoutRecovery.value : null
+  if (needsRecovery && recovery === null) {
+    const decided = await decisionRecoveryForExecute(
+      claim,
+      previous,
+      workflowNode,
+      expectedInput,
+      worktree.value,
+    )
+    if (!decided.ok) return pauseTicketWithError(claim, decided.error.kind, decided.error.detail)
+    recovery = decided.value
+  }
   if (recovery === null && worktree.value.head !== expectedInput)
     return pauseTicketWithError(
       claim,
@@ -1166,17 +1265,27 @@ export async function tickManagedTicket(
       ],
     )
     if (recovery !== null) {
-      await ticketEvent(c, claim.task.id, 'ManagedTicketTimeoutRecovery', {
-        stageId,
-        stage,
-        previousAttempt: recovery.previousAttempt,
-        attempt: claim.attempt,
-        headCommit: inputCommit,
-        previousInputCommit: recovery.previousInputCommit,
-        worktreeState: recovery.worktreeState,
-        changedFiles: recovery.changedFiles,
-        dirtyDigest: recovery.dirtyDigest,
-      })
+      await ticketEvent(
+        c,
+        claim.task.id,
+        recovery.decisionRequestId === undefined
+          ? 'ManagedTicketTimeoutRecovery'
+          : 'ManagedTicketDecisionRecovery',
+        {
+          stageId,
+          stage,
+          previousAttempt: recovery.previousAttempt,
+          attempt: claim.attempt,
+          headCommit: inputCommit,
+          previousInputCommit: recovery.previousInputCommit,
+          worktreeState: recovery.worktreeState,
+          changedFiles: recovery.changedFiles,
+          dirtyDigest: recovery.dirtyDigest,
+          ...(recovery.decisionRequestId === undefined
+            ? {}
+            : { requestId: recovery.decisionRequestId }),
+        },
+      )
     }
     await ticketEvent(c, claim.task.id, 'ManagedTicketStageStarted', {
       stageId,

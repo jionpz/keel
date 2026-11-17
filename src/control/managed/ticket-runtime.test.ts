@@ -1161,6 +1161,121 @@ describe('managed ticket runtime', () => {
     )
   })
 
+  it.each([
+    'unchanged',
+    'dirty',
+    'different-head',
+    'different-branch',
+    'outside-scope',
+    'preference',
+  ] as const)('执行恢复点等待决定后续跑，拒绝决定之外的现场漂移：%s', async (change) => {
+    const { repoId, root, taskId } = await seed()
+    await bindWorkflowIssue(repoId, taskId, '#134', ['feature.txt'])
+    let checkpoint = ''
+    await tickManagedTicket(
+      {
+        harness: 'pi',
+        toolInventory: workerTools,
+        run: async () => {
+          checkpoint = await commitFile(root, 'feature.txt', 'implementation\n')
+          return {
+            ok: false,
+            error: makeError('RUN_TIMEOUT', 'timeout after commit'),
+            usage: ZERO_USAGE,
+          }
+        },
+      },
+      taskId,
+    )
+    const blocked = workerWith(async () => {
+      if (change === 'outside-scope')
+        checkpoint = await commitFile(root, 'outside.txt', 'out of scope\n')
+      return success('execute', {
+        status: 'blocked',
+        commit: checkpoint,
+        worktree_head: checkpoint,
+        decision: {
+          decision_key: 'execute.validation-environment',
+          kind: change === 'preference' ? 'preference' : 'recovery',
+          question: '保留已提交现场，修复隔离验证后继续？',
+          options: ['继续验证恢复点', '停止并等待人工处理'],
+          action_category: 'validation_environment_recovery',
+          impact: {
+            environment: 'test',
+            reversibility: 'reversible',
+            affected_resources: ['fixture'],
+          },
+        },
+      })
+    })
+    expect(await tickManagedTicket(blocked, taskId)).toMatchObject({
+      ok: true,
+      value: { status: 'WAITING_HUMAN' },
+    })
+    const waiting = await getManagedTicket(taskId)
+    if (
+      !waiting.ok ||
+      waiting.value.pending_decision_id === null ||
+      waiting.value.pending_decision_revision === null
+    )
+      throw new Error('missing decision')
+    expect(
+      await answerManagedTicketDecision(
+        waiting.value.pending_decision_id,
+        waiting.value.pending_decision_revision,
+        'option-1',
+        new Date().toISOString(),
+      ),
+    ).toMatchObject({ ok: true, value: { taskStatus: 'READY' } })
+    if (change === 'dirty') await writeFile(join(root, 'feature.txt'), 'unapproved WIP\n')
+    if (change === 'different-head') await commitFile(root, 'feature.txt', 'unapproved commit\n')
+    if (change === 'different-branch') await git(root, 'checkout', '-b', 'unapproved-branch')
+    let ran = false
+    const resumed = await tickManagedTicket(
+      workerWith(async (input) => {
+        ran = true
+        expect(input.input_commit).toBe(checkpoint)
+        return success('execute', { commit: checkpoint, worktree_head: checkpoint })
+      }),
+      taskId,
+    )
+    expect(resumed).toMatchObject({
+      ok: true,
+      value: { status: change === 'unchanged' ? 'READY' : 'PAUSED' },
+    })
+    expect(ran).toBe(change === 'unchanged')
+    const stages = await listManagedTicketStages(taskId)
+    expect(stages[0]?.status).toBe('FAILED')
+    expect(stages[1]?.status).toBe('MUST_STOP')
+    expect(stages[0]?.output_commit).toBeNull()
+    expect(stages[1]?.output_commit).toBeNull()
+    const recoveries = await asRole('keel_control', (c) =>
+      c.query<{ payload: unknown }>(
+        `SELECT payload FROM managed_ticket_event
+           WHERE task_id=$1 AND type='ManagedTicketDecisionRecovery'`,
+        [taskId],
+      ),
+    )
+    expect(recoveries.rowCount).toBe(change === 'unchanged' ? 1 : 0)
+    if (change === 'unchanged') {
+      expect(recoveries.rows[0]?.payload).toMatchObject({
+        previousAttempt: 2,
+        requestId: waiting.value.pending_decision_id,
+        headCommit: checkpoint,
+        changedFiles: ['feature.txt'],
+      })
+      expect(stages[2]).toMatchObject({
+        status: 'SUCCEEDED',
+        input_commit: checkpoint,
+        output_commit: checkpoint,
+      })
+      expect(await getManagedTicket(taskId)).toMatchObject({
+        ok: true,
+        value: { current_stage: 'verify' },
+      })
+    }
+  })
+
   it.each([true, false])(
     'execute 超时后已提交的恢复点可确认完成；需要补实现=%s',
     async (needsMoreWork) => {

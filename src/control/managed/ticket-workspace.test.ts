@@ -10,6 +10,7 @@ import {
   symlink,
   writeFile,
 } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { assertPrivateGitDirectory } from '../../shared/private-git.js'
@@ -29,13 +30,14 @@ const git = (cwd: string, ...args: string[]) =>
     encoding: 'utf8',
     env: {
       PATH: process.env.PATH,
+      TMPDIR: process.env.TMPDIR,
       GIT_CONFIG_GLOBAL: '/dev/null',
       GIT_CONFIG_NOSYSTEM: '1',
     },
   }).trim()
 
 async function fixture() {
-  const base = await realpath(await mkdtemp('/tmp/keel-private-git-'))
+  const base = await realpath(await mkdtemp(join(tmpdir(), 'keel-private-git-')))
   roots.push(base)
   const repo = join(base, 'source')
   await mkdir(repo)

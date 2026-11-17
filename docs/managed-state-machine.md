@@ -78,6 +78,12 @@ outbox 并撤销 `VALID` permit。详细约束见
 人工恢复只接受可恢复状态，终态不复活；archive 修复后的重试可以只重试完成门，
 不改写已完成的 ticket、不重跑四阶段，也不消耗新的执行尝试预算。
 
+`execute` 的恢复决定被接纳后，可继续暂停时记录的干净提交。恢复必须绑定同一
+stage 的决议版本，并重新核对原 HEAD、分支、diff、scope 与证据摘要；记录
+`ManagedTicketDecisionRecovery` 后重新执行，原 `MUST_STOP`/`FAILED` 不变，后续
+verify/review 门禁照常执行。普通偏好决定不能授权工作区漂移，详见
+[ticket-execution.md](spec/backend/ticket-execution.md)。
+
 workflow 取消保留 `ARCHIVED` 节点及 claim；`FAILED` 节点和 `DONE` / `FAILED` /
 `CANCELLED` ticket 保留原状态，其余未归档节点取消并释放本 workflow 持有的
 `ACTIVE` claim。历史 stage、graph、evidence、worktree 全部保留；同一成功取消可
