@@ -30,6 +30,7 @@ import { asOwner, asRole, closePool } from '../../fact/db.js'
 import { branchFor, GitWorkspace, type PreparedProject } from '../../fact/git-workspace.js'
 import { RuleBasedPolicyEngine } from '../policy/engine.js'
 import { DEFAULT_RULESET } from '../policy/ruleset.js'
+import { PULL_REQUEST_BODY_MAX_LENGTH } from '../pr-description.js'
 import type { TransitionEvent } from '../transition/types.js'
 import { WorkflowDriver } from './driver.js'
 import { applyEffects } from './effects.js'
@@ -162,6 +163,27 @@ async function seedGithubFeedback(taskId: string, externalRefs: readonly string[
   })
 }
 
+async function seedArtifact(
+  taskId: string,
+  kind: Proposal['kind'],
+  key: string,
+  body: Record<string, unknown>,
+): Promise<void> {
+  const committed = await store.commit(
+    {
+      proposal_id: randomUUID(),
+      task_id: taskId,
+      kind,
+      key,
+      body: { schema_version: '1.0', ...body },
+      supersedes: null,
+      produced_by_run: `run-${kind}-${key}`,
+    },
+    commitCtx,
+  )
+  expect(committed.ok, committed.ok ? '' : committed.error.detail).toBe(true)
+}
+
 async function eventsOf(
   taskId: string,
 ): Promise<{ type: string; payload: Record<string, unknown> }[]> {
@@ -204,7 +226,13 @@ describe('CreatePullRequest 副作用记账', () => {
     const input = gateway.calls[0]
     expect(input?.headBranch).toBe(branchFor(taskId))
     expect(input?.baseBranch).toBe('main')
-    expect(input?.body).toBe(`Keel Task ${taskId}\n\nAutomated PR.`)
+    expect(input?.title).toBe('PR 副作用测试')
+    expect(input?.body).toContain(`Keel Task ${taskId}`)
+    expect(input?.body).toContain('## 问题\n\nPR 副作用测试')
+    expect(input?.body).toContain('## 改动')
+    expect(input?.body).toContain('## 验证')
+    expect(input?.body).toContain('Review：pass — 测试:review 通过')
+    expect(input?.body).toContain('来源：artifact:stage_outcome/review@1')
 
     // 远端真的收到了这个分支
     const branches = execFileSync('git', ['-C', origin, 'branch', '--list'], {
@@ -266,11 +294,133 @@ describe('CreatePullRequest 副作用记账', () => {
     const r = await driver.advance(taskId, { type: 'RunSucceeded', stage: 'review' }, NOW)
     expect(r.ok && r.value.to === 'S-PR_OPEN').toBe(true)
 
-    expect(gateway.calls[0]?.body).toBe(
-      `Keel Task ${taskId}\n\nAutomated PR.\n\n` +
-        'Refs acme/other#7\nRefs acme/other#8\n' +
-        `<!-- keel:v1 task=${taskId} -->`,
+    const body = gateway.calls[0]?.body ?? ''
+    expect(body.startsWith(`Keel Task ${taskId}\n\n## 问题`)).toBe(true)
+    expect(
+      body.endsWith(`Refs acme/other#7\nRefs acme/other#8\n<!-- keel:v1 task=${taskId} -->`),
+    ).toBe(true)
+  })
+
+  it('从 Fact Plane 产物生成问题、根因、改动与验证，并写入 artifact id', async () => {
+    const { taskId, repoId } = await seedTaskWithRemote()
+    await seedArtifact(taskId, 'rfc', '', {
+      title: 'PR 描述',
+      problem: '开 PR 时正文只有一句 Automated PR',
+      goals: ['按事实生成正文'],
+      non_goals: [],
+      proposed_change: {
+        summary: '从产物生成章节',
+        approach: '共享渲染函数',
+        affected_areas: ['control'],
+      },
+      acceptance_criteria: [{ id: 'AC1', text: '章节可追溯', verifiable_by: '单测' }],
+      policy_facts: {
+        risk: 'low',
+        complexity: 'low',
+        estimated_files_changed: 3,
+        security_related: false,
+      },
+    })
+    await seedArtifact(taskId, 'stage_outcome', 'develop', {
+      run_id: 'run-develop',
+      stage: 'develop',
+      verdict: 'implemented',
+      reason: '实现共享 PR 描述生成',
+    })
+    await seedArtifact(taskId, 'stage_outcome', 'qa', {
+      run_id: 'run-qa',
+      stage: 'qa',
+      verdict: 'pass',
+      reason: '单测通过',
+    })
+    await seedArtifact(taskId, 'state', '', {
+      risks: [{ text: '历史任务没有 RFC', severity: 'low', mitigation: '退回 issue 标题' }],
+    })
+
+    const git = new GitWorkspace({ root })
+    const project = await prepareFor(git, repoId)
+    const gateway = firstTimeCreated()
+    const driver = new WorkflowDriver(
+      new RuleBasedPolicyEngine(DEFAULT_RULESET),
+      { git, repoId, project },
+      gateway,
     )
+    const r = await driver.advance(taskId, { type: 'RunSucceeded', stage: 'review' }, NOW)
+    expect(r.ok && r.value.to === 'S-PR_OPEN').toBe(true)
+
+    const body = gateway.calls[0]?.body ?? ''
+    expect(body).toContain('## 根因\n\n开 PR 时正文只有一句 Automated PR')
+    expect(body).toContain('## 改动')
+    expect(body).toContain('摘要：从产物生成章节')
+    expect(body).toContain('实施：实现共享 PR 描述生成')
+    expect(body).toContain('## 验证')
+    expect(body).toContain('QA：pass — 单测通过')
+    expect(body).toContain('## 风险与未做')
+    expect(body).toContain('来源：artifact:rfc@1, artifact:stage_outcome/develop@1')
+    expect(body).toContain('来源：artifact:stage_outcome/qa@1, artifact:stage_outcome/review@1')
+    expect(body).toContain('来源：artifact:state@1')
+  })
+
+  it('RFC 自由文本超长时截断正文主体，仍保留引用与机器标记', async () => {
+    const { taskId, repoId } = await seedTaskWithRemote()
+    // rfc.problem 在 schema 里没有 maxLength，长文本必须由渲染器截断
+    await seedArtifact(taskId, 'rfc', '', { title: 'PR 描述', problem: 'x'.repeat(20000) })
+    await seedGithubFeedback(taskId, ['acme/other#7'])
+    const git = new GitWorkspace({ root })
+    const project = await prepareFor(git, repoId)
+    const gateway = firstTimeCreated()
+    const driver = new WorkflowDriver(
+      new RuleBasedPolicyEngine(DEFAULT_RULESET),
+      { git, repoId, project },
+      gateway,
+    )
+    const r = await driver.advance(taskId, { type: 'RunSucceeded', stage: 'review' }, NOW)
+    expect(r.ok && r.value.to === 'S-PR_OPEN').toBe(true)
+
+    const body = gateway.calls[0]?.body ?? ''
+    // 主体截断到共享上限，引用与机器标记在截断之后追加，不会被截掉
+    expect(body.length).toBeLessThanOrEqual(PULL_REQUEST_BODY_MAX_LENGTH + 200)
+    expect(body.includes('x'.repeat(PULL_REQUEST_BODY_MAX_LENGTH))).toBe(false)
+    expect(body.includes('x'.repeat(5000))).toBe(true)
+    expect(body.startsWith(`Keel Task ${taskId}\n\n## 问题`)).toBe(true)
+    expect(body.endsWith(`Refs acme/other#7\n<!-- keel:v1 task=${taskId} -->`)).toBe(true)
+  })
+
+  it('配置提交模板后按模板生成 PR 标题', async () => {
+    const { taskId, repoId } = await seedTaskWithRemote()
+    await asOwner((c) =>
+      c.query(
+        `UPDATE repo SET commit_message_template='{type}({scope}): {summary}',
+           commit_types=ARRAY['fix'],commit_scopes=ARRAY['fact'] WHERE id=$1`,
+        [repoId],
+      ),
+    )
+    await seedArtifact(taskId, 'stage_outcome', 'develop', {
+      run_id: 'run-develop',
+      stage: 'develop',
+      verdict: 'implemented',
+      reason: '实现 PR 标题',
+      commit_message: { type: 'fix', scope: 'fact', summary: '修复 PR 描述' },
+    })
+    // T-021 的 guard 读最新一条 stage_outcome，与 key 无关；develop 落在 review 之后
+    // 就会把 verdict 顶掉，所以这里补一条 review 结论文档，模拟 review 重跑后的真实顺序。
+    await seedArtifact(taskId, 'stage_outcome', 'review', {
+      run_id: 'run-review',
+      stage: 'review',
+      verdict: 'pass',
+      reason: '测试:review 通过',
+    })
+    const git = new GitWorkspace({ root })
+    const project = await prepareFor(git, repoId)
+    const gateway = firstTimeCreated()
+    const driver = new WorkflowDriver(
+      new RuleBasedPolicyEngine(DEFAULT_RULESET),
+      { git, repoId, project },
+      gateway,
+    )
+    const r = await driver.advance(taskId, { type: 'RunSucceeded', stage: 'review' }, NOW)
+    expect(r.ok ? r.value.to : r.error.detail).toBe('S-PR_OPEN')
+    expect(gateway.calls[0]?.title).toBe('fix(fact): 修复 PR 描述')
   })
 
   it('未注入 gateway → SideEffectIntent,不报错也不假装成功', async () => {

@@ -30,6 +30,7 @@
 | [Ticket Execution](./ticket-execution.md) | jstack 单 ticket 固定包、阶段门禁、verify/review 证据绑定、must-stop DecisionRequest、scope 检查与 branch_ready/pr_ready 边界 | ✅ 已实现（JT-02C/JT-04；外部动作见 Action Gateway） |
 | [Workflow Routing](./workflow-routing.md) | jstack XS/S/M/L/XL route 包、依赖图校验、节点调度、scope、证据复用、archive 与双投影 | ✅ 已填（JT-04） |
 | [Action Gateway](./action-gateway.md) | action intent / ExecutionPermit / 持久 outbox、受控 push 与 PR、required checks 与准确 SHA 的 `pr_ready` | ✅ 已填（JT-02D/02E） |
+| [PR Description](./pr-description.md) | PR 标题模板回退与 header 校验、问题/根因/改动/验证章节、artifact 来源、兼容标记 | ✅ 已填（#135） |
 | [Service Runtime](./service-runtime.md) | 单一 `serve` 入口、角色健康、公平调度、SIGTERM 边界、一致性备份与隔离恢复校验 | ✅ 已填（JT-06） |
 | [Trial Readiness](./trial-readiness.md) | `doctor` 支持矩阵、单 owner 试运行账本、7 天/30 代决/5 完成任务门槛与证据边界 | ✅ 已填（JT-07 readiness） |
 | [Logging Guidelines](./logging-guidelines.md) | 结构化日志与日志级别 | ⏳ 暂缓 —— 尚未形成统一日志模块规范 |

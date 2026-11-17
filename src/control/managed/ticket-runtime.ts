@@ -26,7 +26,14 @@ import type {
 } from '../../generated/managed.js'
 import { MANAGED_SCHEMAS } from '../../generated/managed.js'
 import { canonicalJson, sha256CanonicalJson, sha256Text } from '../../shared/canonical-json.js'
-import { prBodyWithIssueReferences } from '../pr-body.js'
+import { COMMIT_POLICY_COLUMNS, commitPolicyFromRow } from '../../shared/commit-policy.js'
+import {
+  commitFieldsFromHeader,
+  PULL_REQUEST_BODY_MAX_LENGTH,
+  type PullRequestSection,
+  pullRequestBody,
+  pullRequestTitle,
+} from '../pr-description.js'
 import { enqueueActionIntent, getRepoBinding } from './action-store.js'
 import {
   escalateDecisionRequest,
@@ -55,6 +62,7 @@ import { runTicketTianwen } from './ticket-tianwen.js'
 import {
   changedFiles,
   commitExists,
+  commitMessage,
   diffDigest,
   inspectTicketWorktree,
   isAncestor,
@@ -163,30 +171,101 @@ function roleInstruction(stage: ManagedTicketStageName): string {
   }
 }
 
-function ticketPrBody(input: {
-  readonly taskId: string
+function objectRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+}
+
+function managedPullRequestSections(input: {
   readonly ticketId: string
+  readonly ticketTitle: string
   readonly baselineCommit: string
   readonly headCommit: string
   readonly diffDigest: string
-  readonly modelBody: string
+  readonly stages: readonly ManagedTicketStageRecord[]
+}): readonly PullRequestSection[] {
+  const latest = (stage: ManagedTicketStageName): ManagedTicketStageRecord | undefined =>
+    input.stages
+      .filter(
+        (record) =>
+          record.stage === stage && (record.status === 'SUCCEEDED' || record.status === 'REUSED'),
+      )
+      .at(-1)
+  const sections: PullRequestSection[] = [
+    {
+      heading: '问题',
+      content: input.ticketTitle,
+      source: `managed-ticket:${input.ticketId}`,
+    },
+  ]
+
+  const execute = latest('execute')
+  if (execute !== undefined) {
+    const summary = stageSummary(execute)
+    sections.push({
+      heading: '改动',
+      content: [
+        ...(summary === null ? [] : [`实施：${summary}`]),
+        `提交：${input.headCommit.slice(0, 7)}`,
+      ].join('\n'),
+      source: `managed-ticket-stage:${execute.id}`,
+    })
+  }
+
+  const verify = latest('verify')
+  if (verify !== undefined) {
+    const summary = stageSummary(verify)
+    const result = objectRecord(verify.result)
+    const rawChecks = result?.checks
+    const checks = Array.isArray(rawChecks)
+      ? rawChecks.flatMap((entry) => {
+          const check = objectRecord(entry)
+          if (check === null || typeof check.command !== 'string') return []
+          return [
+            `\`${check.command}\` → exit ${String(check.exit_code)}（${check.passed === true ? '通过' : '未通过'}）`,
+          ]
+        })
+      : []
+    sections.push({
+      heading: '验证',
+      content: [
+        ...(summary === null ? [] : [`结论：${summary}`]),
+        ...(checks.length === 0 ? [] : checks.map((check) => `- ${check}`)),
+      ].join('\n'),
+      source: `managed-ticket-stage:${verify.id}`,
+    })
+  }
+
+  sections.push({
+    heading: '交付证据',
+    content: [
+      `基线：${input.baselineCommit}`,
+      `Head：${input.headCommit}`,
+      `Diff：${input.diffDigest}`,
+    ].join('\n'),
+    source: `managed-ticket:${input.ticketId}/evidence`,
+  })
+  return sections
+}
+
+function ticketPrBody(input: {
+  readonly taskId: string
+  readonly ticketId: string
+  readonly ticketTitle: string
+  readonly baselineCommit: string
+  readonly headCommit: string
+  readonly diffDigest: string
+  readonly stages: readonly ManagedTicketStageRecord[]
   readonly remoteUrl: string
   readonly externalIssue: string | null
 }): string {
-  const model = input.modelBody.slice(0, 12000)
-  const evidence = [
-    '',
-    '---',
-    `Keel ticket: ${input.ticketId}`,
-    `Baseline: ${input.baselineCommit}`,
-    `Head: ${input.headCommit}`,
-    `Diff: ${input.diffDigest}`,
-  ].join('\n')
-  return prBodyWithIssueReferences({
-    body: `${model}${evidence}`.slice(0, 16000),
+  return pullRequestBody({
     taskId: input.taskId,
+    sections: managedPullRequestSections(input),
     remoteUrl: input.remoteUrl,
     externalRefs: input.externalIssue === null ? [] : [input.externalIssue],
+    maxBodyLength: PULL_REQUEST_BODY_MAX_LENGTH,
   })
 }
 
@@ -1777,6 +1856,30 @@ export async function tickManagedTicket(
           )
         } else {
           const decision = lastDecisionFromHandoff(claim.task.handoff)
+          const stageRecords = (
+            await c.query<ManagedTicketStageRecord>(
+              'SELECT * FROM managed_ticket_stage WHERE task_id=$1 ORDER BY started_at, stage, attempt',
+              [claim.task.id],
+            )
+          ).rows
+          const policyRow =
+            (
+              await c.query<Record<string, unknown>>(
+                `SELECT ${COMMIT_POLICY_COLUMNS.join(',')} FROM repo WHERE id=$1`,
+                [claim.task.repo_id],
+              )
+            ).rows[0] ?? {}
+          const parsedPolicy = commitPolicyFromRow(policyRow)
+          const policy = parsedPolicy.ok ? parsedPolicy.value : undefined
+          const commitFields = commitFieldsFromHeader(
+            policy,
+            await commitMessage(claim.task.worktree_path, after.value.head),
+          )
+          const prTitle = pullRequestTitle({
+            issueTitle: claim.task.ticket_title,
+            ...(policy === undefined ? {} : { policy }),
+            ...(commitFields === undefined ? {} : { commitMessage: commitFields }),
+          })
           await enqueueActionIntent(c, {
             task_id: claim.task.id,
             project_id: claim.task.repo_id,
@@ -1793,14 +1896,15 @@ export async function tickManagedTicket(
               `branch:${result.land.branch}`,
               `base:${repoBinding.default_branch}`,
             ],
-            pr_title: result.land.action_intent.pr_title,
+            pr_title: prTitle,
             pr_body: ticketPrBody({
               taskId: claim.task.id,
               ticketId: claim.task.ticket_id,
+              ticketTitle: claim.task.ticket_title,
               baselineCommit: claim.task.baseline_commit,
               headCommit: after.value.head,
               diffDigest: changedDiff.value,
-              modelBody: result.land.action_intent.pr_body,
+              stages: stageRecords,
               remoteUrl: repoBinding.remote_url,
               externalIssue: workflowNode?.external_issue ?? null,
             }),

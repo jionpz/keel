@@ -632,11 +632,19 @@ describe('managed ticket runtime', () => {
 
     const intent = (
       await asRole('keel_control', (c) =>
-        c.query<{ pr_body: string }>('SELECT pr_body FROM managed_action_intent WHERE task_id=$1', [
-          taskId,
-        ]),
+        c.query<{ pr_title: string; pr_body: string }>(
+          'SELECT pr_title,pr_body FROM managed_action_intent WHERE task_id=$1',
+          [taskId],
+        ),
       )
     ).rows[0]
+    expect(intent?.pr_title).toBe('fixture ticket')
+    expect(intent?.pr_body).toContain(`Keel Task ${taskId}`)
+    expect(intent?.pr_body).toContain('## 问题\n\nfixture ticket')
+    expect(intent?.pr_body).toContain('## 改动')
+    expect(intent?.pr_body).toContain('## 验证')
+    expect(intent?.pr_body).toContain('## 交付证据')
+    expect(intent?.pr_body).toContain('来源：managed-ticket-stage:')
     expect(intent?.pr_body).toContain(`Closes #129\n<!-- keel:v1 task=${taskId} -->`)
   })
 
