@@ -79,6 +79,9 @@ pnpm keel register-repo https://github.com/owner/repo.git \
 - `commit_message_check` 为 JavaScript Unicode 正则（只匹配 header，完整匹配需自行加 `^…$`）
   或字面量 `hook`。提交前先暂存全部改动，再通过 `git hook run commit-msg` 在 ticket worktree 中执行，
   遵从仓库 `core.hooksPath`；缺少 hook、hook 非零退出或改写待校验消息均拒绝。
+  预检 hook 使用本次提交的实际身份：配置 `commit_author` 时取该身份，否则取默认
+  `Keel <keel@localhost>`；`user.*`、`author.*`、`committer.*` 与
+  `GIT_AUTHOR_*` / `GIT_COMMITTER_*` 同时提供，hook 不应把仓库当前 `user.*` 当作提交身份。
   正常 `git commit` 自身的 hooks 仍生效；提交后逐字比较真实消息与提交前消息，
   即使改写后的消息仍符合模板也拒绝。此时 Git 已创建本地提交，拒绝不会自动回滚历史。
   hook 应保持可重复执行。
@@ -88,6 +91,8 @@ pnpm keel register-repo https://github.com/owner/repo.git \
 提交前检查任务基线以来的全部新增 commit（包括 Harness 自行提交的 commit），验证身份、
 无签名、模板、枚举、正文和正则/hook，避免用干净工作树或后续 commit 绕过拒绝。
 历史 hook 在具有独立 refs/index 的临时 Git 快照中运行，只读复用原仓库对象：
+被检提交的 author/committer 同时作为 hook 的 `author.*` / `committer.*` 与环境变量
+（`user.*` 取 author），不继承当前仓库配置的 `user.*`。
 保留任务工作树当前的分支名，HEAD 指向被检提交的第一父提交（根提交使用同名未出生分支），
 暂存区与跟踪文件内容还原为被检提交，hook 路径取当前仓库配置的绝对路径。
 快照依序读取原仓库公共配置和已启用 `extensions.worktreeConfig` 时的 `config.worktree`，

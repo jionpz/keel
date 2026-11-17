@@ -572,6 +572,125 @@ describe('仓库提交身份与消息校验', () => {
     expect(result.ok, result.ok ? '' : result.error.detail).toBe(true)
     expect(log(path, '%s')).toBe('fix: 修复\n')
   })
+  it('commit-msg hook 预检看到实际提交的 commit_author 身份', async () => {
+    const { g, taskId, path } = await setup()
+    execFileSync('git', ['-C', path, 'config', 'user.name', 'Fixture'])
+    execFileSync('git', ['-C', path, 'config', 'user.email', 'fixture@example.test'])
+    hook(
+      path,
+      'case "$(git var GIT_AUTHOR_IDENT)" in "Bot <bot@example.test> "*) ;; *) echo "wrong author: $(git var GIT_AUTHOR_IDENT)" >&2; exit 7 ;; esac\n' +
+        'case "$(git var GIT_COMMITTER_IDENT)" in "Bot <bot@example.test> "*) ;; *) echo "wrong committer: $(git var GIT_COMMITTER_IDENT)" >&2; exit 8 ;; esac\n' +
+        'test "$(git config user.name)" = Bot || exit 9\n' +
+        'test "$(git config user.email)" = bot@example.test || exit 10\n' +
+        'test "$(git config author.name)" = Bot || exit 11\n' +
+        'test "$(git config committer.email)" = bot@example.test || exit 12',
+    )
+    const result = await g.commitAll(taskId, 'fix: identity', {
+      commit_author: 'Bot <bot@example.test>',
+      commit_message_check: 'hook',
+    })
+    expect(result.ok, result.ok ? '' : result.error.detail).toBe(true)
+    expect(log(path, '%an <%ae>|%cn <%ce>|%G?')).toBe(
+      'Bot <bot@example.test>|Bot <bot@example.test>|N\n',
+    )
+  })
+  it('历史 hook 看到每个被检提交的 author/committer 身份', { timeout: 30_000 }, async () => {
+    const { g, p, taskId, path } = await setup()
+    hook(
+      path,
+      'case "$(cat "$1")" in\n' +
+        '  *first*) author_name=Bot; author_email=bot@example.test; committer_name=Bot; committer_email=bot@example.test ;;\n' +
+        '  *second*) author_name=Author; author_email=author@example.test; committer_name=Committer; committer_email=committer@example.test ;;\n' +
+        '  *) exit 6 ;;\n' +
+        'esac\n' +
+        'author="$author_name <$author_email>"; committer="$committer_name <$committer_email>"\n' +
+        'case "$(git var GIT_AUTHOR_IDENT)" in "$author "*) ;; *) echo "wrong author: $(git var GIT_AUTHOR_IDENT), expected $author" >&2; exit 7 ;; esac\n' +
+        'case "$(git var GIT_COMMITTER_IDENT)" in "$committer "*) ;; *) echo "wrong committer: $(git var GIT_COMMITTER_IDENT), expected $committer" >&2; exit 8 ;; esac\n' +
+        'test "$(git config user.name)" = "$author_name" || exit 9\n' +
+        'test "$(git config user.email)" = "$author_email" || exit 10\n' +
+        'test "$(git config author.name)" = "$author_name" || exit 11\n' +
+        'test "$(git config committer.name)" = "$committer_name" || exit 12\n' +
+        'test "$(git config committer.email)" = "$committer_email" || exit 13',
+    )
+    writeFileSync(join(path, 'feature.txt'), 'first\n')
+    execFileSync('git', ['-C', path, 'add', '-A'])
+    execFileSync(
+      'git',
+      [
+        '-C',
+        path,
+        '-c',
+        'commit.gpgsign=false',
+        '-c',
+        'user.name=Bot',
+        '-c',
+        'user.email=bot@example.test',
+        '-c',
+        'author.name=Bot',
+        '-c',
+        'author.email=bot@example.test',
+        '-c',
+        'committer.name=Bot',
+        '-c',
+        'committer.email=bot@example.test',
+        'commit',
+        '-q',
+        '-m',
+        'fix: first',
+      ],
+      {
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: 'Bot',
+          GIT_AUTHOR_EMAIL: 'bot@example.test',
+          GIT_COMMITTER_NAME: 'Bot',
+          GIT_COMMITTER_EMAIL: 'bot@example.test',
+        },
+      },
+    )
+    writeFileSync(join(path, 'feature.txt'), 'second\n')
+    execFileSync('git', ['-C', path, 'add', '-A'])
+    execFileSync(
+      'git',
+      [
+        '-C',
+        path,
+        '-c',
+        'commit.gpgsign=false',
+        '-c',
+        'user.name=Author',
+        '-c',
+        'user.email=author@example.test',
+        '-c',
+        'author.name=Author',
+        '-c',
+        'author.email=author@example.test',
+        '-c',
+        'committer.name=Committer',
+        '-c',
+        'committer.email=committer@example.test',
+        'commit',
+        '-q',
+        '-m',
+        'fix: second',
+      ],
+      {
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: 'Author',
+          GIT_AUTHOR_EMAIL: 'author@example.test',
+          GIT_COMMITTER_NAME: 'Committer',
+          GIT_COMMITTER_EMAIL: 'committer@example.test',
+        },
+      },
+    )
+    expect(
+      await g.validateCommitHistory(taskId, p.baseSha, { commit_message_check: 'hook' }),
+    ).toEqual({ ok: true, value: undefined })
+    expect(log(path, '%an <%ae>|%cn <%ce>|%s')).toBe(
+      'Author <author@example.test>|Committer <committer@example.test>|fix: second\n',
+    )
+  })
   it('历史 hook 按各提交的父提交、暂存区和文件视图复检，不受当前改动影响', {
     timeout: 30_000,
   }, async () => {

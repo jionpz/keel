@@ -69,6 +69,32 @@ import { workspaceError } from './workspace-error.js'
 
 type ExecResult = { readonly stdout: string; readonly stderr: string }
 
+type CommitIdentity = {
+  readonly authorName: string
+  readonly authorEmail: string
+  readonly committerName: string
+  readonly committerEmail: string
+}
+
+const DEFAULT_COMMIT_IDENTITY: CommitIdentity = {
+  authorName: 'Keel',
+  authorEmail: 'keel@localhost',
+  committerName: 'Keel',
+  committerEmail: 'keel@localhost',
+}
+
+function commitIdentityFor(commitAuthor: string | undefined): CommitIdentity {
+  if (commitAuthor === undefined) return DEFAULT_COMMIT_IDENTITY
+  const authorName = commitAuthor.replace(/ <[^<>]+>$/, '')
+  const authorEmail = commitAuthor.match(/<([^<>]+)>$/)?.[1] ?? DEFAULT_COMMIT_IDENTITY.authorEmail
+  return {
+    authorName,
+    authorEmail,
+    committerName: authorName,
+    committerEmail: authorEmail,
+  }
+}
+
 /**
  * git 子进程执行器。
  *
@@ -291,33 +317,37 @@ export class GitWorkspace {
         await this.execGit(['-C', wt, 'add', '-A'])
       }
       // 无配置时保留旧 noop 路径；有校验时即使干净也不能用 noop 绕过消息检查。
-      const checked = await this.checkCommitMessage(taskId, message, policy.commit_message_check)
+      const identity = commitIdentityFor(policy.commit_author)
+      const checked = await this.checkCommitMessage(
+        taskId,
+        message,
+        policy.commit_message_check,
+        identity,
+      )
       if (!checked.ok) return checked
       if (status.trim() === '') return ok(null)
 
       if (policy.commit_message_check !== 'hook') await this.execGit(['-C', wt, 'add', '-A'])
-      const authorName = policy.commit_author?.replace(/ <[^<>]+>$/, '')
-      const authorEmail = policy.commit_author?.match(/<([^<>]+)>$/)?.[1]
       const args = [
         '-C',
         wt,
         '-c',
-        `user.email=${authorEmail ?? 'keel@localhost'}`,
+        `user.email=${identity.authorEmail}`,
         '-c',
-        `user.name=${authorName ?? 'Keel'}`,
+        `user.name=${identity.authorName}`,
         '-c',
         'commit.gpgsign=false',
         ...(policy.commit_author === undefined
           ? []
           : [
               '-c',
-              `author.name=${authorName}`,
+              `author.name=${identity.authorName}`,
               '-c',
-              `author.email=${authorEmail}`,
+              `author.email=${identity.authorEmail}`,
               '-c',
-              `committer.name=${authorName}`,
+              `committer.name=${identity.committerName}`,
               '-c',
-              `committer.email=${authorEmail}`,
+              `committer.email=${identity.committerEmail}`,
             ]),
         'commit',
         ...(policy.commit_message_template === undefined ? [] : ['--cleanup=verbatim']),
@@ -332,10 +362,10 @@ export class GitWorkspace {
           : {
               env: {
                 ...process.env,
-                GIT_AUTHOR_NAME: authorName,
-                GIT_AUTHOR_EMAIL: authorEmail,
-                GIT_COMMITTER_NAME: authorName,
-                GIT_COMMITTER_EMAIL: authorEmail,
+                GIT_AUTHOR_NAME: identity.authorName,
+                GIT_AUTHOR_EMAIL: identity.authorEmail,
+                GIT_COMMITTER_NAME: identity.committerName,
+                GIT_COMMITTER_EMAIL: identity.committerEmail,
               },
             },
       )
@@ -409,7 +439,18 @@ export class GitWorkspace {
     if (policy.commit_message_check === 'hook') {
       if (expectedMessage === undefined) {
         const parent = /^parent ([a-f0-9]+)$/m.exec(raw.stdout.split('\n\n')[0] ?? '')?.[1]
-        return this.checkHistoricalCommitHook(taskId, sha, message, parent)
+        return this.checkHistoricalCommitHook(
+          taskId,
+          sha,
+          message,
+          {
+            authorName: authorName ?? '',
+            authorEmail: authorEmail ?? '',
+            committerName: committerName ?? '',
+            committerEmail: committerEmail ?? '',
+          },
+          parent,
+        )
       }
       // 真正的 git commit 还会再次运行 hook；必须比对落盘消息，不能只信预检。
       const storedMessage = raw.stdout.slice(raw.stdout.indexOf('\n\n') + 2)
@@ -428,6 +469,7 @@ export class GitWorkspace {
     taskId: string,
     sha: string,
     message: string,
+    identity: CommitIdentity,
     parent?: string,
   ): Promise<Result<void>> {
     const wt = this.worktreePath(taskId)
@@ -533,7 +575,7 @@ export class GitWorkspace {
           snapshotRoot,
         )
       }
-      return await this.runCommitMessageHook(snapshot, message, hooks.trim())
+      return await this.runCommitMessageHook(snapshot, message, hooks.trim(), identity)
     } catch (e) {
       return err(commitMessageRejection(`历史 commit-msg hook 复检失败：${this.redact(e)}`))
     } finally {
@@ -661,7 +703,12 @@ export class GitWorkspace {
   }
 
   /** 显式 hook 在 ticket worktree 运行；失败或修改模板消息均回灌，不容许假绿。 */
-  async checkCommitMessage(taskId: string, message: string, check?: string): Promise<Result<void>> {
+  async checkCommitMessage(
+    taskId: string,
+    message: string,
+    check?: string,
+    identity?: CommitIdentity,
+  ): Promise<Result<void>> {
     if (check === undefined) return ok(undefined)
     if (check !== 'hook') {
       try {
@@ -672,28 +719,59 @@ export class GitWorkspace {
         return err(commitMessageRejection(`header 正则无效：${this.redact(e)}`))
       }
     }
-    return this.runCommitMessageHook(this.worktreePath(taskId), message)
+    return this.runCommitMessageHook(this.worktreePath(taskId), message, undefined, identity)
   }
 
   private async runCommitMessageHook(
     wt: string,
     message: string,
     hooksPath?: string,
+    identity?: CommitIdentity,
   ): Promise<Result<void>> {
     const dir = await mkdtemp(join(tmpdir(), 'keel-commit-msg-'))
     const file = join(dir, 'COMMIT_EDITMSG')
     try {
       await writeFile(file, `${message}\n`)
-      await this.execGit([
+      const args = [
         '-C',
         wt,
         ...(hooksPath === undefined ? [] : ['-c', `core.hooksPath=${hooksPath}`]),
+        ...(identity === undefined
+          ? []
+          : [
+              '-c',
+              `user.name=${identity.authorName}`,
+              '-c',
+              `user.email=${identity.authorEmail}`,
+              '-c',
+              `author.name=${identity.authorName}`,
+              '-c',
+              `author.email=${identity.authorEmail}`,
+              '-c',
+              `committer.name=${identity.committerName}`,
+              '-c',
+              `committer.email=${identity.committerEmail}`,
+            ]),
         'hook',
         'run',
         'commit-msg',
         '--',
         file,
-      ])
+      ]
+      await this.execGit(
+        args,
+        identity === undefined
+          ? {}
+          : {
+              env: {
+                ...process.env,
+                GIT_AUTHOR_NAME: identity.authorName,
+                GIT_AUTHOR_EMAIL: identity.authorEmail,
+                GIT_COMMITTER_NAME: identity.committerName,
+                GIT_COMMITTER_EMAIL: identity.committerEmail,
+              },
+            },
+      )
       if ((await readFile(file, 'utf8')) !== `${message}\n`) {
         return err(
           commitMessageRejection('commit-msg hook 修改了消息；请由 Developer 更新提交字段后重试'),
@@ -952,13 +1030,15 @@ export class GitWorkspace {
    */
   private async execGit(
     args: readonly string[],
-    opts: { readonly auth?: string } = {},
+    opts: { readonly auth?: string; readonly env?: NodeJS.ProcessEnv } = {},
   ): Promise<ExecResult> {
-    if (opts.auth === undefined) return this.exec('git', args)
-    const token = await this.tokenForRemoteHost(opts.auth)
-    const auth = authEnvFor(opts.auth, token)
-    if (Object.keys(auth).length === 0) return this.exec('git', args)
-    return this.exec('git', args, { env: { ...process.env, ...auth } })
+    let env = opts.env
+    if (opts.auth !== undefined) {
+      const token = await this.tokenForRemoteHost(opts.auth)
+      const auth = authEnvFor(opts.auth, token)
+      if (Object.keys(auth).length > 0) env = { ...(env ?? process.env), ...auth }
+    }
+    return env === undefined ? this.exec('git', args) : this.exec('git', args, { env })
   }
 
   /**
