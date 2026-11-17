@@ -678,6 +678,48 @@ describe('仓库提交身份与消息校验', () => {
     })
     expect(readFileSync(join(modules, 'validator', 'data'), 'utf8')).toBe('installed\n')
   })
+  it('历史内部链接按被检提交解析，不受当前目标删除影响', async () => {
+    const { g, p, taskId, path } = await setup()
+    hook(path, 'grep -q "^fix:" "$1"')
+    const policy = { commit_message_check: 'hook' }
+    writeFileSync(join(path, 'target.txt'), 'historically valid\n')
+    symlinkSync('target.txt', join(path, 'link.txt'))
+    expect((await g.commitAll(taskId, 'fix: add internal link', policy)).ok).toBe(true)
+    expect(await g.validateCommitHistory(taskId, p.baseSha, policy)).toEqual({
+      ok: true,
+      value: undefined,
+    })
+    rmSync(join(path, 'link.txt'))
+    rmSync(join(path, 'target.txt'))
+    expect((await g.commitAll(taskId, 'fix: remove internal link', policy)).ok).toBe(true)
+    expect(await g.validateCommitHistory(taskId, p.baseSha, policy)).toEqual({
+      ok: true,
+      value: undefined,
+    })
+  })
+  it('历史目录链接先本地化，ignored 复制不写回外部目录', async () => {
+    const { g, p, taskId, path } = await setup()
+    const external = join(root, 'external-cache')
+    mkdirSync(external)
+    writeFileSync(join(external, 'data'), 'original\n')
+    writeFileSync(join(path, '.gitignore'), '*.tmp\n')
+    symlinkSync(external, join(path, 'cache'))
+    hook(path, 'grep -q "^fix:" "$1"')
+    const policy = { commit_message_check: 'hook' }
+    expect((await g.commitAll(taskId, 'fix: add external cache', policy)).ok).toBe(true)
+    rmSync(join(path, 'cache'))
+    mkdirSync(join(path, 'cache'))
+    writeFileSync(join(path, 'cache', 'README'), 'tracked\n')
+    expect((await g.commitAll(taskId, 'fix: replace external cache', policy)).ok).toBe(true)
+    writeFileSync(join(path, 'cache', 'extra.tmp'), 'ignored local content\n')
+    expect(await g.validateCommitHistory(taskId, p.baseSha, policy)).toEqual({
+      ok: true,
+      value: undefined,
+    })
+    expect(existsSync(join(external, 'extra.tmp'))).toBe(false)
+    expect(readFileSync(join(external, 'data'), 'utf8')).toBe('original\n')
+    expect(await g.isDirty(taskId)).toEqual({ ok: true, value: false })
+  })
   it.each(['absolute directory', 'relative directory', 'external file'])(
     '历史 hook 复制外部依赖符号链接的内容，成功与拒绝均不写回原依赖：%s',
     async (kind) => {

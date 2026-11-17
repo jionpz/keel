@@ -514,18 +514,23 @@ export class GitWorkspace {
       ])
       const snapshotRoot = await realpath(snapshot)
       const worktreeRoot = await realpath(wt)
-      // 保留相对目标仍在被复制子树内的链接；npm 风格的 .bin shim 依赖原链接解析模块。
-      // 指向子树外的链接在复制时实体化，历史跟踪内容优先，复制冲突直接失败。
-      for (const path of ignored.split('\0').filter(Boolean)) {
-        await this.copySnapshotTree(join(worktreeRoot, path), join(snapshotRoot, path))
-      }
-      // read-tree 也会还原已跟踪的链接；它们不在 ignored 列表中，同样不能写回原依赖。
+      // 先本地化 read-tree 还原的历史链接，后续 ignored 复制才不会沿外部链接写出快照。
       const { stdout: tracked } = await this.execGit(['-C', snapshot, 'ls-files', '--stage', '-z'])
       for (const entry of tracked.split('\0').filter((entry) => entry.startsWith('120000 '))) {
         await this.localizeTrackedSnapshotLink(
           snapshotRoot,
           worktreeRoot,
           entry.slice(entry.indexOf('\t') + 1),
+        )
+      }
+      // 保留相对目标仍在被复制子树内的链接；npm 风格的 .bin shim 依赖原链接解析模块。
+      // 指向子树外的链接在复制时实体化，历史跟踪内容优先，复制冲突直接失败。
+      for (const path of ignored.split('\0').filter(Boolean)) {
+        await this.copySnapshotTree(
+          join(worktreeRoot, path),
+          join(snapshotRoot, path),
+          undefined,
+          snapshotRoot,
         )
       }
       return await this.runCommitMessageHook(snapshot, message, hooks.trim())
@@ -540,6 +545,34 @@ export class GitWorkspace {
     return path === root || path.startsWith(`${root}${sep}`)
   }
 
+  /** 逐级确认复制目标的祖先目录；内部链接可跟随，外部链接必须在写入前拒绝。 */
+  private async ensureSnapshotDirectory(directory: string, snapshotRoot: string): Promise<void> {
+    const rel = relative(snapshotRoot, directory)
+    if (rel.startsWith('..') || isAbsolute(rel))
+      throw new Error(`依赖复制目标越过快照边界：${directory}`)
+    let current = snapshotRoot
+    for (const part of rel.split(sep).filter(Boolean)) {
+      current = join(current, part)
+      let stat: Stats | undefined
+      try {
+        stat = await lstat(current)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        await mkdir(current)
+        continue
+      }
+      if (stat.isSymbolicLink()) {
+        const target = await realpath(current)
+        if (!this.inside(snapshotRoot, target))
+          throw new Error(`依赖复制目标经符号链接越过快照边界：${current}`)
+        if (!(await lstat(target)).isDirectory())
+          throw new Error(`依赖复制目标的祖先不是目录：${current}`)
+        continue
+      }
+      if (!stat.isDirectory()) throw new Error(`依赖复制目标的祖先不是目录：${current}`)
+    }
+  }
+
   /**
    * 复制一棵依赖树：相对目标仍在树内的链接原样保留，其余链接（外部/绝对/歧义）实体化。
    * 实体化子树继续递归，因此外部依赖内部的相对链接仍按原结构解析，写入只落在快照内。
@@ -548,10 +581,12 @@ export class GitWorkspace {
     source: string,
     dest: string,
     subtreeRoot?: string,
+    snapshotRoot?: string,
   ): Promise<void> {
     const stat = await lstat(source)
     const root = subtreeRoot ?? (stat.isDirectory() ? await realpath(source) : resolve(source))
-    await mkdir(dirname(dest), { recursive: true })
+    if (snapshotRoot === undefined) await mkdir(dirname(dest), { recursive: true })
+    else await this.ensureSnapshotDirectory(dirname(dest), snapshotRoot)
     if (stat.isSymbolicLink()) {
       const text = await readlink(source)
       const lexical = isAbsolute(text) ? text : resolve(dirname(source), text)
@@ -560,7 +595,7 @@ export class GitWorkspace {
         await symlink(text, dest)
         return
       }
-      await this.copySnapshotTree(target, dest)
+      await this.copySnapshotTree(target, dest, undefined, snapshotRoot)
       return
     }
     if (stat.isDirectory()) {
@@ -573,7 +608,7 @@ export class GitWorkspace {
       if (existing === undefined) await mkdir(dest)
       else if (!existing.isDirectory()) throw new Error(`历史文件与依赖目录冲突：${dest}`)
       for (const entry of await readdir(source)) {
-        await this.copySnapshotTree(join(source, entry), join(dest, entry), root)
+        await this.copySnapshotTree(join(source, entry), join(dest, entry), root, snapshotRoot)
       }
       return
     }
@@ -581,7 +616,7 @@ export class GitWorkspace {
     await cp(source, dest, { force: false, mode: constants.COPYFILE_FICLONE })
   }
 
-  /** 历史跟踪链接按原仓库位置解析；仅保留目标仍在快照内的相对链接。 */
+  /** 历史跟踪链接优先按被检提交解析；目标在当前工作树删除不应影响历史有效性。 */
   private async localizeTrackedSnapshotLink(
     snapshotRoot: string,
     worktreeRoot: string,
@@ -589,14 +624,22 @@ export class GitWorkspace {
   ): Promise<void> {
     const link = join(snapshotRoot, path)
     const text = await readlink(link)
-    const intended = isAbsolute(text) ? text : resolve(dirname(join(worktreeRoot, path)), text)
-    const target = await realpath(intended)
+    const lexical = isAbsolute(text) ? text : resolve(dirname(link), text)
+    let snapshotTarget: string | undefined
+    try {
+      snapshotTarget = await realpath(link)
+    } catch {
+      snapshotTarget = undefined
+    }
     if (
       !isAbsolute(text) &&
-      this.inside(worktreeRoot, target) &&
-      existsSync(join(snapshotRoot, relative(worktreeRoot, target)))
+      this.inside(snapshotRoot, lexical) &&
+      snapshotTarget !== undefined &&
+      this.inside(snapshotRoot, snapshotTarget)
     )
       return
+    const intended = isAbsolute(text) ? text : resolve(dirname(join(worktreeRoot, path)), text)
+    const target = await realpath(intended)
     const dir = await mkdtemp(join(tmpdir(), 'keel-history-link-'))
     try {
       const copy = join(dir, 'copy')
