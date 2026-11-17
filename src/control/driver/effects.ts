@@ -20,9 +20,11 @@ import type { PullRequestGateway } from '../../contracts/git-provider.js'
 import type { PolicyEngine } from '../../contracts/policy-engine.js'
 import { commitArtifactOn } from '../../fact/artifact-store.js'
 import { branchFor, type GitWorkspace, type PreparedProject } from '../../fact/git-workspace.js'
+import { commitPolicyFromRow } from '../../shared/commit-policy.js'
 import type { Stage } from '../../shared/ids.js'
 import { TIMER_DURATIONS } from '../../shared/timers.js'
-import { prBodyWithIssueReferences } from '../pr-body.js'
+import { pullRequestBody, pullRequestTitle } from '../pr-description.js'
+import { loadLegacyPullRequestFacts } from '../pr-description-facts.js'
 import type { SideEffect, TransitionEvent } from '../transition/types.js'
 import { loadPolicyFacts } from './facts.js'
 
@@ -564,8 +566,17 @@ async function createPullRequest(c: PoolClient, ctx: EffectContext): Promise<App
   }
 
   const { git, repoId, project } = ctx.workspace
-  const repo = await c.query<{ remote_url: string; default_branch: string; title: string }>(
-    `SELECT r.remote_url, r.default_branch, t.title
+  const repo = await c.query<{
+    remote_url: string
+    default_branch: string
+    title: string
+    commit_message_template: string | null
+    commit_message_check: string | null
+    commit_types: string[] | null
+    commit_scopes: string[] | null
+  }>(
+    `SELECT r.remote_url, r.default_branch, t.title,
+       r.commit_message_template, r.commit_message_check, r.commit_types, r.commit_scopes
      FROM repo r JOIN task t ON t.repo_id = r.id
      WHERE r.id = $1 AND t.id = $2`,
     [repoId, ctx.taskId],
@@ -585,11 +596,25 @@ async function createPullRequest(c: PoolClient, ctx: EffectContext): Promise<App
      ORDER BY f.external_ref`,
     [ctx.taskId],
   )
-  const body = prBodyWithIssueReferences({
-    body: `Keel Task ${ctx.taskId}\n\nAutomated PR.`,
+  const policyResult = commitPolicyFromRow(row)
+  const policy = policyResult.ok ? policyResult.value : undefined
+  const facts = await loadLegacyPullRequestFacts(c, {
     taskId: ctx.taskId,
+    issueTitle: row.title,
+    fallbackChanges: `分支 ${headBranch} 已包含本次改动（基线 ${project.baseSha.slice(0, 7)}）。`,
+  })
+  const body = pullRequestBody({
+    taskId: ctx.taskId,
+    sections: facts.sections,
     remoteUrl: row.remote_url,
     externalRefs: feedback.rows.map((entry) => entry.external_ref),
+  })
+  const title = pullRequestTitle({
+    issueTitle: row.title,
+    ...(policy === undefined ? {} : { policy }),
+    ...(facts.developCommitMessage === undefined
+      ? {}
+      : { commitMessage: facts.developCommitMessage }),
   })
 
   const pr = await ctx.github.createPullRequest({
@@ -597,7 +622,7 @@ async function createPullRequest(c: PoolClient, ctx: EffectContext): Promise<App
     remoteUrl: row.remote_url,
     baseBranch: project.baseBranch || row.default_branch,
     headBranch,
-    title: row.title,
+    title,
     body,
   })
   if (!pr.ok) throw new Error(`创建 PR 失败：${pr.error.detail}`)

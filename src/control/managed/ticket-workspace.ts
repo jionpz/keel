@@ -89,6 +89,16 @@ export async function commitExists(path: string, commit: string): Promise<boolea
   return (await resolveCommit(path, commit)) !== null
 }
 
+/** 读取已落盘提交的完整消息；只用于从事实生成 PR 标题。 */
+export async function commitMessage(path: string, commit: string): Promise<string | null> {
+  if (!/^[a-f0-9]{7,40}$/.test(commit)) return null
+  try {
+    return await git(path, ['show', '-s', '--format=%B', commit])
+  } catch {
+    return null
+  }
+}
+
 export async function resolveCommit(path: string, commit: string): Promise<string | null> {
   if (!/^[a-f0-9]{7,40}$/.test(commit)) return null
   try {
