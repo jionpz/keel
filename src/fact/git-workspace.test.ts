@@ -645,6 +645,39 @@ describe('仓库提交身份与消息校验', () => {
       snapshots,
     )
   })
+  it('历史 hook 保留 npm 可执行链接的相对模块解析，同时隔离依赖写入', async () => {
+    const { g, p, taskId, path } = await setup()
+    writeFileSync(join(path, '.gitignore'), 'node_modules/\n')
+    const modules = join(path, 'node_modules')
+    const bin = join(modules, '.bin')
+    mkdirSync(bin, { recursive: true })
+    mkdirSync(join(modules, 'validator', 'bin'), { recursive: true })
+    mkdirSync(join(modules, 'validator', 'lib'))
+    writeFileSync(join(modules, 'validator', 'lib', 'validate.cjs'), 'module.exports = () => 0\n')
+    writeFileSync(
+      join(modules, 'validator', 'bin', 'cli.cjs'),
+      '#!/usr/bin/env node\n' +
+        "const { lstatSync, writeFileSync } = require('node:fs')\n" +
+        "const { join } = require('node:path')\n" +
+        "if (!lstatSync(join(__dirname, '..', '..', '.bin', 'validator')).isSymbolicLink())\n" +
+        '  process.exit(7)\n' +
+        "require('../lib/validate.cjs')\n" +
+        "writeFileSync(join(__dirname, '..', 'data'), 'snapshot\\n')\n",
+      { mode: 0o755 },
+    )
+    writeFileSync(join(modules, 'validator', 'data'), 'installed\n')
+    symlinkSync('../validator/bin/cli.cjs', join(bin, 'validator'))
+    hook(path, 'exec ./node_modules/.bin/validator "$1"')
+    const policy = { commit_message_check: 'hook' }
+    expect((await g.commitAll(taskId, 'fix: npm tool', policy)).ok).toBe(true)
+    // 真实提交允许写本地依赖；历史复检必须只写快照副本。
+    writeFileSync(join(modules, 'validator', 'data'), 'installed\n')
+    expect(await g.validateCommitHistory(taskId, p.baseSha, policy)).toEqual({
+      ok: true,
+      value: undefined,
+    })
+    expect(readFileSync(join(modules, 'validator', 'data'), 'utf8')).toBe('installed\n')
+  })
   it.each(['absolute directory', 'relative directory', 'external file'])(
     '历史 hook 复制外部依赖符号链接的内容，成功与拒绝均不写回原依赖：%s',
     async (kind) => {

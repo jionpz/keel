@@ -27,22 +27,26 @@
  */
 
 import { execFile } from 'node:child_process'
-import { constants, existsSync } from 'node:fs'
+import { constants, existsSync, type Stats } from 'node:fs'
 import {
   appendFile,
   cp,
+  lstat,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
+  readlink,
   realpath,
   rename,
   rm,
   rmdir,
+  symlink,
   unlink,
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, sep } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 import { err, makeError, ok, type Result } from '../contracts/errors.js'
 import {
@@ -508,35 +512,97 @@ export class GitWorkspace {
         '--directory',
         '-z',
       ])
-      // 解引用后复制依赖（含外部链接），不留下通向原依赖的写入路径；历史跟踪内容优先。
-      // 悬空/循环链接等无法复制的情况由外层拒绝，不跳过校验或回退到原目录。
-      for (const path of ignored.split('\0').filter(Boolean)) {
-        await cp(join(wt, path), join(snapshot, path), {
-          recursive: true,
-          force: false,
-          dereference: true,
-          mode: constants.COPYFILE_FICLONE,
-        })
-      }
-      // read-tree 也会还原已跟踪的外部链接；它们不在 ignored 列表中，同样不能写回原依赖。
-      const { stdout: tracked } = await this.execGit(['-C', snapshot, 'ls-files', '--stage', '-z'])
       const snapshotRoot = await realpath(snapshot)
+      const worktreeRoot = await realpath(wt)
+      // 保留相对目标仍在被复制子树内的链接；npm 风格的 .bin shim 依赖原链接解析模块。
+      // 指向子树外的链接在复制时实体化，历史跟踪内容优先，复制冲突直接失败。
+      for (const path of ignored.split('\0').filter(Boolean)) {
+        await this.copySnapshotTree(join(worktreeRoot, path), join(snapshotRoot, path))
+      }
+      // read-tree 也会还原已跟踪的链接；它们不在 ignored 列表中，同样不能写回原依赖。
+      const { stdout: tracked } = await this.execGit(['-C', snapshot, 'ls-files', '--stage', '-z'])
       for (const entry of tracked.split('\0').filter((entry) => entry.startsWith('120000 '))) {
-        const link = join(snapshot, entry.slice(entry.indexOf('\t') + 1))
-        const target = await realpath(link)
-        if (target === snapshotRoot || target.startsWith(`${snapshotRoot}${sep}`)) continue
-        const copy = join(dir, 'dependency')
-        await cp(link, copy, {
-          recursive: true,
-          dereference: true,
-          mode: constants.COPYFILE_FICLONE,
-        })
-        await unlink(link)
-        await rename(copy, link)
+        await this.localizeTrackedSnapshotLink(
+          snapshotRoot,
+          worktreeRoot,
+          entry.slice(entry.indexOf('\t') + 1),
+        )
       }
       return await this.runCommitMessageHook(snapshot, message, hooks.trim())
     } catch (e) {
       return err(commitMessageRejection(`历史 commit-msg hook 复检失败：${this.redact(e)}`))
+    } finally {
+      await rm(dir, { recursive: true })
+    }
+  }
+
+  private inside(root: string, path: string): boolean {
+    return path === root || path.startsWith(`${root}${sep}`)
+  }
+
+  /**
+   * 复制一棵依赖树：相对目标仍在树内的链接原样保留，其余链接（外部/绝对/歧义）实体化。
+   * 实体化子树继续递归，因此外部依赖内部的相对链接仍按原结构解析，写入只落在快照内。
+   */
+  private async copySnapshotTree(
+    source: string,
+    dest: string,
+    subtreeRoot?: string,
+  ): Promise<void> {
+    const stat = await lstat(source)
+    const root = subtreeRoot ?? (stat.isDirectory() ? await realpath(source) : resolve(source))
+    await mkdir(dirname(dest), { recursive: true })
+    if (stat.isSymbolicLink()) {
+      const text = await readlink(source)
+      const lexical = isAbsolute(text) ? text : resolve(dirname(source), text)
+      const target = await realpath(source)
+      if (!isAbsolute(text) && this.inside(root, lexical) && this.inside(root, target)) {
+        await symlink(text, dest)
+        return
+      }
+      await this.copySnapshotTree(target, dest)
+      return
+    }
+    if (stat.isDirectory()) {
+      let existing: Stats | undefined
+      try {
+        existing = await lstat(dest)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      }
+      if (existing === undefined) await mkdir(dest)
+      else if (!existing.isDirectory()) throw new Error(`历史文件与依赖目录冲突：${dest}`)
+      for (const entry of await readdir(source)) {
+        await this.copySnapshotTree(join(source, entry), join(dest, entry), root)
+      }
+      return
+    }
+    if (!stat.isFile()) throw new Error(`无法复制依赖：${source}`)
+    await cp(source, dest, { force: false, mode: constants.COPYFILE_FICLONE })
+  }
+
+  /** 历史跟踪链接按原仓库位置解析；仅保留目标仍在快照内的相对链接。 */
+  private async localizeTrackedSnapshotLink(
+    snapshotRoot: string,
+    worktreeRoot: string,
+    path: string,
+  ): Promise<void> {
+    const link = join(snapshotRoot, path)
+    const text = await readlink(link)
+    const intended = isAbsolute(text) ? text : resolve(dirname(join(worktreeRoot, path)), text)
+    const target = await realpath(intended)
+    if (
+      !isAbsolute(text) &&
+      this.inside(worktreeRoot, target) &&
+      existsSync(join(snapshotRoot, relative(worktreeRoot, target)))
+    )
+      return
+    const dir = await mkdtemp(join(tmpdir(), 'keel-history-link-'))
+    try {
+      const copy = join(dir, 'copy')
+      await this.copySnapshotTree(target, copy)
+      await unlink(link)
+      await rename(copy, link)
     } finally {
       await rm(dir, { recursive: true })
     }
