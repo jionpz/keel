@@ -537,6 +537,15 @@ describe('仓库提交身份与消息校验', () => {
         })
       ).ok,
     ).toBe(true)
+    const committed = headOf(path)
+    expect(await g.isDirty(taskId)).toEqual({ ok: true, value: false })
+    expect(
+      await g.commitAll(taskId, 'wrong', { commit_message_check: '^fix\\(fact\\): .+$' }),
+    ).toMatchObject({
+      ok: false,
+      error: { detail: expect.stringContaining('header 不匹配正则') },
+    })
+    expect(headOf(path)).toBe(committed)
   })
   it('commit-msg hook 在 ticket worktree 执行，拒绝原因可回灌，成功后才提交', async () => {
     const { g, taskId, path } = await setup()
