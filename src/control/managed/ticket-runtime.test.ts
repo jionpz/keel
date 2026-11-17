@@ -1166,6 +1166,7 @@ describe('managed ticket runtime', () => {
     'dirty',
     'different-head',
     'different-branch',
+    'reset-input',
     'outside-scope',
     'preference',
   ] as const)('执行恢复点等待决定后续跑，拒绝决定之外的现场漂移：%s', async (change) => {
@@ -1230,6 +1231,7 @@ describe('managed ticket runtime', () => {
     if (change === 'dirty') await writeFile(join(root, 'feature.txt'), 'unapproved WIP\n')
     if (change === 'different-head') await commitFile(root, 'feature.txt', 'unapproved commit\n')
     if (change === 'different-branch') await git(root, 'checkout', '-b', 'unapproved-branch')
+    if (change === 'reset-input') await git(root, 'reset', '--hard', waiting.value.baseline_commit)
     let ran = false
     const resumed = await tickManagedTicket(
       workerWith(async (input) => {
@@ -1274,6 +1276,60 @@ describe('managed ticket runtime', () => {
         value: { current_stage: 'verify' },
       })
     }
+  })
+
+  it('没有提交恢复点的环境决定仍可从原输入继续实现', async () => {
+    const { repoId, root, taskId } = await seed()
+    await bindWorkflowIssue(repoId, taskId, '#134', ['feature.txt'])
+    await tickManagedTicket(
+      workerWith(async () =>
+        success('execute', {
+          status: 'blocked',
+          decision: {
+            decision_key: 'execute.environment',
+            kind: 'recovery',
+            question: '环境就绪后继续？',
+            options: ['继续实现', '停止并等待人工处理'],
+            action_category: 'validation_environment_recovery',
+            impact: {
+              environment: 'test',
+              reversibility: 'reversible',
+              affected_resources: ['fixture'],
+            },
+          },
+        }),
+      ),
+      taskId,
+    )
+    const waiting = await getManagedTicket(taskId)
+    if (
+      !waiting.ok ||
+      waiting.value.pending_decision_id === null ||
+      waiting.value.pending_decision_revision === null
+    )
+      throw new Error('missing decision')
+    expect(
+      await answerManagedTicketDecision(
+        waiting.value.pending_decision_id,
+        waiting.value.pending_decision_revision,
+        'option-1',
+        new Date().toISOString(),
+      ),
+    ).toMatchObject({ ok: true, value: { taskStatus: 'READY' } })
+    expect(
+      await tickManagedTicket(
+        workerWith(async (input) => {
+          expect(input.input_commit).toBe(waiting.value.baseline_commit)
+          const commit = await commitFile(root, 'feature.txt', 'implementation\n')
+          return success('execute', { commit, worktree_head: commit })
+        }),
+        taskId,
+      ),
+    ).toMatchObject({ ok: true, value: { status: 'READY' } })
+    expect(await getManagedTicket(taskId)).toMatchObject({
+      ok: true,
+      value: { current_stage: 'verify' },
+    })
   })
 
   it.each([true, false])(

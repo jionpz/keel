@@ -733,6 +733,8 @@ async function decisionRecoveryForExecute(
   const result = eventPayload(blocked.result)
   if (result.status !== 'blocked' || eventPayload(result.decision).kind !== 'recovery')
     return ok(null)
+  const recordedGit = eventPayload(eventPayload(blocked.evidence).git)
+  if (recordedGit.clean === true && recordedGit.output_commit === expectedInput) return ok(null)
   const accepted = await asRole('keel_control', (c) =>
     c.query(
       `SELECT e.seq FROM managed_ticket_event e
@@ -758,7 +760,6 @@ async function decisionRecoveryForExecute(
   )
   if (accepted.rowCount !== 1)
     return err(makeError('WORKSPACE_ERROR', '恢复点缺少对应阶段已接纳的恢复决定'))
-  const recordedGit = eventPayload(eventPayload(blocked.evidence).git)
   const diff = await diffDigest(worktree.path, claim.task.baseline_commit, worktree.head)
   if (
     !worktree.clean ||
@@ -1190,7 +1191,7 @@ export async function tickManagedTicket(
   if (timeoutRecovery !== null && !timeoutRecovery.ok)
     return pauseTicketWithError(claim, timeoutRecovery.error.kind, timeoutRecovery.error.detail)
   let recovery = timeoutRecovery?.ok ? timeoutRecovery.value : null
-  if (needsRecovery && recovery === null) {
+  if (recovery === null) {
     const decided = await decisionRecoveryForExecute(
       claim,
       previous,
