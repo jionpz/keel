@@ -84,6 +84,8 @@ stage 的决议版本，并重新核对原 HEAD、分支、diff、scope 与证�
 verify/review 门禁照常执行。恢复决定的控制代次和当前授权仍须有效；未改变现场的
 可重试 Harness 错误不丢失恢复点。普通偏好决定不能授权工作区漂移，详见
 [ticket-execution.md](spec/backend/ticket-execution.md)。
+带请求动作而暂停的 recovery 还须同请求精确版本的人工一次批准，不能用委托
+代替；真正 `MUST_STOP` 不走普通恢复。人工覆盖理由随台账决议下发到阶段上下文。
 
 workflow 取消保留 `ARCHIVED` 节点及 claim；`FAILED` 节点和 `DONE` / `FAILED` /
 `CANCELLED` ticket 保留原状态，其余未归档节点取消并释放本 workflow 持有的
