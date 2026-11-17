@@ -454,6 +454,20 @@ function verifyReferences(input: DecisionAcceptanceInput, answerOptionId: string
 }
 
 export function acceptDecision(input: DecisionAcceptanceInput): Result<DecisionResolution> {
+  return evaluateDecision(input, false)
+}
+
+/** 只重新求值已接纳决议的当前授权，不写入新请求或决议。 */
+export function recheckDecisionAuthority(
+  input: DecisionAcceptanceInput,
+): Result<DecisionResolution> {
+  return evaluateDecision(input, true)
+}
+
+function evaluateDecision(
+  input: DecisionAcceptanceInput,
+  recheck: boolean,
+): Result<DecisionResolution> {
   const request = validateDecisionRequest(input.request)
   if (!request.ok) return request
   const proposal = validateTianwenProposal(input.proposal)
@@ -477,7 +491,11 @@ export function acceptDecision(input: DecisionAcceptanceInput): Result<DecisionR
     input.authenticated_caller.authenticated_id.trim().length === 0
   )
     return denied(input, '调用者身份或来源不是受信天问提案')
-  if (input.request.status !== 'OPEN' && input.request.status !== 'PROCESSING')
+  if (
+    recheck
+      ? input.request.status !== 'RESOLVED'
+      : input.request.status !== 'OPEN' && input.request.status !== 'PROCESSING'
+  )
     return denied(input, `请求状态 ${input.request.status} 不接受新决议`)
   if (input.request.revision !== input.proposal.request_revision)
     return denied(input, '提案 revision 与请求不匹配')

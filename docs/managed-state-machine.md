@@ -81,7 +81,8 @@ outbox 并撤销 `VALID` permit。详细约束见
 `execute` 的恢复决定被接纳后，可继续暂停时记录的干净提交。恢复必须绑定同一
 stage 的决议版本，并重新核对原 HEAD、分支、diff、scope 与证据摘要；记录
 `ManagedTicketDecisionRecovery` 后重新执行，原 `MUST_STOP`/`FAILED` 不变，后续
-verify/review 门禁照常执行。普通偏好决定不能授权工作区漂移，详见
+verify/review 门禁照常执行。恢复决定的控制代次和当前授权仍须有效；未改变现场的
+可重试 Harness 错误不丢失恢复点。普通偏好决定不能授权工作区漂移，详见
 [ticket-execution.md](spec/backend/ticket-execution.md)。
 
 workflow 取消保留 `ARCHIVED` 节点及 claim；`FAILED` 节点和 `DONE` / `FAILED` /

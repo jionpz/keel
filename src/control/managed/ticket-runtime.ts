@@ -32,6 +32,7 @@ import {
   escalateDecisionRequest,
   getDecisionRequest,
   openDecisionRequestForTicket,
+  recheckTicketDecisionAuthority,
 } from './decision-store.js'
 import {
   TICKET_STAGE_ORDER,
@@ -720,7 +721,16 @@ async function decisionRecoveryForExecute(
   expectedInput: string,
   worktree: TicketWorktreeState,
 ): Promise<Result<ExecuteRecovery | null>> {
-  const blocked = previous.at(-1)
+  let blockedIndex = previous.length - 1
+  while (
+    previous[blockedIndex]?.stage === 'execute' &&
+    previous[blockedIndex]?.status === 'FAILED' &&
+    ['HARNESS_UNAVAILABLE', 'PROTOCOL_ERROR', 'RUN_TIMEOUT'].includes(
+      previous[blockedIndex]?.error ?? '',
+    )
+  )
+    blockedIndex--
+  const blocked = previous[blockedIndex]
   const decision = lastDecisionFromHandoff(claim.task.handoff)
   if (
     claim.task.current_stage !== 'execute' ||
@@ -735,6 +745,12 @@ async function decisionRecoveryForExecute(
     return ok(null)
   const recordedGit = eventPayload(eventPayload(blocked.evidence).git)
   if (recordedGit.clean === true && recordedGit.output_commit === expectedInput) return ok(null)
+  if (
+    eventPayload(eventPayload(claim.task.handoff).last_decision).control_generation !==
+      Number(claim.task.control_generation) ||
+    !(await recheckTicketDecisionAuthority(claim.task.id, decision, new Date().toISOString()))
+  )
+    return err(makeError('PERMISSION_DENIED', '恢复决定的控制代次或授权依据已失效'))
   const accepted = await asRole('keel_control', (c) =>
     c.query(
       `SELECT e.seq FROM managed_ticket_event e
@@ -760,19 +776,31 @@ async function decisionRecoveryForExecute(
   )
   if (accepted.rowCount !== 1)
     return err(makeError('WORKSPACE_ERROR', '恢复点缺少对应阶段已接纳的恢复决定'))
-  const diff = await diffDigest(worktree.path, claim.task.baseline_commit, worktree.head)
+  const checkpointHead = recordedGit.output_commit
+  if (typeof checkpointHead !== 'string')
+    return err(makeError('WORKSPACE_ERROR', '恢复决定缺少已记录的 HEAD'))
+  const diff = await diffDigest(worktree.path, claim.task.baseline_commit, checkpointHead)
   if (
-    !worktree.clean ||
     recordedGit.clean !== true ||
     recordedGit.input_commit !== blocked.input_commit ||
     recordedGit.baseline_commit !== claim.task.baseline_commit ||
-    recordedGit.output_commit !== worktree.head ||
     recordedGit.branch !== worktree.branch ||
     blocked.evidence_digest !== sha256CanonicalJson(blocked.evidence) ||
     blocked.output_digest !== sha256CanonicalJson(blocked.result) ||
     !diff.ok ||
     diff.value !== recordedGit.diff_digest ||
-    !(await isAncestor(worktree.path, expectedInput, worktree.head))
+    !(await isAncestor(worktree.path, expectedInput, checkpointHead))
+  )
+    return err(makeError('WORKSPACE_ERROR', '恢复决定的原始 HEAD/diff 证据不一致'))
+  if (previous.at(-1)?.error === 'RUN_TIMEOUT') {
+    if (!(await isAncestor(worktree.path, checkpointHead, worktree.head)))
+      return err(makeError('WORKSPACE_ERROR', '超时恢复不能丢弃已批准的恢复提交'))
+    return ok(null)
+  }
+  if (
+    !worktree.clean ||
+    checkpointHead !== worktree.head ||
+    previous.slice(blockedIndex + 1).some((record) => record.input_commit !== checkpointHead)
   )
     return err(makeError('WORKSPACE_ERROR', '恢复决定后的现场与已记录 HEAD/diff 不一致'))
   const changed = await workingTreeChangedFiles(worktree.path, expectedInput)
@@ -1178,30 +1206,28 @@ export async function tickManagedTicket(
   const isolated = await isolationViolations(worktree.value.path)
   if (!isolated.ok) return pauseTicketWithError(claim, 'WORKSPACE_ERROR', isolated.error.detail)
   const needsRecovery = !worktree.value.clean || worktree.value.head !== expectedInput
-  const timeoutRecovery = needsRecovery
-    ? await timeoutRecoveryForExecute(
-        claim,
-        stage,
-        previous,
-        workflowNode,
-        expectedInput,
-        worktree.value,
-      )
-    : null
+  const decided = await decisionRecoveryForExecute(
+    claim,
+    previous,
+    workflowNode,
+    expectedInput,
+    worktree.value,
+  )
+  if (!decided.ok) return pauseTicketWithError(claim, decided.error.kind, decided.error.detail)
+  const timeoutRecovery =
+    needsRecovery && decided.value === null
+      ? await timeoutRecoveryForExecute(
+          claim,
+          stage,
+          previous,
+          workflowNode,
+          expectedInput,
+          worktree.value,
+        )
+      : null
   if (timeoutRecovery !== null && !timeoutRecovery.ok)
     return pauseTicketWithError(claim, timeoutRecovery.error.kind, timeoutRecovery.error.detail)
-  let recovery = timeoutRecovery?.ok ? timeoutRecovery.value : null
-  if (recovery === null) {
-    const decided = await decisionRecoveryForExecute(
-      claim,
-      previous,
-      workflowNode,
-      expectedInput,
-      worktree.value,
-    )
-    if (!decided.ok) return pauseTicketWithError(claim, decided.error.kind, decided.error.detail)
-    recovery = decided.value
-  }
+  const recovery = decided.value ?? (timeoutRecovery?.ok ? timeoutRecovery.value : null)
   if (recovery === null && worktree.value.head !== expectedInput)
     return pauseTicketWithError(
       claim,

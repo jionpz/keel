@@ -11,7 +11,11 @@ import type {
   TianwenProposal,
 } from '../../generated/managed.js'
 import { sha256CanonicalJson } from '../../shared/canonical-json.js'
-import { acceptDecision, type DecisionAcceptanceControl } from './decision-acceptor.js'
+import {
+  acceptDecision,
+  type DecisionAcceptanceControl,
+  recheckDecisionAuthority,
+} from './decision-acceptor.js'
 import {
   decisionRequestDigest,
   validateDecisionRequest,
@@ -842,6 +846,60 @@ export async function readDecisionResolution(
   return checked.value
 }
 
+export async function recheckTicketDecisionAuthority(
+  taskId: string,
+  reference: {
+    readonly request_id: string
+    readonly request_revision: number
+    readonly resolution_id: string
+    readonly digest: string
+  },
+  now: string,
+): Promise<boolean> {
+  const resolution = await readDecisionResolution(reference.request_id, reference.request_revision)
+  if (
+    resolution === null ||
+    resolution.id !== reference.resolution_id ||
+    resolution.context_digest !== reference.digest
+  )
+    return false
+  return asRole('keel_control', async (c) => {
+    const request = await requestBody(c, reference.request_id, reference.request_revision)
+    if (request?.status !== 'RESOLVED' || request.managed_ticket_task_id !== taskId) return false
+    if (request.expires_at !== undefined && Date.parse(request.expires_at) <= Date.parse(now))
+      return false
+    if (resolution.disposition === 'human_confirmed') return true
+    if (resolution.disposition !== 'delegated') return false
+    const original = await c.query<{ proposal: TianwenProposal }>(
+      `SELECT payload->'proposal' AS proposal FROM managed_ticket_event
+       WHERE task_id=$1 AND type='ManagedTicketDecisionDelegated'
+         AND payload->'resolution'->>'id'=$2`,
+      [taskId, resolution.id],
+    )
+    const proposal = original.rows[0]?.proposal
+    if (original.rowCount !== 1 || proposal === undefined) return false
+    const checked = recheckDecisionAuthority({
+      request,
+      proposal,
+      resolution_id: resolution.id,
+      now,
+      authenticated_caller: {
+        actor_type: resolution.actor.type,
+        authenticated_id: resolution.actor.authenticated_id,
+        source: 'model_proposal',
+      },
+      decisions: await decisionsForProject(c, request.project_id),
+      policies: await currentPolicies(c, request.project_id),
+      control: await controlForRequest(c, request),
+    })
+    return (
+      checked.ok &&
+      checked.value.disposition === 'delegated' &&
+      checked.value.answer_option_id === resolution.answer_option_id
+    )
+  })
+}
+
 async function currentRequestForQuestion(
   c: PoolClient,
   questionId: string,
@@ -1283,8 +1341,9 @@ export async function answerManagedTicketDecision(
           last_error: string | null
           pending_decision_id: string
           pending_decision_revision: number
+          control_generation: string | number
         }>(
-          'SELECT status,last_error,pending_decision_id,pending_decision_revision FROM managed_ticket_task WHERE id=$1 FOR UPDATE',
+          'SELECT status,last_error,pending_decision_id,pending_decision_revision,control_generation FROM managed_ticket_task WHERE id=$1 FOR UPDATE',
           [request.managed_ticket_task_id],
         )
       ).rows[0]
@@ -1313,6 +1372,7 @@ export async function answerManagedTicketDecision(
               request_revision: resolution.request_revision,
               resolution_id: resolution.id,
               digest: resolution.context_digest,
+              control_generation: Number(task.control_generation) + 1,
             },
           }),
         ],
@@ -1377,8 +1437,12 @@ export async function overrideManagedTicketDecision(
       now,
     )
     const task = (
-      await c.query<{ status: string; last_error: string | null }>(
-        'SELECT status,last_error FROM managed_ticket_task WHERE id=$1 FOR UPDATE',
+      await c.query<{
+        status: string
+        last_error: string | null
+        control_generation: string | number
+      }>(
+        'SELECT status,last_error,control_generation FROM managed_ticket_task WHERE id=$1 FOR UPDATE',
         [request.managed_ticket_task_id],
       )
     ).rows[0]
@@ -1420,6 +1484,7 @@ export async function overrideManagedTicketDecision(
             request_revision: resolution.request_revision,
             resolution_id: resolution.id,
             digest: resolution.context_digest,
+            control_generation: Number(task.control_generation) + 1,
           },
         }),
       ],

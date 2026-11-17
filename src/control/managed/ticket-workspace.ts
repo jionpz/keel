@@ -32,7 +32,7 @@ async function git(path: string, args: readonly string[]): Promise<string> {
     maxBuffer: 8 * 1024 * 1024,
     timeout: 15000,
   })
-  return result.stdout.trim()
+  return args.includes('-z') ? result.stdout : result.stdout.trim()
 }
 
 export async function inspectTicketWorktree(path: string): Promise<Result<TicketWorktreeState>> {
@@ -69,6 +69,13 @@ async function inspectGitWorktree(
     topLevel = await git(canonical, ['rev-parse', '--show-toplevel'])
     head = await git(canonical, ['rev-parse', 'HEAD'])
     branch = await git(canonical, ['rev-parse', '--abbrev-ref', 'HEAD'])
+    if (privateGit) {
+      const entries = await git(canonical, ['ls-files', '-v', '-z'])
+      if (entries.split('\0').some((entry) => /^[a-zS] /.test(entry)))
+        return err(
+          makeError('WORKSPACE_ERROR', 'ticket worktree 的 index 不能使用隐藏工作区修改的标记'),
+        )
+    }
     status = await git(canonical, ['status', '--porcelain', '--untracked-files=normal'])
   } catch (error) {
     return err(
