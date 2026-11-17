@@ -7,10 +7,10 @@
  *
  * 本文件把两者合一：**一条真实反馈，全程由真实 OMP session 驱动**。
  *
- * 诚实边界：`S-PR_OPEN → S-DONE` 需要 CI 结果，而 CI 是 Keel 的
+ * 诚实边界：`S-PR_OPEN → S-DONE` 需要 PR 合并，CI 和 PR 状态均是 Keel 的
  * **外部事实源**（docs/09-roadmap.md §3），系统本身不产生它。
  * 真实 git/CI 接入已完成（子任务 7：GitHubProvider + `opts.ci`），
- * 但本文件**刻意**仍由测试注入 CI —— 保留一个不依赖远程仓库与凭据的
+ * 但本文件**刻意**仍由测试分别注入 CI 和 PR 状态 —— 保留一个不依赖远程仓库与凭据的
  * 本地 cheap 版本；真实 GitHub 全链路由
  * `v01-criterion-github.acceptance.test.ts` 验证。注入处显式标记为模拟。
  */
@@ -133,6 +133,11 @@ describe('v0.1 完成判据（完整）', () => {
           ciCalls++
           return 'passed'
         },
+        externalPr: async () => ({
+          state: ciCalls > 0 ? 'merged' : 'open',
+          mergedAt: '2026-08-26T00:00:00Z',
+          mergeSha: null,
+        }),
       },
     )
 

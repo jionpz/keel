@@ -1051,30 +1051,7 @@ export async function answerManagedQuestionWithDecision(
 
       const current = await currentRequestForQuestion(c, id)
       if (current === null) {
-        if (
-          question.status !== 'WAITING_HUMAN' ||
-          task.status !== 'WAITING_HUMAN' ||
-          task.pending_question_id !== id
-        )
-          return err(makeError('CONFLICT', '问题尚未经天问处理，或当前任务已不等待该问题'))
-        await c.query(
-          `UPDATE managed_question SET status='RESOLVED',answer=$2,answered_by='local-operator',answered_at=now() WHERE id=$1`,
-          [id, answer],
-        )
-        await c.query(
-          `UPDATE managed_task SET status='READY',phase='investigate',pending_question_id=NULL,lease_token=NULL,lease_until=NULL,answers=answers || $2::jsonb,updated_at=now() WHERE id=$1`,
-          [taskId, JSON.stringify([{ question: question.question, answer, actor: 'human' }])],
-        )
-        await insertManagedEvent(c, taskId, 'ManagedHumanAnswered', {
-          questionId: id,
-          answer,
-          actor: 'local-operator',
-        })
-        await insertManagedEvent(c, taskId, 'ManagedTaskReady', {
-          source: 'human-answer',
-          questionId: id,
-        })
-        return ok(taskId)
+        return err(makeError('CONFLICT', '问题缺少 DecisionRequest，不能绕过决策台账答复'))
       }
 
       const option = current.options.find((candidate) => candidate.text === answer)

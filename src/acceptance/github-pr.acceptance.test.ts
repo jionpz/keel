@@ -25,7 +25,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { GitWorkspace } from '../fact/git-workspace.js'
-import { GitHubProvider, ownerRepo, readTokenFromEnv } from '../fact/github-provider.js'
+import { readTokenFromEnv } from '../fact/github-auth.js'
+import { GitHubProvider, ownerRepo } from '../fact/github-provider.js'
 
 const token: string | undefined = readTokenFromEnv()
 const remote = process.env.KEEL_TEST_REMOTE_REPO

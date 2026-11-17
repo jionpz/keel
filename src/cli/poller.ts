@@ -15,7 +15,8 @@ import { drainIssueWriteback } from '../control/issue-writeback.js'
 import { preflightModelRouting } from '../execution/model-routing.js'
 import { asRole, closePool } from '../fact/db.js'
 import { resolveGitHubToken, type TokenResolver } from '../fact/github-auth.js'
-import { GitHubProvider, type IssueList, parseRemoteUrl } from '../fact/github-provider.js'
+import { GitHubProvider, type IssueList } from '../fact/github-provider.js'
+import { parseRemoteUrl } from '../fact/github-remote.js'
 import { acquireResidentLock, lockErrorMessage, type ResidentLock } from '../fact/resident-lock.js'
 import {
   createSafeDetail,

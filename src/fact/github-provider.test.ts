@@ -17,12 +17,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   apiRootForHost,
   GitHubProvider,
-  isGitHubHost,
   issueUrlFor,
   ownerRepo,
   parseIssueUrl,
-  parseRemoteUrl,
 } from './github-provider.js'
+import { isGitHubHost, parseRemoteUrl } from './github-remote.js'
 
 let server: Server
 let baseUrl: string

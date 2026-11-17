@@ -82,6 +82,66 @@ async function seed(): Promise<{ repoId: string; taskId: string }> {
 }
 
 describe('managed decision runtime', () => {
+  async function seedQuestionWithoutRequest(
+    status: 'WAITING_TIANWEN' | 'WAITING_HUMAN',
+  ): Promise<{ taskId: string; questionId: string }> {
+    const { taskId } = await seed()
+    const questionId = randomUUID()
+    await asOwner(async (c) => {
+      await c.query(
+        `INSERT INTO managed_question(id,task_id,question,options,status)
+         VALUES($1,$2,'报告语言？','["中文","英文"]'::jsonb,$3)`,
+        [questionId, taskId, status === 'WAITING_HUMAN' ? 'WAITING_HUMAN' : 'OPEN'],
+      )
+      await c.query(
+        `UPDATE managed_task SET status=$2,phase='tianwen',pending_question_id=$3 WHERE id=$1`,
+        [taskId, status, questionId],
+      )
+    })
+    return { taskId, questionId }
+  }
+
+  it('缺少决策台账的旧问题明确失败，不再接纳旧建议协议', async () => {
+    const { taskId, questionId } = await seedQuestionWithoutRequest('WAITING_TIANWEN')
+    const result = await tickManaged(
+      fixed({
+        recommendation: '中文',
+        rationale: '旧建议不构成决议',
+        missing_information: [],
+      }),
+      taskId,
+    )
+    expect(result).toEqual({ ok: true, value: { taskId, status: 'FAILED' } })
+    const task = await getManagedTask(taskId)
+    expect(task).toMatchObject({
+      status: 'FAILED',
+      error: 'DECISION_REQUEST_MISSING',
+      pending_question_id: questionId,
+      answers: [],
+      lease_token: null,
+    })
+    const attempts = await asRole('keel_control', (c) =>
+      c.query('SELECT status,error FROM managed_attempt WHERE task_id=$1', [taskId]),
+    )
+    expect(attempts.rows).toEqual([{ status: 'FAILED', error: 'DECISION_REQUEST_MISSING' }])
+    expect((await listManagedQuestions(taskId))[0]?.answer).toBeNull()
+    expect((await answerManagedQuestion(questionId, '中文')).ok).toBe(false)
+  })
+
+  it('人工答复不能绕过缺失的决策台账唤醒历史问题', async () => {
+    const { taskId, questionId } = await seedQuestionWithoutRequest('WAITING_HUMAN')
+    const result = await answerManagedQuestion(questionId, '中文')
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error.kind).toBe('CONFLICT')
+    expect((await getManagedTask(taskId))?.status).toBe('WAITING_HUMAN')
+    expect((await getManagedTask(taskId))?.answers).toEqual([])
+    expect((await listManagedQuestions(taskId))[0]?.answer).toBeNull()
+    const audit = await asRole('keel_control', (c) =>
+      c.query('SELECT type FROM managed_event WHERE task_id=$1', [taskId]),
+    )
+    expect(audit.rows).toEqual([])
+  })
+
   it('无依据时升级人工，人工答复创建新 revision 并唤醒任务', async () => {
     const { taskId } = await seed()
     await tickManaged(

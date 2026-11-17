@@ -15,7 +15,8 @@
 
 import type { Result } from '../contracts/errors.js'
 import { gitAuthSecrets, readTokenFromEnv, redactSecrets } from '../fact/github-auth.js'
-import { type IssueList, issueUrlFor, parseRemoteUrl } from '../fact/github-provider.js'
+import { type IssueList, issueUrlFor } from '../fact/github-provider.js'
+import { parseRemoteUrl } from '../fact/github-remote.js'
 import { isTerminal, type TaskStatus } from '../shared/ids.js'
 import {
   parseIssueNumber,
