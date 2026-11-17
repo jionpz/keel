@@ -34,13 +34,15 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rename,
   rm,
   rmdir,
+  unlink,
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { promisify } from 'node:util'
 import { err, makeError, ok, type Result } from '../contracts/errors.js'
 import {
@@ -439,17 +441,33 @@ export class GitWorkspace {
         'objects',
         '--git-path',
         'config',
+        '--git-path',
+        'config.worktree',
         '--symbolic-full-name',
         'HEAD',
       ])
-      const [hooks, objects, config, branch] = metadata.trimEnd().split('\n')
+      const [hooks, objects, config, worktreeConfig, branch] = metadata.trimEnd().split('\n')
       if (
         hooks === undefined ||
         objects === undefined ||
         config === undefined ||
+        worktreeConfig === undefined ||
         branch === undefined
       ) {
         throw new Error('历史 hook 缺少仓库路径或分支信息')
+      }
+      const { stdout: worktreeConfigEnabled } = await this.execGit([
+        '-C',
+        wt,
+        'config',
+        '--type=bool',
+        '--default=false',
+        '--get',
+        'extensions.worktreeConfig',
+      ])
+      const configs = [config]
+      if (worktreeConfigEnabled.trim() === 'true' && existsSync(worktreeConfig)) {
+        configs.push(worktreeConfig)
       }
       // refs/index 独立，只读复用对象；同名分支指向父提交也不会移动原任务分支。
       await this.execGit([
@@ -458,10 +476,10 @@ export class GitWorkspace {
         ...(branch === 'HEAD' ? [] : [`--initial-branch=${branch.replace(/^refs\/heads\//, '')}`]),
         snapshot,
       ])
-      // 保留原 linked worktree 可读的仓库配置，但工作树路径与 bare 标记属于快照。
+      // 公共配置在前，启用的 worktree 配置在后；最后钉住快照路径与 bare 标记。
       await appendFile(
         join(snapshot, '.git', 'config'),
-        `\n[include]\n\tpath = ${JSON.stringify(config.trim())}\n` +
+        configs.map((path) => `\n[include]\n\tpath = ${JSON.stringify(path)}\n`).join('') +
           `[core]\n\tbare = false\n\tworktree = ${JSON.stringify(snapshot)}\n`,
       )
       await writeFile(
@@ -490,14 +508,31 @@ export class GitWorkspace {
         '--directory',
         '-z',
       ])
-      // 复制而非链接依赖目录，避免 hook 的写入污染原工作树；历史跟踪内容优先。
+      // 解引用后复制依赖（含外部链接），不留下通向原依赖的写入路径；历史跟踪内容优先。
+      // 悬空/循环链接等无法复制的情况由外层拒绝，不跳过校验或回退到原目录。
       for (const path of ignored.split('\0').filter(Boolean)) {
         await cp(join(wt, path), join(snapshot, path), {
           recursive: true,
           force: false,
-          verbatimSymlinks: true,
+          dereference: true,
           mode: constants.COPYFILE_FICLONE,
         })
+      }
+      // read-tree 也会还原已跟踪的外部链接；它们不在 ignored 列表中，同样不能写回原依赖。
+      const { stdout: tracked } = await this.execGit(['-C', snapshot, 'ls-files', '--stage', '-z'])
+      const snapshotRoot = await realpath(snapshot)
+      for (const entry of tracked.split('\0').filter((entry) => entry.startsWith('120000 '))) {
+        const link = join(snapshot, entry.slice(entry.indexOf('\t') + 1))
+        const target = await realpath(link)
+        if (target === snapshotRoot || target.startsWith(`${snapshotRoot}${sep}`)) continue
+        const copy = join(dir, 'dependency')
+        await cp(link, copy, {
+          recursive: true,
+          dereference: true,
+          mode: constants.COPYFILE_FICLONE,
+        })
+        await unlink(link)
+        await rename(copy, link)
       }
       return await this.runCommitMessageHook(snapshot, message, hooks.trim())
     } catch (e) {
