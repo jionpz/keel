@@ -53,8 +53,7 @@ describe('parseArgs(零依赖 argv 解析)', () => {
 })
 
 /**
- * 分发与 HELP 在 `run.ts`(index.ts 只剩进程入口) —— 仍然读源码而非 import:
- * import 会在模块顶层真的跑 CLI 逻辑。
+ * 分发与 HELP 在 `run.ts`(index.ts 只剩进程入口)。
  *
  * 读源码是刻意的：断言一份手抄的 HELP 副本包含哪些命令，等于测试自己写的字面量,
  * 加了 case 忘了改帮助时照样是绿的。这里比对的是 run.ts 里**实际**的两份清单。
@@ -70,15 +69,12 @@ describe('命令分发 · switch 分支与 HELP 清单不得漂移', () => {
       .sort()
   }
 
-  /** HELP 文本「命令:」段每行的首个 token */
+  /** 读取 HELP 中缩进的命令行，分组标题与说明文字不参与命令清单。 */
   function documentedCommands(): string[] {
-    // 行首锚定:顶部文档注释里的「 * 子命令:」不是 HELP 模板,不能误抓
-    const block = source.match(/^命令:\n([\s\S]*?)\n\n选项:/m)
+    const block = source.match(/^当前工作流:\n([\s\S]*?)\n\n选项:/m)
     expect(block?.[1]).toBeDefined()
-    return (block?.[1] ?? '')
-      .split('\n')
-      .map((line) => line.trim().split(/\s/)[0] ?? '')
-      .filter((c) => c !== '')
+    return [...(block?.[1] ?? '').matchAll(/^  ([a-z][a-z-]*)[ \t]/gm)]
+      .map((match) => match[1] as string)
       .sort()
   }
 
