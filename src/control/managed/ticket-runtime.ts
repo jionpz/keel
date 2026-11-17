@@ -571,17 +571,20 @@ interface WorkflowNodeReference {
   readonly external_issue: string | null
 }
 
-interface ExecuteRecovery {
+interface DecisionRecoveryBinding {
+  readonly decisionRequestId?: string
+  readonly decisionRequestRevision?: number
+  readonly decisionResolutionId?: string
+  readonly decisionContextDigest?: string
+}
+
+interface ExecuteRecovery extends DecisionRecoveryBinding {
   readonly previousAttempt: number
   readonly previousInputCommit: string
   readonly inputCommit: string
   readonly worktreeState: 'dirty' | 'committed' | 'committed_and_dirty'
   readonly changedFiles: readonly string[]
   readonly dirtyDigest: string
-  readonly decisionRequestId?: string
-  readonly decisionRequestRevision?: number
-  readonly decisionResolutionId?: string
-  readonly decisionContextDigest?: string
 }
 
 const STAGE_PREFLIGHT_CLEAN_DETAIL = 'ticket worktree 在阶段开始前必须干净'
@@ -625,6 +628,7 @@ async function timeoutRecoveryForExecute(
   workflowNode: WorkflowNodeReference | null,
   expectedInput: string,
   worktree: TicketWorktreeState,
+  decisionBinding?: DecisionRecoveryBinding,
 ): Promise<Result<ExecuteRecovery | null>> {
   if (stage !== 'execute') return ok(null)
   const executeHistory = previous
@@ -674,6 +678,24 @@ async function timeoutRecoveryForExecute(
       )
         continue
       return err(makeError('WORKSPACE_ERROR', 'RUN_TIMEOUT 后出现不连续的执行尝试，拒绝续跑'))
+    }
+    if (event.type === 'ManagedTicketDecisionOverridden') {
+      if (
+        decisionBinding?.decisionRequestId !== undefined &&
+        decisionBinding.decisionRequestRevision !== undefined &&
+        decisionBinding.decisionResolutionId !== undefined &&
+        decisionBinding.decisionContextDigest !== undefined &&
+        payload.requestId === decisionBinding.decisionRequestId &&
+        payload.priorRevision === decisionBinding.decisionRequestRevision - 1 &&
+        payload.newRevision === decisionBinding.decisionRequestRevision &&
+        payload.resolutionId === decisionBinding.decisionResolutionId &&
+        payload.contextDigest === decisionBinding.decisionContextDigest &&
+        payload.controlGeneration === Number(claim.task.control_generation) &&
+        payload.optionId === 'option-2' &&
+        payload.disposition === 'human_confirmed'
+      )
+        continue
+      return err(makeError('WORKSPACE_ERROR', 'RUN_TIMEOUT 后出现无关的决策覆盖，不能确认恢复授权'))
     }
     if (event.type === 'ManagedTicketPaused') continue
     return err(
@@ -753,8 +775,6 @@ async function decisionRecoveryForExecute(
   const result = eventPayload(blocked.result)
   if (result.status !== 'blocked' || eventPayload(result.decision).kind !== 'recovery')
     return ok(null)
-  if (blocked.error === 'UNAUTHORIZED_ACTION' && blockedIndex !== previous.length - 1)
-    return err(makeError('PERMISSION_DENIED', '请求动作的一次批准已使用，失败后需重新确认'))
   const recordedGit = eventPayload(eventPayload(blocked.evidence).git)
   if (
     eventPayload(eventPayload(claim.task.handoff).last_decision).control_generation !==
@@ -763,8 +783,8 @@ async function decisionRecoveryForExecute(
   )
     return err(makeError('PERMISSION_DENIED', '恢复决定的控制代次或授权依据已失效'))
   const accepted = await asRole('keel_control', (c) =>
-    c.query(
-      `SELECT e.seq FROM managed_ticket_event e
+    c.query<{ seq: string }>(
+      `SELECT e.seq::text AS seq FROM managed_ticket_event e
        JOIN managed_decision_request r ON r.id::text=e.payload->>'requestId'
        JOIN managed_decision_resolution res ON res.request_id=r.id
          AND res.request_revision=r.revision
@@ -788,8 +808,64 @@ async function decisionRecoveryForExecute(
       ],
     ),
   )
-  if (accepted.rowCount !== 1)
+  const acceptedDecision = accepted.rows[0]
+  if (accepted.rowCount !== 1 || acceptedDecision === undefined)
     return err(makeError('WORKSPACE_ERROR', '恢复点缺少对应阶段已接纳的恢复决定'))
+  if (blocked.error === 'UNAUTHORIZED_ACTION' && blockedIndex !== previous.length - 1) {
+    const latestFailure = previous.at(-1)
+    if (latestFailure === undefined)
+      return err(makeError('WORKSPACE_ERROR', '后续失败后缺少可绑定的最新执行尝试'))
+    const failureEvent = await asRole('keel_control', (c) =>
+      c.query<{ seq: string }>(
+        `SELECT seq::text AS seq FROM managed_ticket_event
+         WHERE task_id=$1 AND type='ManagedTicketStageFailed'
+           AND payload->>'stageId'=$2
+         ORDER BY seq DESC LIMIT 1`,
+        [claim.task.id, latestFailure.id],
+      ),
+    )
+    const failureSeq = failureEvent.rows[0]?.seq
+    const approval = await asRole('keel_control', (c) =>
+      c.query<{ seq: string }>(
+        `SELECT e.seq::text AS seq FROM managed_ticket_event e
+         JOIN managed_decision_request r ON r.id::text=e.payload->>'requestId'
+         JOIN managed_decision_resolution res ON res.request_id=r.id
+           AND res.request_revision=r.revision
+         WHERE e.task_id=$1 AND e.type='ManagedTicketDecisionOverridden'
+           AND r.id=$2 AND r.revision::text=e.payload->>'newRevision'
+           AND r.revision=$3 AND r.status='RESOLVED'
+           AND r.managed_ticket_task_id=$1 AND r.workflow_digest=$4
+           AND res.id=$5 AND res.context_digest=$6
+           AND res.disposition='human_confirmed' AND res.answer_option_id='option-2'
+           AND e.payload->>'priorRevision'=$7
+           AND e.payload->>'resolutionId'=res.id::text
+           AND e.payload->>'contextDigest'=$6
+           AND e.payload->>'controlGeneration'=$8
+         ORDER BY e.seq`,
+        [
+          claim.task.id,
+          decision.request_id,
+          decision.request_revision,
+          claim.task.package_digest,
+          decision.resolution_id,
+          decision.digest,
+          String(decision.request_revision - 1),
+          String(claim.task.control_generation),
+        ],
+      ),
+    )
+    const approvalSeq = approval.rows[0]?.seq
+    if (
+      failureEvent.rowCount !== 1 ||
+      failureSeq === undefined ||
+      approval.rowCount !== 1 ||
+      approvalSeq === undefined ||
+      BigInt(approvalSeq) <= BigInt(failureSeq)
+    )
+      return err(
+        makeError('PERMISSION_DENIED', '请求动作的一次批准已使用，后续失败后必须重新人工确认'),
+      )
+  }
   const decisionBinding = {
     decisionRequestId: decision.request_id,
     decisionRequestRevision: decision.request_revision,
@@ -815,7 +891,19 @@ async function decisionRecoveryForExecute(
   if (previous.at(-1)?.error === 'RUN_TIMEOUT') {
     if (!(await isAncestor(worktree.path, checkpointHead, worktree.head)))
       return err(makeError('WORKSPACE_ERROR', '超时恢复不能丢弃已批准的恢复提交'))
-    return ok(null)
+    const timeout = await timeoutRecoveryForExecute(
+      claim,
+      'execute',
+      previous,
+      node,
+      expectedInput,
+      worktree,
+      decisionBinding,
+    )
+    if (!timeout.ok) return timeout
+    if (timeout.value === null)
+      return err(makeError('WORKSPACE_ERROR', '重新批准后仍找不到可续跑的执行恢复点'))
+    return ok({ ...timeout.value, ...decisionBinding })
   }
   if (recordedGit.clean === true && checkpointHead === expectedInput) {
     const liveChanged = await workingTreeChangedFiles(worktree.path, expectedInput)

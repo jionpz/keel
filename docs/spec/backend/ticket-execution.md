@@ -119,7 +119,11 @@ result/evidence 摘要仍有效，全部改动仍在节点 scope 内。决定后
 `human_confirmed` 决议选择“批准本次继续（仅一次）”，才可在上述全部现场校验后
 恢复 execute；委托决定不能启用此路径，`MUST_STOP` 也不纳入普通恢复。
 这次批准只允许启动一次 execute，失败后不能因 Harness 错误或超时隐式重试，
-必须重新确认。恢复本身不执行请求动作、不增加工具权限。阶段上下文同步下发持久决议的
+必须重新确认。若批准后的 execute 再次超时，操作员须覆盖同一请求并生成新的
+`human_confirmed` revision；控制层以该 revision 的覆盖事件序号晚于最新失败事件
+作为重新授权依据，并只把精确绑定当前 handoff、resolution、context digest 与控制代次
+的 `ManagedTicketDecisionOverridden` 纳入超时恢复事件。旧批准事件早于后续失败时仍
+fail closed。恢复本身不执行请求动作、不增加工具权限。阶段上下文同步下发持久决议的
 `rationale`，使人工覆盖的具体理由与限制不会只留在台账中；它不替代固定包、
 scope、权限和阶段门禁。恢复阶段的 input digest 与事件还绑定精确的 request
 revision、resolution id 与 context digest；即使恢复点没有 Git 改动，也必须先通过

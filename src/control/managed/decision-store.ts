@@ -1497,6 +1497,9 @@ export async function overrideManagedTicketDecision(
       reason: reason.trim(),
       disposition: resolution.disposition,
       taskStatus,
+      resolutionId: resolution.id,
+      contextDigest: resolution.context_digest,
+      controlGeneration: Number(task.control_generation) + 1,
       ...boundary,
     })
     return ok({ requestId, optionId, taskStatus, resolution })
