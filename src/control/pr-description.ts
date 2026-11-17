@@ -17,6 +17,12 @@ import {
 } from '../shared/commit-policy.js'
 import { prBodyWithIssueReferences } from './pr-body.js'
 
+/**
+ * 正文主体上限：legacy 与 managed 共用。超出时先截断主体，兼容引用与机器标记
+ * 仍在截断之后追加；事实正文来自没有 maxLength 约束的自由文本，必须设上限。
+ */
+export const PULL_REQUEST_BODY_MAX_LENGTH = 12000
+
 export interface PullRequestSection {
   readonly heading: string
   readonly content: string

@@ -23,7 +23,11 @@ import { branchFor, type GitWorkspace, type PreparedProject } from '../../fact/g
 import { commitPolicyFromRow } from '../../shared/commit-policy.js'
 import type { Stage } from '../../shared/ids.js'
 import { TIMER_DURATIONS } from '../../shared/timers.js'
-import { pullRequestBody, pullRequestTitle } from '../pr-description.js'
+import {
+  PULL_REQUEST_BODY_MAX_LENGTH,
+  pullRequestBody,
+  pullRequestTitle,
+} from '../pr-description.js'
 import { loadLegacyPullRequestFacts } from '../pr-description-facts.js'
 import type { SideEffect, TransitionEvent } from '../transition/types.js'
 import { loadPolicyFacts } from './facts.js'
@@ -608,6 +612,7 @@ async function createPullRequest(c: PoolClient, ctx: EffectContext): Promise<App
     sections: facts.sections,
     remoteUrl: row.remote_url,
     externalRefs: feedback.rows.map((entry) => entry.external_ref),
+    maxBodyLength: PULL_REQUEST_BODY_MAX_LENGTH,
   })
   const title = pullRequestTitle({
     issueTitle: row.title,

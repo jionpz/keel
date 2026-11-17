@@ -30,6 +30,7 @@ import { asOwner, asRole, closePool } from '../../fact/db.js'
 import { branchFor, GitWorkspace, type PreparedProject } from '../../fact/git-workspace.js'
 import { RuleBasedPolicyEngine } from '../policy/engine.js'
 import { DEFAULT_RULESET } from '../policy/ruleset.js'
+import { PULL_REQUEST_BODY_MAX_LENGTH } from '../pr-description.js'
 import type { TransitionEvent } from '../transition/types.js'
 import { WorkflowDriver } from './driver.js'
 import { applyEffects } from './effects.js'
@@ -358,6 +359,31 @@ describe('CreatePullRequest 副作用记账', () => {
     expect(body).toContain('来源：artifact:rfc@1, artifact:stage_outcome/develop@1')
     expect(body).toContain('来源：artifact:stage_outcome/qa@1, artifact:stage_outcome/review@1')
     expect(body).toContain('来源：artifact:state@1')
+  })
+
+  it('RFC 自由文本超长时截断正文主体，仍保留引用与机器标记', async () => {
+    const { taskId, repoId } = await seedTaskWithRemote()
+    // rfc.problem 在 schema 里没有 maxLength，长文本必须由渲染器截断
+    await seedArtifact(taskId, 'rfc', '', { title: 'PR 描述', problem: 'x'.repeat(20000) })
+    await seedGithubFeedback(taskId, ['acme/other#7'])
+    const git = new GitWorkspace({ root })
+    const project = await prepareFor(git, repoId)
+    const gateway = firstTimeCreated()
+    const driver = new WorkflowDriver(
+      new RuleBasedPolicyEngine(DEFAULT_RULESET),
+      { git, repoId, project },
+      gateway,
+    )
+    const r = await driver.advance(taskId, { type: 'RunSucceeded', stage: 'review' }, NOW)
+    expect(r.ok && r.value.to === 'S-PR_OPEN').toBe(true)
+
+    const body = gateway.calls[0]?.body ?? ''
+    // 主体截断到共享上限，引用与机器标记在截断之后追加，不会被截掉
+    expect(body.length).toBeLessThanOrEqual(PULL_REQUEST_BODY_MAX_LENGTH + 200)
+    expect(body.includes('x'.repeat(PULL_REQUEST_BODY_MAX_LENGTH))).toBe(false)
+    expect(body.includes('x'.repeat(5000))).toBe(true)
+    expect(body.startsWith(`Keel Task ${taskId}\n\n## 问题`)).toBe(true)
+    expect(body.endsWith(`Refs acme/other#7\n<!-- keel:v1 task=${taskId} -->`)).toBe(true)
   })
 
   it('配置提交模板后按模板生成 PR 标题', async () => {

@@ -29,6 +29,7 @@ import { canonicalJson, sha256CanonicalJson, sha256Text } from '../../shared/can
 import { COMMIT_POLICY_COLUMNS, commitPolicyFromRow } from '../../shared/commit-policy.js'
 import {
   commitFieldsFromHeader,
+  PULL_REQUEST_BODY_MAX_LENGTH,
   type PullRequestSection,
   pullRequestBody,
   pullRequestTitle,
@@ -262,7 +263,7 @@ function ticketPrBody(input: {
     sections: managedPullRequestSections(input),
     remoteUrl: input.remoteUrl,
     externalRefs: input.externalIssue === null ? [] : [input.externalIssue],
-    maxBodyLength: 12000,
+    maxBodyLength: PULL_REQUEST_BODY_MAX_LENGTH,
   })
 }
 
