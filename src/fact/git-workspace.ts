@@ -325,7 +325,7 @@ export class GitWorkspace {
       )
       const { stdout: sha } = await this.execGit(['-C', wt, 'rev-parse', 'HEAD'])
       if (Object.keys(policy).length > 0) {
-        const actual = await this.validateCommit(taskId, sha.trim(), policy, false)
+        const actual = await this.validateCommit(taskId, sha.trim(), policy, message)
         if (!actual.ok) return actual
       }
       return ok(sha.trim())
@@ -352,7 +352,7 @@ export class GitWorkspace {
         `${baseSha}..HEAD`,
       ])
       for (const sha of stdout.trim().split('\n').filter(Boolean)) {
-        const checked = await this.validateCommit(taskId, sha, policy, true)
+        const checked = await this.validateCommit(taskId, sha, policy)
         if (!checked.ok) return checked
       }
       return ok(undefined)
@@ -365,7 +365,7 @@ export class GitWorkspace {
     taskId: string,
     sha: string,
     policy: RepoCommitPolicy,
-    runHook: boolean,
+    expectedMessage?: string,
   ): Promise<Result<void>> {
     const { stdout } = await this.execGit([
       '-C',
@@ -390,9 +390,71 @@ export class GitWorkspace {
     const message = body.join('\n').replace(/\n+$/, '')
     const formatted = validateStoredCommitMessage(policy, message)
     if (!formatted.ok) return formatted
-    return policy.commit_message_check === 'hook' && !runHook
-      ? ok(undefined)
-      : this.checkCommitMessage(taskId, message, policy.commit_message_check)
+    if (policy.commit_message_check === 'hook') {
+      if (expectedMessage === undefined) return this.checkHistoricalCommitHook(taskId, sha, message)
+      // 真正的 git commit 还会再次运行 hook；必须比对落盘消息，不能只信预检。
+      const storedMessage = raw.stdout.slice(raw.stdout.indexOf('\n\n') + 2)
+      if (storedMessage !== `${expectedMessage.replace(/\n*$/, '')}\n`) {
+        return err(
+          commitMessageRejection('commit-msg hook 修改了消息；请由 Developer 更新提交字段后重试'),
+        )
+      }
+      return ok(undefined)
+    }
+    return this.checkCommitMessage(taskId, message, policy.commit_message_check)
+  }
+
+  /** 在独立快照中还原 HEAD=父提交、index/文件=被检提交，不触碰当前暂存区。 */
+  private async checkHistoricalCommitHook(
+    taskId: string,
+    sha: string,
+    message: string,
+  ): Promise<Result<void>> {
+    const wt = this.worktreePath(taskId)
+    const dir = await mkdtemp(join(tmpdir(), 'keel-history-hook-'))
+    const snapshot = join(dir, 'worktree')
+    let added = false
+    try {
+      const { stdout: hooks } = await this.execGit([
+        '-C',
+        wt,
+        'rev-parse',
+        '--path-format=absolute',
+        '--git-path',
+        'hooks',
+      ])
+      const { stdout: parents } = await this.execGit([
+        '-C',
+        wt,
+        'rev-list',
+        '--parents',
+        '-n',
+        '1',
+        sha,
+      ])
+      const parent = parents.trim().split(' ')[1]
+      await this.execGit(['-C', wt, 'worktree', 'add', '--detach', '--no-checkout', snapshot, sha])
+      added = true
+      if (parent === undefined) {
+        // 根提交没有父提交，使用未出生的 HEAD，使 cached diff 与首次提交一致。
+        await this.execGit([
+          '-C',
+          snapshot,
+          'symbolic-ref',
+          'HEAD',
+          `refs/heads/${dir.split('/').pop()}`,
+        ])
+      } else {
+        await this.execGit(['-C', snapshot, 'update-ref', '--no-deref', 'HEAD', parent])
+      }
+      await this.execGit(['-C', snapshot, 'read-tree', '--reset', '-u', sha])
+      return await this.runCommitMessageHook(snapshot, message, hooks.trim())
+    } catch (e) {
+      return err(commitMessageRejection(`历史 commit-msg hook 复检失败：${this.redact(e)}`))
+    } finally {
+      if (added) await this.execGit(['-C', wt, 'worktree', 'remove', '--force', snapshot])
+      await rmdir(dir)
+    }
   }
 
   async isDirty(taskId: string): Promise<Result<boolean>> {
@@ -416,11 +478,28 @@ export class GitWorkspace {
         return err(commitMessageRejection(`header 正则无效：${this.redact(e)}`))
       }
     }
+    return this.runCommitMessageHook(this.worktreePath(taskId), message)
+  }
+
+  private async runCommitMessageHook(
+    wt: string,
+    message: string,
+    hooksPath?: string,
+  ): Promise<Result<void>> {
     const dir = await mkdtemp(join(tmpdir(), 'keel-commit-msg-'))
     const file = join(dir, 'COMMIT_EDITMSG')
     try {
       await writeFile(file, `${message}\n`)
-      await this.execGit(['-C', this.worktreePath(taskId), 'hook', 'run', 'commit-msg', '--', file])
+      await this.execGit([
+        '-C',
+        wt,
+        ...(hooksPath === undefined ? [] : ['-c', `core.hooksPath=${hooksPath}`]),
+        'hook',
+        'run',
+        'commit-msg',
+        '--',
+        file,
+      ])
       if ((await readFile(file, 'utf8')) !== `${message}\n`) {
         return err(
           commitMessageRejection('commit-msg hook 修改了消息；请由 Developer 更新提交字段后重试'),

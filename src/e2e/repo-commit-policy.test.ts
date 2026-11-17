@@ -273,6 +273,25 @@ describe('仓库提交门禁的真实编排', () => {
     },
   )
 
+  it('依赖暂存区的 hook 在后续 QA/review 历史复检通过后才交付', async () => {
+    const fixture = await setup('hook', 0)
+    writeFileSync(
+      join(fixture.project.gitDir, 'hooks', 'commit-msg'),
+      '#!/bin/sh\ngit diff --cached --name-only | grep -q "^feature.txt$" || exit 7\n' +
+        'test "$(git show :feature.txt)" = "$(cat feature.txt)" || exit 8\n' +
+        'grep -q "^fix(fact):" "$1" || exit 9\n',
+    )
+    const result = await runTaskToCompletion(fixture.taskId, fixture.deps)
+    expect(result.ok, result.ok ? '' : result.error.detail).toBe(true)
+    expect(result.ok && result.value.finalStatus).toBe('S-PR_OPEN')
+    expect(fixture.adapter.developerPrompts).toHaveLength(1)
+    expect((await evidence(fixture.taskId)).rejected).toHaveLength(0)
+    expect(fixture.pullRequests()).toBe(1)
+    expect(git(origin, 'rev-parse', branchFor(fixture.taskId))).toBe(
+      git(fixture.workspaceGit.preservePath(fixture.taskId), 'rev-parse', 'HEAD'),
+    )
+  })
+
   it('run 内三次拒绝后重新派发 Developer，失败原因进入下一 run 的 prompt', async () => {
     const fixture = await setup('^fix\\(fact\\): .+$', 3)
     const result = await runTaskToCompletion(fixture.taskId, fixture.deps)

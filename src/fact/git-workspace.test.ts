@@ -571,6 +571,93 @@ describe('仓库提交身份与消息校验', () => {
     expect(result.ok, result.ok ? '' : result.error.detail).toBe(true)
     expect(log(path, '%s')).toBe('fix: 修复\n')
   })
+  it('历史 hook 按各提交的父提交、暂存区和文件视图复检，不受当前改动影响', async () => {
+    const { g, p, taskId, path } = await setup()
+    const policy = { commit_message_check: 'hook' }
+    hook(
+      path,
+      'git diff --cached --name-only | grep -q "^feature.txt$" || exit 7\n' +
+        'test "$(git show :feature.txt)" = "$(cat feature.txt)" || exit 8\n' +
+        'grep -q "^fix:" "$1" || exit 9',
+    )
+    execFileSync('git', ['-C', path, 'config', 'core.hooksPath', '.hooks'])
+    expect((await g.commitAll(taskId, 'fix: first', policy)).ok).toBe(true)
+    expect(await g.validateCommitHistory(taskId, p.baseSha, policy)).toEqual({
+      ok: true,
+      value: undefined,
+    })
+    writeFileSync(join(path, 'feature.txt'), '后续合规改动\n')
+    expect((await g.commitAll(taskId, 'fix: second', policy)).ok).toBe(true)
+    writeFileSync(join(path, 'feature.txt'), '暂存但未提交\n')
+    execFileSync('git', ['-C', path, 'add', 'feature.txt'])
+    writeFileSync(join(path, 'feature.txt'), '工作区尚未暂存\n')
+    const before = headOf(path)
+    const index = execFileSync('git', ['-C', path, 'show', ':feature.txt'], { encoding: 'utf8' })
+    const worktrees = execFileSync('git', ['-C', path, 'worktree', 'list', '--porcelain'])
+    expect(await g.validateCommitHistory(taskId, p.baseSha, policy)).toEqual({
+      ok: true,
+      value: undefined,
+    })
+    expect(headOf(path)).toBe(before)
+    expect(execFileSync('git', ['-C', path, 'show', ':feature.txt'], { encoding: 'utf8' })).toBe(
+      index,
+    )
+    expect(readFileSync(join(path, 'feature.txt'), 'utf8')).toBe('工作区尚未暂存\n')
+    expect(execFileSync('git', ['-C', path, 'worktree', 'list', '--porcelain'])).toEqual(worktrees)
+  })
+  it('历史 hook 支持没有父提交的根提交', async () => {
+    const { g, p, taskId, path } = await setup()
+    execFileSync('git', ['-C', path, 'checkout', '--orphan', 'history-root'])
+    hook(
+      path,
+      'if git rev-parse --verify HEAD >/dev/null 2>&1; then exit 7; fi\n' +
+        'git diff --cached --name-only | grep -q "^feature.txt$" || exit 8',
+    )
+    const policy = { commit_message_check: 'hook' }
+    expect((await g.commitAll(taskId, 'fix: root', policy)).ok).toBe(true)
+    expect(await g.validateCommitHistory(taskId, p.baseSha, policy)).toEqual({
+      ok: true,
+      value: undefined,
+    })
+  })
+  it('历史 hook 的拒绝和消息改写仍生效，失败后清理快照', async () => {
+    const { g, p, taskId, path } = await setup()
+    expect((await g.commitAll(taskId, 'bad')).ok).toBe(true)
+    hook(path, 'grep -q "^fix:" "$1" || { echo "历史 header 不合规" >&2; exit 9; }')
+    const before = execFileSync('git', ['-C', path, 'worktree', 'list', '--porcelain'])
+    const policy = { commit_message_check: 'hook' }
+    expect(await g.validateCommitHistory(taskId, p.baseSha, policy)).toMatchObject({
+      ok: false,
+      error: { detail: expect.stringContaining('历史 header 不合规') },
+    })
+    writeFileSync(join(path, '.hooks', 'commit-msg'), '#!/bin/sh\necho "changed" >> "$1"\n')
+    expect(await g.validateCommitHistory(taskId, p.baseSha, policy)).toMatchObject({
+      ok: false,
+      error: { detail: expect.stringContaining('hook 修改了消息') },
+    })
+    expect(execFileSync('git', ['-C', path, 'worktree', 'list', '--porcelain'])).toEqual(before)
+  })
+  it('真实 commit-msg hook 改写为另一条合规模板消息仍拒绝', async () => {
+    const { g, taskId, path } = await setup()
+    const policy: RepoCommitPolicy = {
+      commit_message_check: 'hook',
+      commit_message_template: '{type}({scope}): {summary}',
+      commit_types: ['fix'],
+      commit_scopes: ['fact'],
+    }
+    const original = `fix(fact): original\n\nKeel-Run: ${taskId} stage=develop`
+    hook(
+      path,
+      'case "$1" in *keel-commit-msg-*) exit 0 ;; esac\n' +
+        'sed "s/original/rewritten/" "$1" > "$1.next"\nmv "$1.next" "$1"',
+    )
+    const result = await g.commitAll(taskId, original, policy)
+    expect(result).toMatchObject({
+      ok: false,
+      error: { detail: expect.stringContaining('hook 修改了消息') },
+    })
+    expect(log(path, '%B')).toBe(`${original.replace('original', 'rewritten')}\n\n`)
+  })
   it('缺 hook 和改写消息均拒绝，不能静默通过', async () => {
     const { g, taskId, path } = await setup()
     expect((await g.commitAll(taskId, 'fix: x', { commit_message_check: 'hook' })).ok).toBe(false)

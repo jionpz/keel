@@ -79,12 +79,17 @@ pnpm keel register-repo https://github.com/owner/repo.git \
 - `commit_message_check` 为 JavaScript Unicode 正则（只匹配 header，完整匹配需自行加 `^…$`）
   或字面量 `hook`。提交前先暂存全部改动，再通过 `git hook run commit-msg` 在 ticket worktree 中执行，
   遵从仓库 `core.hooksPath`；缺少 hook、hook 非零退出或改写待校验消息均拒绝。
-  正常 `git commit` 自身的 hooks 仍生效。hook 应保持可重复执行。
+  正常 `git commit` 自身的 hooks 仍生效；提交后逐字比较真实消息与提交前消息，
+  即使改写后的消息仍符合模板也拒绝。此时 Git 已创建本地提交，拒绝不会自动回滚历史。
+  hook 应保持可重复执行。
 
 配置仓库的提交与校验发生在 run 的 `RUNNING` 围栏内，早于 `SUCCEEDED` 和 artifact 落库。
-模板、枚举、长度和普通正文行在创建提交前核对；拒绝时 HEAD 不前进，改动保留以便重试。
+模板、枚举、长度和普通正文行在创建提交前核对；预检拒绝时 HEAD 不前进，改动保留以便重试。
 提交前检查任务基线以来的全部新增 commit（包括 Harness 自行提交的 commit），验证身份、
 无签名、模板、枚举、正文和正则/hook，避免用干净工作树或后续 commit 绕过拒绝。
+历史 hook 在临时 worktree 中运行：HEAD 指向被检提交的第一父提交（根提交使用未出生 HEAD），
+暂存区与文件内容还原为被检提交，hook 路径取当前仓库配置的绝对路径。
+成功或拒绝后均清理快照，保留原工作树的 HEAD、暂存和未暂存改动；缺 hook、非零退出和消息改写仍拒绝。
 无配置仓库沿用原提交时机、argv 和环境参数。
 
 提交消息拒绝使用 `SCHEMA_VIOLATION`，detail 前缀为 `commit_message_rejected:`。
