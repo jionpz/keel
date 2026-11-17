@@ -79,6 +79,7 @@ pnpm keel register-repo https://github.com/owner/repo.git \
 - `commit_message_check` 为 JavaScript Unicode 正则（只匹配 header，完整匹配需自行加 `^…$`）
   或字面量 `hook`。提交前先暂存全部改动，再通过 `git hook run commit-msg` 在 ticket worktree 中执行，
   遵从仓库 `core.hooksPath`；缺少 hook、hook 非零退出或改写待校验消息均拒绝。
+  工作树无改动时直接返回空提交结果，不运行依赖暂存区的预检 hook；现存提交由历史校验覆盖。
   预检 hook 使用本次提交的实际身份：配置 `commit_author` 时取该身份，否则取默认
   `Keel <keel@localhost>`；`user.*`、`author.*`、`committer.*` 与
   `GIT_AUTHOR_*` / `GIT_COMMITTER_*` 同时提供，hook 不应把仓库当前 `user.*` 当作提交身份。

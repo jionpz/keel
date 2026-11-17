@@ -312,11 +312,14 @@ export class GitWorkspace {
       // 在产生 commit 之前核对模板，避免先留下坏提交再让下一轮修复历史。
       const formatted = validateStoredCommitMessage(policy, message)
       if (!formatted.ok) return formatted
+      // 干净工作树没有待提交内容；历史校验已覆盖现存提交。hook 依赖暂存区，
+      // 不能在合规的 no-op 上运行并被误判为 commit_message_rejected；不依赖
+      // 暂存区的消息校验保持原语义。
+      if (status.trim() === '' && policy.commit_message_check === 'hook') return ok(null)
       // hook 与真正 git commit 一样看到待提交的暂存区；缺省路径的 argv 顺序不变。
-      if (policy.commit_message_check === 'hook' && status.trim() !== '') {
+      if (policy.commit_message_check === 'hook') {
         await this.execGit(['-C', wt, 'add', '-A'])
       }
-      // 无配置时保留旧 noop 路径；有校验时即使干净也不能用 noop 绕过消息检查。
       const identity = commitIdentityFor(policy.commit_author)
       const checked = await this.checkCommitMessage(
         taskId,

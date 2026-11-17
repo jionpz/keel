@@ -572,6 +572,23 @@ describe('仓库提交身份与消息校验', () => {
     expect(result.ok, result.ok ? '' : result.error.detail).toBe(true)
     expect(log(path, '%s')).toBe('fix: 修复\n')
   })
+  it('无改动时不运行依赖暂存区的 commit-msg hook', async () => {
+    const { g, taskId, path } = await setup()
+    const hookDir = join(root, 'clean-hook')
+    mkdirSync(hookDir)
+    writeFileSync(
+      join(hookDir, 'commit-msg'),
+      '#!/bin/sh\ngit diff --cached --name-only | grep -q "^feature.txt$" || exit 7\n',
+      { mode: 0o755 },
+    )
+    execFileSync('git', ['-C', path, 'config', 'core.hooksPath', hookDir])
+    rmSync(join(path, 'feature.txt'))
+    const before = headOf(path)
+    const result = await g.commitAll(taskId, 'fix: clean', { commit_message_check: 'hook' })
+    expect(result).toEqual({ ok: true, value: null })
+    expect(headOf(path)).toBe(before)
+    expect(await g.isDirty(taskId)).toEqual({ ok: true, value: false })
+  })
   it('commit-msg hook 预检看到实际提交的 commit_author 身份', async () => {
     const { g, taskId, path } = await setup()
     execFileSync('git', ['-C', path, 'config', 'user.name', 'Fixture'])
