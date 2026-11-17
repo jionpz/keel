@@ -421,6 +421,7 @@ export async function runTicketTianwen(
               request_revision: resolution.request_revision,
               resolution_id: resolution.id,
               digest: resolution.context_digest,
+              control_generation: Number(loaded.task.control_generation) + 1,
             },
           }),
         ],

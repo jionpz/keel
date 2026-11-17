@@ -18,6 +18,10 @@ Git 副本，规则见 [ADR-0014](../../adr/0014-managed-private-git.md) 与
 本地配置、refs 或 hooks。push 按准确 SHA 读取源对象库，避免 URL 重写、SSH/helper
 命令、代理与 include 把宿主网关变成执行器脚本的入口；不改注册远端或认证来源。
 
+路径清单使用 `-z` 的原始 NUL 分隔输出，不做 trim；文件名中的空格与换行也是
+scope 匹配的一部分。私有副本检查拒绝 index 的 assume-unchanged/skip-worktree
+标记，避免干净检查漏掉真实未提交内容；不会清除标记或丢弃工作区文件。
+
 ## Agent 的 git 提交：行为相关配置一律用 `-c` 钉死，不继承全局
 
 `commitAll` 的实际写法：

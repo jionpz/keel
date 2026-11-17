@@ -97,6 +97,23 @@ commit 当作未确认输入，而不是误判为 drift。续跑不会绕过完�
 verify；恢复前有 WIP 则不能丢弃 WIP 后重复确认旧 HEAD。普通脏工作区、没有 scope、非绑定
 输入后代的 HEAD、超时后出现其他阶段事件以及 scope 外改动都 fail-closed。
 
+`execute` 在已提交且干净的恢复点返回 `blocked`、提出 `kind=recovery` 决策后，
+相应决议被接纳时可以续跑该恢复点。控制层核对当前 handoff 的决议 ID、revision
+与摘要，必须精确对应这次 stage 发出的 DecisionRequest 和固定包。决定必须属于
+当前控制代次；委托决定还会重新使用确定性接纳器核验原提案与当前项目决定、委托
+策略和有效期，撤销、替代或新增的限制规则都会阻止恢复。当前 HEAD、
+分支、diff、baseline 必须与暂停时控制层记录的 Git evidence 完全相同，原始
+result/evidence 摘要仍有效，全部改动仍在节点 scope 内。决定后的 WIP、新提交、
+分支变更、其他种类的决定或 scope 外改动均拒绝恢复。续跑写入独立的
+`ManagedTicketDecisionRecovery`，不把原 `MUST_STOP` 或 `FAILED` 改成成功，也不
+复用其检查作为正式验证。执行器可确认完整恢复 commit，随后仍走 verify/review。
+恢复后发生 `HARNESS_UNAVAILABLE` 或 `PROTOCOL_ERROR` 而未改变现场时，可在再次
+核对相同授权、原恢复点和 scope 后重试，保留每次失败行。pause/resume 后的旧决定
+不再适用；缺少控制代次的历史 handoff 也不能隐式授权恢复，需正常人工覆盖新决议。
+恢复续跑再次 `RUN_TIMEOUT` 时，先核验原恢复证据、当前授权与分支，要求当前 HEAD
+仍包含已批准提交，再交由上述超时恢复校验 WIP 和 scope；即使回退后的 HEAD 恰好
+等于 baseline，也不能跳过这道检查。
+
 结构化阶段结果通过 schema 校验后，先保留 result 与实际 git/检查 evidence，再做
 阶段门禁；验证失败也必须能够回查命令、退出码与输出摘要。FAILED 行的结果只用于
 诊断，没有成功摘要，不能作为成功阶段或可复用证明。

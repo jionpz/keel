@@ -10,10 +10,12 @@ import {
   symlink,
   writeFile,
 } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { assertPrivateGitDirectory } from '../../shared/private-git.js'
 import {
+  changedFiles,
   createTicketRepository,
   diffDigest,
   inspectTicketWorktree,
@@ -29,13 +31,14 @@ const git = (cwd: string, ...args: string[]) =>
     encoding: 'utf8',
     env: {
       PATH: process.env.PATH,
+      TMPDIR: process.env.TMPDIR,
       GIT_CONFIG_GLOBAL: '/dev/null',
       GIT_CONFIG_NOSYSTEM: '1',
     },
   }).trim()
 
 async function fixture() {
-  const base = await realpath(await mkdtemp('/tmp/keel-private-git-'))
+  const base = await realpath(await mkdtemp(join(tmpdir(), 'keel-private-git-')))
   roots.push(base)
   const repo = join(base, 'source')
   await mkdir(repo)
@@ -121,6 +124,40 @@ it('宿主检查不执行 workspace 配置的 fsmonitor 或外部 diff，不读�
     value: ['README.md'],
   })
   expect(await readFile(marker, 'utf8').catch(() => 'ABSENT')).toBe('ABSENT')
+})
+
+it('NUL 分隔的路径结果保留文件名中的空白和换行', async () => {
+  const { repo, head: baseline } = await fixture()
+  const committed = [' leading.txt', 'trailing .txt', 'line\nbreak.txt']
+  const untracked = [' untracked.txt', 'untracked .txt', 'untracked\nbreak.txt']
+
+  for (const name of committed) await writeFile(join(repo, name), `${name}\n`)
+  git(repo, 'add', '--', ...committed)
+  git(repo, 'commit', '-m', 'special filenames')
+  const head = git(repo, 'rev-parse', 'HEAD')
+
+  expect(await changedFiles(repo, baseline, head)).toEqual({
+    ok: true,
+    value: [...committed].sort(),
+  })
+
+  for (const name of untracked) await writeFile(join(repo, name), `${name}\n`)
+  expect(await workingTreeChangedFiles(repo, baseline)).toEqual({
+    ok: true,
+    value: [...committed, ...untracked].sort(),
+  })
+})
+
+it.each(['--assume-unchanged', '--skip-worktree'])('拒绝 index %s 隐藏的真实修改', async (flag) => {
+  const { repo } = await fixture()
+  git(repo, 'update-index', flag, 'README.md')
+  await writeFile(join(repo, 'README.md'), 'hidden WIP\n')
+  expect(git(repo, 'status', '--porcelain')).toBe('')
+  expect(await inspectTicketWorktree(repo)).toMatchObject({
+    ok: false,
+    error: { kind: 'WORKSPACE_ERROR' },
+  })
+  expect(await readFile(join(repo, 'README.md'), 'utf8')).toBe('hidden WIP\n')
 })
 
 it.each(['symlink', 'hardlink', 'alternates', 'commondir'] as const)(
