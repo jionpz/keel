@@ -1,7 +1,7 @@
 /**
  * OmpAdapter —— Oh My Pi 的 HarnessAdapter 实现（L2）。
  *
- * 事实来源：`research/omp-interface.md`（本机实测 omp v17.4.2 + deepseek-v4-flash）。
+ * 事实来源：`research/omp-interface.md`（本机实测 omp v17.4.2）。
  * 本文件中每一个 argv 参数都有实测依据，不是从文档推断的。
  */
 
@@ -19,16 +19,9 @@ import type {
   WorkspaceDiff,
 } from '../../contracts/harness-adapter.js'
 import type { CapabilityId } from '../../shared/ids.js'
-import { DEFAULT_OMP_MODEL } from '../model-routing.js'
 import { collectGitDiff, gitHeadSha } from './git-diff.js'
 import { OmpStreamParser, type ProgressEvent } from './omp-parse.js'
 import { tierOf } from './tier.js'
-
-/**
- * 缺省模型。字面量在 `model-routing.ts`（唯一事实源），这里只 re-export ——
- * 两份定义会让「改一处忘另一处」以静默的模型漂移出现。
- */
-export { DEFAULT_OMP_MODEL }
 
 /** 实测确认的能力集（research/omp-interface.md §7） */
 export const OMP_CAPABILITIES: readonly CapabilityId[] = [
@@ -46,7 +39,7 @@ export const OMP_CAPABILITIES: readonly CapabilityId[] = [
 export interface OmpOptions {
   /** 可执行文件，默认 'omp' */
   readonly bin?: string
-  /** 默认模型 */
+  /** adapter 级 fallback；未指定时不传 `--model`，由 omp 自己的配置决定 */
   readonly model?: string
   /** 覆盖 spawn，供测试注入 */
   readonly spawnFn?: typeof spawn
@@ -74,7 +67,7 @@ interface RunState {
 
 export class OmpAdapter implements HarnessAdapter {
   private readonly bin: string
-  private readonly model: string
+  private readonly model: string | undefined
   /**
    * 幂等映射：idempotency_key → 运行状态。
    *
@@ -85,7 +78,7 @@ export class OmpAdapter implements HarnessAdapter {
 
   constructor(private readonly opts: OmpOptions = {}) {
     this.bin = opts.bin ?? 'omp'
-    this.model = opts.model ?? DEFAULT_OMP_MODEL
+    this.model = opts.model
   }
 
   describe(): HarnessDescriptor {
@@ -117,6 +110,17 @@ export class OmpAdapter implements HarnessAdapter {
   }
 
   async startRun(spec: RunSpec, hooks?: RunHooks): Promise<Result<RunHandle>> {
+    if (spec.model !== undefined && spec.model.trim() === '') {
+      return err(makeError('CAPABILITY_UNSUPPORTED', 'RunSpec.model 不能为空白；空白不等于未指定'))
+    }
+    if (spec.thinking !== undefined) {
+      return err(
+        makeError(
+          'CAPABILITY_UNSUPPORTED',
+          'OMP adapter 当前没有 thinking 参数；不能用项目默认值替代，也不能静默丢弃。',
+        ),
+      )
+    }
     // 契约要求：untrusted 而未声明该能力 → 拒绝，**不得降级执行**
     if (spec.workspace.untrusted && !OMP_CAPABILITIES.includes('CAP-UNTRUSTED_WORKSPACE')) {
       return err(
@@ -333,8 +337,12 @@ export class OmpAdapter implements HarnessAdapter {
  * 模型优先取 `spec.model`（编排器按 stage 解析出的最终值），没有才用
  * adapter 构造时的 `fallbackModel`。两者都来自模型路由，不会各算一次。
  */
-export function buildArgv(spec: RunSpec, fallbackModel: string): string[] {
-  const argv = ['-p', '--mode=json', '--model', spec.model ?? fallbackModel]
+export function buildArgv(spec: RunSpec, fallbackModel?: string): string[] {
+  const argv = ['-p', '--mode=json']
+  const model = spec.model ?? fallbackModel
+  if (model !== undefined && model !== '') {
+    argv.push('--model', model)
+  }
 
   argv.push('--cwd', spec.workspace.path)
 

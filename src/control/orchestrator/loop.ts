@@ -30,7 +30,11 @@ import type {
 } from '../../contracts/pull-request-state.js'
 import type { RepoSignalsSource } from '../../contracts/repo-signals.js'
 import type { Usage } from '../../contracts/types.js'
-import { type ModelProfile, resolveStageModel } from '../../execution/model-routing.js'
+import {
+  type ModelRoutingSettings,
+  type ModelStage,
+  resolveModelRoute,
+} from '../../execution/model-routing.js'
 import type { HarnessSessionManager } from '../../execution/session/manager.js'
 import { resolveKeelStageToolPolicy, type ToolPolicyDocument } from '../../execution/tool-policy.js'
 import { commitArtifactOn } from '../../fact/artifact-store.js'
@@ -109,15 +113,10 @@ export interface OrchestratorDeps {
   /** 测试注入：缩短沉默检查 / owner 心跳间隔 */
   readonly livenessCheckIntervalMs?: number
   readonly ownerHeartbeatMs?: number
-  /**
-   * 显式模型覆盖（`--model` / `KEEL_MODEL` 合并后的值），**不含**缺省。
-   * 缺省由 `resolveStageModel` 按 profile 补齐 —— 否则 enterprise profile 永远轮不到生效。
-   */
+  /** 显式模型覆盖（`--model` / `KEEL_MODEL` 合并后的值），**不含**缺省。 */
   readonly modelOverride?: string
-  /** 模型 profile；缺省 `default`（与改动前行为一致） */
-  readonly modelProfile?: ModelProfile
-  /** 非空时最终模型必须命中（`KEEL_MODEL_ALLOWLIST`）；缺省不校验 */
-  readonly modelAllowlist?: readonly string[]
+  /** 已解析的 profile / allowlist；未设置 = 不按 profile 路由。 */
+  readonly modelRouting?: ModelRoutingSettings
   /**
    * jstack 导出的阶段/角色工具策略。缺省时只对 Pi / Claude 之外保留旧权限；
    * CLI 必须在执行前加载并传入，不能让生产静默退化为统一 read/write。
@@ -666,7 +665,7 @@ async function executeClaimedRun(
   // 解析失败就不 spawn（R6）。同一个值同时进 runSpec.model 与
   // run.requested_model —— 两处各算一次会出现「库里记 A、实际跑 B」，
   // 而两边各自看起来都自洽（R5）。
-  const requested = resolveRequestedModel(pending.stage, descriptor.harness_id, deps)
+  const requested = resolveRequestedModel(pending.stage, pending.role, descriptor.harness_id, deps)
   if (!requested.ok) return { ok: false, error: requested.error, usage: ZERO_USAGE }
   await asRole('keel_control', (c) =>
     c.query('UPDATE run SET requested_model=$2 WHERE id=$1', [
@@ -726,8 +725,8 @@ async function executeClaimedRun(
         permissions: stagePermissions.value,
         limits: { wall_clock_s: wallClockS, budget_usd: null, max_turns: 8 },
         // 与 run.requested_model 同源（见上方 resolveRequestedModel）；
-        // claude 不消费这个字段，它的模型来自 adapter 构造参数。
         ...(requested.value.spawnModel === undefined ? {} : { model: requested.value.spawnModel }),
+        ...(requested.value.thinking === undefined ? {} : { thinking: requested.value.thinking }),
       },
       adapter: deps.adapter,
       expect,
@@ -926,19 +925,19 @@ async function executeClaimedRun(
   return { ok: true }
 }
 
-/** 一次 run 的模型解析结果。`spawnModel` 只对 omp 有值（进入 RunSpec） */
+/** 一次 run 的模型解析结果。 */
 interface RequestedRunModel {
   readonly spawnModel: string | undefined
+  readonly thinking: string | undefined
   readonly requestedModel: string | null
 }
 
 /**
- * 解析本次 run 的模型。
+ * 解析本次 run 的模型与 thinking。
  *
- * omp 按 stage 走 `resolveStageModel`（profile / allowlist / 显式覆盖）。
- * 其余 harness 不改行为：claude 的模型来自构造参数（未显式指定就不传
- * `--model`），RunSpec 不带 model；`requested_model` 只记录显式 override
- * （可能为 NULL）—— 那正是它实际 spawn 的模型来源。
+ * 所有 harness 共用同一个 `resolveModelRoute`：profile / stage / role /
+ * 显式 override 只在这里裁决一次。未配置模型时 `spawnModel` 为 undefined，
+ * 由 harness 自己的配置决定；不再注入项目缺省模型。
  */
 function legacyStagePermissions(stage: Stage): {
   readonly allowed_tools: readonly string[]
@@ -988,20 +987,30 @@ function resolveStagePermissions(
 
 function resolveRequestedModel(
   stage: Stage,
+  role: RoleId,
   harnessId: string,
   deps: OrchestratorDeps,
 ): Result<RequestedRunModel> {
-  if (harnessId !== 'omp') {
-    return ok({ spawnModel: undefined, requestedModel: deps.modelOverride ?? null })
+  if (harnessId !== 'omp' && harnessId !== 'claude' && harnessId !== 'pi') {
+    return ok({
+      spawnModel: undefined,
+      thinking: undefined,
+      requestedModel: deps.modelOverride ?? null,
+    })
   }
-  const resolved = resolveStageModel({
-    stage,
-    override: deps.modelOverride,
-    profile: deps.modelProfile ?? 'default',
-    allowlist: deps.modelAllowlist ?? [],
+  const resolved = resolveModelRoute({
+    harness: harnessId === 'claude' ? 'claude' : harnessId,
+    stage: stage as ModelStage,
+    role,
+    ...(deps.modelOverride === undefined ? {} : { override: deps.modelOverride }),
+    routing: deps.modelRouting ?? { allowlist: [] },
   })
   if (!resolved.ok) return resolved
-  return ok({ spawnModel: resolved.value, requestedModel: resolved.value })
+  return ok({
+    spawnModel: resolved.value.model,
+    thinking: resolved.value.thinking,
+    requestedModel: resolved.value.model ?? null,
+  })
 }
 
 /**

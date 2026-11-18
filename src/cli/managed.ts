@@ -2,6 +2,7 @@
 
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
+import { ok } from '../contracts/errors.js'
 import {
   type ManagedActionGatewayDeps,
   reconcileAction,
@@ -65,6 +66,11 @@ import {
   createIsolatedManagedInference,
   createIsolatedTicketWorker,
 } from '../execution/isolated-ticket-worker.js'
+import {
+  loadModelRoutingSettings,
+  type ModelRoutingSettings,
+  preflightModelRouting,
+} from '../execution/model-routing.js'
 import { asRole } from '../fact/db.js'
 import { GitCliPushGateway } from '../fact/git-push.js'
 import { GitHubProvider } from '../fact/github-provider.js'
@@ -742,6 +748,14 @@ async function runWorker(argv: readonly string[]): Promise<void> {
   if (!harness.ok) throw new Error(harness.error.detail)
   const model = resolveOptionalModel(modelRaw, process.env.KEEL_MODEL)
   if (!model.ok) throw new Error(model.error.detail)
+  const routing = loadModelRoutingSettings(process.env)
+  if (!routing.ok) throw new Error(routing.error.detail)
+  const preflight = preflightModelRouting({
+    harness: harness.value,
+    routing: routing.value,
+    ...(model.value === undefined ? {} : { override: model.value }),
+  })
+  if (!preflight.ok) throw new Error(preflight.error.detail)
 
   // 启动预检在 tick/认领之前完成；探测输出丢弃，凭据不读取或打印。
   if (harness.value === 'claude') {
@@ -758,7 +772,10 @@ async function runWorker(argv: readonly string[]): Promise<void> {
     }
   }
 
-  const infer = createIsolatedManagedInference(harness.value, model.value)
+  const infer = createIsolatedManagedInference(harness.value, {
+    ...(model.value === undefined ? {} : { model: model.value }),
+    routing: routing.value,
+  })
   if (once) {
     const result = await tickManaged(infer, taskId)
     if (!result.ok) throw new Error(result.error.detail)
@@ -786,6 +803,7 @@ async function runWorker(argv: readonly string[]): Promise<void> {
 export interface ManagedWorkerSelection {
   readonly harness?: string
   readonly model?: string
+  readonly modelRouting?: ModelRoutingSettings
 }
 
 /** 构造 managed 执行器；供 managed CLI 与统一 serve 共用同一启动预检。 */
@@ -798,6 +816,17 @@ export async function createManagedTicketWorker(
   if (!harness.ok) throw new Error(harness.error.detail)
   const model = resolveOptionalModel(modelRaw, process.env.KEEL_MODEL)
   if (!model.ok) throw new Error(model.error.detail)
+  const routing =
+    selection.modelRouting === undefined
+      ? loadModelRoutingSettings(process.env)
+      : ok(selection.modelRouting)
+  if (!routing.ok) throw new Error(routing.error.detail)
+  const preflight = preflightModelRouting({
+    harness: harness.value,
+    routing: routing.value,
+    ...(model.value === undefined ? {} : { override: model.value }),
+  })
+  if (!preflight.ok) throw new Error(preflight.error.detail)
   if (harness.value === 'claude') {
     const ready = requireClaudeReady()
     if (!ready.ok) throw new Error(ready.error.detail)
@@ -811,10 +840,11 @@ export async function createManagedTicketWorker(
       throw new Error('找不到可用的 omp CLI；ticket worker 未认领任务')
     }
   }
-  const adapter = createHarnessAdapter(harness.value, model.value)
+  const adapter = createHarnessAdapter(harness.value, undefined)
   return createIsolatedTicketWorker({
     harness: harness.value,
     ...(model.value === undefined ? {} : { model: model.value }),
+    routing: routing.value,
     descriptor: adapter.describe(),
   })
 }

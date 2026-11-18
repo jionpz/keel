@@ -31,7 +31,6 @@ import {
   sanitizeClaudeEnv,
 } from './claude-code.js'
 import { parseClaudeStream } from './claude-code-parse.js'
-import { DEFAULT_OMP_MODEL } from './omp.js'
 import { tierOf } from './tier.js'
 
 const FIXTURE = fileURLToPath(
@@ -180,6 +179,7 @@ describe('Claude capability / tier', () => {
     expect(CLAUDE_CAPABILITIES).toContain('CAP-COST')
     expect(CLAUDE_CAPABILITIES).toContain('CAP-UNTRUSTED_WORKSPACE')
     expect(CLAUDE_CAPABILITIES).toContain('CAP-PERMISSION')
+    expect(CLAUDE_CAPABILITIES).toContain('CAP-MODEL_OVERRIDE')
     expect(CLAUDE_CAPABILITIES).not.toContain('CAP-STRUCTURED_OUTPUT')
     expect(CLAUDE_CAPABILITIES).not.toContain('CAP-INTERRUPT')
     expect(CLAUDE_CAPABILITIES).not.toContain('CAP-PROBE')
@@ -225,23 +225,21 @@ describe('buildClaudeArgv', () => {
     expect(argv[i + 1]).toBe('Read,Write,Edit,Bash')
   })
 
-  it('缺省不传 --model，也不出现 omp 缺省 deepseek', () => {
+  it('缺省不传 --model（项目不预设模型）', () => {
     const argv = buildClaudeArgv(spec())
     expect(argv).not.toContain('--model')
-    expect(argv).not.toContain(DEFAULT_OMP_MODEL)
   })
 
   it('显式 model 才进 argv', () => {
-    const argv = buildClaudeArgv(spec(), { model: 'claude-opus-4-6' })
+    const argv = buildClaudeArgv(spec(), { model: 'deployment/claude-model' })
     const i = argv.indexOf('--model')
-    expect(argv[i + 1]).toBe('claude-opus-4-6')
-    expect(argv).not.toContain(DEFAULT_OMP_MODEL)
+    expect(argv[i + 1]).toBe('deployment/claude-model')
   })
 
-  it('spec.model 不被消费 —— claude 的模型只来自构造参数', () => {
-    const argv = buildClaudeArgv(spec({ model: 'moonshotai/Kimi-K3' }))
+  it('buildClaudeArgv 只消费 opts.model；adapter 负责把 spec.model 解析进来', () => {
+    const argv = buildClaudeArgv(spec({ model: 'deployment/spec-model' }))
     expect(argv).not.toContain('--model')
-    expect(argv).not.toContain('moonshotai/Kimi-K3')
+    expect(argv).not.toContain('deployment/spec-model')
   })
 
   it('空工具列表 → --tools 空串', () => {
@@ -570,7 +568,7 @@ describe('renderPrompt —— context 的每个 section 都要真的进提示词
     }
   })
 
-  it('未指定 model 时 spawn argv 不含 omp 缺省模型', async () => {
+  it('未指定 model 时 spawn argv 不含 --model', async () => {
     const { spawnFn, calls } = recordingSpawn()
     const a = new ClaudeCodeAdapter({ spawnFn })
     const started = await a.startRun(spec())
@@ -578,7 +576,17 @@ describe('renderPrompt —— context 的每个 section 都要真的进提示词
     if (!started.ok) return
     await a.awaitResult(started.value)
     expect(calls[0]).not.toContain('--model')
-    expect(calls[0]).not.toContain(DEFAULT_OMP_MODEL)
+  })
+
+  it('spec.model 进入 spawn argv（编排器按 stage / role 解析的最终值）', async () => {
+    const { spawnFn, calls } = recordingSpawn()
+    const a = new ClaudeCodeAdapter({ spawnFn })
+    const started = await a.startRun(spec({ model: 'deployment/claude-model' }))
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+    await a.awaitResult(started.value)
+    const args = calls[0] ?? []
+    expect(args[args.indexOf('--model') + 1]).toBe('deployment/claude-model')
   })
 })
 

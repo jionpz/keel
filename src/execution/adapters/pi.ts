@@ -53,6 +53,7 @@ interface RunState {
   readonly handle: RunHandle
   readonly spec: RunSpec
   readonly model: string | undefined
+  readonly thinking: string | undefined
   readonly baseSha: string | null
   promise: Promise<Result<RunResult>>
   aborted: boolean
@@ -140,7 +141,7 @@ export class PiAdapter implements HarnessAdapter {
       )
     }
 
-    const thinking = resolvePiThinking(this.opts.thinking)
+    const thinking = resolvePiThinking(spec.thinking ?? this.opts.thinking)
     if (!thinking.ok) return thinking
 
     const existing = this.runs.get(spec.idempotency_key)
@@ -155,6 +156,7 @@ export class PiAdapter implements HarnessAdapter {
       handle,
       spec,
       model: model.value,
+      thinking: thinking.value,
       baseSha: head.ok ? head.value : null,
       aborted: false,
       timeout: false,
@@ -239,7 +241,7 @@ export class PiAdapter implements HarnessAdapter {
     const argv = buildPiArgv(spec, {
       ...(state.model === undefined ? {} : { model: state.model }),
       ...(this.opts.provider === undefined ? {} : { provider: this.opts.provider }),
-      ...(this.opts.thinking === undefined ? {} : { thinking: this.opts.thinking }),
+      ...(state.thinking === undefined ? {} : { thinking: state.thinking }),
       ...(this.opts.extensions === undefined ? {} : { extensions: this.opts.extensions }),
       tools,
       prompt,

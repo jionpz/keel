@@ -188,7 +188,7 @@ timer/巡检、outbox 和 required checks 放在同一进程中；每个角色�
 
 ```bash
 # 默认运行 ingress；需要明确只处理已持久化 managed 工作时才用 --no-ingress
-keel serve --harness pi --model opencode-go/deepseek-v4.1-flash
+keel serve --harness pi --model your-model-id
 
 # 只读观察
 keel service-status
@@ -279,10 +279,11 @@ pending 归并、runner 无 omp),记录见任务 `prd.md`。
 
 运行真实验收:`KEEL_GITHUB_TOKEN="$(gh auth token)" KEEL_TEST_REMOTE_REPO=<url> pnpm run test:acceptance`
 (缺凭据时明确失败,不静默跳过)。未注入 provider 时系统如实记录 `SideEffectIntent`,不假装成功。
-换模型:`KEEL_MODEL=<id>` 或 `keel run-issue <url> --model <id>`(缺省仍 `deepseek-v4-flash`;空白拒绝)。
-按阶段路由到企业网关目录:`KEEL_MODEL_PROFILE=enterprise`(develop/qa/review → `moonshotai/Kimi-K3`,其余 → `zai-org/GLM-5.3`);
-`KEEL_MODEL_ALLOWLIST=<id,...>` 可限制允许的最终模型;启动时按 profile 全部阶段预检,清单外直接拒绝(不会先 ingest 再失败)。
-`run.requested_model` 记录每次 run 实际请求的模型,与 spawn 的 `--model` 同源。
+换模型:`KEEL_MODEL=<id>` 或 `keel run-issue <url> --model <id>`;未指定时不传 `--model`,由 harness 自己的配置决定(项目不预设模型;空白拒绝)。
+按部署配置路由:`KEEL_MODEL_PROFILES_FILE` 指向 profile JSON,`KEEL_MODEL_PROFILE` 选择其中一个 profile;
+配置按 harness 的 stage / role 指定模型与可选 thinking,示例见 `docs/examples/model-profiles.example.json`。
+`KEEL_MODEL_ALLOWLIST=<id,...>` 可限制允许的最终模型;启动时按选中 profile 的全部条目预检,清单外直接拒绝(不会先 ingest 再失败)。
+legacy `run.requested_model` 记录每次 run 实际请求的模型,与 spawn 的 `--model` 同源;未指定模型时为 `NULL`。
 
 阶段/角色工具策略由 jstack 发布,Keel 不再硬编码 `read`/`write`:
 `jstack tools export > config/jstack-tools.json`(或设置 `KEEL_TOOL_POLICY` 指向该文件)。

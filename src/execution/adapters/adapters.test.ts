@@ -4,7 +4,7 @@
  * 分三层，各测各的：
  *   1. 纯函数（解析、tier、argv）—— 用真实抓到的样本，不起进程
  *   2. 契约拒绝 —— 不起进程
- *   3. 真实集成 —— 真调 omp + deepseek-v4-flash
+ *   3. 真实集成 —— 真调 omp（模型由 omp 自身配置决定）
  *
  * 第 3 层慢且花钱，但**不做 mock**：
  * mock 一个 harness 等于验证「我以为它会怎样」，而不是「它实际怎样」。
@@ -31,7 +31,7 @@ import type { ProgressEvent, RunSpec } from '../../contracts/harness-adapter.js'
 import { TIER_REQUIREMENTS } from '../../shared/ids.js'
 import { CLAUDE_CAPABILITIES } from './claude-code.js'
 import { HUMAN_CAPABILITIES, HumanAdapter, type HumanInbox } from './human.js'
-import { buildArgv, DEFAULT_OMP_MODEL, OMP_CAPABILITIES, OmpAdapter } from './omp.js'
+import { buildArgv, OMP_CAPABILITIES, OmpAdapter } from './omp.js'
 import { OmpStreamParser, parseOmpStream } from './omp-parse.js'
 import { tierOf } from './tier.js'
 
@@ -78,7 +78,7 @@ describe('parseOmpStream —— 用真实抓到的事件流', () => {
 
   it('正确处理 thinking block —— 不假设 content[0] 是 text', async () => {
     const parsed = parseOmpStream(await readFile(FIXTURE, 'utf8'))
-    // 这条样本是 deepseek 返回的 [{type:'thinking'}, {type:'text'}]
+    // 这条样本是 omp 返回的 [{type:'thinking'}, {type:'text'}]
     expect(parsed.nonTextBlocks).toBeGreaterThan(0)
     expect(parsed.text).toBe('4271')
   })
@@ -298,7 +298,7 @@ describe('tier 由 capability 推导，不硬编码', () => {
 
 describe('buildArgv', () => {
   it('untrusted 时带上三个隔离开关', () => {
-    const argv = buildArgv(spec(), 'deepseek-v4-flash')
+    const argv = buildArgv(spec(), 'fallback-model')
     expect(argv).toContain('--no-extensions')
     expect(argv).toContain('--no-skills')
     expect(argv).toContain('--no-rules')
@@ -335,29 +335,25 @@ describe('buildArgv', () => {
     expect(argv.slice(0, 2)).toEqual(['-p', '--mode=json'])
   })
 
-  it('缺省模型钉在 --model 之后(五连基线)', () => {
-    const argv = buildArgv(spec(), DEFAULT_OMP_MODEL)
-    const i = argv.indexOf('--model')
-    expect(i).toBeGreaterThanOrEqual(0)
-    expect(argv[i + 1]).toBe('deepseek-v4-flash')
-    expect(argv[i + 1]).toBe(DEFAULT_OMP_MODEL)
+  it('未指定模型时 argv 不含 --model（项目不预设模型）', () => {
+    const argv = buildArgv(spec())
+    expect(argv).not.toContain('--model')
   })
 
-  it('自定义 model 原样透传，不回退缺省', () => {
-    const argv = buildArgv(spec(), 'gpt-5.2')
+  it('adapter 级 fallback model 原样透传', () => {
+    const argv = buildArgv(spec(), 'deployment/default-model')
     const i = argv.indexOf('--model')
-    expect(argv[i + 1]).toBe('gpt-5.2')
-    expect(argv).not.toContain(DEFAULT_OMP_MODEL)
+    expect(argv[i + 1]).toBe('deployment/default-model')
   })
 
   it('spec.model 覆盖 adapter fallback —— 编排器按 stage 路由出的最终值', () => {
-    const argv = buildArgv(spec({ model: 'moonshotai/Kimi-K3' }), 'fallback-model')
+    const argv = buildArgv(spec({ model: 'deployment/stage-model' }), 'fallback-model')
     const i = argv.indexOf('--model')
-    expect(argv[i + 1]).toBe('moonshotai/Kimi-K3')
+    expect(argv[i + 1]).toBe('deployment/stage-model')
     expect(argv).not.toContain('fallback-model')
   })
 
-  it('没有 spec.model 时仍用 fallback（旧调用方行为不变）', () => {
+  it('没有 spec.model 时仍用 fallback（adapter 级配置，不是项目缺省）', () => {
     const argv = buildArgv(spec(), 'fallback-model')
     const i = argv.indexOf('--model')
     expect(argv[i + 1]).toBe('fallback-model')
@@ -615,7 +611,7 @@ function haveOmp(): boolean {
 
 const REQUIRE_OMP = process.env.KEEL_REQUIRE_OMP === '1'
 
-describe.skipIf(!REQUIRE_OMP)('真实集成：omp + deepseek-v4-flash', () => {
+describe.skipIf(!REQUIRE_OMP)('真实集成：omp（使用 omp 自身配置）', () => {
   it('omp 可执行 —— 它是 v0.1 首批 harness，开启门控后缺失即失败而非跳过', () => {
     expect(
       haveOmp(),
@@ -690,7 +686,7 @@ describe.skipIf(!REQUIRE_OMP)('CAP-UNTRUSTED_WORKSPACE 反例验证', () => {
     )
 
     const runOmp = (isolate: boolean, traceFile: string): void => {
-      const args = ['-p', '--mode=json', '--model', 'deepseek-v4-flash', '--no-tools']
+      const args = ['-p', '--mode=json', '--no-tools']
       if (isolate) args.push('--no-extensions', '--no-skills', '--no-rules')
       args.push('回复 ok')
       try {

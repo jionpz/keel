@@ -200,18 +200,18 @@ describe('runTask · --ci real 缺 token 时不进 loop', () => {
     expect(r.error.detail).toMatch(/claude/)
   })
 
-  it('非法 KEEL_MODEL_PROFILE 在 task 查询之前失败(不静默退回 default)', async () => {
+  it('非法 KEEL_MODEL_PROFILE 在 task 查询之前失败（不静默忽略）', async () => {
     process.env.KEEL_MODEL_PROFILE = 'enterprize'
     const r = await runTask(randomUUID(), { ci: 'passed' })
     expect(r.ok).toBe(false)
     if (r.ok) return
     expect(r.error.kind).toBe('CAPABILITY_UNSUPPORTED')
     expect(r.error.detail).toContain('KEEL_MODEL_PROFILE=enterprize')
-    expect(r.error.detail).toContain('default | enterprise')
+    expect(r.error.detail).toContain('KEEL_MODEL_PROFILES_FILE')
   })
 
   it('非法 KEEL_MODEL_ALLOWLIST（空项）在 task 查询之前失败', async () => {
-    process.env.KEEL_MODEL_ALLOWLIST = 'moonshotai/Kimi-K3,,zai-org/GLM-5.3'
+    process.env.KEEL_MODEL_ALLOWLIST = 'model/a,,model/b'
     const r = await runTask(randomUUID(), { ci: 'passed' })
     expect(r.ok).toBe(false)
     if (r.ok) return
@@ -251,14 +251,14 @@ describe('runTask · --ci real 缺 token 时不进 loop', () => {
     }
   })
 
-  it('allowlist 未覆盖 profile 模型：task 查询 / 认领之前失败', async () => {
-    // 语法合法但缺省 profile 会 spawn deepseek-v4-flash —— 清单里没有它。
-    process.env.KEEL_MODEL_ALLOWLIST = 'moonshotai/Kimi-K3'
+  it('allowlist 未覆盖显式模型：task 查询 / 认领之前失败', async () => {
+    process.env.KEEL_MODEL = 'deployment/not-allowed'
+    process.env.KEEL_MODEL_ALLOWLIST = 'deployment/allowed'
     const r = await runTask(randomUUID(), { ci: 'passed' })
     expect(r.ok).toBe(false)
     if (r.ok) return
     expect(r.error.kind).toBe('CAPABILITY_UNSUPPORTED')
-    expect(r.error.detail).toContain('deepseek-v4-flash')
+    expect(r.error.detail).toContain('deployment/not-allowed')
     expect(r.error.detail).toContain('KEEL_MODEL_ALLOWLIST')
   })
 
@@ -480,7 +480,7 @@ describe('--wall-clock 旗标', () => {
     }
   })
 
-  it('非法 KEEL_MODEL_PROFILE：启动即失败，文案点名变量与可选值', async () => {
+  it('非法 KEEL_MODEL_PROFILE：启动即失败，文案点名变量与配置文件', async () => {
     const prevProfile = process.env.KEEL_MODEL_PROFILE
     const prevCode = process.exitCode
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -496,7 +496,7 @@ describe('--wall-clock 旗标', () => {
       expect(process.exitCode).toBe(1)
       const text = errSpy.mock.calls.flat().join(' ')
       expect(text).toContain('KEEL_MODEL_PROFILE=enterprize')
-      expect(text).toContain('default | enterprise')
+      expect(text).toContain('KEEL_MODEL_PROFILES_FILE')
     } finally {
       errSpy.mockRestore()
       if (prevProfile === undefined) delete process.env.KEEL_MODEL_PROFILE

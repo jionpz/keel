@@ -258,13 +258,15 @@ describe('pollerMain · 参数与凭据前置', () => {
     }
   })
 
-  it('allowlist 未覆盖 profile 模型 → 启动即拒绝，不进入轮询', async () => {
+  it('allowlist 未覆盖显式模型 → 启动即拒绝，不进入轮询', async () => {
     process.env.KEEL_GITHUB_TOKEN = 't'
     const prevAllowlist = process.env.KEEL_MODEL_ALLOWLIST
+    const prevModel = process.env.KEEL_MODEL
     const listRepos = vi.fn()
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     try {
-      process.env.KEEL_MODEL_ALLOWLIST = 'moonshotai/Kimi-K3'
+      process.env.KEEL_MODEL = 'deployment/not-allowed'
+      process.env.KEEL_MODEL_ALLOWLIST = 'deployment/allowed'
       await runPollerMain([], { listRepos })
 
       expect(process.exitCode).toBe(1)
@@ -275,6 +277,8 @@ describe('pollerMain · 参数与凭据前置', () => {
     } finally {
       if (prevAllowlist === undefined) delete process.env.KEEL_MODEL_ALLOWLIST
       else process.env.KEEL_MODEL_ALLOWLIST = prevAllowlist
+      if (prevModel === undefined) delete process.env.KEEL_MODEL
+      else process.env.KEEL_MODEL = prevModel
     }
   })
 

@@ -10,7 +10,7 @@ import type {
 import { ZERO_USAGE } from '../contracts/types.js'
 import type { ManagedTicketWorker } from '../control/managed/ticket-runtime.js'
 import { ClaudeCodeAdapter } from './adapters/claude-code.js'
-import { DEFAULT_OMP_MODEL, OmpAdapter } from './adapters/omp.js'
+import { OmpAdapter } from './adapters/omp.js'
 import { PI_SUBAGENT_TOOLS, PiAdapter } from './adapters/pi.js'
 import {
   type ManagedExecutorEnv,
@@ -19,11 +19,20 @@ import {
 } from './isolation/managed-env.js'
 import { supervisedSandboxCommand } from './isolation/process-supervisor.js'
 import { managedInference } from './managed-inference.js'
-import { ticketWorkerFromAdapter } from './ticket-stage-runner.js'
+import {
+  type ModelRole,
+  type ModelRoutingSettings,
+  type ModelStage,
+  type ResolvedModelRoute,
+  resolveModelRoute,
+} from './model-routing.js'
+import { roleForTicketRole, ticketWorkerFromAdapter } from './ticket-stage-runner.js'
 
 export interface IsolatedTicketWorkerOptions {
   readonly harness: ManagedHarness
+  /** 显式 `--model` / `KEEL_MODEL` 覆盖 */
   readonly model?: string
+  readonly routing: ModelRoutingSettings
   /** 用宿主环境构造的探针 descriptor，只取 harness 名与工具清单。 */
   readonly descriptor: HarnessDescriptor
 }
@@ -40,9 +49,19 @@ export function createIsolatedTicketWorker(
 ): ManagedTicketWorker {
   const harness =
     options.descriptor.harness_id === 'claude' ? 'claude-code' : options.descriptor.harness_id
+  const routeFor = (stage: ModelStage, role: ModelRole): ReturnType<typeof resolveModelRoute> =>
+    resolveModelRoute({
+      harness: options.harness,
+      stage,
+      role,
+      ...(options.model === undefined ? {} : { override: options.model }),
+      routing: options.routing,
+    })
   const run: ManagedTicketStageRunner = async (input) => {
     try {
-      return await withIsolatedAdapter(options, input.workspace_path, (adapter) =>
+      const route = routeFor(input.stage, roleForTicketRole(input.tool_plan.role))
+      if (!route.ok) return { ok: false, error: route.error, usage: ZERO_USAGE }
+      return await withIsolatedAdapter(options, route.value, input.workspace_path, (adapter) =>
         ticketWorkerFromAdapter(adapter).run(input),
       )
     } catch (error) {
@@ -51,8 +70,11 @@ export function createIsolatedTicketWorker(
   }
   const decide: ManagedTicketDecisionRunner = async (input) => {
     try {
+      const route = routeFor('tianwen', 'Tianwen')
+      if (!route.ok) return { ok: false, error: route.error, usage: ZERO_USAGE }
       return await withIsolatedAdapter(
         options,
+        route.value,
         input.workspace_path,
         (adapter) => ticketWorkerFromAdapter(adapter).decide(input),
         true,
@@ -63,8 +85,11 @@ export function createIsolatedTicketWorker(
   }
   const plan: ManagedWorkflowPlanRunner = async (input) => {
     try {
+      const route = routeFor('plan', 'Architect')
+      if (!route.ok) return { ok: false, error: route.error, usage: ZERO_USAGE }
       return await withIsolatedAdapter(
         options,
+        route.value,
         input.workspace_path,
         (adapter) => ticketWorkerFromAdapter(adapter).plan(input),
         true,
@@ -84,14 +109,28 @@ export function createIsolatedTicketWorker(
 }
 
 /** managed 只读调查也走同一隔离边界：每次推理一个独立 HOME/TMPDIR。 */
+export interface ManagedInferenceSelection {
+  readonly model?: string
+  readonly routing: ModelRoutingSettings
+}
+
 export function createIsolatedManagedInference(
   harness: ManagedHarness,
-  model?: string,
+  selection: ManagedInferenceSelection,
 ): ManagedInference {
   return async (input) => {
     try {
+      const route = resolveModelRoute({
+        harness,
+        stage: input.phase === 'tianwen' ? 'tianwen' : 'managed_investigate',
+        role: input.phase === 'tianwen' ? 'Tianwen' : 'Investigator',
+        ...(selection.model === undefined ? {} : { override: selection.model }),
+        routing: selection.routing,
+      })
+      if (!route.ok) return { ok: false, error: route.error, usage: ZERO_USAGE }
       return await withIsolatedAdapter(
-        { harness, descriptor: descriptorFor(harness), ...(model === undefined ? {} : { model }) },
+        { harness },
+        route.value,
         input.workspace_path,
         (adapter) => managedInference(adapter)(input),
         true,
@@ -99,17 +138,6 @@ export function createIsolatedManagedInference(
     } catch (error) {
       return { ok: false, error: managedEnvError(error), usage: ZERO_USAGE }
     }
-  }
-}
-
-function descriptorFor(harness: ManagedHarness): HarnessDescriptor {
-  switch (harness) {
-    case 'pi':
-      return new PiAdapter({ autoSubagents: false }).describe()
-    case 'claude':
-      return new ClaudeCodeAdapter().describe()
-    case 'omp':
-      return new OmpAdapter({ model: DEFAULT_OMP_MODEL }).describe()
   }
 }
 
@@ -121,7 +149,8 @@ function managedEnvError(error: unknown) {
 }
 
 async function withIsolatedAdapter<T>(
-  options: IsolatedTicketWorkerOptions,
+  options: { readonly harness: ManagedHarness },
+  route: ResolvedModelRoute,
   workspace: string,
   action: (adapter: HarnessAdapter) => Promise<T>,
   readOnlyWorkspace = false,
@@ -130,13 +159,13 @@ async function withIsolatedAdapter<T>(
     harness: options.harness,
     workspace,
     readOnlyWorkspace,
-    ...(options.model === undefined ? {} : { model: options.model }),
+    ...(route.model === undefined ? {} : { model: route.model }),
   })
   if (!prepared.ok) throw prepared.error
   let cleanupFailed = false
   try {
     const result = await action(
-      adapterFor(options.harness, options.model, prepared.value, () => {
+      adapterFor(options.harness, route, prepared.value, () => {
         cleanupFailed = true
       }),
     )
@@ -150,23 +179,28 @@ async function withIsolatedAdapter<T>(
 
 export function adapterFor(
   harness: ManagedHarness,
-  model: string | undefined,
+  route: ResolvedModelRoute,
   env: ManagedExecutorEnv,
   onSupervisorFailure?: () => void,
 ): HarnessAdapter {
   const spawnFn = sandboxedSpawn(env, onSupervisorFailure)
   const spawnOption = spawnFn === undefined ? {} : { spawnFn }
+  if (route.thinking !== undefined && harness !== 'pi') {
+    throw new Error(`${harness} 不支持 thinking 覆盖`)
+  }
   switch (harness) {
     case 'pi':
       return env.piExtensions.length === 0
         ? new PiAdapter({
-            ...(model === undefined ? {} : { model }),
+            ...(route.model === undefined ? {} : { model: route.model }),
+            ...(route.thinking === undefined ? {} : { thinking: route.thinking }),
             env: env.env,
             autoSubagents: false,
             ...spawnOption,
           })
         : new PiAdapter({
-            ...(model === undefined ? {} : { model }),
+            ...(route.model === undefined ? {} : { model: route.model }),
+            ...(route.thinking === undefined ? {} : { thinking: route.thinking }),
             env: env.env,
             extensions: env.piExtensions,
             trustedTools: PI_SUBAGENT_TOOLS,
@@ -174,13 +208,13 @@ export function adapterFor(
           })
     case 'claude':
       return new ClaudeCodeAdapter({
-        ...(model === undefined ? {} : { model }),
+        ...(route.model === undefined ? {} : { model: route.model }),
         env: env.env,
         ...spawnOption,
       })
     case 'omp':
       return new OmpAdapter({
-        model: model ?? DEFAULT_OMP_MODEL,
+        ...(route.model === undefined ? {} : { model: route.model }),
         env: env.env,
         ...spawnOption,
       })

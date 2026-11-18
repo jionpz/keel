@@ -14,7 +14,7 @@
 | [Session Context](./session-context.md) | 上下文下行桥：`withPrompt` 只能追加、Adapter 渲染全部 section、`ContextBuilt` 不得说假话 | ✅ 已填（`08-26-v01-closeout`） |
 | [Harness Adapter](./harness-adapter.md) | 子进程环境隔离（宿主运行时变量）、同 Run 多轮 state 定位、argv 以当前 CLI 版本为准 | ✅ 已填（`10-25-claude-auth-config`） |
 | [Executor Isolation](./executor-isolation.md) | 执行器环境 allowlist、容器规格门禁、真实 Docker 负例探针与证据边界 | ✅ 已填（JT-02A 切片） |
-| [Model Routing](./model-routing.md) | 优先级链单一裁决点、`requested_model` 与 spawn 同源、allowlist 启动期预检先于 ingest、claude 不消费 `spec.model` | ✅ 已填（`11-03-execution-model-routing`） |
+| [Model Routing](./model-routing.md) | 项目不预设模型、部署方 profile 按 harness/stage/role 配置、managed 与 legacy 共用解析、`requested_model` 与 spawn 同源、allowlist 启动期预检先于 ingest | ✅ 已填（`11-03`；#156 起改部署方配置） |
 | [Workspace Diff](./workspace-diff.md) | `collectChanges` 接入编排：采集时机、HEAD 基线、未跟踪文件、事件载体与 fail-closed | ✅ 已填（`10-25-collect-changes-wiring`） |
 | [Transition Effects](./transition-effects.md) | `firstRun`/`nextRun` 的可用站点与白名单双向断言、撞键可归因（`existing_status`）、不改键算法的理由、Task 级 timer 三件套的武装/取消对称与 `claimDueTimers` 的 `JOIN task` 防线 | ✅ 已填（`10-26-run-reentry-wallclock`；`11-05-human-review-ttl` 补 timer 章节；`11-07-human-review-ttl-gap` 补存量对账） |
 | [Orchestrator Loop](./orchestrator-loop.md) | 停止原因必填（`stopReason`）、阶段态无 run 的证据式判据、单进程前提、只报告不修复 | ✅ 已填（`10-26-orchestrator-stop-reasons`） |

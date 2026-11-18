@@ -37,6 +37,7 @@ export const CLAUDE_CAPABILITIES: readonly CapabilityId[] = [
   'CAP-RESUME',
   'CAP-COST',
   'CAP-PERMISSION',
+  'CAP-MODEL_OVERRIDE',
 ]
 
 export interface ClaudeCodeOptions {
@@ -44,7 +45,7 @@ export interface ClaudeCodeOptions {
   readonly bin?: string
   /**
    * 仅当调用方显式指定时传入 argv `--model`。
-   * 缺省**不传** —— 禁止把 OMP 缺省 `deepseek-v4-flash` 塞给 claude。
+   * 缺省**不传** —— 由 claude 自己的配置决定，不能借用其它 harness 的模型。
    */
   readonly model?: string
   readonly spawnFn?: typeof spawn
@@ -108,6 +109,17 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
   }
 
   async startRun(spec: RunSpec): Promise<Result<RunHandle>> {
+    if (spec.model !== undefined && spec.model.trim() === '') {
+      return err(makeError('CAPABILITY_UNSUPPORTED', 'RunSpec.model 不能为空白；空白不等于未指定'))
+    }
+    if (spec.thinking !== undefined) {
+      return err(
+        makeError(
+          'CAPABILITY_UNSUPPORTED',
+          'Claude Code adapter 当前没有 thinking 参数；不能用项目默认值替代，也不能静默丢弃。',
+        ),
+      )
+    }
     if (spec.workspace.untrusted && !CLAUDE_CAPABILITIES.includes('CAP-UNTRUSTED_WORKSPACE')) {
       return err(
         makeError('CAPABILITY_UNSUPPORTED', 'workspace.untrusted 要求 CAP-UNTRUSTED_WORKSPACE'),
@@ -236,8 +248,9 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
     tools: readonly string[],
   ): Promise<Result<RunResult>> {
     const prompt = renderPrompt(spec)
+    const requestedModel = spec.model !== undefined ? spec.model.trim() : this.model?.trim()
     const argvOpts: ClaudeArgvOpts = {
-      ...(this.model === undefined ? {} : { model: this.model }),
+      ...(requestedModel === undefined || requestedModel === '' ? {} : { model: requestedModel }),
       prompt,
       tools,
     }

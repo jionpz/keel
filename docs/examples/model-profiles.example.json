@@ -1,0 +1,29 @@
+{
+  "profiles": {
+    "team-a": {
+      "omp": {
+        "stages": {
+          "develop": { "model": "<model-id>" },
+          "managed_investigate": { "model": "<model-id>" },
+          "tianwen": { "model": "<model-id>" }
+        },
+        "roles": {
+          "Reviewer": { "model": "<model-id>" }
+        }
+      },
+      "claude": {
+        "stages": {
+          "develop": { "model": "<model-id>" }
+        }
+      },
+      "pi": {
+        "stages": {
+          "develop": { "model": "<model-id>", "thinking": "<level>" }
+        },
+        "roles": {
+          "Reviewer": { "model": "<model-id>", "thinking": "<level>" }
+        }
+      }
+    }
+  }
+}

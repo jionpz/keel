@@ -10,12 +10,9 @@ import { parseArgs } from './argv.js'
 import {
   CI_MODES,
   createHarnessAdapter,
-  DEFAULT_OMP_MODEL,
   HARNESS_IDS,
   parseCiMode,
   resolveHarness,
-  resolveModel,
-  resolveModelForHarness,
   resolveOptionalModel,
 } from './run-task.js'
 
@@ -244,59 +241,8 @@ describe('resolveHarness · CLI > env > 缺省 omp，非法拒绝', () => {
   })
 })
 
-describe('resolveModel · CLI > env > 缺省，空白拒绝', () => {
-  it('都不给 → 缺省 deepseek-v4-flash', () => {
-    const r = resolveModel(undefined, undefined)
-    expect(r.ok && r.value).toBe(DEFAULT_OMP_MODEL)
-    expect(r.ok && r.value).toBe('deepseek-v4-flash')
-  })
-
-  it('--model 取值原样(trim)', () => {
-    const r = resolveModel('  gpt-5.2  ', 'ignored')
-    expect(r.ok && r.value).toBe('gpt-5.2')
-  })
-
-  it('KEEL_MODEL 在无 CLI 时生效', () => {
-    const r = resolveModel(undefined, '  claude-opus  ')
-    expect(r.ok && r.value).toBe('claude-opus')
-  })
-
-  it('CLI 覆盖 env', () => {
-    const r = resolveModel('gpt-5.2', DEFAULT_OMP_MODEL)
-    expect(r.ok && r.value).toBe('gpt-5.2')
-  })
-
-  it('空白 CLI 拒绝，不回退缺省', () => {
-    for (const cli of ['', '   ', true] as const) {
-      const r = resolveModel(cli, DEFAULT_OMP_MODEL)
-      expect(r.ok).toBe(false)
-      if (r.ok) return
-      expect(r.error.kind).toBe('CAPABILITY_UNSUPPORTED')
-      expect(r.error.retryable).toBe(false)
-      expect(r.error.detail).toMatch(/空白/)
-    }
-  })
-
-  it('空白 KEEL_MODEL 拒绝，不回退缺省', () => {
-    const r = resolveModel(undefined, '   ')
-    expect(r.ok).toBe(false)
-    if (r.ok) return
-    expect(r.error.kind).toBe('CAPABILITY_UNSUPPORTED')
-    expect(r.error.detail).toMatch(/KEEL_MODEL/)
-  })
-
-  it('parseArgs 的 --model 无值(布尔 true)拒绝', () => {
-    const p = parseArgs(['task-1', '--model'])
-    expect(p.flags.model).toBe(true)
-    const r = resolveModel(p.flags.model, undefined)
-    expect(r.ok).toBe(false)
-    if (r.ok) return
-    expect(r.error.kind).toBe('CAPABILITY_UNSUPPORTED')
-  })
-})
-
 describe('resolveOptionalModel · 都不给是 undefined，不套 omp 缺省', () => {
-  it('都不给 → undefined（claude 用这条，避免 deepseek 进 --model）', () => {
+  it('都不给 → undefined（避免把一个 harness 的模型串给另一个）', () => {
     const r = resolveOptionalModel(undefined, undefined)
     expect(r.ok && r.value).toBeUndefined()
   })
@@ -304,26 +250,6 @@ describe('resolveOptionalModel · 都不给是 undefined，不套 omp 缺省', (
   it('有 CLI 时原样 trim，不套缺省', () => {
     const r = resolveOptionalModel('  opus  ', undefined)
     expect(r.ok && r.value).toBe('opus')
-  })
-})
-
-describe('resolveModelForHarness · omp 套缺省，claude 不套', () => {
-  it('omp 都不给 → DEFAULT_OMP_MODEL', () => {
-    const r = resolveModelForHarness('omp', undefined, undefined)
-    expect(r.ok && r.value).toBe(DEFAULT_OMP_MODEL)
-  })
-
-  it('claude 都不给 → undefined，不是 deepseek', () => {
-    const r = resolveModelForHarness('claude', undefined, undefined)
-    expect(r.ok).toBe(true)
-    if (!r.ok) return
-    expect(r.value).toBeUndefined()
-    expect(r.value).not.toBe(DEFAULT_OMP_MODEL)
-  })
-
-  it('claude 显式 model 原样，仍不是缺省 deepseek', () => {
-    const r = resolveModelForHarness('claude', '  claude-opus-4-6  ', DEFAULT_OMP_MODEL)
-    expect(r.ok && r.value).toBe('claude-opus-4-6')
   })
 })
 

@@ -83,7 +83,7 @@ HTTP 夹具统一使用 `src/test-support/http-server.ts` 的 Unix socket；禁�
 
 1. **纯函数**(解析、tier、argv)→ 用真实抓到的样本 fixture,不起进程
 2. **契约拒绝**(schema 违规、能力未声明)→ 不起进程
-3. **真实集成** → 真调 omp + deepseek,慢且花钱,**但不做 mock**
+3. **真实集成** → 真调 omp（模型由部署配置决定）,慢且花钱,**但不做 mock**
 
 理由:mock 一个 harness 验证的是「我以为它会怎样」,不是「它实际怎样」。
 本项目已经为「未经反例验证的检查」付出过代价(见 error-handling.md §防假绿)。
@@ -108,8 +108,11 @@ HTTP 夹具统一使用 `src/test-support/http-server.ts` 的 Unix socket；禁�
 
 | 变量 | 用途 | 要求 |
 |---|---|---|
-| `OPENCODE_API_KEY`(或 `DEEPSEEK_API_KEY`) | omp 推理网关(OmpAdapter 默认模型 `deepseek-v4-flash`) | 任一即可解锁 |
-| `KEEL_MODEL` | 覆盖 OMP `--model`(CLI `--model` 优先) | 可选；空白拒绝、不静默回退缺省 `deepseek-v4-flash` |
+| `OPENCODE_API_KEY`(或 `DEEPSEEK_API_KEY`) | omp 推理网关凭据(模型由 omp 自身配置或部署 profile 决定) | 任一即可解锁 |
+| `KEEL_MODEL` | 显式覆盖 `--model`(CLI `--model` 优先) | 可选；未设置时不传模型；空白拒绝 |
+| `KEEL_MODEL_PROFILES_FILE` | 部署方模型路由 JSON | 选了 `KEEL_MODEL_PROFILE` 时必填 |
+| `KEEL_MODEL_PROFILE` | 选中部署方 profile | 可选；未设置时不按 profile 路由 |
+| `KEEL_MODEL_ALLOWLIST` | 允许的最终模型清单(逗号分隔) | 可选；启动期检查 profile 全部条目 |
 | `KEEL_HARNESS` | 选择 Adapter(`omp` / `claude`;CLI `--harness` 优先) | 可选；缺省 `omp`；非法/空白拒绝、不静默回退 |
 | `ANTHROPIC_API_KEY` | Claude Code `--bare` 认证(不读 OAuth / 钥匙串) | `--harness claude` 与 `claude-code-e2e` 必须 |
 | `KEEL_GITHUB_TOKEN`(优先)/ `GITHUB_TOKEN` | GitHub REST:PR 创建 + CI 回读(`GitHubProvider`);git https clone/fetch/push 的传输认证 | 见下「token 能力边界」;传输认证见 `git-workspace.md` |

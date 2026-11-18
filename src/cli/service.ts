@@ -24,6 +24,11 @@ import {
   serviceReasonCode,
 } from '../control/service/runtime.js'
 import { createIsolatedManagedInference } from '../execution/isolated-ticket-worker.js'
+import {
+  loadModelRoutingSettings,
+  type ModelRoutingSettings,
+  preflightModelRouting,
+} from '../execution/model-routing.js'
 import { closePool } from '../fact/db.js'
 import { GitCliPushGateway } from '../fact/git-push.js'
 import { GitHubProvider } from '../fact/github-provider.js'
@@ -101,7 +106,7 @@ export const SERVICE_HELP = `用法: keel serve [选项]
 
 选项:
   --harness omp|claude|pi   缺省读取 KEEL_HARNESS；启动时预检可执行文件
-  --model <id>              缺省读取 KEEL_MODEL
+  --model <id>              也可设 KEEL_MODEL；未指定时不传模型
   --no-ingress              不运行 GitHub issue 接入 poller（默认运行）
   --ci passed|failed|real   ingress 使用的 CI 模式，缺省 real
   --concurrency <n>         ingress 在途驱动上限，缺省 3
@@ -117,6 +122,7 @@ export const SERVICE_HELP = `用法: keel serve [选项]
 
 说明:
   ingress 仍驱动 legacy-v01 issue 任务；--no-ingress 时只管理已持久化的 managed 工作。
+  KEEL_MODEL_PROFILES_FILE / KEEL_MODEL_PROFILE 提供部署方模型路由；项目不预设模型。
   摘要组件只生成 DRAFT，发布/回滚仍需 owner 显式命令。
   同一数据库只允许一个 serve；启用 ingress 时还会与独立 poller 互斥。`
 
@@ -124,6 +130,7 @@ function buildDefaultComponents(options: {
   readonly worker: ManagedTicketWorker
   readonly harness: HarnessId
   readonly model?: string
+  readonly modelRouting: ModelRoutingSettings
   readonly now: () => string
   readonly liveness: LivenessStore
   readonly intervals: {
@@ -146,7 +153,10 @@ function buildDefaultComponents(options: {
     {
       ...createManagedComponent({
         worker: options.worker,
-        infer: createIsolatedManagedInference(options.harness, options.model),
+        infer: createIsolatedManagedInference(options.harness, {
+          ...(options.model === undefined ? {} : { model: options.model }),
+          routing: options.modelRouting,
+        }),
       }),
       intervalMs: options.intervals.managed,
     },
@@ -259,6 +269,14 @@ export async function serveMain(
     if (!harness.ok) throw new Error(harness.error.detail)
     const model = resolveOptionalModel(optionalString(flags, 'model'), process.env.KEEL_MODEL)
     if (!model.ok) throw new Error(model.error.detail)
+    const routing = loadModelRoutingSettings(process.env)
+    if (!routing.ok) throw new Error(routing.error.detail)
+    const preflight = preflightModelRouting({
+      harness: harness.value,
+      routing: routing.value,
+      ...(model.value === undefined ? {} : { override: model.value }),
+    })
+    if (!preflight.ok) throw new Error(preflight.error.detail)
     if (flags.ingress === true && flags['no-ingress'] === true)
       throw new Error('--ingress 与 --no-ingress 不能同时使用')
     // 单一服务入口默认覆盖接入；--no-ingress 仅用于明确只处理已持久化 managed 工作。
@@ -281,6 +299,7 @@ export async function serveMain(
       (await createManagedTicketWorker({
         harness: harness.value,
         ...(model.value === undefined ? {} : { model: model.value }),
+        modelRouting: routing.value,
       }))
 
     let ingressDeps: Awaited<ReturnType<typeof buildPollerRuntime>>['deps'] | undefined
@@ -289,6 +308,7 @@ export async function serveMain(
         ci,
         harness: harness.value,
         ...(model.value === undefined ? {} : { model: model.value }),
+        modelRouting: routing.value,
         ...(wallClock.value === undefined ? {} : { wallClockS: wallClock.value }),
         now,
       })
@@ -316,6 +336,7 @@ export async function serveMain(
         worker,
         harness: harness.value,
         ...(model.value === undefined ? {} : { model: model.value }),
+        modelRouting: routing.value,
         now,
         liveness,
         intervals: {

@@ -14,7 +14,11 @@ import type { Result } from '../contracts/errors.js'
 import { err, makeError, ok } from '../contracts/errors.js'
 import { type ClaudeAuthProbe, requireClaudeReady } from '../execution/adapters/claude-code.js'
 import { requirePiBinary } from '../execution/adapters/pi.js'
-import { parseAllowlist, parseProfile, preflightModelRouting } from '../execution/model-routing.js'
+import {
+  loadModelRoutingSettings,
+  type ModelRoutingSettings,
+  preflightModelRouting,
+} from '../execution/model-routing.js'
 import { loadConfiguredToolPolicy, type ToolPolicyDocument } from '../execution/tool-policy.js'
 import type { TokenResolver } from '../fact/github-auth.js'
 import { type GitHubProvider, ownerRepo, parseIssueUrl } from '../fact/github-provider.js'
@@ -24,7 +28,6 @@ import { resolveHumanReviewTtlMs } from './human-review-ttl.js'
 import { ingestIssue } from './ingest-issue.js'
 import {
   type CiMode,
-  DEFAULT_OMP_MODEL,
   parseCiMode,
   parseWallClock,
   printNonDoneReport,
@@ -52,6 +55,8 @@ export interface RunIssueOptions {
   readonly wallClockS?: number
   /** 透传 runTask 的 `--model`；省略则按 harness 解析 */
   readonly model?: string | number | boolean
+  /** 已解析的模型路由配置；省略时从环境读取。 */
+  readonly modelRouting?: ModelRoutingSettings
   /** 透传 runTask 的 `--harness`；省略则 KEEL_HARNESS / 缺省 omp */
   readonly harness?: string | number | boolean
   /** 测试注入 stub provider(只作用于 ingest 侧读 Issue) */
@@ -117,21 +122,19 @@ export async function runIssue(opts: RunIssueOptions): Promise<Result<RunIssueRe
     if (!ready.ok) return ready
   }
 
-  // 只把**显式**模型传下去；omp 缺省由 runTask 里的模型路由按 profile 补齐。
+  // 只把**显式**模型传下去；其它模型由 runTask 按 profile 的 stage / role 解析。
   const model = resolveOptionalModel(opts.model, process.env.KEEL_MODEL)
   if (!model.ok) return model
 
   // profile / allowlist 同样先于 ingest：非法配置不能让库里多一个驱动不了的 task。
-  const profile = parseProfile(process.env.KEEL_MODEL_PROFILE)
-  if (!profile.ok) return profile
-  const allowlist = parseAllowlist(process.env.KEEL_MODEL_ALLOWLIST)
-  if (!allowlist.ok) return allowlist
+  const routing =
+    opts.modelRouting === undefined ? loadModelRoutingSettings(process.env) : ok(opts.modelRouting)
+  if (!routing.ok) return routing
   // 清单必须覆盖本次调用所有可能 spawn 的模型 —— 否则要到驱动第一个 run 才失败，
   // 而那时 ingest 已经写入了 feedback / task。
   const preflight = preflightModelRouting({
-    harnessId: harness.value,
-    profile: profile.value,
-    allowlist: allowlist.value,
+    harness: harness.value,
+    routing: routing.value,
     ...(model.value === undefined ? {} : { override: model.value }),
   })
   if (!preflight.ok) return preflight
@@ -147,6 +150,7 @@ export async function runIssue(opts: RunIssueOptions): Promise<Result<RunIssueRe
       ...(opts.claudeAuthProbe === undefined ? {} : { claudeAuthProbe: opts.claudeAuthProbe }),
       harness: harness.value,
       ...(model.value === undefined ? {} : { model: model.value }),
+      modelRouting: routing.value,
       humanReviewTtlMs: humanReviewTtl.value,
       ...(opts.tokenResolver === undefined ? {} : { tokenResolver: opts.tokenResolver }),
       toolPolicy: toolPolicy.value,
@@ -233,18 +237,19 @@ ingest 一个 GitHub Issue 并把产生的 task 驱动到终态。
 --ci 缺省 passed(模拟 CI);--ci real 接真实 GitHub PR / CI,凭据来源同上。
 --harness 缺省 omp，也可设 KEEL_HARNESS；非法值拒绝（不静默回退）。
 --redrive 仅用于上一轮 PR 未合并关闭后，为同一 issue 开新 Task；其它终态拒绝。
---model 对 omp 缺省 ${DEFAULT_OMP_MODEL}，也可设 KEEL_MODEL；空白值拒绝（不静默回退）。
-claude / pi 未指定 --model / KEEL_MODEL 时不传 --model。
-KEEL_MODEL_PROFILE 可选 default|enterprise（缺省 default）：enterprise 按阶段使用企业网关目录；
-非法值启动即报错。KEEL_MODEL_ALLOWLIST 可选逗号分隔的允许模型；必须覆盖 profile 下所有阶段
-可能 spawn 的模型，否则在 ingest 之前就拒绝。
+--model 也可设 KEEL_MODEL；未指定时不传 --model，由 harness 自己的配置决定（项目不预设模型）。
+KEEL_MODEL_PROFILES_FILE 指向部署方的 profile JSON；KEEL_MODEL_PROFILE 选择其中一个 profile。
+profile 按 harness/stage/role 配置模型，非法 JSON、未知 stage/role、空值启动即报错。
+KEEL_MODEL_ALLOWLIST 可选逗号分隔的允许模型；配置中出现的模型必须命中，否则在 ingest 之前拒绝。
+thinking 只由支持它的 harness（当前 Pi）消费；其它 harness 配了 thinking 会拒绝启动。
 --wall-clock 显式覆盖 stage 墙钟硬上限（秒）；缺省按 stage 策略（develop 12h）；只接受正整数，非法值拒绝。
 KEEL_HUMAN_REVIEW_TTL_H 控制 S-HUMAN_REVIEW 的超时自动弃单（小时，缺省 24；0 = 关闭；非法值启动即报错）。`)
     return
   }
   const mode = readLivenessMode('run-issue')
   if (mode === undefined) return
-  if (readModelRoutingEnv('run-issue') === undefined) return
+  const routing = readModelRoutingEnv('run-issue')
+  if (routing === undefined) return
   const issueUrl = positionals[0] as string
   const label = typeof flags.label === 'string' ? flags.label : undefined
   const repoId = typeof flags.repo === 'string' ? flags.repo : undefined
@@ -289,6 +294,7 @@ KEEL_HUMAN_REVIEW_TTL_H 控制 S-HUMAN_REVIEW 的超时自动弃单（小时，�
     ...(maxSteps === undefined ? {} : { maxSteps }),
     ci: ci.value,
     harness: harness.value,
+    modelRouting: routing,
     redrive,
     ...(model.value === undefined ? {} : { model: model.value }),
     ...(wallClock.value === undefined ? {} : { wallClockS: wallClock.value }),
