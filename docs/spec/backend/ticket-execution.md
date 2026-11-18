@@ -163,6 +163,22 @@ review 的 diff 摘要由 Control 运行 `git diff --binary baseline..HEAD` 计�
 被 workflow 节点绑定的 ticket 还会在 execute 后检查 `baseline..HEAD` 的实际改动文件：
 每个路径必须落在节点 `scope_paths` 内，否则阶段失败为 `SCOPE_VIOLATION`。
 
+检查分工由固定阶段指令给出，只取决于阶段名，与仓库无关：
+
+- `execute` 只运行覆盖本次改动的定向检查：受改动影响的测试文件，以及类型检查、
+  lint 等静态检查。不运行项目的完整测试套件或完整检查命令。
+- 完整验证只在 `verify` 运行；项目声明 `check:isolated` 时优先使用它。
+- 任何阶段的检查都不能连接宿主开发库或测试库。
+
+要求在 execute 运行完整检查的来源有三处：固定包里 execute 的 provider 原文（按“一个
+会话做完实现和验证”书写）、仓库自己的规则（例如“提交前必须运行完整检查”）、ticket
+的验收条目。照它们执行会让 execute 和 verify 各跑一遍完整检查；完整检查的耗时接近
+阶段上限时，execute 常在检查中途超时、整轮作废。所以阶段指令写明这三处与它冲突时
+以它为准，这类要求由 verify 在同一提交上满足。少点名一处，那一处就会把完整检查带回
+execute。分工不改变门禁：execute 仍按提交、工作树与 scope 判定，verify 的每条 check
+仍是硬门禁。verify 的完整检查失败时任务按 `VERIFICATION_FAILED` 暂停，不会自动回到
+execute。
+
 verify 的 command/result 是隔离执行器产出的结构化证据，并由 Keel 用真实 git HEAD、
 工作树干净状态和 diff 摘要绑定；`output_digest` 由 Keel 从 `output_excerpt` 重新
 计算，不信任模型自报摘要。它不是模型自报的 `completed` 文本。当前切片不重放任意

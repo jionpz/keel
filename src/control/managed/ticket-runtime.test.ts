@@ -658,6 +658,46 @@ describe('managed ticket runtime', () => {
     })
   })
 
+  it('阶段指令把完整验证只交给 verify，execute 只跑定向检查', async () => {
+    const { root, taskId } = await seed()
+    const happy = happyWorker(root)
+    const roles = new Map<string, string>()
+    const worker: ManagedTicketWorker = {
+      ...happy,
+      run: (input) => {
+        const role = input.context.sections.find((entry) => entry.id === 'role')
+        roles.set(input.stage, role?.content ?? '')
+        return happy.run(input)
+      },
+    }
+    for (let index = 0; index < 4; index++) {
+      const tick = await tickManagedTicket(worker, taskId)
+      if (!tick.ok) throw new Error(tick.error.detail)
+    }
+    expect([...roles.keys()]).toEqual(['execute', 'verify', 'review', 'land'])
+
+    const execute = roles.get('execute') ?? ''
+    expect(execute).toContain('只运行覆盖本次改动的定向检查')
+    expect(execute).toContain('不运行项目的完整测试套件或完整检查命令')
+    expect(execute).toContain('完整验证由 verify 阶段运行一次')
+    // 要求在 execute 跑完整检查的来源有三处：provider 原文、仓库规则、ticket 验收条目。
+    // 少点名一处，那一处就会把完整检查带回 execute，所以三处都要写明谁优先。
+    expect(execute).toContain('provider 原文、仓库规则或 ticket 验收条目')
+    expect(execute).toContain('以本节为准')
+    expect(execute).toContain('这类要求由 verify 阶段在同一提交上满足')
+
+    const verify = roles.get('verify') ?? ''
+    expect(verify).toContain('完整验证只在本阶段运行')
+    expect(verify).toContain('若项目声明 check:isolated，优先使用该命令')
+
+    // 运行完整检查的指引只出现在 verify，其余阶段不会被它带去重复运行。
+    for (const stage of ['execute', 'review', 'land'])
+      expect(roles.get(stage)).not.toContain('优先使用该命令')
+    // 不连宿主库是所有阶段的边界，不随检查分工移动。
+    for (const text of roles.values())
+      expect(text).toContain('任何检查都不能连接宿主开发库或测试库')
+  })
+
   it('land 时把 workflow 来源 issue 写进 PR 正文', async () => {
     const { repoId, root, taskId } = await seed()
     await bindWorkflowIssue(repoId, taskId, 'jionpz/keel#129')
