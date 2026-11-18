@@ -27,7 +27,7 @@
 **检查一旦不可信，就等于没有检查。**
 
 实测依据：`v01-criterion` 在一次 `check` 中失败、重跑通过
-（51s 失败 / 146s 通过）。根因是 deepseek 输出有波动，
+（51s 失败 / 146s 通过）。根因是模型输出有波动，
 R-007 的重试仍可能连续三次不合格。
 
 ## 这不是「不可用就跳过」
@@ -72,7 +72,9 @@ FEEDBACK 注释里分析过的那类夹具错误）；其唯一独特断言 —�
 |---|---|---|
 | `omp` CLI（不是环境变量） | 六个阶段的推理 | 必须在 `PATH` 上 |
 | `OPENCODE_API_KEY`（或 `DEEPSEEK_API_KEY`） | omp 推理网关 | 任一即可 |
-| `KEEL_MODEL` | 覆盖 OMP 模型（也可 `keel run-issue … --model <id>`） | 可选；缺省 `deepseek-v4-flash`；空白值会启动失败 |
+| `KEEL_MODEL` | 显式覆盖模型（也可 `keel run-issue … --model <id>`） | 可选；未设置时不传 `--model`，由 harness 自身配置决定；空白值会启动失败 |
+| `KEEL_MODEL_PROFILES_FILE` / `KEEL_MODEL_PROFILE` | 部署方模型路由配置与选中的 profile | 可选；选择 profile 时必须提供配置文件 |
+| `KEEL_MODEL_ALLOWLIST` | 允许的最终模型清单 | 可选；启动期检查 profile 全部条目 |
 | `KEEL_HARNESS` | 选择执行层（也可 `--harness omp\|claude`） | 可选；缺省 `omp`；非法/空白拒绝，不静默回退 |
 | `ANTHROPIC_API_KEY` | Claude Code `--bare` 认证（不读 OAuth） | `--harness claude` / `claude-code-e2e` 必须 |
 | `KEEL_GITHUB_TOKEN`（或 `GITHUB_TOKEN`） | PR 创建 + CI 回读（REST API） | fine-grained PAT：Contents RW + Pull requests RW |

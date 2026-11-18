@@ -5,7 +5,7 @@ import { DEFAULT_SANDBOX_EXEC } from '../execution/isolation/os-sandbox.js'
 import { collectDoctorReport, type DoctorDeps } from './doctor.js'
 
 const NOW = '2026-11-11T00:00:00.000Z'
-const MODEL = 'opencode-go/deepseek-v4.1-flash'
+const MODEL = 'deployment/doctor-model'
 
 function deps(over: Partial<DoctorDeps> = {}): DoctorDeps {
   return {

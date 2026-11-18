@@ -18,16 +18,40 @@ import type {
   RunSpec,
   WorkspaceDiff,
 } from '../../contracts/harness-adapter.js'
+import { CLAUDE_TOOL_INVENTORY_2_1_314 } from '../../execution/adapters/claude-code.js'
+import type { ModelProfileDefinition, ModelRoutingSettings } from '../../execution/model-routing.js'
 import { HarnessSessionManager } from '../../execution/session/manager.js'
 import { loadToolPolicy } from '../../execution/tool-policy.js'
 import { asOwner, closePool } from '../../fact/db.js'
-import type { Stage, TaskStatus } from '../../shared/ids.js'
+import type { RoleId, Stage, TaskStatus } from '../../shared/ids.js'
 import { WorkflowDriver } from '../driver/driver.js'
 import { RuleBasedPolicyEngine } from '../policy/engine.js'
 import { DEFAULT_RULESET } from '../policy/ruleset.js'
 import { type OrchestratorDeps, runTaskToCompletion } from './loop.js'
 
 const NOW = '2026-11-05T12:00:00Z'
+
+const TEAM_PROFILE: ModelProfileDefinition = {
+  omp: {
+    stages: {
+      pm: { model: 'deployment/pm-model' },
+      develop: { model: 'deployment/dev-model' },
+      qa: { model: 'deployment/qa-model' },
+      review: { model: 'deployment/review-model' },
+    },
+    roles: {
+      Reviewer: { model: 'deployment/reviewer-model' },
+    },
+  },
+}
+
+function modelRouting(allowlist: readonly string[] = []): ModelRoutingSettings {
+  return {
+    profile: 'team-a',
+    profiles: { profiles: { 'team-a': TEAM_PROFILE } },
+    allowlist,
+  }
+}
 
 /** 每个 stage 一个合法 verdict —— 让 run 能真的成功，而不是靠失败路径蒙混 */
 const VERDICTS: Readonly<Record<Stage, string>> = {
@@ -122,7 +146,11 @@ afterAll(async () => {
   await closePool()
 })
 
-async function seed(stage: Stage, status: TaskStatus): Promise<{ taskId: string; runId: string }> {
+async function seed(
+  stage: Stage,
+  status: TaskStatus,
+  role: RoleId = 'PM',
+): Promise<{ taskId: string; runId: string }> {
   const repoId = randomUUID()
   const taskId = randomUUID()
   const runId = randomUUID()
@@ -139,8 +167,8 @@ async function seed(stage: Stage, status: TaskStatus): Promise<{ taskId: string;
     )
     await c.query(
       `INSERT INTO run (id, task_id, stage, role, attempt, status, idempotency_key)
-       VALUES ($1,$2,$3,'PM',1,'PENDING',$4)`,
-      [runId, taskId, stage, `${taskId}/${stage}/1`],
+       VALUES ($1,$2,$3,$4,1,'PENDING',$5)`,
+      [runId, taskId, stage, role, `${taskId}/${stage}/1`],
     )
   })
   return { taskId, runId }
@@ -163,67 +191,84 @@ async function runErrorKind(runId: string): Promise<string | null> {
 }
 
 describe('requested_model 与 spawn 的模型同源', () => {
-  it('未设新变量：omp 仍 spawn deepseek-v4-flash，且落库一致（R1）', async () => {
+  it('未配置路由：omp 不收到 model，requested_model 为 NULL', async () => {
     const { taskId, runId } = await seed('develop', 'S-DEVELOPING')
     const adapter = new RecordingAdapter('omp', 'develop')
 
     await runTaskToCompletion(taskId, deps(adapter), { maxSteps: 1 })
 
-    expect(adapter.specs[0]?.model).toBe('deepseek-v4-flash')
-    expect(await requestedModel(runId)).toBe(adapter.specs[0]?.model)
+    expect(adapter.specs[0]?.model).toBeUndefined()
+    expect(await requestedModel(runId)).toBeNull()
   })
 
-  it('enterprise profile：develop → Kimi-K3，requested_model 同值（R2/R5）', async () => {
+  it('profile 的 stage 配置进入 RunSpec，requested_model 同值（R2/R5）', async () => {
     const { taskId, runId } = await seed('develop', 'S-DEVELOPING')
     const adapter = new RecordingAdapter('omp', 'develop')
 
-    await runTaskToCompletion(taskId, deps(adapter, { modelProfile: 'enterprise' }), {
+    await runTaskToCompletion(taskId, deps(adapter, { modelRouting: modelRouting() }), {
       maxSteps: 1,
     })
 
-    expect(adapter.specs[0]?.model).toBe('moonshotai/Kimi-K3')
-    expect(await requestedModel(runId)).toBe('moonshotai/Kimi-K3')
+    expect(adapter.specs[0]?.model).toBe('deployment/dev-model')
+    expect(await requestedModel(runId)).toBe('deployment/dev-model')
   })
 
-  it('enterprise profile：pm → GLM-5.3，且与 develop 不同', async () => {
+  it('不同 stage 可以使用不同模型', async () => {
     const dev = await seed('develop', 'S-DEVELOPING')
     const devAdapter = new RecordingAdapter('omp', 'develop')
-    await runTaskToCompletion(dev.taskId, deps(devAdapter, { modelProfile: 'enterprise' }), {
+    await runTaskToCompletion(dev.taskId, deps(devAdapter, { modelRouting: modelRouting() }), {
       maxSteps: 1,
     })
 
     const pm = await seed('pm', 'S-PM_ANALYZING')
     const pmAdapter = new RecordingAdapter('omp', 'pm')
-    await runTaskToCompletion(pm.taskId, deps(pmAdapter, { modelProfile: 'enterprise' }), {
+    await runTaskToCompletion(pm.taskId, deps(pmAdapter, { modelRouting: modelRouting() }), {
       maxSteps: 1,
     })
 
-    expect(pmAdapter.specs[0]?.model).toBe('zai-org/GLM-5.3')
-    expect(await requestedModel(pm.runId)).toBe('zai-org/GLM-5.3')
+    expect(pmAdapter.specs[0]?.model).toBe('deployment/pm-model')
+    expect(await requestedModel(pm.runId)).toBe('deployment/pm-model')
     expect(devAdapter.specs[0]?.model).not.toBe(pmAdapter.specs[0]?.model)
   })
 
-  it('显式 override 全阶段生效，压过 enterprise 表（R3）', async () => {
+  it('role 配置压过 stage 配置', async () => {
+    const { taskId, runId } = await seed('review', 'S-REVIEW', 'Reviewer')
+    const adapter = new RecordingAdapter('omp', 'review')
+
+    await runTaskToCompletion(taskId, deps(adapter, { modelRouting: modelRouting() }), {
+      maxSteps: 1,
+    })
+
+    expect(adapter.specs[0]?.model).toBe('deployment/reviewer-model')
+    expect(await requestedModel(runId)).toBe('deployment/reviewer-model')
+  })
+
+  it('显式 override 全阶段生效，压过 profile（R3）', async () => {
     const { taskId, runId } = await seed('pm', 'S-PM_ANALYZING')
     const adapter = new RecordingAdapter('omp', 'pm')
 
     await runTaskToCompletion(
       taskId,
-      deps(adapter, { modelProfile: 'enterprise', modelOverride: 'custom/model' }),
+      deps(adapter, {
+        modelRouting: modelRouting(),
+        modelOverride: 'deployment/override-model',
+      }),
       { maxSteps: 1 },
     )
 
-    expect(adapter.specs[0]?.model).toBe('custom/model')
-    expect(await requestedModel(runId)).toBe('custom/model')
+    expect(adapter.specs[0]?.model).toBe('deployment/override-model')
+    expect(await requestedModel(runId)).toBe('deployment/override-model')
   })
 
   it('allowlist 未命中 → 不 spawn，run FAILED 且 requested_model 保持 NULL（R6）', async () => {
     const { taskId, runId } = await seed('develop', 'S-DEVELOPING')
     const adapter = new RecordingAdapter('omp', 'develop')
 
-    await runTaskToCompletion(taskId, deps(adapter, { modelAllowlist: ['moonshotai/Kimi-K3'] }), {
-      maxSteps: 1,
-    })
+    await runTaskToCompletion(
+      taskId,
+      deps(adapter, { modelRouting: modelRouting(['deployment/pm-model']) }),
+      { maxSteps: 1 },
+    )
 
     expect(adapter.specs, '解析失败不得启动进程').toHaveLength(0)
     expect(await runErrorKind(runId)).toBe('CAPABILITY_UNSUPPORTED')
@@ -231,7 +276,7 @@ describe('requested_model 与 spawn 的模型同源', () => {
   })
 })
 
-describe('claude 行为不变（R7）', () => {
+describe('claude 模型接线', () => {
   it('未指定模型：RunSpec 不带 model，requested_model 为 NULL', async () => {
     const { taskId, runId } = await seed('develop', 'S-DEVELOPING')
     const adapter = new RecordingAdapter('claude', 'develop')
@@ -242,19 +287,27 @@ describe('claude 行为不变（R7）', () => {
     expect(await requestedModel(runId)).toBeNull()
   })
 
-  it('显式模型：不走 profile 表，requested_model 记录显式值', async () => {
+  it('显式模型进入 RunSpec，requested_model 与 spawn 同源', async () => {
     const { taskId, runId } = await seed('develop', 'S-DEVELOPING')
-    const adapter = new RecordingAdapter('claude', 'develop')
+    const adapter = new RecordingAdapter('claude', 'develop', CLAUDE_TOOL_INVENTORY_2_1_314)
+    const loaded = await loadToolPolicy(
+      new URL('../../../config/jstack-tools.json', import.meta.url).pathname,
+    )
+    expect(loaded.ok).toBe(true)
+    if (!loaded.ok) return
 
     await runTaskToCompletion(
       taskId,
-      deps(adapter, { modelProfile: 'enterprise', modelOverride: 'claude-opus-4-6' }),
+      deps(adapter, {
+        modelOverride: 'deployment/claude-model',
+        toolPolicy: loaded.value,
+        toolPolicyAllowShellFallback: true,
+      }),
       { maxSteps: 1 },
     )
 
-    // claude 的模型来自 adapter 构造参数，RunSpec.model 不参与
-    expect(adapter.specs[0]?.model).toBeUndefined()
-    expect(await requestedModel(runId)).toBe('claude-opus-4-6')
+    expect(adapter.specs[0]?.model).toBe('deployment/claude-model')
+    expect(await requestedModel(runId)).toBe('deployment/claude-model')
   })
 })
 

@@ -9,7 +9,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { fixtureRoutePackage, fixtureRoutePlan } from '../control/managed/route-test-utils.js'
 import { getManagedTask } from '../control/managed/store.js'
 import { asOwner, closePool } from '../fact/db.js'
-import { managedMain } from './managed.js'
+import { createManagedTicketWorker, managedMain } from './managed.js'
 
 const run = promisify(execFile)
 
@@ -26,7 +26,14 @@ const WORKFLOW = {
   },
 }
 
-const ENV_KEYS = ['PATH', 'KEEL_HARNESS', 'KEEL_MODEL'] as const
+const ENV_KEYS = [
+  'PATH',
+  'KEEL_HARNESS',
+  'KEEL_MODEL',
+  'KEEL_MODEL_PROFILE',
+  'KEEL_MODEL_PROFILES_FILE',
+  'KEEL_MODEL_ALLOWLIST',
+] as const
 let savedEnv: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>>
 let savedExitCode: typeof process.exitCode
 
@@ -134,6 +141,39 @@ describe('managed CLI · 参数拒绝', () => {
       ['memory-retrieve', randomUUID(), '--query', '报告', '--budget-entries', '0'],
       '正整数',
     )
+  })
+})
+
+describe('managed worker · 模型路由预检', () => {
+  it('非法 profile 在探测 harness / 认领之前失败', async () => {
+    process.env.KEEL_MODEL_PROFILE = 'enterprize'
+    await expect(createManagedTicketWorker({ harness: 'omp' })).rejects.toThrow(
+      /KEEL_MODEL_PROFILE=enterprize/,
+    )
+  })
+
+  it('profile 缺少当前 harness 的表时失败，不静默执行', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'keel-managed-profile-'))
+    try {
+      const file = join(dir, 'profiles.json')
+      await writeFile(
+        file,
+        JSON.stringify({
+          profiles: {
+            'team-a': {
+              pi: { stages: { develop: { model: 'deployment/pi-model' } } },
+            },
+          },
+        }),
+        'utf8',
+      )
+      process.env.KEEL_MODEL_PROFILES_FILE = file
+      process.env.KEEL_MODEL_PROFILE = 'team-a'
+
+      await expect(createManagedTicketWorker({ harness: 'omp' })).rejects.toThrow(/harness=omp/)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 })
 

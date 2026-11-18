@@ -76,7 +76,7 @@
 | | Claude Code | OMP |
 |---|---|---|
 | `CAP-STRUCTURED_OUTPUT` | ✅ `--json-schema` | ❌ 需 `post_validate` |
-| `CAP-MODEL_OVERRIDE` | 默认不假设 | ✅ `--model` |
+| `CAP-MODEL_OVERRIDE` | ✅ `--model`（显式指定时） | ✅ `--model` |
 | `CAP-UNTRUSTED_WORKSPACE` | ✅ `--bare`（依据官方文档） | ✅ `--no-extensions --no-skills --no-rules`（**已反例验证：不加则仓库内扩展会被加载**） |
 
 > ⚠️ 下游任何设计**不得**假定上表 `未验证` 项的能力。
@@ -196,7 +196,8 @@ RunSpec {
     budget_usd:   number | null
   }
 
-  model?:           string          // 本次 run 请求的模型；Harness 支持 CAP-MODEL_OVERRIDE 时生效
+  model?:           string          // 本次 run 请求的模型；未设置 = 由 Harness 自己的配置决定
+  thinking?:        string          // 本次 run 请求的思考等级；只有支持的 Harness（当前 Pi）消费
 }
 ```
 
@@ -208,8 +209,9 @@ RunSpec {
   → 返回 `CAPABILITY_UNSUPPORTED`；调用方应改用 `post_validate`
 - 相同 `idempotency_key` 的重复调用 → 返回已有 `RunHandle`，**不得启动第二个进程**
 - `model` 是调用方按 stage 路由出的最终值（见 `docs/archive/tasks/2026-11/11-03-execution-model-routing`）：
-  与 `run.requested_model` 同源；不支持 `CAP-MODEL_OVERRIDE` 的 Harness 应忽略它，
-  而不是静默换成一个不同的模型
+  与 `run.requested_model` 同源；未设置时不注入项目缺省模型，
+  由 Harness 自己的配置决定。`thinking` 独立于 `model` 解析，只有支持的
+  Adapter 消费；不支持时必须拒绝而不是静默丢弃。
 
 ### 3.3 `awaitResult()` `[v0.1 必须]`
 
@@ -381,8 +383,9 @@ HarnessEvent {
 > `ModelProvider` **不服务于 Agent 干活**，只服务于 Keel 自己那几处小型 LLM 调用。
 > 它与 `HarnessAdapter` **不重叠**，是两条独立的路径。
 
-若某个 Harness 支持由外部指定模型，则通过一个可选 capability 表达
-（`CAP-MODEL_OVERRIDE`，v0.1 不实现）。**默认假设是模型归 Harness 管。**
+若某个 Harness 支持由外部指定模型，则通过可选 capability 表达
+（`CAP-MODEL_OVERRIDE`；当前 omp / pi / claude 支持）。
+**未显式指定时仍默认模型归 Harness 管。**
 
 ---
 

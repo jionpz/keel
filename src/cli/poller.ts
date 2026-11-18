@@ -12,7 +12,7 @@ import { err, makeError, ok, type Result } from '../contracts/errors.js'
 import { DEFAULT_MAX_RUNNING_RUNS } from '../control/concurrency/limits.js'
 import { collectIssueClarifications } from '../control/issue-clarification.js'
 import { drainIssueWriteback } from '../control/issue-writeback.js'
-import { preflightModelRouting } from '../execution/model-routing.js'
+import { type ModelRoutingSettings, preflightModelRouting } from '../execution/model-routing.js'
 import { asRole, closePool } from '../fact/db.js'
 import { resolveGitHubToken, type TokenResolver } from '../fact/github-auth.js'
 import { GitHubProvider, type IssueList } from '../fact/github-provider.js'
@@ -37,7 +37,6 @@ import { parseArgs } from './argv.js'
 import { runIssue } from './run-issue.js'
 import {
   type CiMode,
-  DEFAULT_OMP_MODEL,
   type HarnessId,
   parseCiMode,
   parseWallClock,
@@ -283,14 +282,14 @@ const HELP = `用法: keel poller [--interval <ms>] [--concurrency <n>] [--ci pa
                        排不下的 issue 记为 deferred,下一轮重扫;只接受 1-${DEFAULT_MAX_RUNNING_RUNS} 的整数
   --ci passed|failed|real
                        缺省 real;real 需要 GitHub 凭据(KEEL_GITHUB_TOKEN / GITHUB_TOKEN / gh auth login)
-  --model <id>         对 omp 缺省 ${DEFAULT_OMP_MODEL},也可设 KEEL_MODEL;空白值拒绝
+  --model <id>         也可设 KEEL_MODEL;未指定时不传 --model,由 harness 自己的配置决定
   --harness omp|claude|pi
                        缺省 omp,也可设 KEEL_HARNESS;非法值拒绝
   --wall-clock <秒>    显式覆盖 stage 墙钟硬上限;缺省按 stage 策略(develop 12h);只接受正整数
 
 环境变量:
-  KEEL_MODEL_PROFILE   default|enterprise(缺省 default);enterprise 按阶段使用企业网关目录
-  KEEL_MODEL_ALLOWLIST 逗号分隔的允许模型;必须覆盖 profile 下所有阶段可能 spawn 的模型,
+  KEEL_MODEL_PROFILES_FILE 部署方 profile JSON;KEEL_MODEL_PROFILE 选择其中一个 profile
+  KEEL_MODEL_ALLOWLIST 逗号分隔的允许模型;配置中出现的模型必须命中,
                       否则启动即失败(不会等每轮 ingest 写库后才在 run 上失败)
 
 label 从 repo.issue_label 读取,不提供 --label:每个仓库可以不同。
@@ -360,6 +359,7 @@ export interface BuildPollerRuntimeOptions {
   readonly ci: CiMode
   readonly harness: HarnessId
   readonly model?: string
+  readonly modelRouting?: ModelRoutingSettings
   readonly wallClockS?: number
   readonly deps?: PollerMainDeps
   readonly now?: () => string
@@ -407,6 +407,7 @@ export async function buildPollerRuntime(
           harness: options.harness,
           ...(input.redrive === undefined ? {} : { redrive: true }),
           ...(options.model === undefined ? {} : { model: options.model }),
+          ...(options.modelRouting === undefined ? {} : { modelRouting: options.modelRouting }),
           ...(options.wallClockS === undefined ? {} : { wallClockS: options.wallClockS }),
         })),
     listPrOpenTasks: deps.listPrOpenTasks ?? loadPrOpenGithubTasks,
@@ -470,7 +471,7 @@ export async function pollerMain(
   // 常驻进程启动时就校验：非法模式不能让它在每轮认领后才失败
   const mode = readLivenessMode('poller')
   if (mode === undefined) return
-  // 模型路由的拼写错误同理：常驻期间不能每轮都用缺省模型静默跑
+  // 模型路由的拼写错误同理：常驻期间不能每轮都绕过 profile 静默跑
   const routing = readModelRoutingEnv('poller')
   if (routing === undefined) return
 
@@ -495,9 +496,8 @@ export async function pollerMain(
   // allowlist 必须覆盖 profile 下所有可能 spawn 的模型：常驻进程不能等每轮
   // runIssue 的 ingest 写完之后才在第一个 run 上失败。
   const preflight = preflightModelRouting({
-    harnessId: harness.value,
-    profile: routing.profile,
-    allowlist: routing.allowlist,
+    harness: harness.value,
+    routing,
     ...(model.value === undefined ? {} : { override: model.value }),
   })
   if (!preflight.ok) {
@@ -543,6 +543,7 @@ export async function pollerMain(
       ci: ci.value,
       harness: harness.value,
       ...(model.value === undefined ? {} : { model: model.value }),
+      modelRouting: routing,
       ...(wallClock.value === undefined ? {} : { wallClockS: wallClock.value }),
       deps,
     })

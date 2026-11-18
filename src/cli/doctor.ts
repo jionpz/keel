@@ -14,7 +14,7 @@ import type { Result } from '../contracts/errors.js'
 import type { TrialEvaluation } from '../control/trial.js'
 import { readTrialStatus } from '../control/trial-store.js'
 import { CLAUDE_CAPABILITIES } from '../execution/adapters/claude-code.js'
-import { DEFAULT_OMP_MODEL, OMP_CAPABILITIES } from '../execution/adapters/omp.js'
+import { OMP_CAPABILITIES } from '../execution/adapters/omp.js'
 import { PI_CAPABILITIES } from '../execution/adapters/pi.js'
 import { tierOf } from '../execution/adapters/tier.js'
 import { selectManagedPiModel } from '../execution/isolation/managed-env.js'
@@ -210,9 +210,12 @@ function claudeCredentials(
 
 function piCredentials(
   run: (bin: string, args: readonly string[]) => CommandOutcome,
-  model: string,
+  model: string | undefined,
   deps: DoctorDeps,
 ): HarnessReadiness['credentials'] {
+  if (model === undefined) {
+    return { status: 'unknown', method: '未指定 KEEL_MODEL；doctor 不读取宿主默认模型' }
+  }
   let provider: string
   try {
     const models =
@@ -245,8 +248,11 @@ function piCredentials(
 
 function ompCredentials(
   run: (bin: string, args: readonly string[]) => CommandOutcome,
-  model: string,
+  model: string | undefined,
 ): HarnessReadiness['credentials'] {
+  if (model === undefined) {
+    return { status: 'unknown', method: '未指定 KEEL_MODEL；未检查具体模型' }
+  }
   const result = run('omp', ['models', '--json'])
   if (!result.ok) return { status: 'unknown', method: 'OMP 模型目录不可读取' }
   try {
@@ -263,7 +269,11 @@ function ompCredentials(
   }
 }
 
-function probeHarness(spec: HarnessSpec, deps: DoctorDeps, model: string): HarnessReadiness {
+function probeHarness(
+  spec: HarnessSpec,
+  deps: DoctorDeps,
+  model: string | undefined,
+): HarnessReadiness {
   const run = deps.run ?? defaultRun
   const versionResult = run(spec.bin, ['--version'])
   const version = versionResult.ok ? cleanVersion(versionResult.output) : null
@@ -369,7 +379,8 @@ export async function collectDoctorReport(
   const run = deps.run ?? defaultRun
   const now = deps.now ?? (() => new Date().toISOString())
   const observedAt = now()
-  const model = (deps.env ?? process.env).KEEL_MODEL?.trim() || DEFAULT_OMP_MODEL
+  const requestedModel = (deps.env ?? process.env).KEEL_MODEL?.trim()
+  const model = requestedModel === '' ? undefined : requestedModel
   const harnesses = SPECS.map((spec) => probeHarness(spec, deps, model))
   const selected = harnesses.find((harness) => harness.id === selectedHarness)
   if (selected === undefined) throw new Error(`未知 harness：${selectedHarness}`)

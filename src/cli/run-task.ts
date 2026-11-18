@@ -26,12 +26,13 @@ import {
   ClaudeCodeAdapter,
   requireClaudeReady,
 } from '../execution/adapters/claude-code.js'
-import { DEFAULT_OMP_MODEL, OmpAdapter } from '../execution/adapters/omp.js'
+import { OmpAdapter } from '../execution/adapters/omp.js'
 import { PiAdapter, requirePiBinary } from '../execution/adapters/pi.js'
 import {
-  type ModelProfile,
-  parseAllowlist,
-  parseProfile,
+  loadModelRoutingSettings,
+  MODEL_HARNESSES,
+  type ModelHarness,
+  type ModelRoutingSettings,
   preflightModelRouting,
 } from '../execution/model-routing.js'
 import { HarnessSessionManager } from '../execution/session/manager.js'
@@ -54,8 +55,8 @@ import { loadTaskRemoteUrl, loadTaskWorkspace } from './task-workspace.js'
 export const CI_MODES = ['passed', 'failed', 'real'] as const
 export type CiMode = (typeof CI_MODES)[number]
 
-export const HARNESS_IDS = ['omp', 'claude', 'pi'] as const
-export type HarnessId = (typeof HARNESS_IDS)[number]
+export const HARNESS_IDS = MODEL_HARNESSES
+export type HarnessId = ModelHarness
 
 export function parseCiMode(raw: string): Result<CiMode> {
   const found = CI_MODES.find((m) => m === raw)
@@ -71,14 +72,9 @@ export function parseCiMode(raw: string): Result<CiMode> {
   return ok(found)
 }
 
-export { DEFAULT_OMP_MODEL }
-
 /**
  * 解析模型 id，**不**套缺省。CLI `--model` > env `KEEL_MODEL`；都没有 → `undefined`。
  * 空白 / 只写标志 → `CAPABILITY_UNSUPPORTED`。
- *
- * omp 用 `resolveModel` 再套 `DEFAULT_OMP_MODEL`；claude / pi 用本函数，
- * 未指定则不传 `--model`（禁止把 deepseek 缺省塞给它们）。
  */
 export function resolveOptionalModel(
   cli: string | number | boolean | undefined,
@@ -93,15 +89,6 @@ export function resolveOptionalModel(
     return r.ok ? ok(r.value) : r
   }
   return ok(undefined)
-}
-
-export function resolveModel(
-  cli: string | number | boolean | undefined,
-  env: string | undefined,
-): Result<string> {
-  const r = resolveOptionalModel(cli, env)
-  if (!r.ok) return r
-  return ok(r.value ?? DEFAULT_OMP_MODEL)
 }
 
 /**
@@ -152,27 +139,6 @@ function parseHarnessToken(
   return ok(found)
 }
 
-/**
- * 按 harness 解析模型。omp 套缺省；claude / pi 不套（禁止 deepseek 进 --model）。
- * 新增 harness 必须加 case —— 没有 default 回退。
- */
-export function resolveModelForHarness(
-  harness: HarnessId,
-  cli: string | number | boolean | undefined,
-  env: string | undefined,
-): Result<string | undefined> {
-  switch (harness) {
-    case 'omp': {
-      const r = resolveModel(cli, env)
-      return r.ok ? ok(r.value) : r
-    }
-    case 'claude':
-      return resolveOptionalModel(cli, env)
-    case 'pi':
-      return resolveOptionalModel(cli, env)
-  }
-}
-
 export function createHarnessAdapter(
   harness: HarnessId,
   model: string | undefined,
@@ -183,7 +149,7 @@ export function createHarnessAdapter(
     case 'pi':
       return new PiAdapter(model === undefined ? {} : { model })
     case 'omp':
-      return new OmpAdapter({ model: model ?? DEFAULT_OMP_MODEL })
+      return new OmpAdapter(model === undefined ? {} : { model })
   }
 }
 
@@ -195,16 +161,13 @@ function parseModelToken(
     return err(
       makeError(
         'CAPABILITY_UNSUPPORTED',
-        `${source} 需要一个非空模型 id。只写标志没有值等同空白，` +
-          '空白模型会静默回退缺省，拒绝。',
+        `${source} 需要一个非空模型 id。只写标志没有值等同空白，空白值不等于未指定，拒绝。`,
       ),
     )
   }
   const trimmed = String(raw).trim()
   if (trimmed === '') {
-    return err(
-      makeError('CAPABILITY_UNSUPPORTED', `${source} 为空。空白模型会静默回退缺省，拒绝。`),
-    )
+    return err(makeError('CAPABILITY_UNSUPPORTED', `${source} 为空。空白值不等于未指定，拒绝。`))
   }
   return ok(trimmed)
 }
@@ -334,31 +297,20 @@ export function readLivenessMode(command: string): LivenessMode | undefined {
   }
 }
 
-export interface ModelRoutingEnv {
-  readonly profile: ModelProfile
-  readonly allowlist: readonly string[]
-}
-
 /**
  * 启动期校验模型路由环境变量。
  *
  * 非法值必须在进入驱动之前失败：常驻 poller 否则会在每轮认领之后才暴露
- * 同一个拼写错误，而运行中的每个 run 都已按缺省模型跑掉了。
+ * 同一个拼写错误，而运行中的每个 run 都已绕过 profile 跑掉了。
  */
-export function readModelRoutingEnv(command: string): ModelRoutingEnv | undefined {
-  const profile = parseProfile(process.env.KEEL_MODEL_PROFILE)
-  if (!profile.ok) {
-    console.error(`${command}: ${profile.error.detail}`)
+export function readModelRoutingEnv(command: string): ModelRoutingSettings | undefined {
+  const routing = loadModelRoutingSettings(process.env)
+  if (!routing.ok) {
+    console.error(`${command}: ${routing.error.detail}`)
     process.exitCode = 1
     return undefined
   }
-  const allowlist = parseAllowlist(process.env.KEEL_MODEL_ALLOWLIST)
-  if (!allowlist.ok) {
-    console.error(`${command}: ${allowlist.error.detail}`)
-    process.exitCode = 1
-    return undefined
-  }
-  return { profile: profile.value, allowlist: allowlist.value }
+  return routing.value
 }
 
 /**
@@ -383,10 +335,12 @@ export interface RunTaskOptions {
   /** 显式覆盖 stage 墙钟硬上限(秒)。省略时 progress 模式按 stage 策略,wallclock 模式 180s。 */
   readonly wallClockS?: number
   /**
-   * `--model` 原值。omp：省略则 KEEL_MODEL / 缺省 deepseek；
-   * claude / pi：省略则不传 `--model`。空白拒绝。
+   * `--model` 原值。省略则 KEEL_MODEL / profile / harness 自己的配置；
+   * 空白拒绝。
    */
   readonly model?: string | number | boolean
+  /** 已解析的模型路由配置；省略时从环境读取。 */
+  readonly modelRouting?: ModelRoutingSettings
   /** `--harness` 原值。省略则 KEEL_HARNESS / 缺省 omp。 */
   readonly harness?: string | number | boolean
   /**
@@ -457,24 +411,20 @@ export async function runTask(
     if (!ready.ok) return ready
   }
 
-  // 模型路由：非法 profile / allowlist 在任何数据库动作前失败（R6）。
-  const profile = parseProfile(process.env.KEEL_MODEL_PROFILE)
-  if (!profile.ok) return profile
-  const allowlist = parseAllowlist(process.env.KEEL_MODEL_ALLOWLIST)
-  if (!allowlist.ok) return allowlist
-  // 只有显式 --model / KEEL_MODEL 才是 override。omp 的缺省由
-  // resolveStageModel 按 profile 补齐；在这里提前套缺省会让 enterprise 永远失效。
-  // adapter 也只拿显式值：omp 的 fallback 用同一个 DEFAULT_OMP_MODEL，
-  // 编排器则用 spec.model 覆盖它 —— 模型解析只有 resolveStageModel 一处。
+  // 模型路由：非法配置在任何数据库动作前失败（R6）。
+  const routing =
+    opts.modelRouting === undefined ? loadModelRoutingSettings(process.env) : ok(opts.modelRouting)
+  if (!routing.ok) return routing
+  // 只有显式 --model / KEEL_MODEL 才是 override。缺省模型不属于项目，
+  // 未配置时由 harness 自己决定；这里提前套一个项目缺省会让部署配置永远失效。
   const override = resolveOptionalModel(opts.model, process.env.KEEL_MODEL)
   if (!override.ok) return override
 
   // allowlist 必须覆盖本次 profile 下所有可能 spawn 的模型 —— 否则会在
   // 认领之后才失败；这里在任何数据库动作前用同一套解析预检。
   const preflight = preflightModelRouting({
-    harnessId: harness.value,
-    profile: profile.value,
-    allowlist: allowlist.value,
+    harness: harness.value,
+    routing: routing.value,
     ...(override.value === undefined ? {} : { override: override.value }),
   })
   if (!preflight.ok) return preflight
@@ -503,11 +453,10 @@ export async function runTask(
           humanReviewTtl.value,
         ),
         sessions: new HarnessSessionManager(),
-        adapter: createHarnessAdapter(harness.value, override.value),
+        adapter: createHarnessAdapter(harness.value, undefined),
         workspace: { mode: 'worktree', ...binding },
         now,
-        modelProfile: profile.value,
-        modelAllowlist: allowlist.value,
+        modelRouting: routing.value,
         toolPolicy: toolPolicy.value,
         toolPolicyAllowShellFallback: readToolShellFallback(),
         ...(override.value === undefined ? {} : { modelOverride: override.value }),
@@ -621,11 +570,11 @@ export async function runTaskMain(
 模拟 CI 成功后仍等待 PR 合并，不会合成 PRMerged 或自动到 S-DONE。
 --ci real 接真实 GitHub PR / CI,需要 GitHub 凭据（KEEL_GITHUB_TOKEN / GITHUB_TOKEN / gh auth login）。
 --harness 缺省 omp，也可设 KEEL_HARNESS；非法值拒绝（不静默回退）。
---model 对 omp 缺省 ${DEFAULT_OMP_MODEL}，也可设 KEEL_MODEL；空白值拒绝（不静默回退）。
-claude / pi 未指定 --model / KEEL_MODEL 时不传 --model（不把 omp 缺省塞给它们）。
-KEEL_MODEL_PROFILE 可选 default|enterprise（缺省 default）：enterprise 按阶段使用企业网关目录；
-非法值启动即报错。KEEL_MODEL_ALLOWLIST 可选逗号分隔的允许模型；必须覆盖 profile 下所有阶段
-可能 spawn 的模型，否则启动即拒绝（不会等 run 认领后才失败）。
+--model 也可设 KEEL_MODEL；未指定时不传 --model，由 harness 自己的配置决定（项目不预设模型）。
+KEEL_MODEL_PROFILES_FILE 指向部署方的 profile JSON；KEEL_MODEL_PROFILE 选择其中一个 profile。
+profile 按 harness/stage/role 配置模型，非法 JSON、未知 stage/role、空值启动即报错。
+KEEL_MODEL_ALLOWLIST 可选逗号分隔的允许模型；配置中出现的模型必须命中，否则启动即拒绝。
+thinking 只由支持它的 harness（当前 Pi）消费；其它 harness 配了 thinking 会拒绝启动。
 --wall-clock 显式覆盖 stage 墙钟硬上限（秒）；缺省按 stage 策略（develop 12h）；只接受正整数，非法值拒绝。
 KEEL_HUMAN_REVIEW_TTL_H 控制 S-HUMAN_REVIEW 的超时自动弃单（小时，缺省 24；0 = 关闭；非法值启动即报错）。
 KEEL_REPO_SIGNALS_DAYS PM 仓库信号回看天数（缺省 14）；KEEL_REPO_SIGNALS_MAX_TOKENS 该 section 的 token 上限（缺省 1200）。`)
@@ -634,7 +583,8 @@ KEEL_REPO_SIGNALS_DAYS PM 仓库信号回看天数（缺省 14）；KEEL_REPO_SI
   const mode = readLivenessMode('run-task')
   if (mode === undefined) return
   // 模型路由的拼写错误同样要在进入驱动之前暴露
-  if (readModelRoutingEnv('run-task') === undefined) return
+  const routing = readModelRoutingEnv('run-task')
+  if (routing === undefined) return
   const taskId = positionals[0] as string
   const maxSteps =
     typeof flags['max-steps'] === 'number'
@@ -654,7 +604,7 @@ KEEL_REPO_SIGNALS_DAYS PM 仓库信号回看天数（缺省 14）；KEEL_REPO_SI
     process.exitCode = 1
     return
   }
-  // 只把**显式** --model / KEEL_MODEL 传给 runTask；omp 缺省由模型路由补齐
+  // 只把**显式** --model / KEEL_MODEL 传给 runTask；缺省由 harness 自己决定
   const model = resolveOptionalModel(flags.model, process.env.KEEL_MODEL)
   if (!model.ok) {
     console.error(`run-task: ${model.error.detail}`)
@@ -674,6 +624,7 @@ KEEL_REPO_SIGNALS_DAYS PM 仓库信号回看天数（缺省 14）；KEEL_REPO_SI
     maxSteps,
     ci: ci.value,
     harness: harness.value,
+    modelRouting: routing,
     ...(model.value === undefined ? {} : { model: model.value }),
     ...(wallClock.value === undefined ? {} : { wallClockS: wallClock.value }),
   })

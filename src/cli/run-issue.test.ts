@@ -339,10 +339,10 @@ describe('run-issue 组合命令', () => {
     expect(await countRows('task')).toBe(0)
   })
 
-  it('allowlist 未覆盖 profile 模型 → 先于 ingest 失败(零写入)', async () => {
+  it('allowlist 未覆盖显式模型 → 先于 ingest 失败(零写入)', async () => {
     await registerRepoMain([REMOTE])
-    // 语法合法，但缺省 profile 会 spawn deepseek-v4-flash —— 清单里没有它。
-    process.env.KEEL_MODEL_ALLOWLIST = 'moonshotai/Kimi-K3'
+    process.env.KEEL_MODEL = 'deployment/not-allowed'
+    process.env.KEEL_MODEL_ALLOWLIST = 'deployment/allowed'
 
     const r = await runIssue({
       issueUrl: ISSUE_URL,

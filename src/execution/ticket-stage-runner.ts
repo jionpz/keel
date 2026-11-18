@@ -31,6 +31,11 @@ const ROLE_MAP: Readonly<Record<string, RoleId>> = {
   releaser: 'Developer',
 }
 
+/** managed ticket 的 tool-policy role → RunRef.role；未知值按 Developer 解释。 */
+export function roleForTicketRole(role: string): RoleId {
+  return ROLE_MAP[role] ?? 'Developer'
+}
+
 const STAGE_MAP = {
   execute: 'develop',
   verify: 'qa',
@@ -130,7 +135,7 @@ export function ticketWorkerFromAdapter(adapter: HarnessAdapter): ManagedTicketW
           run_id: input.attempt_id,
           task_id: input.task_id,
           stage: STAGE_MAP[input.stage],
-          role: ROLE_MAP[input.tool_plan.role] ?? 'Developer',
+          role: roleForTicketRole(input.tool_plan.role),
           attempt: 1,
         },
         idempotency_key: input.attempt_id,

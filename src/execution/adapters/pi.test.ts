@@ -6,7 +6,6 @@ import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { describe, expect, it, vi } from 'vitest'
 import type { RunSpec } from '../../contracts/harness-adapter.js'
-import { DEFAULT_OMP_MODEL } from './omp.js'
 import {
   buildPiArgv,
   discoverPiSubagentsExtension,
@@ -206,12 +205,11 @@ describe('buildPiArgv', () => {
     expect(argv).not.toContain('--model')
     expect(argv).not.toContain('--provider')
     expect(argv).not.toContain('--thinking')
-    expect(argv).not.toContain(DEFAULT_OMP_MODEL)
   })
 
   it('显式 model 进 argv；provider 只在有 model 时进', () => {
-    const argv = buildPiArgv(spec(), { model: 'opencode-go/deepseek-v4.1-flash' })
-    expect(argv[argv.indexOf('--model') + 1]).toBe('opencode-go/deepseek-v4.1-flash')
+    const argv = buildPiArgv(spec(), { model: 'deployment/pi-model' })
+    expect(argv[argv.indexOf('--model') + 1]).toBe('deployment/pi-model')
     expect(argv).not.toContain('--provider')
     const withProvider = buildPiArgv(spec(), { model: 'm1', provider: 'magpie' })
     expect(withProvider[withProvider.indexOf('--provider') + 1]).toBe('magpie')
