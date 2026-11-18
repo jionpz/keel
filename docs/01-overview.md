@@ -74,9 +74,7 @@ Keel **不是**"又一个 Claude Code" —— 它在编排层之上，把 Claude
 **Fact Plane 与 Execution Plane 之间只有两条通道，各单向**：
 `Context` 下行，`Proposal` 上行。没有第三条路。
 
-这个约束不靠代码自觉，而是靠**数据库授权**强制 ——
-`keel_execution` 角色对 `artifact` / `event` / `task` 没有写权限
-（见 [`03-domain-model.md`](./03-domain-model.md) §4）。
+这个约束不靠代码自觉，而是靠**数据库授权**强制：实际表权限以 `migrations/` 的 SQL 与数据库集成测试为准。旧 `task`/`event`/`artifact` 的角色关系可参见 [`03-domain-model.md`](./03-domain-model.md) §4；当前 managed 的受限执行与受控动作边界见 [执行隔离](./spec/backend/executor-isolation.md) 和 [动作网关](./spec/backend/action-gateway.md)。
 
 ---
 

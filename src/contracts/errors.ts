@@ -1,7 +1,8 @@
 /**
  * 错误语义。
  *
- * 定义处：docs/05-contracts/README.md「错误语义」一节。
+ * 唯一可执行注册表为本文件 ERROR_KINDS / RETRYABLE；
+ * docs/05-contracts/README.md「错误语义」只解释 legacy 契约。
  *
  * `retryable` 不是建议 —— 它是 docs/04-state-machine.md 中
  * T-030（重试自环）与 T-031（升人工）的 guard 输入。

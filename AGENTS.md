@@ -12,7 +12,7 @@
 ## 项目规范（所有 harness）
 
 - 写代码前先读 `docs/spec/backend/index.md` 或 `docs/spec/frontend/index.md` 指向的相关规范；这是项目的编码约定。
-- 架构事实来源是 `docs/`：先读 `docs/01-overview.md`、`docs/02-glossary.md`、`docs/03-domain-model.md`，改架构前读 `docs/adr/`。
+- 先读 `docs/README.md` 的**权威来源矩阵**；当前 managed 架构读 `docs/01-overview.md`、`docs/02-glossary.md`、`docs/managed-state-machine.md`。`docs/03-domain-model.md` 只用于 `legacy-v01`；改架构前查 `docs/adr/`。
 - 当前产品状态机读 `docs/managed-state-machine.md`；`docs/04-state-machine.md` 是 `legacy-v01` 契约。两套状态和完成条件不能混用，历史流程不作为新 managed 功能的设计源。
 - 提交前必须 `pnpm run check`；CI 跑同一条。
 - 遵守 C1–C4：`docs/schemas/` 是生成源；Execution Plane 不写 Fact Plane；转移函数必须是纯函数；转移表必须与 `docs/04-state-machine.md` 同步。
