@@ -1,7 +1,7 @@
 # jstack 主工作流与天问代理决策：生产方案
 
 **日期**：2026-11-10
-**状态**：生产目标设计。JT-01～JT-06 已合入 `main`：Linux 原生 OMP 真实模型与两处 SIGKILL 恢复、项目记忆、委托代批、路线图/多 ticket、授权与 PR 网关、统一服务均已落地。JT-07 的 `doctor` 支持矩阵与试运行账本已实现，但真实 2–3 项目连续 7 天试运行、30 个实际代决、5 个完成任务和独立评测未完成；原生 Claude 未验，XL 未单独跑，不能视为整个方案已交付。状态以 GitHub tracker 为准。见[实施进度](./implementation.md)。
+**状态**：这是**目标设计与取舍依据**，不是当前 API 说明或实时进度板。已实现部分请对照 [managed 状态机](../../managed-state-machine.md)、[后端实际规范](../../spec/backend/index.md) 与源代码；未实现部分仍是目标。真实进度/阻塞以 GitHub [#85](https://github.com/jionpz/keel/issues/85)、[JT-07 #95](https://github.com/jionpz/keel/issues/95) 及[实施证据](./implementation.md) 为准。
 **产品方向**：用户已明确 jstack 为个人核心工作流；Keel 主打后台、自动、少人工；任何原本要交给人的问题，先经过天问。技术契约和默认参数为本方案建议值。
 
 配套材料：[接口与一致性](./contracts.md)、[交付与上线](./delivery.md)、[验收场景](./acceptance.md)、[ADR-0011](../../adr/0011-jstack-tianwen-runtime.md)。现有行为仍以代码和现有架构文档为准；本目录同时记录已实现部分与待实现目标。

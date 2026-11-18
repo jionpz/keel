@@ -29,8 +29,7 @@ export type Result<T> =
 
 ## `ErrorKind` 是封闭注册表
 
-12 个 kind，定义在 `src/contracts/errors.ts`，与
-`docs/05-contracts/README.md` 的表格一致。**新增 kind 要同时改两处。**
+**唯一可执行注册表**是 [`src/contracts/errors.ts`](../../../src/contracts/errors.ts) 的 `ERROR_KINDS` 和 `RETRYABLE`。`docs/05-contracts/README.md` 的表格解释 **legacy-v01** 错误语义，不维护第二份硬编码的 kind 总数；增删种类或调整可重试性，必须先对照运行时、受影响的 guard 和测试，再同步解释文档。不能仅改 Markdown 声称已经生效。
 
 ## `retryable` 不是建议
 

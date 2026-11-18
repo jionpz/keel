@@ -1,44 +1,13 @@
-# Frontend Development Guidelines
+# 前端 / 控制台规范
 
-> Best practices for frontend development in this project.
+Keel 当前有真实 Web 控制台，但**没有独立 React 组件体系、React Hooks、全局状态库或对应构建链**。不要用通用前端模板推断项目技术栈。
 
----
+## 唯一现行控制台规范
 
-## 状态:部分填充
+- [Console Guidelines](./console-guidelines.md)：页面、数据投影、认证、人工操作、可观察性与真实测试门槛。
+- 事实源：`src/cli/console.ts`、`src/cli/console-page.ts`、`src/cli/console-login-page.ts` 和 `src/cli/console.test.ts`。
+- 为什么采用单一 WorkItem 投影： [ADR-0013](../../adr/0013-console-work-item-projection.md)。
 
-本项目的主体仍是纯后端(TypeScript / Node)。2026-10-27 起多了第一份真实前端代码:
-`src/cli/console.ts` + `src/cli/console-page.ts`(只读 Web 控制台)。
+如将来真的引入组件框架或状态库，先交付代码与测试，再补**对应实际行为**的规范；不提前创建空白文件。
 
-因此**只**填写与它相关的约定;其余文件继续保持留空 ——
-「记录现实而非理想」的规则不变,没有对应代码的地方不凭空发明。
-
----
-
-## Guidelines Index
-
-| Guide | Description | Status |
-|-------|-------------|--------|
-| [Console Guidelines](./console-guidelines.md) | 只读控制台:单文件零构建、GET-only、数据口径与 CLI 一致、404/503 纪律 | ✅ 已填（`10-27-console-and-demo-app`） |
-| [Directory Structure](./directory-structure.md) | Module organization and file layout | To fill |
-| [Component Guidelines](./component-guidelines.md) | Component patterns, props, composition | To fill |
-| [Hook Guidelines](./hook-guidelines.md) | Custom hooks, data fetching patterns | To fill |
-| [State Management](./state-management.md) | Local state, global state, server state | To fill |
-| [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
-| [Type Safety](./type-safety.md) | Type patterns, validation | To fill |
-
----
-
-## How to Fill These Guidelines
-
-For each guideline file:
-
-1. Document your project's **actual conventions** (not ideals)
-2. Include **code examples** from your codebase
-3. List **forbidden patterns** and why
-4. Add **common mistakes** your team has made
-
-The goal is to help AI assistants and new team members understand how YOUR project works.
-
----
-
-**Language**: All documentation should be written in **English**.
+本目录与 [后端规范](../backend/index.md) 一样，文档和注释用中文，API / 标识符用英文。

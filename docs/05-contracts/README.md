@@ -65,7 +65,7 @@ Error {
 }
 ```
 
-`ErrorKind` 注册表：
+`ErrorKind` 的 legacy 语义对照表（**运行时枚举与 `retryable` 的可执行来源是 [`src/contracts/errors.ts`](../../src/contracts/errors.ts) 的 `ERROR_KINDS` / `RETRYABLE`**；下表不能独立变更）：
 
 | kind | `retryable` | 典型来源 |
 |---|---|---|

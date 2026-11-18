@@ -1,6 +1,6 @@
 # 决策协议、持久模型与一致性
 
-**状态**：目标契约，尚未实现。字段名、状态和接口均为方案约定，不是当前 API。适用范围与运行方式见[主方案](./README.md)。
+**状态**：**目标设计 + 尚未逐项对照的协议草案**。JT-01～JT-07 中已有部分持久模型、接纳器与网关实现；**不能把本页所有字段/接口判为「尚未实现」，也不能反过来视为现行 API**。现行结构以 [JSON Schema](../../schemas/)、`migrations/`、`src/contracts/`、[当前 managed 状态机](../../managed-state-machine.md) 和[后端实现规范](../../spec/backend/index.md) 为准；未对照实现的草案只用于验收与差距分析。方案动机见[主方案](./README.md)。
 
 ## 1. jstack managed 协议
 

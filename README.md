@@ -12,7 +12,7 @@
 
 ## 📐 架构文档
 
-**[`docs/`](./docs/README.md) 是架构的事实来源。**
+**[`docs/`](./docs/README.md) 是文档导航与权威来源矩阵。** 工作流包、JSON Schema、SQL、运行时代码、测试与 ADR 各有其实际事实归属，不从目录名称推断所有语义都由 Markdown 定义。
 
 赶时间就读这三篇：
 [总览](./docs/01-overview.md) → [术语表](./docs/02-glossary.md) → [当前 managed 状态机](./docs/managed-state-machine.md)
@@ -68,7 +68,7 @@ Fact 与 Execution 之间只有两条单向通道：`Context` 下行、`Proposal
 
 **TypeScript / Node**（[`ADR-0002`](./docs/adr/0002-implementation-language.md)）。
 
-选它的主要收益是 `docs/schemas/` 的 11 份 JSON Schema 可以**直接生成类型** ——
+选它的主要收益是 `docs/schemas/` 中的 JSON Schema 可以**直接生成类型** ——
 让"文档里的 schema"与"代码里的类型"机械对齐，而不是靠人维护同步。
 这一步必须纳入 CI，否则选 TS 与选任何语言就没区别了。
 

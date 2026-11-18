@@ -7,16 +7,9 @@
 
 ---
 
-## 0. 历史阶段与当前路线（2026-11-10）
+## 0. 历史范围（不维护当前进度副本）
 
-本文档 §1–§5 记录的是 **2026-08 的 v0.1 与阶段二边界**。这些历史门槛已有归档证据：v0.1 判据、连续 5 个真实 Task、事件流四问均已完成；它们证明的是 `legacy-v01` 状态机闭环，不是当前 JT 路线已完成。
-
-2026-11 起，当前产品主线是 **jstack 主工作流 + 天问代理决策**（[ADR-0011](./adr/0011-jstack-tianwen-runtime.md)）。交付票、真实状态与原生依赖见 GitHub [#85](https://github.com/jionpz/keel/issues/85)：
-
-- JT-01 只读影子链路已合入 `main`（PR #84），Linux 原生 OMP 真实模型与两处 SIGKILL 恢复已验；managed 安全读取仍只支持 Linux。
-- JT-02～JT-06 已合入 `main`：项目记忆、委托代批、路线图/多 ticket、授权与 PR 网关、统一服务均已落地（JT-06 为 PR #122）。
-- JT-07 的 `doctor` 支持矩阵与 `trial-*` 试运行账本已实现；真实 2–3 项目连续 7 天试运行、30 个实际代决、5 个完成任务和独立评测尚未完成（[#95](https://github.com/jionpz/keel/issues/95) 仍开放）。
-- 旧任务保留 `legacy-v01` 驱动，不自动迁移，也不与新的 jstack 任务并行跑两套主编排。
+本页 §1–§5 记录 2026-08 的 **legacy-v01** 阶段范围、历史门槛和验收思路；不能用来判定 jstack managed 的交付状态。当前路线的状态和阻塞项只到 GitHub [总跟踪 #85](https://github.com/jionpz/keel/issues/85) 与 [JT-07 #95](https://github.com/jionpz/keel/issues/95) 核对。新的运行语义见 [managed 状态机](./managed-state-machine.md)，重大选择见 [ADR-0011](./adr/0011-jstack-tianwen-runtime.md)。
 
 ---
 
