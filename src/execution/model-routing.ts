@@ -7,7 +7,8 @@
  * - `KEEL_MODEL_PROFILES_FILE` 指向部署方的 JSON 配置；
  * - `KEEL_MODEL_PROFILE` 选择其中一个 profile；
  * - `--model` / `KEEL_MODEL` 是全局显式覆盖；
- * - stage / role 的具体模型与可选 thinking 由配置决定。
+ * - stage / role 的具体模型与可选 thinking 由配置决定；
+ * - managed 工作流阶段的墙钟上限 `timeout_s` 也由配置决定。
  *
  * 配置结构（示例中的值全部是占位符）：
  *
@@ -18,7 +19,8 @@
  *       "omp": {
  *         "stages": {
  *           "develop": { "model": "<model-id>" },
- *           "managed_investigate": { "model": "<model-id>" }
+ *           "managed_investigate": { "model": "<model-id>" },
+ *           "execute": { "model": "<model-id>", "timeout_s": 1800 }
  *         },
  *         "roles": {
  *           "Reviewer": { "model": "<model-id>" }
@@ -32,6 +34,9 @@
  * 解析优先级：`override > role > stage > 不传`。`thinking` 按 role / stage
  * 独立解析，不因 model 是否配置而改变。缺项表示不覆盖，由 harness 或用户
  * 自己的配置决定；未知字段 / 未知 stage / 未知 role / 空值都在启动期拒绝。
+ *
+ * `timeout_s` 不参与上面的优先级：它只按阶段取值，不受 role 与 `--model`
+ * 影响，缺项时由调用方使用 managed 的缺省上限。
  */
 
 import { readFileSync } from 'node:fs'
@@ -64,13 +69,34 @@ export type ModelStage = (typeof MODEL_STAGES)[number]
 export const MODEL_ROLES = [...ROLES, 'Investigator', 'Tianwen'] as const
 export type ModelRole = (typeof MODEL_ROLES)[number]
 
+/**
+ * 墙钟上限可配的 managed 工作流阶段。
+ *
+ * 只读调查与天问的上限是固定值，不在这里；`timeout_s` 写在这五个阶段之外的
+ * 条目上会在解析期拒绝，不让配置看起来生效而实际被忽略。`review` 与 legacy
+ * 共用阶段键，但 `timeout_s` 只作用于 managed review：legacy 的墙钟由
+ * ADR-0009 的策略表与 `--wall-clock` 决定。
+ */
+export const TIMEOUT_STAGES = ['plan', 'execute', 'verify', 'review', 'land'] as const
+export type TimeoutStage = (typeof TIMEOUT_STAGES)[number]
+
+/** `timeout_s` 的取值范围（秒）：下限挡住误写的分钟数，上限挡住误写的毫秒数。 */
+export const STAGE_TIMEOUT_MIN_S = 60
+export const STAGE_TIMEOUT_MAX_S = 14_400
+
 export interface ModelRouteEntry {
   readonly model?: string
   readonly thinking?: string
 }
 
+/** stage 条目在 model / thinking 之外可以带墙钟上限；role 条目不能。 */
+export interface ModelStageEntry extends ModelRouteEntry {
+  /** 墙钟上限（秒）。只会出现在 `TIMEOUT_STAGES` 的条目上。 */
+  readonly timeout_s?: number
+}
+
 export interface ModelRouteTable {
-  readonly stages?: Partial<Record<ModelStage, ModelRouteEntry>>
+  readonly stages?: Partial<Record<ModelStage, ModelStageEntry>>
   readonly roles?: Partial<Record<ModelRole, ModelRouteEntry>>
 }
 
@@ -305,6 +331,23 @@ export function resolveModelRoute(input: ResolveModelRouteInput): Result<Resolve
   return ok(withOptionalRoute(model, thinking))
 }
 
+/**
+ * 部署配置为某个 managed 工作流阶段声明的墙钟上限（秒）。
+ *
+ * 未选 profile、该 harness 没有表、条目未写 `timeout_s` 都返回 undefined，
+ * 由调用方落到缺省上限。选中 profile 却缺 harness 表是配置错误，但它由
+ * `resolveModelRoute` / `preflightModelRouting` 报告；这里不重复裁决，
+ * 同一个错误只留一个出口。
+ */
+export function configuredStageTimeoutS(
+  routing: ModelRoutingSettings,
+  harness: ModelHarness,
+  stage: TimeoutStage,
+): number | undefined {
+  if (routing.profile === undefined) return undefined
+  return routing.profiles?.profiles[routing.profile]?.[harness]?.stages?.[stage]?.timeout_s
+}
+
 export interface RoutingPreflightInput {
   readonly harness: string
   readonly routing: ModelRoutingSettings
@@ -402,18 +445,18 @@ function parseRouteTable(raw: unknown, where: string): Result<ModelRouteTable> {
 function parseStageEntries(
   raw: unknown,
   where: string,
-): Result<Partial<Record<ModelStage, ModelRouteEntry>> | undefined> {
+): Result<Partial<Record<ModelStage, ModelStageEntry>> | undefined> {
   if (raw === undefined) return ok(undefined)
   const entries = asRecord(raw)
   if (entries === undefined) return invalid(`${where} 必须是对象`)
   if (Object.keys(entries).length === 0) return invalid(`${where} 不能为空对象`)
 
-  const parsed: Partial<Record<ModelStage, ModelRouteEntry>> = {}
+  const parsed: Partial<Record<ModelStage, ModelStageEntry>> = {}
   for (const [stage, entryRaw] of Object.entries(entries)) {
     if (!isModelStage(stage)) {
       return invalid(`${where}.${stage} 不是支持的阶段（${MODEL_STAGES.join(' | ')}）`)
     }
-    const entry = parseRouteEntry(entryRaw, `${where}.${stage}`)
+    const entry = parseRouteEntry(entryRaw, `${where}.${stage}`, isTimeoutStage(stage))
     if (!entry.ok) return entry
     parsed[stage] = entry.value
   }
@@ -434,30 +477,46 @@ function parseRoleEntries(
     if (!isModelRole(role)) {
       return invalid(`${where}.${role} 不是支持的角色（${MODEL_ROLES.join(' | ')}）`)
     }
-    const entry = parseRouteEntry(entryRaw, `${where}.${role}`)
+    const entry = parseRouteEntry(entryRaw, `${where}.${role}`, false)
     if (!entry.ok) return entry
     parsed[role] = entry.value
   }
   return ok(parsed)
 }
 
-function parseRouteEntry(raw: unknown, where: string): Result<ModelRouteEntry> {
+/** `acceptsTimeout` 只对 `TIMEOUT_STAGES` 的 stage 条目为 true。 */
+function parseRouteEntry(
+  raw: unknown,
+  where: string,
+  acceptsTimeout: boolean,
+): Result<ModelStageEntry> {
   const entry = asRecord(raw)
   if (entry === undefined) return invalid(`${where} 必须是对象`)
-  const unknownKey = rejectUnknownKeys(entry, ['model', 'thinking'], where)
+  if (!acceptsTimeout && 'timeout_s' in entry) {
+    return invalid(
+      `${where}.timeout_s 不被接受：timeout_s 只作用于 stages 下的 ` +
+        `${TIMEOUT_STAGES.join(' | ')} 条目。写在这里不会生效，所以拒绝而不是静默忽略。`,
+    )
+  }
+  const fields = acceptsTimeout ? ['model', 'thinking', 'timeout_s'] : ['model', 'thinking']
+  const unknownKey = rejectUnknownKeys(entry, fields, where)
   if (!unknownKey.ok) return unknownKey
 
   const model = optionalNonEmptyString(entry.model, `${where}.model`)
   if (!model.ok) return model
   const thinking = optionalNonEmptyString(entry.thinking, `${where}.thinking`)
   if (!thinking.ok) return thinking
+  const timeout = optionalTimeoutSeconds(entry.timeout_s, `${where}.timeout_s`)
+  if (!timeout.ok) return timeout
 
-  if (model.value === undefined && thinking.value === undefined) {
-    return invalid(`${where} 至少需要 model 或 thinking，空条目不能表达任何意图`)
+  if (model.value === undefined && thinking.value === undefined && timeout.value === undefined) {
+    const need = acceptsTimeout ? 'model、thinking 或 timeout_s' : 'model 或 thinking'
+    return invalid(`${where} 至少需要 ${need}，空条目不能表达任何意图`)
   }
   return ok({
     ...(model.value === undefined ? {} : { model: model.value }),
     ...(thinking.value === undefined ? {} : { thinking: thinking.value }),
+    ...(timeout.value === undefined ? {} : { timeout_s: timeout.value }),
   })
 }
 
@@ -575,6 +634,22 @@ function optionalNonEmptyString(raw: unknown, where: string): Result<string | un
   return ok(trimmed)
 }
 
+function optionalTimeoutSeconds(raw: unknown, where: string): Result<number | undefined> {
+  if (raw === undefined) return ok(undefined)
+  if (
+    typeof raw !== 'number' ||
+    !Number.isInteger(raw) ||
+    raw < STAGE_TIMEOUT_MIN_S ||
+    raw > STAGE_TIMEOUT_MAX_S
+  ) {
+    return invalid(
+      `${where} 必须是 ${STAGE_TIMEOUT_MIN_S} 到 ${STAGE_TIMEOUT_MAX_S} 之间的整数（单位：秒），` +
+        `收到 ${JSON.stringify(raw)}`,
+    )
+  }
+  return ok(raw)
+}
+
 function asRecord(raw: unknown): Record<string, unknown> | undefined {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
   return raw as Record<string, unknown>
@@ -604,6 +679,10 @@ function isModelHarness(raw: string): raw is ModelHarness {
 
 function isModelStage(raw: string): raw is ModelStage {
   return (MODEL_STAGES as readonly string[]).includes(raw)
+}
+
+function isTimeoutStage(raw: ModelStage): raw is TimeoutStage {
+  return (TIMEOUT_STAGES as readonly string[]).includes(raw)
 }
 
 function isModelRole(raw: string): raw is ModelRole {

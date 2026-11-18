@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ok, type Result } from '../contracts/errors.js'
 import type { HarnessAdapter, RunResult } from '../contracts/harness-adapter.js'
-import { fixtureTicketPackage } from '../control/managed/ticket-test-utils.js'
+import { fixtureRoutePackage } from '../control/managed/route-test-utils.js'
+import { fixtureStageInput as stageInput } from '../control/managed/ticket-test-utils.js'
 import { MANAGED_STAGE_CLEANUP_MS, MANAGED_STAGE_TIMEOUT_MS } from '../shared/managed-limits.js'
 import { awaitTicketResult, ticketWorkerFromAdapter } from './ticket-stage-runner.js'
 
@@ -25,13 +26,7 @@ describe('managed ticket Harness 生命周期', () => {
     { status: 'FAILED' as const, text: null, kind: 'PROTOCOL_ERROR' },
   ])('$status / $text 保留 usage 并释放真实句柄', async ({ status, text, kind }) => {
     const adapter = recordingAdapter({ ...timedOut, status, text })
-    const result = await ticketWorkerFromAdapter(adapter).decide({
-      attempt_id: 'a',
-      task_id: 't',
-      repo_id: 'r',
-      workspace_path: '/tmp/workspace',
-      context: emptyContext,
-    })
+    const result = await ticketWorkerFromAdapter(adapter).decide(decisionInput)
     expect(adapter.dispose).toHaveBeenCalledExactlyOnceWith(handle)
     if (kind === null) {
       expect(result.ok).toBe(true)
@@ -47,34 +42,8 @@ describe('managed ticket Harness 生命周期', () => {
 
   it('阶段执行传递进展钩子，同时保留工具白名单', async () => {
     const adapter = recordingAdapter({ ...timedOut, status: 'SUCCEEDED', text: '{}' })
-    const pkg = fixtureTicketPackage()
-    const definition = pkg.stages[0]
-    if (definition === undefined) throw new Error('fixture 缺 execute 阶段')
     const onProgress = vi.fn()
-    await ticketWorkerFromAdapter(adapter).run({
-      attempt_id: 'a',
-      task_id: 't',
-      repo_id: 'r',
-      stage: 'execute',
-      context: emptyContext,
-      workspace_path: '/tmp/workspace',
-      package: pkg,
-      stage_definition: definition,
-      tool_plan: {
-        harness: 'pi',
-        stage: 'execute',
-        role: 'developer',
-        profile: 'developer',
-        native_tools: ['read'],
-        degradations: [],
-        missing_optional: [],
-      },
-      baseline_commit: 'a'.repeat(40),
-      input_commit: 'a'.repeat(40),
-      rework_notes: [],
-      human_decisions: [],
-      onProgress,
-    })
+    await ticketWorkerFromAdapter(adapter).run({ ...stageInput('execute'), onProgress })
     expect(adapter.startRun).toHaveBeenCalledWith(
       expect.objectContaining({
         permissions: { allowed_tools: ['read'], mode: 'deny_unlisted' },
@@ -94,7 +63,7 @@ describe('managed ticket Harness 生命周期', () => {
         return ok(undefined)
       }),
     }
-    const result = awaitTicketResult(adapter, handle)
+    const result = awaitTicketResult(adapter, handle, MANAGED_STAGE_TIMEOUT_MS)
     await vi.advanceTimersByTimeAsync(MANAGED_STAGE_TIMEOUT_MS)
     expect(await result).toEqual(ok(timedOut))
     expect(adapter.interrupt).toHaveBeenCalledExactlyOnceWith(handle, 'timeout')
@@ -106,7 +75,7 @@ describe('managed ticket Harness 生命周期', () => {
       awaitResult: () => new Promise<Result<RunResult>>(() => undefined),
       interrupt: vi.fn(async () => ok(undefined)),
     }
-    const result = awaitTicketResult(adapter, handle)
+    const result = awaitTicketResult(adapter, handle, MANAGED_STAGE_TIMEOUT_MS)
     await vi.advanceTimersByTimeAsync(MANAGED_STAGE_TIMEOUT_MS + MANAGED_STAGE_CLEANUP_MS)
     expect(await result).toBeNull()
     expect(adapter.interrupt).toHaveBeenCalledExactlyOnceWith(handle, 'timeout')
@@ -127,7 +96,7 @@ describe('managed ticket Harness 生命周期', () => {
         return ok(undefined)
       }),
     }
-    const result = awaitTicketResult(adapter, handle, controller.signal)
+    const result = awaitTicketResult(adapter, handle, MANAGED_STAGE_TIMEOUT_MS, controller.signal)
     controller.abort()
     expect(await result).toEqual(ok(cancelled))
     expect(adapter.interrupt).toHaveBeenCalledExactlyOnceWith(handle, 'cancelled')
@@ -140,12 +109,67 @@ describe('managed ticket Harness 生命周期', () => {
       awaitResult: async () => ok(completed),
       interrupt: vi.fn(async () => ok(undefined)),
     }
-    expect(await awaitTicketResult(adapter, handle)).toEqual(ok(completed))
+    expect(await awaitTicketResult(adapter, handle, MANAGED_STAGE_TIMEOUT_MS)).toEqual(
+      ok(completed),
+    )
     await vi.advanceTimersByTimeAsync(MANAGED_STAGE_TIMEOUT_MS + MANAGED_STAGE_CLEANUP_MS)
     expect(adapter.interrupt).not.toHaveBeenCalled()
     expect(vi.getTimerCount()).toBe(0)
   })
 })
+
+describe('managed 阶段墙钟上限', () => {
+  it('未提供阶段上限时，阶段、路线规划与天问都用缺省上限', async () => {
+    const adapter = recordingAdapter({ ...timedOut, status: 'SUCCEEDED', text: '{}' }, PLAN_TOOLS)
+    const worker = ticketWorkerFromAdapter(adapter)
+    await worker.run(stageInput('execute'))
+    await worker.plan(planInput())
+    await worker.decide(decisionInput)
+    expect(wallClocks(adapter)).toEqual([900, 900, 900])
+  })
+
+  it('阶段上限同时决定交给 Harness 的 wall_clock_s 与本进程的中断时刻', async () => {
+    const adapter = hangingAdapter()
+    const worker = ticketWorkerFromAdapter(adapter, (stage) =>
+      stage === 'execute' ? 2 * MANAGED_STAGE_TIMEOUT_MS : MANAGED_STAGE_TIMEOUT_MS,
+    )
+    const result = worker.run(stageInput('execute'))
+    await vi.advanceTimersByTimeAsync(MANAGED_STAGE_TIMEOUT_MS)
+    expect(adapter.interrupt).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(MANAGED_STAGE_TIMEOUT_MS)
+    expect(adapter.interrupt).toHaveBeenCalledExactlyOnceWith(handle, 'timeout')
+    const settled = await result
+    expect(settled.ok).toBe(false)
+    if (!settled.ok) expect(settled.error.kind).toBe('RUN_TIMEOUT')
+    expect(wallClocks(adapter)).toEqual([1800])
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('上限短于缺省值时按配置提前中断，不取两者的较大值', async () => {
+    const adapter = hangingAdapter()
+    const result = ticketWorkerFromAdapter(adapter, () => 60_000).run(stageInput('verify'))
+    await vi.advanceTimersByTimeAsync(59_999)
+    expect(adapter.interrupt).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(adapter.interrupt).toHaveBeenCalledExactlyOnceWith(handle, 'timeout')
+    expect((await result).ok).toBe(false)
+    expect(wallClocks(adapter)).toEqual([60])
+  })
+
+  it('每个阶段按自己的键取上限；天问不受阶段上限影响', async () => {
+    const adapter = recordingAdapter({ ...timedOut, status: 'SUCCEEDED', text: '{}' }, PLAN_TOOLS)
+    const seconds = { plan: 1200, execute: 1800, verify: 2400, review: 600, land: 300 }
+    const worker = ticketWorkerFromAdapter(adapter, (stage) => seconds[stage] * 1000)
+    for (const stage of ['execute', 'verify', 'review', 'land'] as const) {
+      await worker.run(stageInput(stage))
+    }
+    await worker.plan(planInput())
+    await worker.decide(decisionInput)
+    expect(wallClocks(adapter)).toEqual([1800, 2400, 600, 300, 1200, 900])
+  })
+})
+
+const PLAN_TOOLS = ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash', 'Agent']
 
 const emptyContext = {
   context_id: 'fixture',
@@ -156,17 +180,62 @@ const emptyContext = {
   dropped: [],
 }
 
-function recordingAdapter(result: RunResult) {
+const decisionInput = {
+  attempt_id: 'a',
+  task_id: 't',
+  repo_id: 'r',
+  workspace_path: '/tmp/workspace',
+  context: emptyContext,
+}
+
+function planInput() {
+  return {
+    attempt_id: 'a',
+    workflow_id: 'w',
+    repo_id: 'r',
+    request: 'fixture',
+    context: emptyContext,
+    workspace_path: '/tmp/workspace',
+    scope_paths: ['src'],
+    package: fixtureRoutePackage(),
+  }
+}
+
+/** 每次 startRun 交给 Harness 的墙钟上限（秒），按调用顺序。 */
+function wallClocks(adapter: { startRun: { mock: { calls: readonly unknown[][] } } }): number[] {
+  return adapter.startRun.mock.calls.map(
+    (call) => (call[0] as { limits: { wall_clock_s: number } }).limits.wall_clock_s,
+  )
+}
+
+/** awaitResult 一直不返回，直到被中断才以 TIMEOUT 收敛。 */
+function hangingAdapter() {
+  let settle: ((result: Result<RunResult>) => void) | undefined
+  const pending = new Promise<Result<RunResult>>((resolve) => {
+    settle = resolve
+  })
+  return {
+    ...recordingAdapter(timedOut),
+    awaitResult: () => pending,
+    interrupt: vi.fn(async () => {
+      settle?.(ok(timedOut))
+      return ok(undefined)
+    }),
+  } satisfies HarnessAdapter
+}
+
+function recordingAdapter(result: RunResult, toolInventory: readonly string[] = []) {
   return {
     describe: () => ({
       harness_id: 'pi',
       version: 'fixture',
       tier: 'L0',
       capabilities: [],
+      tool_inventory: toolInventory,
       cost_basis: 'unavailable',
       limits: { max_input_bytes: null, max_wall_clock_s: null },
     }),
-    startRun: vi.fn(async () => ok(handle)),
+    startRun: vi.fn(async (..._args: Parameters<HarnessAdapter['startRun']>) => ok(handle)),
     awaitResult: async () => ok(result),
     interrupt: async () => ok(undefined),
     collectChanges: async () => ok({ files_changed: [], patch: '', commits: [], is_dirty: false }),

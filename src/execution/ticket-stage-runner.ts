@@ -21,6 +21,7 @@ import type {
 } from '../generated/managed.js'
 import type { RoleId } from '../shared/ids.js'
 import { MANAGED_STAGE_CLEANUP_MS, MANAGED_STAGE_TIMEOUT_MS } from '../shared/managed-limits.js'
+import type { TimeoutStage } from './model-routing.js'
 import { extractJson } from './session/extract.js'
 import { parseToolPolicy, resolveToolPolicy } from './tool-policy.js'
 
@@ -51,9 +52,15 @@ export interface ManagedTicketWorkerAdapter {
   readonly plan: ManagedWorkflowPlanRunner
 }
 
+/** 各 managed 工作流阶段的墙钟上限（毫秒）。天问不在其中，固定用缺省上限。 */
+export type StageTimeoutMs = (stage: TimeoutStage) => number
+
+const defaultStageTimeoutMs: StageTimeoutMs = () => MANAGED_STAGE_TIMEOUT_MS
+
 export async function awaitTicketResult(
   adapter: Pick<HarnessAdapter, 'awaitResult' | 'interrupt'>,
   handle: RunHandle,
+  timeoutMs: number,
   signal?: AbortSignal,
 ): Promise<Result<RunResult> | null> {
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -65,7 +72,7 @@ export async function awaitTicketResult(
       void adapter.interrupt(handle, reason).catch(() => undefined)
       cleanupTimer = setTimeout(() => resolve(null), MANAGED_STAGE_CLEANUP_MS)
     }
-    timer = setTimeout(() => interrupt('timeout'), MANAGED_STAGE_TIMEOUT_MS)
+    timer = setTimeout(() => interrupt('timeout'), timeoutMs)
     onAbort = () => interrupt('cancelled')
     signal?.addEventListener('abort', onAbort, { once: true })
     if (signal?.aborted) onAbort()
@@ -79,7 +86,12 @@ export async function awaitTicketResult(
   }
 }
 
-/** 执行、决策和规划共用超时、usage 与释放语义。 */
+/**
+ * 执行、决策和规划共用超时、usage 与释放语义。
+ *
+ * 计时器从 `spec.limits.wall_clock_s` 派生：交给 Harness 的上限和本进程
+ * 强制中断的时刻是同一个数，不各算一次。
+ */
 async function runStructured<T>(
   adapter: HarnessAdapter,
   spec: RunSpec,
@@ -90,7 +102,12 @@ async function runStructured<T>(
   const started = await adapter.startRun(spec, hooks)
   if (!started.ok) return { ok: false, error: started.error, usage: ZERO_USAGE }
   try {
-    const result = await awaitTicketResult(adapter, started.value, signal)
+    const result = await awaitTicketResult(
+      adapter,
+      started.value,
+      spec.limits.wall_clock_s * 1000,
+      signal,
+    )
     if (result === null)
       return {
         ok: false,
@@ -123,7 +140,10 @@ async function runStructured<T>(
   }
 }
 
-export function ticketWorkerFromAdapter(adapter: HarnessAdapter): ManagedTicketWorkerAdapter {
+export function ticketWorkerFromAdapter(
+  adapter: HarnessAdapter,
+  stageTimeoutMs: StageTimeoutMs = defaultStageTimeoutMs,
+): ManagedTicketWorkerAdapter {
   const descriptor = adapter.describe()
   const harness = descriptor.harness_id === 'claude' ? 'claude-code' : descriptor.harness_id
   const toolInventory = descriptor.tool_inventory ?? []
@@ -151,7 +171,11 @@ export function ticketWorkerFromAdapter(adapter: HarnessAdapter): ManagedTicketW
           allowed_tools: input.tool_plan.native_tools,
           mode: 'deny_unlisted',
         },
-        limits: { wall_clock_s: MANAGED_STAGE_TIMEOUT_MS / 1000, budget_usd: null, max_turns: 40 },
+        limits: {
+          wall_clock_s: stageTimeoutMs(input.stage) / 1000,
+          budget_usd: null,
+          max_turns: 40,
+        },
       },
       'managed ticket stage',
       input.onProgress === undefined ? undefined : { onProgress: input.onProgress },
@@ -218,7 +242,7 @@ export function ticketWorkerFromAdapter(adapter: HarnessAdapter): ManagedTicketW
           allowed_tools: resolved.value.native_tools,
           mode: 'deny_unlisted',
         },
-        limits: { wall_clock_s: MANAGED_STAGE_TIMEOUT_MS / 1000, budget_usd: null, max_turns: 40 },
+        limits: { wall_clock_s: stageTimeoutMs('plan') / 1000, budget_usd: null, max_turns: 40 },
       },
       'managed route plan',
     )

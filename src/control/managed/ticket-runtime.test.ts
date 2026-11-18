@@ -11,7 +11,11 @@ import { ZERO_USAGE } from '../../contracts/types.js'
 import { asOwner, asRole, closePool } from '../../fact/db.js'
 import type { ManagedTicketStageResult } from '../../generated/managed.js'
 import { sha256Text } from '../../shared/canonical-json.js'
-import { MANAGED_STAGE_CLEANUP_MS, MANAGED_STAGE_TIMEOUT_MS } from '../../shared/managed-limits.js'
+import {
+  MANAGED_STAGE_CLEANUP_MS,
+  MANAGED_STAGE_TIMEOUT_MS,
+  managedExecutionLeaseSeconds,
+} from '../../shared/managed-limits.js'
 import {
   answerManagedTicketDecision,
   recordDelegationPolicy,
@@ -477,6 +481,39 @@ describe('managed ticket runtime', () => {
     const task = await getManagedTicket(taskId)
     if (!task.ok) throw new Error(task.error.detail)
     expect(task.value.status).toBe('RUNNING')
+  })
+
+  it.each([
+    { name: '未声明上限的 worker 保持 965 秒租约', maxRunMs: undefined, lease: 965 },
+    { name: '声明 2 小时上限的 worker 得到覆盖它的租约', maxRunMs: 7_200_000, lease: 7265 },
+  ])('租约由 worker 的单次运行上限派生：$name', async ({ maxRunMs, lease }) => {
+    const { taskId, root } = await seed()
+    const base = happyWorker(root)
+    let remaining: number | undefined
+    const worker: ManagedTicketWorker = {
+      ...base,
+      ...(maxRunMs === undefined ? {} : { maxRunMs }),
+      run: async (input) => {
+        const row = await asRole('keel_control', (client) =>
+          client.query<{ seconds: number }>(
+            `SELECT EXTRACT(EPOCH FROM (lease_until-clock_timestamp()))::float8 AS seconds
+             FROM managed_ticket_task WHERE id=$1`,
+            [taskId],
+          ),
+        )
+        remaining = row.rows[0]?.seconds
+        return base.run(input)
+      },
+    }
+    const result = await tickManagedTicket(worker, taskId)
+    expect(result.ok).toBe(true)
+    expect(managedExecutionLeaseSeconds(maxRunMs)).toBe(lease)
+    // 认领到阶段开始之间只隔几次本地查询；租约剩余应贴着派生值，而不是别的常量。
+    expect(remaining).toBeLessThanOrEqual(lease)
+    expect(remaining).toBeGreaterThan(lease - 30)
+    expect(remaining).toBeGreaterThan(
+      ((maxRunMs ?? MANAGED_STAGE_TIMEOUT_MS) + MANAGED_STAGE_CLEANUP_MS) / 1000,
+    )
   })
 
   it('天问按项目决定解决偏好问题后把 ticket 放回 READY', async () => {

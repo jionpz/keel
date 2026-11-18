@@ -27,6 +27,7 @@ import type {
 import { MANAGED_SCHEMAS } from '../../generated/managed.js'
 import { canonicalJson, sha256CanonicalJson, sha256Text } from '../../shared/canonical-json.js'
 import { COMMIT_POLICY_COLUMNS, commitPolicyFromRow } from '../../shared/commit-policy.js'
+import { managedExecutionLeaseSeconds } from '../../shared/managed-limits.js'
 import {
   commitFieldsFromHeader,
   PULL_REQUEST_BODY_MAX_LENGTH,
@@ -79,6 +80,11 @@ import {
 export interface ManagedTicketWorker {
   readonly harness: string
   readonly toolInventory: readonly string[]
+  /**
+   * 该 worker 单次运行（阶段、路线规划或天问）的最长墙钟，毫秒。
+   * ticket 与 workflow 的租约由它派生；缺省为 managed 的缺省阶段上限。
+   */
+  readonly maxRunMs?: number
   readonly run: ManagedTicketStageRunner
   readonly decide?: ManagedTicketDecisionRunner
   readonly plan?: ManagedWorkflowPlanRunner
@@ -1387,7 +1393,11 @@ export async function tickManagedTicket(
   worker: ManagedTicketWorker,
   taskId?: string,
 ): Promise<Result<ManagedTicketTickResult | null>> {
-  const claim = await claimManagedTicketTask(new Date().toISOString(), taskId)
+  const claim = await claimManagedTicketTask(
+    new Date().toISOString(),
+    taskId,
+    managedExecutionLeaseSeconds(worker.maxRunMs),
+  )
   if (claim === null) return ok(null)
   const loaded = await asRole('keel_control', (c) =>
     loadTicketPackage(c, claim.task.package_digest),

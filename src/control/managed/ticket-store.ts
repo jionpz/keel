@@ -3,7 +3,7 @@ import type { PoolClient } from 'pg'
 import { err, makeError, ok, type Result } from '../../contracts/errors.js'
 import type { ManagedTicketStageRecord, ManagedTicketTask } from '../../contracts/managed.js'
 import { asRole } from '../../fact/db.js'
-import { MANAGED_EXECUTION_LEASE_SECONDS } from '../../shared/managed-limits.js'
+import { managedExecutionLeaseSeconds } from '../../shared/managed-limits.js'
 
 export interface ManagedTicketClaim {
   readonly task: ManagedTicketTask
@@ -43,9 +43,11 @@ export async function listManagedTicketStages(
   return result.rows
 }
 
+/** `leaseSeconds` 必须覆盖认领方单次阶段运行的墙钟上限与清理等待。 */
 export async function claimManagedTicketTask(
   now: string,
   taskId?: string,
+  leaseSeconds: number = managedExecutionLeaseSeconds(),
 ): Promise<ManagedTicketClaim | null> {
   return asRole('keel_control', async (c) => {
     const candidates = await c.query<ManagedTicketTask>(
@@ -86,7 +88,7 @@ export async function claimManagedTicketTask(
       `UPDATE managed_ticket_task SET status='RUNNING',lease_token=$2,
          lease_until=clock_timestamp() + $4 * interval '1 second',
          attempts=attempts+1,last_error=NULL,updated_at=$3 WHERE id=$1`,
-      [task.id, token, now, MANAGED_EXECUTION_LEASE_SECONDS],
+      [task.id, token, now, leaseSeconds],
     )
     await ticketEvent(c, task.id, 'ManagedTicketAttemptStarted', {
       attempt,
