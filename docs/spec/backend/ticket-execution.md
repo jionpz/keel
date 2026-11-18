@@ -70,10 +70,19 @@ route 工作流还会把节点 `scope_paths` 与 `acceptance` 保存到
 baseline、输入 commit、输入摘要、输出摘要、证据摘要、结构化 result/evidence 与 usage。
 已结束的阶段行不可改写。
 
-managed 阶段、天问与路线规划的墙钟上限为 15 分钟；超时会调用 Harness 的
+managed 阶段、天问与路线规划的墙钟上限缺省为 15 分钟。`plan` / `execute` / `verify` /
+`review` / `land` 的上限可以由部署方在模型 profile 的阶段条目里用 `timeout_s` 调整
+（60 到 14400 秒，见 [model-routing.md](./model-routing.md)）；天问固定用缺省值，
+只读调查走自己的 90 秒路径，两者不可配。交给 Harness 的 `limits.wall_clock_s` 与
+本进程强制中断的计时器是同一个数。超时会调用 Harness 的
 `interrupt(..., 'timeout')`，最多等待 5 秒收敛并保留已上报 usage，然后才清理执行环境。
-ticket 与 workflow 的租约为 965 秒，比执行上限和清理等待多 60 秒，避免超时处理
-恰好撞上租约失效而无法记录失败。租约失效时，失败或暂停的落库返回 `CONFLICT`，
+
+ticket 与 workflow 的租约由 worker 的最长单次运行派生：
+`max(各阶段上限, 天问的缺省上限) + 5 秒清理等待 + 60 秒余量`，缺省即 965 秒。租约必须
+比运行本身活得久，否则超时处理恰好撞上租约失效而无法记录失败。workflow 认领时还
+不知道本次会内联执行规划还是哪个 ticket 阶段，所以两种租约都按最长的那个上限取值，
+不按阶段区分。代价是调大任一阶段的上限后，进程硬崩溃留下的 `RUNNING` 也要等同样
+更久才会被重新认领。租约失效时，失败或暂停的落库返回 `CONFLICT`，
 不能输出一个数据库中并不存在的 `READY` 或 `PAUSED`。
 
 `execute` 是真实现场中唯一允许留下合法 WIP 的阶段。只有同时满足以下条件，Keel

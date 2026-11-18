@@ -8,6 +8,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   configuredStageTimeoutS,
@@ -273,6 +274,24 @@ describe('loadModelRoutingSettings · 环境变量', () => {
     if (missing.ok) return
     expect(missing.error.detail).toContain('team-b')
     expect(missing.error.detail).toContain('team-a')
+  })
+
+  it('仓库自带的示例 profile 能启动，并示范了 managed 阶段键与 timeout_s', () => {
+    // 示例是部署方照抄的起点：解析不过，或只示范 legacy 阶段键，照抄就不生效。
+    const loaded = loadModelRoutingSettings({
+      KEEL_MODEL_PROFILE: 'team-a',
+      KEEL_MODEL_PROFILES_FILE: fileURLToPath(
+        new URL('../../docs/examples/model-profiles.example.json', import.meta.url),
+      ),
+    })
+    expect(loaded.ok).toBe(true)
+    if (!loaded.ok) return
+    for (const harness of ['omp', 'claude', 'pi'])
+      expect(preflightModelRouting({ harness, routing: loaded.value }).ok).toBe(true)
+    for (const harness of ['omp', 'pi'] as const) {
+      expect(configuredStageTimeoutS(loaded.value, harness, 'execute')).toBe(1800)
+      expect(configuredStageTimeoutS(loaded.value, harness, 'verify')).toBe(2400)
+    }
   })
 
   it('坏 JSON → CAPABILITY_UNSUPPORTED，消息点名文件', () => {
