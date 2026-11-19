@@ -212,7 +212,9 @@ pnpm install
 pnpm run check     # CI 跑的就是这一条 —— 与本地完全一致
 ```
 
-`check` 聚合了 lint / typecheck / 架构边界 / 类型同步 / 转移表比对 / 纯度 / 测试。
+`check` 聚合了 lint / typecheck / 架构边界 / 类型同步 / 转移表比对 / 纯度 / 确定性测试 / **构建与 CLI 烟测**。
+
+CI 在 PR 上另外执行隔离负例和 `pnpm run check:package`：从源码编译，在临时目录**只安装生产依赖**后实际启动 CLI。仅已整合到 `main` 且三道门都通过的提交会生成带 SHA-256 的**候选制品**，但**不会自动发布或部署**。完整约束见 [CI / 候选交付契约](./docs/spec/backend/ci-cd.md)。
 
 ### AI 工作流
 
