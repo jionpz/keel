@@ -7,6 +7,7 @@
 - **理解产品**：[总览](./01-overview.md) → [术语](./02-glossary.md) → [当前 managed 状态机](./managed-state-machine.md)。
 - **实施变更**：先读根目录 [AGENTS.md](../AGENTS.md)，再按模块查看 [后端规范](./spec/backend/index.md) 或 [控制台规范](./spec/frontend/index.md)，以及相应测试。
 - **排查安全 / 准备上线**：[执行隔离](./spec/backend/executor-isolation.md)、[决策接纳](./spec/backend/decision-acceptance.md)、[动作网关](./spec/backend/action-gateway.md)、[服务与恢复](./spec/backend/service-runtime.md)、[试运行准入](./spec/backend/trial-readiness.md)。
+- **检查与制品交付**：[CI / 候选交付契约](./spec/backend/ci-cd.md)：解释 PR 检查、可运行包、候选制品与人工生产准入的独立边界。
 
 ## 两条产品路径，不得混用
 
