@@ -29,18 +29,21 @@
     "check:isolation": "pnpm exec vitest run --config vitest.isolation.config.ts && pnpm exec tsx scripts/jt02a/isolation-probe.ts",
     "check:agents": "pnpm exec tsx scripts/jt02a/agent-negative-probe.ts",
     "check:isolated": "tsx scripts/check-isolated.ts",
-    "check": "pnpm run lint && pnpm run typecheck && pnpm run boundaries && pnpm run check:generated && pnpm run check:transitions && pnpm run check:purity && pnpm run test"
+    "check:package": "sh scripts/check-package.sh",
+    "check": "pnpm run lint && pnpm run typecheck && pnpm run boundaries && pnpm run check:generated && pnpm run check:transitions && pnpm run check:purity && pnpm run test && pnpm run build && node dist/cli/index.js --help"
+  },
+  "dependencies": {
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "node-pg-migrate": "^9.0.0",
+    "pg": "^8.23.0"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.0.0",
     "@types/node": "^24.0.0",
     "@types/pg": "^8.23.1",
-    "ajv": "^8.17.1",
-    "ajv-formats": "^3.0.1",
     "dependency-cruiser": "^16.0.0",
     "json-schema-to-typescript": "^15.0.0",
-    "node-pg-migrate": "^9.0.0",
-    "pg": "^8.23.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",
     "vitest": "^3.0.0"

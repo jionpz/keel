@@ -1,38 +1,27 @@
 name: CI
 
+# PR only tests the proposed change; main tests the integrated commit.
+# Do not run push on every feature branch: it duplicates PR runs for the same SHA.
 on:
-  push:
-    branches: ['**']
   pull_request:
+  push:
+    branches: [main]
+
+# All jobs execute repository-controlled code; they need neither write access nor secrets.
+permissions:
+  contents: read
+
+# Stop obsolete PR checks, but never cancel the integrated main commit's checks.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  isolation:
-    # 项目数据库契约是 PostgreSQL 16。固定 runner，避免 ubuntu-latest 漂到
-    # PostgreSQL 18 客户端后，pg_dump 写入 PostgreSQL 16 不认识的 session 参数。
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: pnpm/action-setup@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
-
-      - run: docker version
-
-      - run: pnpm run check:isolation
-
   check:
     runs-on: ubuntu-24.04
+    timeout-minutes: 25
 
-    # 不变量测试需要真实 Postgres —— 它们验证的是 GRANT 与触发器，
-    # 用内存替身或 mock 验证不了任何东西。
+    # SQL GRANT, triggers, backup and restore need a real PostgreSQL server.
     services:
       postgres:
         image: postgres:16
@@ -51,40 +40,95 @@ jobs:
       KEEL_DATABASE_URL: postgres://keel:keel@localhost:5432/keel_test
 
     steps:
-      - uses: actions/checkout@v4
+      # Immutable action SHAs; Dependabot keeps them current.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version-file: .nvmrc
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
 
-      # check job 只跑这一条聚合命令 —— 与本地完全一致。
-      #
-      # 这是刻意的：若 CI 与本地跑的是不同命令，迟早会出现「本地过了 CI 红」，
-      # 而人们解决这种摩擦的方式通常是放宽 CI。
-      #
-      # check 聚合了四条架构约束的检查：
-      #   C1 check:generated   —— schema 是类型的唯一事实来源
-      #   C2 boundaries        —— Execution Plane 不得写 Fact Plane
-      #   C3 boundaries + check:purity —— 转移函数必须是纯函数
-      #   C4 check:transitions —— 代码转移表 ⟷ 文档转移表
-      #
-      # 要放宽任何一条，走 ADR。不要在这里加 continue-on-error。
+      # PostgreSQL 16 service must not receive a dump from a newer pg_dump:
+      # that previously caused pg_restore: unrecognized "transaction_timeout".
+      # Fail early rather than silently relying on the runner's default PATH.
+      - name: Select PostgreSQL 16 client
+        shell: bash
+        run: |
+          pg16=/usr/lib/postgresql/16/bin
+          if [[ ! -x "$pg16/pg_dump" || ! -x "$pg16/pg_restore" ]]; then
+            echo "::error::PostgreSQL 16 client missing from ubuntu-24.04 runner"
+            exit 1
+          fi
+          echo "$pg16" >> "$GITHUB_PATH"
+          "$pg16/pg_dump" --version
+          "$pg16/pg_restore" --version
+
+      # One canonical local/CI command. Includes C1-C4, actual DB tests,
+      # TypeScript emit and the compiled CLI smoke check.
       - run: pnpm run check
 
-      # ⚠️ 验收测试（pnpm run test:acceptance）**刻意不在 CI 中**。
-      #
-      # 它们要调真实模型，因此：
-      #   1. 需要 API 凭据。往 CI 放凭据会扩大泄漏面，而收益只是早几小时知道结果。
-      #   2. 每次 push 都花钱，且成本随提交频率线性增长。
-      #   3. 断言依赖模型「说了什么」，天然有波动 —— 放进 CI 会让 CI 因
-      #      非代码原因变红，而人对不可信的红灯的反应是忽略它。
-      #      那会连带毁掉上面那条 check 的可信度。
-      #
-      # 代价是诚实的：**CI 绿不代表 v0.1 判据仍然成立**。
-      # 判据由人在发版前手动跑 `pnpm run test:acceptance` 验证，
-      # 结果记进对应任务的 prd.md（见 src/acceptance/README.md）。
+      # Real-model acceptance deliberately remains a separate release gate:
+      # no external model/GitHub credentials or nondeterministic runs in PR CI.
+      # See src/acceptance/README.md.
+
+  isolation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: docker version
+      - run: pnpm run check:isolation
+
+  package:
+    # The only delivery candidate is built after BOTH checks pass for this SHA.
+    # PRs validate the same package; only integrated main commits upload it.
+    needs: [check, isolation]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Rebuild in a clean job, install only declared production dependencies,
+      # then launch the compiled CLI. A green typecheck alone is insufficient.
+      - run: pnpm run check:package
+        env:
+          KEEL_CANDIDATE_DIR: ${{ runner.temp }}/keel-candidate
+
+      - name: Upload verified candidate (not a production release)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: keel-candidate-${{ github.sha }}
+          path: ${{ runner.temp }}/keel-candidate/
+          if-no-files-found: error
+          retention-days: 14
