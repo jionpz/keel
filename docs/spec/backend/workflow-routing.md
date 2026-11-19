@@ -118,8 +118,9 @@ target digest 绑定 stage、节点 ticket id、scope、acceptance、输入 comm
 branch。`verify` / `review` 若找到同 workflow、同 stage、同 target 的 `VALID` 证据，
 可把阶段标为 `REUSED` 并引用来源 evidence id；不会重复调用模型。
 
-review 要求 rework 时，后续 verify/review/land 证据失效；重新 execute 产生新 commit
-后 target 改变，旧证据不能复活。缺 gate、旧 SHA、旧 diff、伪造摘要均被拒绝。
+review 要求 rework 或 verify 的 check 未通过时，该节点的 verify/review/land 证据
+失效；重新 execute 产生新 commit 后 target 改变，旧证据不能复活。未通过的 verify
+不写入证据，同一提交上再次 verify 必须真实重跑。缺 gate、旧 SHA、旧 diff、伪造摘要均被拒绝。
 
 ## 6. 取消与静止边界
 
