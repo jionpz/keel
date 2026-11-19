@@ -999,6 +999,133 @@ describe('managed ticket runtime', () => {
     })
   })
 
+  it('带给下一轮的失败输出按写进上下文后的长度封顶', async () => {
+    const { root, taskId } = await seed()
+    const happy = happyWorker(root)
+    await tickManagedTicket(happy, taskId)
+    // 控制字符写进 JSON 后每个占 6 个字符：上限必须按转义后的长度算，否则会撑爆上下文预算。
+    const noisy = '\u001b'.repeat(16000)
+    const failing = workerWith(async () =>
+      success('verify', {
+        checks: Array.from({ length: 9 }, (_unused, index) => ({
+          command: `check-${index} ${'\u001b'.repeat(3900)}`,
+          exit_code: 1,
+          passed: false,
+          output_digest: '0'.repeat(64),
+          output_excerpt: `${noisy.slice(0, 15000)} tail-${index}`,
+        })),
+      }),
+    )
+    expect(await tickManagedTicket(failing, taskId)).toMatchObject({
+      ok: true,
+      value: { status: 'READY', stage: 'verify' },
+    })
+    let context: Parameters<ManagedTicketStageRunner>[0]['context'] | undefined
+    const fixing = workerWith(async (input) => {
+      context = input.context
+      const commit = await commitFile(root, 'feature.txt', 'fixed\n')
+      return success('execute', { commit, worktree_head: commit })
+    })
+    expect(await tickManagedTicket(fixing, taskId)).toMatchObject({
+      ok: true,
+      value: { status: 'READY', stage: 'execute' },
+    })
+    const facts = JSON.parse(
+      context?.sections.find((entry) => entry.id === 'facts')?.content ?? '{}',
+    )
+    const failure = facts.verify_failure
+    expect(failure.failed_checks).toHaveLength(8)
+    expect(failure.omitted_failed_checks).toBe(1)
+    failure.failed_checks.forEach(
+      (
+        check: { command: string; output_excerpt: string; excerpt_truncated: boolean },
+        index: number,
+      ) => {
+        expect(check.command.startsWith(`check-${index} `)).toBe(true)
+        expect(check.command.endsWith('…')).toBe(true)
+        expect(JSON.stringify(check.command).length).toBeLessThanOrEqual(503)
+        expect(check.output_excerpt.endsWith(` tail-${index}`)).toBe(true)
+        expect(JSON.stringify(check.output_excerpt).length).toBeLessThanOrEqual(4002)
+        expect(check.excerpt_truncated).toBe(true)
+      },
+    )
+    expect(JSON.stringify(failure).length).toBeLessThan(40000)
+  })
+
+  it('verify 失败修复后再遇 review 返工，execute 不再带着旧的 verify 失败', async () => {
+    const { root, taskId } = await seed()
+    const happy = happyWorker(root)
+    await tickManagedTicket(happy, taskId)
+    const failing = workerWith(async () =>
+      success('verify', {
+        checks: [
+          {
+            command: 'pnpm run check:isolated',
+            exit_code: 1,
+            passed: false,
+            output_digest: '0'.repeat(64),
+            output_excerpt: 'failed once',
+          },
+        ],
+      }),
+    )
+    await tickManagedTicket(failing, taskId)
+    // execute 交出新提交即回应了这次失败；之后 verify 通过，review 再要求返工。
+    const fixing = workerWith(async () => {
+      const commit = await commitFile(root, 'feature.txt', 'fixed\n')
+      return success('execute', { commit, worktree_head: commit })
+    })
+    await tickManagedTicket(fixing, taskId)
+    await tickManagedTicket(happy, taskId)
+    const reviewing = workerWith(async (input) => {
+      const current = await head(root)
+      const digest = await diffDigest(root, input.baseline_commit, current)
+      if (!digest.ok) throw new Error(digest.error.detail)
+      return success('review', {
+        status: 'rework',
+        review: {
+          reviewed_commit: current,
+          diff_digest: digest.value,
+          findings: [
+            {
+              id: 'f-1',
+              severity: 'high',
+              summary: '缺少边界检查',
+              disposition: 'open',
+              reason: '输入为空时会抛错',
+            },
+          ],
+        },
+      })
+    })
+    await tickManagedTicket(reviewing, taskId)
+    expect(await getManagedTicket(taskId)).toMatchObject({
+      ok: true,
+      value: { status: 'READY', current_stage: 'execute', rework_count: 2 },
+    })
+    let context: Parameters<ManagedTicketStageRunner>[0]['context'] | undefined
+    // 旧的 verify 失败已被回应：既不进上下文，也不能让 execute 交回原提交。
+    const reconfirm = workerWith(async (input) => {
+      context = input.context
+      return success('execute', { commit: input.input_commit, worktree_head: input.input_commit })
+    })
+    expect(await tickManagedTicket(reconfirm, taskId)).toMatchObject({
+      ok: true,
+      value: { status: 'PAUSED', stage: 'execute' },
+    })
+    expect(context?.sections.some((entry) => entry.id === 'verify_rework')).toBe(false)
+    const facts = JSON.parse(
+      context?.sections.find((entry) => entry.id === 'facts')?.content ?? '{}',
+    )
+    expect(facts.verify_failure).toBeUndefined()
+    expect(facts.rework_notes).toHaveLength(1)
+    expect((await listManagedTicketStages(taskId)).at(-1)).toMatchObject({
+      stage: 'execute',
+      status: 'FAILED',
+      error: 'STAGE_GATE_FAILED',
+    })
+  })
+
   it('verify 失败不是代码造成时 execute 上报 blocked，恢复决定接纳后在同一提交上重新验证', async () => {
     const { repoId, root, taskId } = await seed()
     await bindWorkflowIssue(repoId, taskId, '#134', ['feature.txt'])
@@ -1087,7 +1214,26 @@ describe('managed ticket runtime', () => {
     })
     expect(recoveryGuidance).toContain('这是 verify 失败后的恢复决定')
     expect(recoveryGuidance).toContain('由 verify 在同一提交上重新运行完整检查')
+    expect(recoveryGuidance).toContain('不要在 execute 里重跑完整检查')
     expect(await head(root)).toBe(commit)
+    // archive 按每个阶段最后一条成功记录的 evidence_digest 查 VALID 的 workflow 证据：
+    // 同一提交上重新确认的 execute 必须换掉第一次 execute 留下的那条，否则节点永远归不了档。
+    const archivable = async (stage: string) => {
+      const last = (await listManagedTicketStages(taskId))
+        .filter((record) => record.stage === stage)
+        .at(-1)
+      const valid = await asRole('keel_control', (c) =>
+        c.query(
+          `SELECT 1 FROM managed_workflow_evidence e
+           JOIN managed_workflow_node n ON n.id=e.node_id
+           WHERE n.ticket_task_id=$1 AND e.stage=$2 AND e.status='VALID'
+             AND e.input_commit=$3 AND e.evidence_digest=$4`,
+          [taskId, stage, commit, last?.evidence_digest],
+        ),
+      )
+      return valid.rowCount
+    }
+    expect(await archivable('execute')).toBe(1)
     expect(await getManagedTicket(taskId)).toMatchObject({
       ok: true,
       value: { status: 'READY', current_stage: 'verify', rework_count: 1 },
@@ -1107,6 +1253,8 @@ describe('managed ticket runtime', () => {
       value: { status: 'READY', stage: 'verify' },
     })
     expect(verifyRuns).toBe(1)
+    expect(await archivable('execute')).toBe(1)
+    expect(await archivable('verify')).toBe(1)
     expect(
       (await listManagedTicketStages(taskId)).map((stage) => [
         stage.stage,

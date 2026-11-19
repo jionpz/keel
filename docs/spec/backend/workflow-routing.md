@@ -120,7 +120,8 @@ branch。`verify` / `review` 若找到同 workflow、同 stage、同 target 的 
 
 review 要求 rework 或 verify 的 check 未通过时，该节点的 verify/review/land 证据
 失效；重新 execute 产生新 commit 后 target 改变，旧证据不能复活。未通过的 verify
-不写入证据，同一提交上再次 verify 必须真实重跑。缺 gate、旧 SHA、旧 diff、伪造摘要均被拒绝。
+不写入证据，同一提交上再次 verify 必须真实重跑。execute 经恢复决定确认原提交时，该节点
+同一提交上旧的 execute 证据失效，由这次确认的证据取代。缺 gate、旧 SHA、旧 diff、伪造摘要均被拒绝。
 
 ## 6. 取消与静止边界
 

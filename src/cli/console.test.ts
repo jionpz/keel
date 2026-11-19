@@ -1604,6 +1604,7 @@ describe('keel console', () => {
       run_count: 4,
       last_progress_at: null as string | null,
       ticket_error: null as string | null,
+      stage_error: null as string | null,
       activity_at: '2026-11-13T02:00:00Z',
     }
     const data = {
@@ -1639,6 +1640,15 @@ describe('keel console', () => {
     expect(detail.innerHTML).toContain('当前阶段 review')
     expect(detail.innerHTML).toContain('阻塞原因：&lt;停止原因&gt;')
     expect(detail.innerHTML).not.toContain('最近进展 ')
+    // 阶段错误码与阻塞原因不同才单独显示；阻塞原因以“错误码: 说明”开头时不重复。
+    node.stage_error = 'RUN_TIMEOUT'
+    await seam.loadWorkflowDetail(TASK_ID, true)
+    expect(detail.innerHTML).toContain('最近执行异常：RUN_TIMEOUT')
+    node.ticket_error = 'REWORK_LIMIT: verify 检查未通过'
+    node.stage_error = 'REWORK_LIMIT'
+    await seam.loadWorkflowDetail(TASK_ID, true)
+    expect(detail.innerHTML).toContain('阻塞原因：REWORK_LIMIT: verify 检查未通过')
+    expect(detail.innerHTML).not.toContain('最近执行异常')
   })
 
   it('GET /api/tasks/:id 组装 task / runs / events / artifacts / feedbacks / timers', async () => {

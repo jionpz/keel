@@ -326,9 +326,29 @@ function stageSummary(record: ManagedTicketStageRecord): string | null {
  * 分开计数会让最坏情况翻倍。
  */
 const MANAGED_TICKET_REWORK_LIMIT = 3
-/** 带给下一轮 execute 的失败检查条数与每条摘录长度上限；完整摘录留在 verify 的阶段记录里。 */
+/**
+ * 带给下一轮 execute 的失败检查条数，以及每条命令与摘录的长度上限；完整内容留在 verify 的阶段记录里。
+ * 长度按写进事实 JSON 之后算：换行、引号和控制字符转义后会变长，按原始字符数封顶
+ * 挡不住上下文超预算，而超预算会让 ticket 每次恢复都停在同一处。
+ */
 const VERIFY_FAILURE_MAX_CHECKS = 8
 const VERIFY_FAILURE_EXCERPT_CHARS = 4000
+const VERIFY_FAILURE_COMMAND_CHARS = 500
+
+function serializedLength(text: string): number {
+  return JSON.stringify(text).length - 2
+}
+
+function clipSerialized(text: string, limit: number, keep: 'head' | 'tail'): string {
+  let clipped = keep === 'head' ? text.slice(0, limit) : text.slice(-limit)
+  for (;;) {
+    const excess = serializedLength(clipped) - limit
+    if (excess <= 0) return clipped
+    // 一个字符转义后最多占 6 个字符，每次至少去掉一个，不会多去。
+    const drop = Math.ceil(excess / 6)
+    clipped = keep === 'head' ? clipped.slice(0, -drop) : clipped.slice(drop)
+  }
+}
 
 interface FailedCheck {
   readonly command: string
@@ -385,13 +405,17 @@ function verifyFailureFacts(record: ManagedTicketStageRecord): Record<string, un
     stage_id: record.id,
     attempt: record.attempt,
     commit: record.input_commit,
-    failed_checks: failed.slice(0, VERIFY_FAILURE_MAX_CHECKS).map((check) => ({
-      command: check.command,
-      exit_code: check.exit_code,
-      output_digest: check.output_digest,
-      output_excerpt: check.output_excerpt.slice(-VERIFY_FAILURE_EXCERPT_CHARS),
-      excerpt_truncated: check.output_excerpt.length > VERIFY_FAILURE_EXCERPT_CHARS,
-    })),
+    failed_checks: failed.slice(0, VERIFY_FAILURE_MAX_CHECKS).map((check) => {
+      const command = clipSerialized(check.command, VERIFY_FAILURE_COMMAND_CHARS, 'head')
+      const excerpt = clipSerialized(check.output_excerpt, VERIFY_FAILURE_EXCERPT_CHARS, 'tail')
+      return {
+        command: command.length < check.command.length ? `${command}…` : command,
+        exit_code: check.exit_code,
+        output_digest: check.output_digest,
+        output_excerpt: excerpt,
+        excerpt_truncated: excerpt.length < check.output_excerpt.length,
+      }
+    }),
     omitted_failed_checks: Math.max(0, failed.length - VERIFY_FAILURE_MAX_CHECKS),
   }
 }
@@ -728,7 +752,7 @@ async function buildTicketContext(
                     ? '恢复点没有 Git 改动且工作树干净；这是 verify 失败后的恢复决定：' +
                       '若决定确认失败原因已消除且无需改代码，直接确认当前 commit 完成' +
                       '（commit 填当前 HEAD，不要空提交），由 verify 在同一提交上重新运行完整检查；' +
-                      '需要改代码时照常提交。'
+                      '不要在 execute 里重跑完整检查。需要改代码时照常提交。'
                     : '恢复点没有 Git 改动且工作树干净；必须完成实现提交，随后仍须正式 verify。'
                   : '恢复点已经提交且工作树干净；若实现完整，可直接确认当前 commit 完成，无需空提交，随后仍须正式 verify。'
                 : '仍有未提交改动，必须完成并提交，不能丢弃 WIP 后确认旧 HEAD。') +
@@ -1864,6 +1888,8 @@ export async function tickManagedTicket(
   if (!after.value.clean) return failStage(claim, stageId, 'WORKTREE_DIRTY', usage, true)
   if (!changedDiff.ok) return failStage(claim, stageId, 'WORKSPACE_ERROR', usage, true)
 
+  // execute 经恢复决定确认原提交、交回 verify 重跑：这个提交已有一条 execute 证据。
+  let reconfirmedCommit = false
   if (stage === 'execute') {
     if (result.status !== 'completed' || result.commit === undefined)
       return failStage(claim, stageId, 'STAGE_GATE_FAILED', usage, true)
@@ -1879,6 +1905,7 @@ export async function tickManagedTicket(
       !(await isAncestor(claim.task.worktree_path, inputCommit, resolvedCommit))
     )
       return failStage(claim, stageId, 'STAGE_GATE_FAILED', usage, true)
+    reconfirmedCommit = resolvedCommit === inputCommit && reverify
     if (workflowNode !== null) {
       const changed = await changedFiles(
         claim.task.worktree_path,
@@ -2017,6 +2044,16 @@ export async function tickManagedTicket(
         })
         return 'READY'
       }
+      // 同一目标只保留一条有效证据，archive 按最后一条阶段记录的证据摘要核对：
+      // 这次确认要换掉同一提交上旧的 execute 证据，否则新证据写不进去，节点无法归档。
+      if (reconfirmedCommit && workflowNode !== null)
+        await invalidateNodeEvidence(
+          c,
+          workflowNode.workflow_id,
+          workflowNode.id,
+          'execute reconfirmed the same commit after a failed verify',
+          ['execute'],
+        )
       await recordWorkflowStageEvidence(
         c,
         workflowNode,

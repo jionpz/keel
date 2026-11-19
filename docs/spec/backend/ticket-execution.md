@@ -172,13 +172,16 @@ verify 已完成且至少一条 check 未通过时，任务同样回到 `execute
   verify 自报了 `worktree_head` 时也必须一致，否则按 `STALE_EVIDENCE` 暂停。
   `VERIFICATION_EVIDENCE_MISSING`（没有 check 或状态不是 completed）仍然暂停。
 - 下一轮 execute 的 `facts.verify_failure` 给出失败检查，固定段 `verify_rework` 要求
-  先判断原因。带入上下文的最多 8 条，每条摘录保留末尾 4000 字符，完整摘录在阶段
-  记录里。execute 交出下一个成功结果后，这两项不再下发，history 仍保留该次尝试。
+  先判断原因。带入上下文的最多 8 条，每条命令保留开头 500 字符、摘录保留末尾 4000
+  字符，长度按写进事实 JSON 后（含转义）计算，避免失败输出撑爆上下文预算；完整内容在
+  阶段记录里。execute 交出下一个成功结果后，这两项不再下发，history 仍保留该次尝试。
 - 由改动造成的失败：修复并提交新 commit，verify 在新提交上重跑。
 - 不是代码造成的失败（检查环境起不来、依赖或工具缺失等）：execute 不改代码，输出
   `blocked` 与 `kind=recovery` 决策。该决定按 §3 的恢复规则被接纳、且现场没有任何
-  改动时，execute 可以确认原提交，verify 在同一提交上重跑。没有被接纳的恢复决定
-  时，重复确认原提交仍按 `STAGE_GATE_FAILED` 拒绝。
+  改动时，execute 可以确认原提交，verify 在同一提交上重跑；execute 这时不重跑完整
+  检查。没有被接纳的恢复决定时，重复确认原提交仍按 `STAGE_GATE_FAILED` 拒绝。
+  确认原提交会让该节点在同一提交上旧的 execute workflow 证据失效并写入这次的证据，
+  archive 核对的是最后一条 execute 记录。
 
 返工有上限：review 的 open finding 与 verify 的检查失败共用 `rework_count`，最多三轮。
 两者每一轮的代价相同，共用才有一个确定的上限；分开计数最坏会到六轮。每次 verify 失败
