@@ -13,6 +13,7 @@ import { ZERO_USAGE } from '../../contracts/types.js'
 import { asOwner, asRole, closePool, getPool } from '../../fact/db.js'
 import type { DelegationPolicyVersion, JstackRoutePlan } from '../../generated/managed.js'
 import { sha256CanonicalJson, sha256Text } from '../../shared/canonical-json.js'
+import { MANAGED_STAGE_CLEANUP_MS } from '../../shared/managed-limits.js'
 import { claimActionOutbox, enqueueActionIntent, issuePermit, retryAction } from './action-store.js'
 import { answerManagedTicketDecision, recordDelegationPolicy } from './decision-store.js'
 import { fixtureRoutePackage, fixtureRoutePlan } from './route-test-utils.js'
@@ -780,6 +781,66 @@ describe('managed workflow runtime', () => {
     const ticked = await tickManagedWorkflow(worker, seeded.workflowId)
     if (!ticked.ok) throw new Error(ticked.error.detail)
     expect(ticked.value?.action).toBe('ticketed')
+  })
+
+  it('sizes the workflow and ticket leases to the longest run the worker declares', async () => {
+    const maxRunMs = 7_200_000
+    const floor = (maxRunMs + MANAGED_STAGE_CLEANUP_MS) / 1000
+    const remaining = (table: 'managed_workflow' | 'managed_ticket_task', id: string) =>
+      asRole('keel_control', async (c) => {
+        const row = await c.query<{ seconds: number }>(
+          `SELECT EXTRACT(EPOCH FROM (lease_until-clock_timestamp()))::float8 AS seconds
+           FROM ${table} WHERE id=$1`,
+          [id],
+        )
+        return row.rows[0]?.seconds
+      })
+
+    // 路线规划在 workflow 租约内联执行。
+    const planning = await seedWorkflow(fixtureRoutePlan('S', 1), { importPlan: false })
+    let whilePlanning: number | undefined
+    const planned = await tickManagedWorkflow(
+      {
+        ...happyWorker(),
+        maxRunMs,
+        plan: async () => {
+          whilePlanning = await remaining('managed_workflow', planning.workflowId)
+          return { ok: true, value: { output: fixtureRoutePlan('S', 1), usage: ZERO_USAGE } }
+        },
+      },
+      planning.workflowId,
+    )
+    if (!planned.ok) throw new Error(planned.error.detail)
+    expect(planned.value?.action).toBe('planned')
+    expect(whilePlanning).toBeGreaterThan(floor)
+    expect(whilePlanning).toBeLessThanOrEqual(floor + 60)
+
+    // ticket 阶段同样在 workflow 租约内联执行，两个租约都要覆盖它。
+    const seeded = await seedWorkflow(fixtureRoutePlan('S', 1), {
+      completionTarget: 'branch_ready',
+    })
+    await tickUntil(seeded.workflowId, happyWorker(), (r) => r.action === 'materialized')
+    const node = await nodeRow(seeded.workflowId, 'ticket-1')
+    let whileRunning: { workflow: number | undefined; ticket: number | undefined } | undefined
+    const worker: ManagedTicketWorker = {
+      ...workerWith(async (input) => {
+        whileRunning = {
+          workflow: await remaining('managed_workflow', seeded.workflowId),
+          ticket: await remaining('managed_ticket_task', node.ticket_task_id),
+        }
+        const result = await happyWorker().run(input)
+        if (!result.ok) throw new Error(result.error.detail)
+        return result.value.output as unknown as Record<string, unknown>
+      }),
+      maxRunMs,
+    }
+    const ticked = await tickManagedWorkflow(worker, seeded.workflowId)
+    if (!ticked.ok) throw new Error(ticked.error.detail)
+    expect(ticked.value?.action).toBe('ticketed')
+    expect(whileRunning?.workflow).toBeGreaterThan(floor)
+    expect(whileRunning?.ticket).toBeGreaterThan(floor)
+    expect(whileRunning?.workflow).toBeLessThanOrEqual(floor + 60)
+    expect(whileRunning?.ticket).toBeLessThanOrEqual(floor + 60)
   })
 
   it.each(['execute', 'land'] as const)(

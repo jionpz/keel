@@ -9,6 +9,7 @@ import type {
 } from '../contracts/managed.js'
 import { ZERO_USAGE } from '../contracts/types.js'
 import type { ManagedTicketWorker } from '../control/managed/ticket-runtime.js'
+import { MANAGED_STAGE_TIMEOUT_MS } from '../shared/managed-limits.js'
 import { ClaudeCodeAdapter } from './adapters/claude-code.js'
 import { OmpAdapter } from './adapters/omp.js'
 import { PI_SUBAGENT_TOOLS, PiAdapter } from './adapters/pi.js'
@@ -20,13 +21,19 @@ import {
 import { supervisedSandboxCommand } from './isolation/process-supervisor.js'
 import { managedInference } from './managed-inference.js'
 import {
+  configuredStageTimeoutS,
   type ModelRole,
   type ModelRoutingSettings,
   type ModelStage,
   type ResolvedModelRoute,
   resolveModelRoute,
+  TIMEOUT_STAGES,
 } from './model-routing.js'
-import { roleForTicketRole, ticketWorkerFromAdapter } from './ticket-stage-runner.js'
+import {
+  roleForTicketRole,
+  type StageTimeoutMs,
+  ticketWorkerFromAdapter,
+} from './ticket-stage-runner.js'
 
 export interface IsolatedTicketWorkerOptions {
   readonly harness: ManagedHarness
@@ -35,6 +42,20 @@ export interface IsolatedTicketWorkerOptions {
   readonly routing: ModelRoutingSettings
   /** 用宿主环境构造的探针 descriptor，只取 harness 名与工具清单。 */
   readonly descriptor: HarnessDescriptor
+}
+
+/**
+ * 各阶段的墙钟上限：profile 里写了 `timeout_s` 就用它，否则用 managed 的缺省上限。
+ * 部署配置只从这里进入执行面，计时器、交给 Harness 的上限和租约都由它派生。
+ */
+export function stageTimeoutsFor(
+  routing: ModelRoutingSettings,
+  harness: ManagedHarness,
+): StageTimeoutMs {
+  return (stage) => {
+    const configured = configuredStageTimeoutS(routing, harness, stage)
+    return configured === undefined ? MANAGED_STAGE_TIMEOUT_MS : configured * 1000
+  }
 }
 
 /**
@@ -57,12 +78,14 @@ export function createIsolatedTicketWorker(
       ...(options.model === undefined ? {} : { override: options.model }),
       routing: options.routing,
     })
+  const stageTimeoutMs = stageTimeoutsFor(options.routing, options.harness)
+  const workerFor = (adapter: HarnessAdapter) => ticketWorkerFromAdapter(adapter, stageTimeoutMs)
   const run: ManagedTicketStageRunner = async (input) => {
     try {
       const route = routeFor(input.stage, roleForTicketRole(input.tool_plan.role))
       if (!route.ok) return { ok: false, error: route.error, usage: ZERO_USAGE }
       return await withIsolatedAdapter(options, route.value, input.workspace_path, (adapter) =>
-        ticketWorkerFromAdapter(adapter).run(input),
+        workerFor(adapter).run(input),
       )
     } catch (error) {
       return { ok: false, error: managedEnvError(error), usage: ZERO_USAGE }
@@ -76,7 +99,7 @@ export function createIsolatedTicketWorker(
         options,
         route.value,
         input.workspace_path,
-        (adapter) => ticketWorkerFromAdapter(adapter).decide(input),
+        (adapter) => workerFor(adapter).decide(input),
         true,
       )
     } catch (error) {
@@ -91,7 +114,7 @@ export function createIsolatedTicketWorker(
         options,
         route.value,
         input.workspace_path,
-        (adapter) => ticketWorkerFromAdapter(adapter).plan(input),
+        (adapter) => workerFor(adapter).plan(input),
         true,
       )
     } catch (error) {
@@ -102,6 +125,8 @@ export function createIsolatedTicketWorker(
   return {
     harness,
     toolInventory: options.descriptor.tool_inventory ?? [],
+    // 天问固定用缺省上限，所以最长的一次运行不会短于它。
+    maxRunMs: Math.max(MANAGED_STAGE_TIMEOUT_MS, ...TIMEOUT_STAGES.map(stageTimeoutMs)),
     run,
     decide,
     plan,

@@ -12,7 +12,7 @@ import type {
   ManagedWorkflowStatus,
 } from '../../contracts/managed.js'
 import { asRole } from '../../fact/db.js'
-import { MANAGED_EXECUTION_LEASE_SECONDS } from '../../shared/managed-limits.js'
+import { managedExecutionLeaseSeconds } from '../../shared/managed-limits.js'
 import { lockIssueOwnership } from '../issue-ownership.js'
 
 export interface ManagedWorkflowClaim {
@@ -123,9 +123,11 @@ export async function listWorkflowEvidence(
   return result.rows
 }
 
+/** `leaseSeconds` 必须覆盖认领方内联执行的路线规划或 ticket 阶段。 */
 export async function claimManagedWorkflow(
   now: string,
   workflowId?: string,
+  leaseSeconds: number = managedExecutionLeaseSeconds(),
 ): Promise<ManagedWorkflowClaim | null> {
   return asRole('keel_control', async (c) => {
     const candidates = await c.query<ManagedWorkflow>(
@@ -177,7 +179,7 @@ export async function claimManagedWorkflow(
       `UPDATE managed_workflow SET status='RUNNING',lease_token=$2,
          lease_until=clock_timestamp() + $5 * interval '1 second',
          attempts=$4,last_error=NULL,updated_at=$3 WHERE id=$1`,
-      [workflow.id, token, now, attempt, MANAGED_EXECUTION_LEASE_SECONDS],
+      [workflow.id, token, now, attempt, leaseSeconds],
     )
     await workflowEvent(
       c,

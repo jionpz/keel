@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs'
+import type { ManagedTicketStageInput, ManagedTicketStageName } from '../../contracts/managed.js'
 import type { ToolPolicyDocument } from '../../execution/tool-policy.js'
 import type { JstackTicketPackage } from '../../generated/managed.js'
 import { sha256CanonicalJson, sha256Text } from '../../shared/canonical-json.js'
@@ -136,4 +137,41 @@ export function fixtureTicketPackage(
     ...ticketPackage,
     content_digest: digest,
   } as unknown as JstackTicketPackage
+}
+
+/** 一次阶段执行的最小入参：固定包、空上下文、只放行 read。 */
+export function fixtureStageInput(stage: ManagedTicketStageName): ManagedTicketStageInput {
+  const ticketPackage = fixtureTicketPackage()
+  const definition = ticketPackage.stages.find((entry) => entry.stage === stage)
+  if (definition === undefined) throw new Error(`fixture 缺 ${stage} 阶段`)
+  return {
+    attempt_id: 'a',
+    task_id: 't',
+    repo_id: 'r',
+    stage,
+    context: {
+      context_id: 'fixture',
+      recipe_id: 'fixture',
+      recipe_version: '1.0',
+      sections: [],
+      total_tokens: 0,
+      dropped: [],
+    },
+    workspace_path: '/tmp/workspace',
+    package: ticketPackage,
+    stage_definition: definition,
+    tool_plan: {
+      harness: 'pi',
+      stage,
+      role: 'developer',
+      profile: 'developer',
+      native_tools: ['read'],
+      degradations: [],
+      missing_optional: [],
+    },
+    baseline_commit: 'a'.repeat(40),
+    input_commit: 'a'.repeat(40),
+    rework_notes: [],
+    human_decisions: [],
+  }
 }

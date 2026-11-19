@@ -15,7 +15,7 @@
 | [Session Context](./session-context.md) | 上下文下行桥：`withPrompt` 只能追加、Adapter 渲染全部 section、`ContextBuilt` 不得说假话 |
 | [Harness Adapter](./harness-adapter.md) | 子进程环境隔离（宿主运行时变量）、同 Run 多轮 state 定位、argv 以当前 CLI 版本为准 |
 | [Executor Isolation](./executor-isolation.md) | 执行器环境 allowlist、容器规格门禁、真实 Docker 负例探针与证据边界 |
-| [Model Routing](./model-routing.md) | 项目不预设模型、部署方 profile 按 harness/stage/role 配置、managed 与 legacy 共用解析、`requested_model` 与 spawn 同源、allowlist 启动期预检先于 ingest |
+| [Model Routing](./model-routing.md) | 项目不预设模型、部署方 profile 按 harness/stage/role 配置、managed 阶段墙钟上限 `timeout_s`、managed 与 legacy 共用解析、`requested_model` 与 spawn 同源、allowlist 启动期预检先于 ingest |
 | [Workspace Diff](./workspace-diff.md) | `collectChanges` 接入编排：采集时机、HEAD 基线、未跟踪文件、事件载体与 fail-closed |
 | [Transition Effects](./transition-effects.md) | `firstRun`/`nextRun` 的可用站点与白名单双向断言、撞键可归因（`existing_status`）、不改键算法的理由、Task 级 timer 三件套的武装/取消对称与 `claimDueTimers` 的 `JOIN task` 防线 |
 | [Orchestrator Loop](./orchestrator-loop.md) | 停止原因必填（`stopReason`）、阶段态无 run 的证据式判据、单进程前提、只报告不修复 |
@@ -28,7 +28,7 @@
 | [CLI Lifecycle](./cli-lifecycle.md) | 分发层统一关池（`finally`）、常驻循环 SIGTERM 必跳出、监听不叠加、关池失败不改退出码、常驻角色单实例 advisory lock |
 | [Decision Acceptance](./decision-acceptance.md) | 项目决定/委托版本、E3/E1 确定性接纳、request revision CAS、唯一决议与角色权限 |
 | [Project Memory](./project-memory.md) | 项目记忆事实源、版本化摘要、epoch/水位增量、检索预算、回滚与人工规则提升 |
-| [Ticket Execution](./ticket-execution.md) | jstack 单 ticket 固定包、阶段门禁、verify/review 证据绑定、must-stop DecisionRequest、scope 检查与 branch_ready/pr_ready 边界 |
+| [Ticket Execution](./ticket-execution.md) | jstack 单 ticket 固定包、阶段门禁、阶段墙钟与租约、execute/verify 检查分工、verify/review 证据绑定、must-stop DecisionRequest、scope 检查与 branch_ready/pr_ready 边界 |
 | [Workflow Routing](./workflow-routing.md) | jstack XS/S/M/L/XL route 包、依赖图校验、节点调度、scope、证据复用、archive 与双投影 |
 | [Action Gateway](./action-gateway.md) | action intent / ExecutionPermit / 持久 outbox、受控 push 与 PR、required checks 与准确 SHA 的 `pr_ready` |
 | [PR Description](./pr-description.md) | PR 标题模板回退与 header 校验、问题/根因/改动/验证章节、artifact 来源、兼容标记 |

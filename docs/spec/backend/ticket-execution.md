@@ -70,10 +70,19 @@ route 工作流还会把节点 `scope_paths` 与 `acceptance` 保存到
 baseline、输入 commit、输入摘要、输出摘要、证据摘要、结构化 result/evidence 与 usage。
 已结束的阶段行不可改写。
 
-managed 阶段、天问与路线规划的墙钟上限为 15 分钟；超时会调用 Harness 的
+managed 阶段、天问与路线规划的墙钟上限缺省为 15 分钟。`plan` / `execute` / `verify` /
+`review` / `land` 的上限可以由部署方在模型 profile 的阶段条目里用 `timeout_s` 调整
+（60 到 14400 秒，见 [model-routing.md](./model-routing.md)）；天问固定用缺省值，
+只读调查走自己的 90 秒路径，两者不可配。交给 Harness 的 `limits.wall_clock_s` 与
+本进程强制中断的计时器是同一个数。超时会调用 Harness 的
 `interrupt(..., 'timeout')`，最多等待 5 秒收敛并保留已上报 usage，然后才清理执行环境。
-ticket 与 workflow 的租约为 965 秒，比执行上限和清理等待多 60 秒，避免超时处理
-恰好撞上租约失效而无法记录失败。租约失效时，失败或暂停的落库返回 `CONFLICT`，
+
+ticket 与 workflow 的租约由 worker 的最长单次运行派生：
+`max(各阶段上限, 天问的缺省上限) + 5 秒清理等待 + 60 秒余量`，缺省即 965 秒。租约必须
+比运行本身活得久，否则超时处理恰好撞上租约失效而无法记录失败。workflow 认领时还
+不知道本次会内联执行规划还是哪个 ticket 阶段，所以两种租约都按最长的那个上限取值，
+不按阶段区分。代价是调大任一阶段的上限后，进程硬崩溃留下的 `RUNNING` 也要等同样
+更久才会被重新认领。租约失效时，失败或暂停的落库返回 `CONFLICT`，
 不能输出一个数据库中并不存在的 `READY` 或 `PAUSED`。
 
 `execute` 是真实现场中唯一允许留下合法 WIP 的阶段。只有同时满足以下条件，Keel
@@ -153,6 +162,22 @@ review 的 diff 摘要由 Control 运行 `git diff --binary baseline..HEAD` 计�
 
 被 workflow 节点绑定的 ticket 还会在 execute 后检查 `baseline..HEAD` 的实际改动文件：
 每个路径必须落在节点 `scope_paths` 内，否则阶段失败为 `SCOPE_VIOLATION`。
+
+检查分工由固定阶段指令给出，只取决于阶段名，与仓库无关：
+
+- `execute` 只运行覆盖本次改动的定向检查：受改动影响的测试文件，以及类型检查、
+  lint 等静态检查。不运行项目的完整测试套件或完整检查命令。
+- 完整验证只在 `verify` 运行；项目声明 `check:isolated` 时优先使用它。
+- 任何阶段的检查都不能连接宿主开发库或测试库。
+
+要求在 execute 运行完整检查的来源有三处：固定包里 execute 的 provider 原文（按“一个
+会话做完实现和验证”书写）、仓库自己的规则（例如“提交前必须运行完整检查”）、ticket
+的验收条目。照它们执行会让 execute 和 verify 各跑一遍完整检查；完整检查的耗时接近
+阶段上限时，execute 常在检查中途超时、整轮作废。所以阶段指令写明这三处与它冲突时
+以它为准，这类要求由 verify 在同一提交上满足。少点名一处，那一处就会把完整检查带回
+execute。分工不改变门禁：execute 仍按提交、工作树与 scope 判定，verify 的每条 check
+仍是硬门禁。verify 的完整检查失败时任务按 `VERIFICATION_FAILED` 暂停，不会自动回到
+execute。
 
 verify 的 command/result 是隔离执行器产出的结构化证据，并由 Keel 用真实 git HEAD、
 工作树干净状态和 diff 摘要绑定；`output_digest` 由 Keel 从 `output_excerpt` 重新

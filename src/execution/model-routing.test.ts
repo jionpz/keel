@@ -8,8 +8,10 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  configuredStageTimeoutS,
   loadModelProfilesFile,
   loadModelRoutingSettings,
   type ModelProfileDefinition,
@@ -20,6 +22,7 @@ import {
   parseProfile,
   preflightModelRouting,
   resolveModelRoute,
+  TIMEOUT_STAGES,
 } from './model-routing.js'
 
 const OMP_TABLE: ModelRouteTable = {
@@ -170,6 +173,64 @@ describe('parseModelProfilesDocument · 部署方配置结构', () => {
       expect(r.error.kind).toBe('CAPABILITY_UNSUPPORTED')
     }
   })
+
+  it('managed 工作流阶段接受 timeout_s，只写 timeout_s 的条目也成立', () => {
+    for (const stage of TIMEOUT_STAGES) {
+      const r = parseModelProfilesDocument({
+        profiles: { p: { omp: { stages: { [stage]: { timeout_s: 1800 } } } } },
+      })
+      expect(r.ok, stage).toBe(true)
+      if (!r.ok) continue
+      expect(r.value.profiles.p?.omp?.stages?.[stage]).toEqual({ timeout_s: 1800 })
+    }
+    const combined = parseModelProfilesDocument({
+      profiles: {
+        p: { pi: { stages: { execute: { model: 'm', thinking: 'high', timeout_s: 60 } } } },
+      },
+    })
+    expect(combined.ok && combined.value.profiles.p?.pi?.stages?.execute).toEqual({
+      model: 'm',
+      thinking: 'high',
+      timeout_s: 60,
+    })
+  })
+
+  it('timeout_s 写在不生效的位置 → 拒绝并指出可用阶段，不静默忽略', () => {
+    const misplaced: unknown[] = [
+      ...['pm', 'brainstorm', 'critic', 'rfc_draft', 'develop', 'qa'].map((stage) => ({
+        stages: { [stage]: { model: 'm', timeout_s: 1800 } },
+      })),
+      { stages: { managed_investigate: { model: 'm', timeout_s: 1800 } } },
+      { stages: { tianwen: { timeout_s: 1800 } } },
+      { roles: { Developer: { model: 'm', timeout_s: 1800 } } },
+      { roles: { Reviewer: { timeout_s: 1800 } } },
+    ]
+    for (const table of misplaced) {
+      const r = parseModelProfilesDocument({ profiles: { p: { omp: table } } })
+      expect(r.ok, JSON.stringify(table)).toBe(false)
+      if (r.ok) continue
+      expect(r.error.kind).toBe('CAPABILITY_UNSUPPORTED')
+      expect(r.error.detail).toContain('timeout_s')
+      expect(r.error.detail).toContain(TIMEOUT_STAGES.join(' | '))
+    }
+  })
+
+  it('timeout_s 只接受 60 到 14400 的整数秒', () => {
+    const parse = (timeout: unknown) =>
+      parseModelProfilesDocument({
+        profiles: { p: { omp: { stages: { execute: { timeout_s: timeout } } } } },
+      })
+    for (const accepted of [60, 900, 14_400]) {
+      expect(parse(accepted).ok, String(accepted)).toBe(true)
+    }
+    for (const rejected of [0, -1, 59, 14_401, 900_000, 1.5, '1800', null, true, [1800]]) {
+      const r = parse(rejected)
+      expect(r.ok, JSON.stringify(rejected)).toBe(false)
+      if (r.ok) continue
+      expect(r.error.detail).toContain('execute.timeout_s')
+      expect(r.error.detail).toContain('60 到 14400')
+    }
+  })
 })
 
 describe('loadModelRoutingSettings · 环境变量', () => {
@@ -213,6 +274,24 @@ describe('loadModelRoutingSettings · 环境变量', () => {
     if (missing.ok) return
     expect(missing.error.detail).toContain('team-b')
     expect(missing.error.detail).toContain('team-a')
+  })
+
+  it('仓库自带的示例 profile 能启动，并示范了 managed 阶段键与 timeout_s', () => {
+    // 示例是部署方照抄的起点：解析不过，或只示范 legacy 阶段键，照抄就不生效。
+    const loaded = loadModelRoutingSettings({
+      KEEL_MODEL_PROFILE: 'team-a',
+      KEEL_MODEL_PROFILES_FILE: fileURLToPath(
+        new URL('../../docs/examples/model-profiles.example.json', import.meta.url),
+      ),
+    })
+    expect(loaded.ok).toBe(true)
+    if (!loaded.ok) return
+    for (const harness of ['omp', 'claude', 'pi'])
+      expect(preflightModelRouting({ harness, routing: loaded.value }).ok).toBe(true)
+    for (const harness of ['omp', 'pi'] as const) {
+      expect(configuredStageTimeoutS(loaded.value, harness, 'execute')).toBe(1800)
+      expect(configuredStageTimeoutS(loaded.value, harness, 'verify')).toBe(2400)
+    }
   })
 
   it('坏 JSON → CAPABILITY_UNSUPPORTED，消息点名文件', () => {
@@ -409,6 +488,62 @@ describe('resolveModelRoute · override > role > stage > 不传', () => {
     expect(r.ok).toBe(false)
     if (r.ok) return
     expect(r.error.kind).toBe('CAPABILITY_UNSUPPORTED')
+  })
+})
+
+describe('configuredStageTimeoutS · 阶段墙钟上限', () => {
+  const timed: ModelRoutingSettings = {
+    profile: 'team-a',
+    profiles: {
+      profiles: {
+        'team-a': {
+          omp: {
+            stages: {
+              execute: { model: 'deployment/dev-model', timeout_s: 1800 },
+              verify: { timeout_s: 2400 },
+              review: { model: 'deployment/reviewer-model' },
+            },
+          },
+          pi: { stages: { execute: { timeout_s: 600 } } },
+        },
+        'team-b': { omp: { stages: { execute: { timeout_s: 7200 } } } },
+      },
+    },
+    allowlist: [],
+  }
+
+  it('取所选 profile、所选 harness 下该阶段的值', () => {
+    expect(configuredStageTimeoutS(timed, 'omp', 'execute')).toBe(1800)
+    expect(configuredStageTimeoutS(timed, 'omp', 'verify')).toBe(2400)
+    expect(configuredStageTimeoutS(timed, 'pi', 'execute')).toBe(600)
+  })
+
+  it('未选 profile、缺 harness 表、阶段未写 timeout_s → undefined，交给缺省上限', () => {
+    expect(configuredStageTimeoutS({ allowlist: [] }, 'omp', 'execute')).toBeUndefined()
+    expect(configuredStageTimeoutS(timed, 'claude', 'execute')).toBeUndefined()
+    expect(configuredStageTimeoutS(timed, 'omp', 'review')).toBeUndefined()
+    expect(configuredStageTimeoutS(timed, 'omp', 'land')).toBeUndefined()
+    expect(configuredStageTimeoutS(timed, 'pi', 'verify')).toBeUndefined()
+  })
+
+  it('timeout_s 不进入模型路由结果，也不受 --model 覆盖影响', () => {
+    const route = resolveModelRoute({
+      harness: 'omp',
+      stage: 'execute',
+      role: 'Developer',
+      override: 'override/model',
+      routing: timed,
+    })
+    expect(route).toEqual({ ok: true, value: { model: 'override/model' } })
+    expect(configuredStageTimeoutS(timed, 'omp', 'execute')).toBe(1800)
+  })
+
+  it('只写 timeout_s 的条目没有模型，启动预检不拿它去比 allowlist', () => {
+    const r = preflightModelRouting({
+      harness: 'pi',
+      routing: { ...timed, allowlist: ['deployment/dev-model'] },
+    })
+    expect(r).toEqual({ ok: true, value: undefined })
   })
 })
 
