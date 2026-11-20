@@ -1021,12 +1021,19 @@ it('MUST_STOP 检查不能复用为正式 verify 证据', async () => {
     fixture.taskId,
   )
   expect(verifyRan).toBe(true)
-  expect(verified).toMatchObject({ ok: true, value: { status: 'PAUSED' } })
-  expect((await listManagedTicketStages(fixture.taskId)).map((stage) => stage.status)).toEqual([
-    'FAILED',
-    'MUST_STOP',
-    'SUCCEEDED',
-    'FAILED',
+  // 正式 verify 的检查未通过：回到 execute 返工，而不是复用恢复点里的检查。
+  expect(verified).toMatchObject({ ok: true, value: { status: 'READY', stage: 'verify' } })
+  expect(await getManagedTicket(fixture.taskId)).toMatchObject({
+    ok: true,
+    value: { status: 'READY', current_stage: 'execute', rework_count: 1 },
+  })
+  expect(
+    (await listManagedTicketStages(fixture.taskId)).map((stage) => [stage.status, stage.error]),
+  ).toEqual([
+    ['FAILED', 'RUN_TIMEOUT'],
+    ['MUST_STOP', 'DECISION_REQUIRED'],
+    ['SUCCEEDED', null],
+    ['REWORK', 'VERIFICATION_FAILED'],
   ])
   const reused = await asRole('keel_control', (c) =>
     c.query(

@@ -68,8 +68,10 @@ outbox 并撤销 `VALID` permit。详细约束见
 | `managed_ticket_task` | `READY`、`RUNNING`、`WAITING_HUMAN`、`WAITING_GATEWAY`、`PAUSED`、`PR_OPENED`、`CHECKING`、`PR_READY`、`PR_CHECKS_FAILED`、`DONE`、`FAILED`、`CANCELLED` | `ticket-runtime.ts` / `ticket-store.ts` 管阶段；control/decision/action/check 模块只写各自职责下的转移 |
 | `managed_ticket_stage` | `RUNNING`、`SUCCEEDED`、`REUSED`、`REWORK`、`FAILED`、`MUST_STOP` | 一行是一次尝试；结束后不可改写；失败产物只供诊断 |
 
-阶段固定为 `execute → verify → review → land`。`review` 有 open finding 时回
-`execute`，新 commit 会改变 verify/review 的绑定，旧证据失效。`REWORK` 是阶段尝试
+阶段固定为 `execute → verify → review → land`。`review` 有 open finding，或
+`verify` 有 check 未通过时回 `execute`，新 commit 会改变 verify/review 的绑定，
+旧证据失效。verify 的失败检查留在那次尝试的记录里，并进入下一轮 execute 的上下文。
+两种返工共用三轮上限，用完后任务按 `REWORK_LIMIT` 进入 `PAUSED`。`REWORK` 是阶段尝试
 结果，不是 workflow 成功状态。managed XS/S 也走 review，这是 managed 固定包的
 安全覆盖，不是交互式 route 的规模规则。
 

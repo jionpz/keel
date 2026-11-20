@@ -3607,7 +3607,9 @@ export const CONSOLE_HTML = `<!doctype html>
     }
     var error = node.ticket_error || node.last_error;
     if (error) html += '<span class="bad-text">阻塞原因：' + esc(error) + '</span>';
-    if (node.stage_error && node.stage_error !== error) html += '<span class="bad-text">最近执行异常：' + esc(node.stage_error) + '</span>';
+    // 阻塞原因以“错误码: 说明”开头时已经包含同一个阶段错误码，不重复显示。
+    var repeated = node.stage_error === error || (error && error.indexOf(node.stage_error + ':') === 0);
+    if (node.stage_error && !repeated) html += '<span class="bad-text">最近执行异常：' + esc(node.stage_error) + '</span>';
     html += '<span>' + (node.run_count == null ? '执行次数不可用' : esc(node.run_count) + ' 次阶段执行') + '</span>';
     if (node.activity_at) html += '<span>更新 ' + esc(fmtListTime(node.activity_at)) + '</span>';
     return html + '</span>';

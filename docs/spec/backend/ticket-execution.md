@@ -141,7 +141,8 @@ revision、resolution id 与 context digest；即使恢复点没有 Git 改动�
 
 结构化阶段结果通过 schema 校验后，先保留 result 与实际 git/检查 evidence，再做
 阶段门禁；验证失败也必须能够回查命令、退出码与输出摘要。FAILED 行的结果只用于
-诊断，没有成功摘要，不能作为成功阶段或可复用证明。
+诊断，没有成功摘要，不能作为成功阶段或可复用证明。检查未通过的 verify 记为
+`REWORK`（见 §4），带 result/evidence 摘要，同样不是成功阶段，不写入 workflow 证据。
 
 verify 的 `checks` 每项都是硬门禁，只包含当前阶段必需的验收检查，失败不能省略。
 探索性环境诊断放在 `summary`；安全负例必须由断言预期拒绝的脚本给出真实成功结果，
@@ -151,14 +152,43 @@ verify 的 `checks` 每项都是硬门禁，只包含当前阶段必需的验收
 
 | 阶段 | 门禁 |
 |---|---|
-| `execute` | 输出等于 HEAD 且为输入后代，工作树干净；通常必须产生新 commit，只有上述已提交完整恢复点允许重新确认 |
-| `verify` | 至少一条 check；每条必须有 command、exit code、passed、输出摘要/摘录；`output_digest` 必须与实际摘录一致；HEAD 不能变化 |
+| `execute` | 输出等于 HEAD 且为输入后代，工作树干净；通常必须产生新 commit，只有上述已提交完整恢复点、以及 verify 失败后被接纳的恢复决定允许重新确认 |
+| `verify` | 至少一条 check；每条必须有 command、exit code、passed、输出摘要/摘录；`output_digest` 必须与实际摘录一致；HEAD 不能变化；任一 check 未通过只能进入 rework |
 | `review` | `reviewed_commit` 必须等于当前 HEAD；`diff_digest` 必须等于 Keel 重新计算的 baseline..HEAD diff；open finding 只能进入 rework |
 | `land` | `land.commit` 必须等于当前 HEAD；branch 必须是 `ai/*` 且不等于 base；只登记 `push_and_pr` intent/outbox，不执行 push/PR |
 
 review 的 diff 摘要由 Control 运行 `git diff --binary baseline..HEAD` 计算；模型自报的
 旧 SHA、旧 diff 或旧 verify 证据都会被拒绝。review 提出 open finding 时任务回到
-`execute`，保留 findings 作为下一轮上下文；最多三轮 rework。
+`execute`，保留 findings 作为下一轮上下文。
+
+verify 已完成且至少一条 check 未通过时，任务同样回到 `execute`，不暂停。verify 的
+阶段指令要求检查未通过时仍输出 `completed` 并保留 `passed=false`，这样失败才带着
+证据进入返工：
+
+- 这次 verify 记为 `REWORK`，`error` 为 `VERIFICATION_FAILED`，全部 checks（命令、
+  退出码、输出摘录与 Keel 重算的摘要）留在该行的 result/evidence 里；
+  `ManagedTicketReworkRequested` 事件带 `reason` 与失败检查的命令、退出码、摘要。
+- 失败证据必须绑定被验证的提交才能驱动返工：Keel 观察到的 HEAD 仍等于输入提交，
+  verify 自报了 `worktree_head` 时也必须一致，否则按 `STALE_EVIDENCE` 暂停。
+  `VERIFICATION_EVIDENCE_MISSING`（没有 check 或状态不是 completed）仍然暂停。
+- 下一轮 execute 的 `facts.verify_failure` 给出失败检查，固定段 `verify_rework` 要求
+  先判断原因。带入上下文的最多 8 条，每条命令保留开头 500 字符、摘录保留末尾 4000
+  字符，长度按写进事实 JSON 后（含转义）计算，避免失败输出撑爆上下文预算；完整内容在
+  阶段记录里。execute 交出下一个成功结果后，这两项不再下发，history 仍保留该次尝试。
+- 由改动造成的失败：修复并提交新 commit，verify 在新提交上重跑。
+- 不是代码造成的失败（检查环境起不来、依赖或工具缺失等）：execute 不改代码，输出
+  `blocked` 与 `kind=recovery` 决策。该决定按 §3 的恢复规则被接纳、且现场没有任何
+  改动时，execute 可以确认原提交，verify 在同一提交上重跑；execute 这时不重跑完整
+  检查。没有被接纳的恢复决定时，重复确认原提交仍按 `STAGE_GATE_FAILED` 拒绝。
+  确认原提交会让该节点在同一提交上旧的 execute workflow 证据失效并写入这次的证据，
+  archive 核对的是最后一条 execute 记录。
+
+返工有上限：review 的 open finding 与 verify 的检查失败共用 `rework_count`，最多三轮。
+两者每一轮的代价相同，共用才有一个确定的上限；分开计数最坏会到六轮。每次 verify 失败
+回退都计一轮，包括最后判定不是代码造成的那些。用完后再次要求返工的那次尝试记为
+`FAILED`/`REWORK_LIMIT`，任务暂停。由 verify 触发时 `last_error` 写明是检查未通过并
+列出失败命令与退出码；由 review 触发时仍是 `REWORK_LIMIT`。暂停后人工 `resume` 会在
+同一提交上重跑当前阶段。
 
 被 workflow 节点绑定的 ticket 还会在 execute 后检查 `baseline..HEAD` 的实际改动文件：
 每个路径必须落在节点 `scope_paths` 内，否则阶段失败为 `SCOPE_VIOLATION`。
@@ -176,8 +206,8 @@ review 的 diff 摘要由 Control 运行 `git diff --binary baseline..HEAD` 计�
 阶段上限时，execute 常在检查中途超时、整轮作废。所以阶段指令写明这三处与它冲突时
 以它为准，这类要求由 verify 在同一提交上满足。少点名一处，那一处就会把完整检查带回
 execute。分工不改变门禁：execute 仍按提交、工作树与 scope 判定，verify 的每条 check
-仍是硬门禁。verify 的完整检查失败时任务按 `VERIFICATION_FAILED` 暂停，不会自动回到
-execute。
+仍是硬门禁。execute 不再预跑完整检查，完整检查的失败要到 verify 才暴露；这时任务
+按上面的规则自动回到 execute，并带上失败输出。
 
 verify 的 command/result 是隔离执行器产出的结构化证据，并由 Keel 用真实 git HEAD、
 工作树干净状态和 diff 摘要绑定；`output_digest` 由 Keel 从 `output_excerpt` 重新
