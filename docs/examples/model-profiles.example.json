@@ -5,7 +5,9 @@
         "stages": {
           "develop": { "model": "<model-id>" },
           "managed_investigate": { "model": "<model-id>" },
-          "tianwen": { "model": "<model-id>" }
+          "tianwen": { "model": "<model-id>" },
+          "execute": { "model": "<model-id>", "timeout_s": 1800 },
+          "verify": { "timeout_s": 2400 }
         },
         "roles": {
           "Reviewer": { "model": "<model-id>" }
@@ -18,7 +20,9 @@
       },
       "pi": {
         "stages": {
-          "develop": { "model": "<model-id>", "thinking": "<level>" }
+          "develop": { "model": "<model-id>", "thinking": "<level>" },
+          "execute": { "model": "<model-id>", "thinking": "<level>", "timeout_s": 1800 },
+          "verify": { "timeout_s": 2400 }
         },
         "roles": {
           "Reviewer": { "model": "<model-id>", "thinking": "<level>" }

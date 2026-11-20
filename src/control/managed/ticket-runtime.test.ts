@@ -11,7 +11,11 @@ import { ZERO_USAGE } from '../../contracts/types.js'
 import { asOwner, asRole, closePool } from '../../fact/db.js'
 import type { ManagedTicketStageResult } from '../../generated/managed.js'
 import { sha256Text } from '../../shared/canonical-json.js'
-import { MANAGED_STAGE_CLEANUP_MS, MANAGED_STAGE_TIMEOUT_MS } from '../../shared/managed-limits.js'
+import {
+  MANAGED_STAGE_CLEANUP_MS,
+  MANAGED_STAGE_TIMEOUT_MS,
+  managedExecutionLeaseSeconds,
+} from '../../shared/managed-limits.js'
 import {
   answerManagedTicketDecision,
   recordDelegationPolicy,
@@ -479,6 +483,39 @@ describe('managed ticket runtime', () => {
     expect(task.value.status).toBe('RUNNING')
   })
 
+  it.each([
+    { name: '未声明上限的 worker 保持 965 秒租约', maxRunMs: undefined, lease: 965 },
+    { name: '声明 2 小时上限的 worker 得到覆盖它的租约', maxRunMs: 7_200_000, lease: 7265 },
+  ])('租约由 worker 的单次运行上限派生：$name', async ({ maxRunMs, lease }) => {
+    const { taskId, root } = await seed()
+    const base = happyWorker(root)
+    let remaining: number | undefined
+    const worker: ManagedTicketWorker = {
+      ...base,
+      ...(maxRunMs === undefined ? {} : { maxRunMs }),
+      run: async (input) => {
+        const row = await asRole('keel_control', (client) =>
+          client.query<{ seconds: number }>(
+            `SELECT EXTRACT(EPOCH FROM (lease_until-clock_timestamp()))::float8 AS seconds
+             FROM managed_ticket_task WHERE id=$1`,
+            [taskId],
+          ),
+        )
+        remaining = row.rows[0]?.seconds
+        return base.run(input)
+      },
+    }
+    const result = await tickManagedTicket(worker, taskId)
+    expect(result.ok).toBe(true)
+    expect(managedExecutionLeaseSeconds(maxRunMs)).toBe(lease)
+    // 认领到阶段开始之间只隔几次本地查询；租约剩余应贴着派生值，而不是别的常量。
+    expect(remaining).toBeLessThanOrEqual(lease)
+    expect(remaining).toBeGreaterThan(lease - 30)
+    expect(remaining).toBeGreaterThan(
+      ((maxRunMs ?? MANAGED_STAGE_TIMEOUT_MS) + MANAGED_STAGE_CLEANUP_MS) / 1000,
+    )
+  })
+
   it('天问按项目决定解决偏好问题后把 ticket 放回 READY', async () => {
     const { repoId, taskId } = await seed()
     const decisionId = randomUUID()
@@ -619,6 +656,46 @@ describe('managed ticket runtime', () => {
     expect(review?.evidence).toMatchObject({
       review: { reviewed_commit: review?.output_commit },
     })
+  })
+
+  it('阶段指令把完整验证只交给 verify，execute 只跑定向检查', async () => {
+    const { root, taskId } = await seed()
+    const happy = happyWorker(root)
+    const roles = new Map<string, string>()
+    const worker: ManagedTicketWorker = {
+      ...happy,
+      run: (input) => {
+        const role = input.context.sections.find((entry) => entry.id === 'role')
+        roles.set(input.stage, role?.content ?? '')
+        return happy.run(input)
+      },
+    }
+    for (let index = 0; index < 4; index++) {
+      const tick = await tickManagedTicket(worker, taskId)
+      if (!tick.ok) throw new Error(tick.error.detail)
+    }
+    expect([...roles.keys()]).toEqual(['execute', 'verify', 'review', 'land'])
+
+    const execute = roles.get('execute') ?? ''
+    expect(execute).toContain('只运行覆盖本次改动的定向检查')
+    expect(execute).toContain('不运行项目的完整测试套件或完整检查命令')
+    expect(execute).toContain('完整验证由 verify 阶段运行一次')
+    // 要求在 execute 跑完整检查的来源有三处：provider 原文、仓库规则、ticket 验收条目。
+    // 少点名一处，那一处就会把完整检查带回 execute，所以三处都要写明谁优先。
+    expect(execute).toContain('provider 原文、仓库规则或 ticket 验收条目')
+    expect(execute).toContain('以本节为准')
+    expect(execute).toContain('这类要求由 verify 阶段在同一提交上满足')
+
+    const verify = roles.get('verify') ?? ''
+    expect(verify).toContain('完整验证只在本阶段运行')
+    expect(verify).toContain('若项目声明 check:isolated，优先使用该命令')
+
+    // 运行完整检查的指引只出现在 verify，其余阶段不会被它带去重复运行。
+    for (const stage of ['execute', 'review', 'land'])
+      expect(roles.get(stage)).not.toContain('优先使用该命令')
+    // 不连宿主库是所有阶段的边界，不随检查分工移动。
+    for (const text of roles.values())
+      expect(text).toContain('任何检查都不能连接宿主开发库或测试库')
   })
 
   it('land 时把 workflow 来源 issue 写进 PR 正文', async () => {

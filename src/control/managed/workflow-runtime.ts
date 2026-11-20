@@ -19,6 +19,7 @@ import { indexManagedWorkspace } from '../../fact/managed-files.js'
 import type { JstackRoutePackage, JstackRoutePlan } from '../../generated/managed.js'
 import { MANAGED_SCHEMAS } from '../../generated/managed.js'
 import { canonicalJson, sha256CanonicalJson, sha256Text } from '../../shared/canonical-json.js'
+import { managedExecutionLeaseSeconds } from '../../shared/managed-limits.js'
 import {
   buildTicketPackageForNode,
   routePackageDigest,
@@ -913,7 +914,11 @@ export async function tickManagedWorkflow(
   worker: ManagedTicketWorker,
   workflowId?: string,
 ): Promise<Result<ManagedWorkflowTickResult | null>> {
-  const claim = await claimManagedWorkflow(new Date().toISOString(), workflowId)
+  const claim = await claimManagedWorkflow(
+    new Date().toISOString(),
+    workflowId,
+    managedExecutionLeaseSeconds(worker.maxRunMs),
+  )
   if (claim === null) return ok(null)
   const finish = async (
     status: ManagedWorkflowStatus,
