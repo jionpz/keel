@@ -1,6 +1,13 @@
 import { randomUUID } from 'node:crypto'
 import type { PoolClient } from 'pg'
-import { err, makeError, ok, type Result } from '../../contracts/errors.js'
+import {
+  err,
+  errorFrom,
+  type KeelError,
+  makeError,
+  ok,
+  type Result,
+} from '../../contracts/errors.js'
 import type {
   ManagedTicketStatus,
   ManagedTicketTask,
@@ -193,6 +200,68 @@ export async function claimManagedWorkflow(
       attempt,
     }
   })
+}
+
+/**
+ * 外层 workflow 可能内联执行 ticket 阶段与随后的天问：两次独立推理的总时长
+ * 可以超过单次推理租约。仅凭增大租约会把 worker 崩溃后的重新认领延后数小时。
+ * 定期按 token / 状态 / 未过期租约续约，不复活过期或被替换的认领。
+ */
+export async function renewManagedWorkflowLease(
+  claim: ManagedWorkflowClaim,
+  leaseSeconds: number,
+): Promise<Result<true>> {
+  return asRole('keel_control', async (c) => {
+    const renewed = await c.query(
+      `UPDATE managed_workflow
+       SET lease_until=clock_timestamp() + $3 * interval '1 second'
+       WHERE id=$1 AND status='RUNNING' AND lease_token=$2
+         AND lease_until > clock_timestamp()`,
+      [claim.workflow.id, claim.token, leaseSeconds],
+    )
+    if (renewed.rowCount !== 1)
+      return err(makeError('CONFLICT', 'managed workflow 租约已过期或认领被替换，禁止续约'))
+    return ok(true)
+  })
+}
+
+/**
+ * 只在外层仍拥有 workflow lease 时延长它，不改变 updated_at / 尝试预算。
+ * 如果续约失败，等待当前内层调用结束后返回 CONFLICT，交给 fencing 阻止迟到结算。
+ * 间隔参数仅供缩时回归测试；正式运行按 30 秒刷新。
+ */
+export async function withManagedWorkflowHeartbeat<T>(
+  claim: ManagedWorkflowClaim,
+  leaseSeconds: number,
+  run: () => Promise<T>,
+  intervalMs = 30_000,
+): Promise<Result<T>> {
+  let inFlight: Promise<void> | null = null
+  let failure: KeelError | null = null
+  const heartbeat = () => {
+    if (inFlight !== null || failure !== null) return
+    inFlight = renewManagedWorkflowLease(claim, leaseSeconds)
+      .then((renewed) => {
+        if (!renewed.ok) failure = renewed.error
+      })
+      .catch((error) => {
+        failure = errorFrom(error, 'CONFLICT', 'managed workflow 租约续约失败')
+      })
+      .finally(() => {
+        inFlight = null
+      })
+  }
+  const timer = setInterval(heartbeat, intervalMs)
+  timer.unref()
+  let value: T
+  try {
+    value = await run()
+  } finally {
+    clearInterval(timer)
+    if (inFlight !== null) await inFlight
+  }
+  if (failure !== null) return err(failure)
+  return ok(value)
 }
 
 export async function withManagedWorkflowClaim<T>(
