@@ -5,6 +5,7 @@
  * 本接口把“等待/读取 GitHub Checks + Commit Status”包装成 Control Plane 可依赖的薄边界。
  */
 
+import type { CiFailureEvidence } from '../shared/ci.js'
 import type { Result } from './errors.js'
 
 export interface CiWaitInput {
@@ -17,6 +18,19 @@ export interface CiWaitInput {
   readonly prNumber?: number
 }
 
+export interface CiRerunTarget {
+  readonly runId: number
+  readonly attempt: number
+}
+
+export type CiObservation =
+  | { readonly state: 'passed' | 'pending' | 'unreported' }
+  | {
+      readonly state: 'failed'
+      readonly evidence: CiFailureEvidence
+      readonly rerun?: CiRerunTarget
+    }
+
 export interface CiGateway {
   /**
    * 等待 CI 到达终态。
@@ -24,4 +38,8 @@ export interface CiGateway {
    * 返回 'passed' | 'failed'；超时或不可恢复错误按失败处理（由调用方决定是否重试/升人工）。
    */
   waitForCi(input: CiWaitInput): Promise<Result<'passed' | 'failed'>>
+  /** 真实轮询使用最新观察；等待超时和无人上报都没有失败证据。 */
+  observeCi?(input: CiWaitInput): Promise<Result<CiObservation>>
+  /** 对已观察到的 Actions 轮次请求重跑，返回是否被 GitHub 接受。 */
+  rerunFailedCi?(input: CiWaitInput, target: CiRerunTarget): Promise<Result<boolean>>
 }

@@ -9,7 +9,7 @@
  */
 
 import type { Stage } from '../../shared/ids.js'
-import type { SideEffect, TransitionFacts, TransitionRule } from './types.js'
+import type { SideEffect, TransitionEvent, TransitionFacts, TransitionRule } from './types.js'
 
 /**
  * 便捷构造：创建某阶段的首个 Run（attempt 恒为 1）。
@@ -32,6 +32,16 @@ const nextRun = (stage: Stage | 'SAME'): SideEffect => ({
 
 const devUnderLimit = (f: TransitionFacts) => f.dev_attempts < f.max_dev_attempts
 const devAtLimit = (f: TransitionFacts) => f.dev_attempts >= f.max_dev_attempts
+
+export function emptyCiRepair(facts: TransitionFacts, event: TransitionEvent): boolean {
+  return (
+    facts.has_bound_pr === true &&
+    facts.awaiting_ci_review === true &&
+    event.type === 'RunFailed' &&
+    event.stage === 'develop' &&
+    event.reason === 'empty_develop_diff'
+  )
+}
 
 export const TASK_TRANSITIONS: readonly TransitionRule[] = [
   // ── 进入 ──
@@ -212,8 +222,8 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
     id: 'T-014',
     from: 'S-HUMAN_REVIEW',
     on: ['HumanApproved'],
-    guard: null,
-    guardText: '—',
+    guard: (f, e) => !f.awaiting_ci_review || (e.type === 'HumanApproved' && e.repairCi === true),
+    guardText: '非 CI 等待或附 CI 修复理由',
     to: 'S-DEVELOPING',
     // 离开人工闸门必须取消 TTL，否则 pending 行会在下一次进入时挡住新的 StartTimer
     effects: [
@@ -252,8 +262,8 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
     id: 'T-028',
     from: 'S-HUMAN_REVIEW',
     on: ['TimerFired'],
-    guard: (_f, e) => e.type === 'TimerFired' && e.timer === 'human_review_ttl',
-    guardText: 'timer=human_review_ttl',
+    guard: (f, e) => !f.has_bound_pr && e.type === 'TimerFired' && e.timer === 'human_review_ttl',
+    guardText: 'timer=human_review_ttl 且无已绑定 PR',
     to: 'S-ABANDONED',
     // 收割：置 fired 在 T-028 事务内（claim 只锁不标，崩溃可重投）
     effects: [{ kind: 'ConsumeTimer', timer: 'human_review_ttl' }],
@@ -358,8 +368,8 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
     id: 'T-025',
     from: 'S-PR_OPEN',
     on: ['CIFailed'],
-    guard: devUnderLimit,
-    guardText: 'dev_attempts < max',
+    guard: (f, e) => e.type === 'CIFailed' && e.evidence === undefined && devUnderLimit(f),
+    guardText: '无结构化 CI 证据且 dev_attempts < max',
     to: 'S-DEVELOPING',
     effects: [nextRun('develop')],
     ignoresControlMode: false,
@@ -368,8 +378,8 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
     id: 'T-026',
     from: 'S-PR_OPEN',
     on: ['CIFailed'],
-    guard: devAtLimit,
-    guardText: 'dev_attempts ≥ max',
+    guard: (f, e) => e.type === 'CIFailed' && (e.evidence !== undefined || devAtLimit(f)),
+    guardText: '有结构化 CI 证据或 dev_attempts ≥ max',
     to: 'S-HUMAN_REVIEW',
     effects: [
       { kind: 'NotifyHuman', reason: 'ci_retries_exhausted' },
@@ -399,6 +409,58 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
     effects: [],
     ignoresControlMode: false,
   },
+  {
+    id: 'T-043',
+    from: 'ANY_NON_TERMINAL',
+    on: ['PRMerged'],
+    guard: (f, e) =>
+      f.has_bound_pr === true &&
+      !f.has_running_run &&
+      e.type === 'PRMerged' &&
+      e.source === 'github',
+    guardText: '已绑定 GitHub PR 合并且无在跑 Run',
+    to: 'S-DONE',
+    effects: [
+      { kind: 'CancelPendingRuns' },
+      { kind: 'CancelTimer', timer: 'human_review_ttl' },
+      { kind: 'CancelTimer', timer: 'clarification_ttl' },
+      { kind: 'CleanWorkspace' },
+    ],
+    ignoresControlMode: false,
+  },
+  {
+    id: 'T-044',
+    from: 'ANY_NON_TERMINAL',
+    on: ['PRClosed'],
+    guard: (f, e) =>
+      f.has_bound_pr === true &&
+      !f.has_running_run &&
+      e.type === 'PRClosed' &&
+      e.source === 'github',
+    guardText: '已绑定 GitHub PR 未合并关闭且无在跑 Run',
+    to: 'S-ABANDONED',
+    effects: [
+      { kind: 'CancelPendingRuns' },
+      { kind: 'CancelTimer', timer: 'human_review_ttl' },
+      { kind: 'CancelTimer', timer: 'clarification_ttl' },
+      { kind: 'CleanWorkspace' },
+    ],
+    ignoresControlMode: false,
+  },
+  {
+    id: 'T-045',
+    from: 'S-HUMAN_REVIEW',
+    on: ['CIPassed'],
+    guard: (f, e) =>
+      f.has_bound_pr === true &&
+      f.awaiting_ci_review === true &&
+      e.type === 'CIPassed' &&
+      e.source === 'github',
+    guardText: '人工等待由 CI 触发且已绑定 GitHub PR 检查通过',
+    to: 'S-PR_OPEN',
+    effects: [{ kind: 'CancelTimer', timer: 'human_review_ttl' }],
+    ignoresControlMode: false,
+  },
 
   // ── 通用规则：全部阶段态 ──
   // 避免为每个阶段重复写六遍失败分支
@@ -406,8 +468,8 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
     id: 'T-030',
     from: 'ANY_STAGE',
     on: ['RunFailed', 'RunTimeout', 'RunStalled'],
-    guard: (f) => f.stage_attempts < f.max_stage_attempts,
-    guardText: 'attempt < max_attempts(stage)',
+    guard: (f, e) => !emptyCiRepair(f, e) && f.stage_attempts < f.max_stage_attempts,
+    guardText: '未达阶段重试上限且非 CI 返工零改动',
     to: 'SELF',
     effects: [nextRun('SAME')],
     ignoresControlMode: false,
@@ -417,8 +479,8 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
     from: 'ANY_STAGE',
     on: ['RunFailed', 'RunTimeout', 'RunStalled'],
     // 提交消息拒绝的 RunFailed 携带闭合 reason；transition() 保留该人工审查理由。
-    guard: (f) => f.stage_attempts >= f.max_stage_attempts,
-    guardText: 'attempt ≥ max_attempts(stage)',
+    guard: (f, e) => emptyCiRepair(f, e) || f.stage_attempts >= f.max_stage_attempts,
+    guardText: '已达阶段重试上限或 CI 返工零改动',
     to: 'S-HUMAN_REVIEW',
     effects: [
       { kind: 'NotifyHuman', reason: 'stage_retries_exhausted' },
@@ -432,8 +494,8 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
     id: 'T-040',
     from: 'ANY_NON_TERMINAL',
     on: ['Cancelled'],
-    guard: null,
-    guardText: '—',
+    guard: (f, e) => e.type !== 'Cancelled' || e.reason !== 'issue_closed' || !f.has_bound_pr,
+    guardText: '显式取消或 issue 关闭且无已绑定 PR',
     to: 'S-ABANDONED',
     // 终态不留 pending timer：两类 TTL 都取消（clarification_ttl 此前会泄漏，
     // 残留行会让 timer_due_idx 每轮扫到、advance 又因状态不匹配无法 Consume）。

@@ -434,7 +434,18 @@ describe('人工裁决 TTL 的转移表声明', () => {
     const rule = ruleOf('T-028')
     expect(rule?.from).toBe('S-HUMAN_REVIEW')
     expect(rule?.to).toBe('S-ABANDONED')
-    expect(rule?.guardText).toBe('timer=human_review_ttl')
+    expect(rule?.guardText).toBe('timer=human_review_ttl 且无已绑定 PR')
+    expect(
+      transition(
+        'S-HUMAN_REVIEW',
+        'auto',
+        {
+          type: 'TimerFired',
+          timer: 'human_review_ttl',
+        },
+        facts({ has_bound_pr: true }),
+      ).matched,
+    ).toBe(false)
     expect(rule?.effects).toEqual([{ kind: 'ConsumeTimer', timer: 'human_review_ttl' }])
   })
 

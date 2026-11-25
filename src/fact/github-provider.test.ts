@@ -80,6 +80,93 @@ afterEach(async () => {
 
 const REMOTE = 'https://github.com/acme/widget.git'
 
+describe('observeCi / rerunFailedCi', () => {
+  it('读取准确 SHA 的失败步骤，且仅对仍失败的首轮 Actions 请求重跑', async () => {
+    const headSha = 'a'.repeat(40)
+    const input = { repoId: 'repo', remoteUrl: REMOTE, headSha, prNumber: 7 }
+    const actions = '/repos/acme/widget/actions/runs'
+    const commit = `/repos/acme/widget/commits/${headSha}`
+    let runAttempt = 1
+    let state = 'failure'
+    let posts = 0
+    const workflow = () => ({
+      id: 42,
+      head_sha: headSha,
+      check_suite_id: 11,
+      run_attempt: runAttempt,
+      status: 'completed',
+      conclusion: 'failure',
+    })
+    routes.set(routeKey('GET', `${commit}/check-runs?`), () => ({
+      status: 200,
+      json: {
+        check_runs: [
+          {
+            id: 99 + runAttempt,
+            head_sha: headSha,
+            name: 'tests',
+            check_suite: { id: 11 },
+            status: state === 'queued' ? 'queued' : 'completed',
+            conclusion: state === 'queued' ? null : state,
+          },
+        ],
+      },
+    }))
+    routes.set(routeKey('GET', `${commit}/statuses?`), () => ({ status: 200, json: [] }))
+    routes.set(routeKey('GET', `${actions}?head_sha=${headSha}`), () => ({
+      status: 200,
+      json: { workflow_runs: [{ ...workflow(), id: 41, check_suite_id: 10 }, workflow()] },
+    }))
+    routes.set(routeKey('GET', `${actions}/42/attempts/1/jobs?`), () => ({
+      status: 200,
+      json: {
+        jobs: [
+          {
+            name: 'verify',
+            conclusion: 'failure',
+            steps: [
+              { name: 'setup', conclusion: 'success' },
+              { name: 'Vitest test-token', conclusion: 'failure' },
+            ],
+          },
+        ],
+      },
+    }))
+    routes.set(routeKey('GET', `${actions}/42`), () => ({ status: 200, json: workflow() }))
+    routes.set(routeKey('GET', '/repos/acme/widget/pulls/7'), () => ({
+      status: 200,
+      json: { number: 7, state: 'open', merged: false, head: { sha: headSha } },
+    }))
+    routes.set(routeKey('POST', `${actions}/42/rerun-failed-jobs`), () => {
+      posts++
+      return { status: 201, json: {} }
+    })
+    const gh = provider()
+    expect(await gh.observeCi(input)).toMatchObject({
+      ok: true,
+      value: {
+        state: 'failed',
+        rerun: { runId: 42, attempt: 1 },
+        evidence: { jobs: [{ name: 'verify', failedSteps: ['Vitest ***'] }] },
+      },
+    })
+    expect(await gh.rerunFailedCi(input, { runId: 42, attempt: 1 })).toEqual({
+      ok: true,
+      value: true,
+    })
+    runAttempt = 2
+    state = 'queued'
+    expect(await gh.observeCi(input)).toEqual({ ok: true, value: { state: 'pending' } })
+    expect(await gh.rerunFailedCi(input, { runId: 42, attempt: 1 })).toEqual({
+      ok: true,
+      value: false,
+    })
+    state = 'success'
+    expect(await gh.observeCi(input)).toEqual({ ok: true, value: { state: 'passed' } })
+    expect(posts).toBe(1)
+  })
+})
+
 function provider(opts: ConstructorParameters<typeof GitHubProvider>[0] = {}): GitHubProvider {
   return new GitHubProvider({
     apiRoot: baseUrl,

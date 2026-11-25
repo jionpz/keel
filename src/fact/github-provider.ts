@@ -14,7 +14,13 @@
  * 真实路径由 test:acceptance 验证。不得在验收前标成「已验证」。
  */
 
-import type { CiGateway, CiWaitInput } from '../contracts/ci-gateway.js'
+import { createHash } from 'node:crypto'
+import type {
+  CiGateway,
+  CiObservation,
+  CiRerunTarget,
+  CiWaitInput,
+} from '../contracts/ci-gateway.js'
 import { err, makeError, ok, type Result } from '../contracts/errors.js'
 import type {
   PullRequestGateway,
@@ -33,7 +39,13 @@ import type {
   RequiredCheckObservationInput,
   RequiredCheckSnapshot,
 } from '../contracts/required-checks.js'
-import { resolveGitHubToken, type TokenResolver } from './github-auth.js'
+import type { CiFailureEvidence } from '../shared/ci.js'
+import {
+  gitAuthSecrets,
+  redactSecrets,
+  resolveGitHubToken,
+  type TokenResolver,
+} from './github-auth.js'
 import { isGitHubHost, type ParsedRemote, parseRemoteUrl } from './github-remote.js'
 
 /** 公网 GitHub 的 API 根。企业 host 由 apiRootForHost 推导。 */
@@ -191,6 +203,29 @@ interface RawCheckRun {
   readonly details_url?: string
   readonly started_at?: string
   readonly completed_at?: string
+  readonly check_suite?: { readonly id?: number }
+  readonly output?: { readonly title?: string | null }
+}
+
+interface RawActionsRun {
+  readonly id: number
+  readonly head_sha: string
+  readonly check_suite_id: number
+  readonly run_attempt: number
+  readonly status: string
+  readonly conclusion: string | null
+}
+
+function actionsRunMatches(run: RawActionsRun, sha: string): boolean {
+  return (
+    run.head_sha === sha &&
+    Number.isSafeInteger(run.id) &&
+    run.id > 0 &&
+    Number.isSafeInteger(run.run_attempt) &&
+    run.run_attempt > 0 &&
+    run.status === 'completed' &&
+    run.conclusion === 'failure'
+  )
 }
 
 interface RawCommitStatus {
@@ -554,6 +589,192 @@ export class GitHubProvider
       }
       await sleep(this.pollIntervalMs)
     }
+  }
+
+  async observeCi(input: CiWaitInput): Promise<Result<CiObservation>> {
+    const parsed = parseRemoteUrl(input.remoteUrl)
+    if (!parsed.ok) return parsed
+    const { host, owner, repo } = parsed.value
+    const slug = `${owner}/${repo}`
+    if (!validHeadSha(input.headSha)) return err(makeError('PROTOCOL_ERROR', 'CI head SHA 无效'))
+
+    const [checks, statuses] = await Promise.all([
+      this.checkRuns(host, slug, input.headSha),
+      this.commitStatuses(host, slug, input.headSha),
+    ])
+    if (!checks.ok) return checks
+    if (!statuses.ok) return statuses
+    if (
+      checks.value.some(
+        (run) =>
+          !run ||
+          typeof run.id !== 'number' ||
+          typeof run.name !== 'string' ||
+          typeof run.status !== 'string',
+      ) ||
+      statuses.value.some((status) => !status || typeof status.context !== 'string')
+    ) {
+      return err(makeError('PROTOCOL_ERROR', 'CI 响应缺少检查或状态的标识'))
+    }
+    const latestStatuses = new Map<string, RawCommitStatus>()
+    for (const status of statuses.value) {
+      const current = latestStatuses.get(status.context)
+      if (current === undefined || statusNewer(status, current))
+        latestStatuses.set(status.context, status)
+    }
+    const currentStatuses = [...latestStatuses.values()]
+    if (checks.value.some((run) => run.head_sha !== undefined && run.head_sha !== input.headSha)) {
+      return err(makeError('PROTOCOL_ERROR', '检查结果的 SHA 与请求不符'))
+    }
+    if (
+      checks.value.some((run) => run.status !== 'completed') ||
+      currentStatuses.some(({ state }) => state === 'pending')
+    )
+      return ok({ state: 'pending' })
+
+    const failedChecks = checks.value.filter(
+      ({ conclusion }) =>
+        conclusion !== null && !['success', 'skipped', 'neutral'].includes(conclusion),
+    )
+    const failedStatuses = currentStatuses.filter(
+      ({ state }) => state === 'failure' || state === 'error',
+    )
+    if (failedChecks.length === 0 && failedStatuses.length === 0) {
+      const reported =
+        checks.value.some(({ conclusion }) => conclusion === 'success') ||
+        currentStatuses.some(({ state }) => state === 'success')
+      return ok({ state: reported ? 'passed' : 'unreported' })
+    }
+
+    // 仅当所有失败检查都落在同一个 Actions suite 时，才对该轮次请求重跑。
+    const suiteId = failedChecks[0]?.check_suite?.id
+    const workflow =
+      failedStatuses.length === 0 &&
+      suiteId !== undefined &&
+      failedChecks.every((check) => check.check_suite?.id === suiteId)
+        ? await this.failedActionsRun(host, slug, input.headSha, suiteId)
+        : undefined
+    const safe = (value: string) =>
+      redactSecrets(value, gitAuthSecrets(this.tokenCache.get(host) ?? this.explicitToken?.value))
+        .replaceAll(String.fromCharCode(0), '')
+        .replace(/\s+/g, ' ')
+        .slice(0, 160)
+    const jobs =
+      workflow === undefined ? [] : await this.failedActionsJobs(host, slug, workflow, safe)
+    const key = createHash('sha256')
+      .update(
+        JSON.stringify({
+          checks: failedChecks.map(({ id, conclusion }) => `${id}:${conclusion}`).sort(),
+          statuses: failedStatuses
+            .map(({ id, context, state }) => `${id}:${context}:${state}`)
+            .sort(),
+        }),
+      )
+      .digest('hex')
+    return ok({
+      state: 'failed',
+      evidence: {
+        key,
+        checks: [
+          ...failedChecks.map(({ name, conclusion, output }) => ({
+            name: safe(name),
+            conclusion: safe(conclusion ?? ''),
+            ...(typeof output?.title === 'string' ? { summary: safe(output.title) } : {}),
+          })),
+          ...failedStatuses.map(({ context, state }) => ({
+            name: safe(context),
+            conclusion: state ?? '',
+          })),
+        ].slice(0, 12),
+        jobs,
+        url: `https://${host}/${slug}/${
+          workflow === undefined
+            ? `commit/${input.headSha}/checks`
+            : `actions/runs/${workflow.id}/attempts/${workflow.run_attempt}`
+        }`,
+      },
+      ...(workflow?.run_attempt === 1 ? { rerun: { runId: workflow.id, attempt: 1 } } : {}),
+    })
+  }
+
+  private async failedActionsRun(
+    host: string,
+    slug: string,
+    sha: string,
+    suiteId: number,
+  ): Promise<RawActionsRun | undefined> {
+    const response = await this.request(
+      host,
+      `/repos/${slug}/actions/runs?head_sha=${sha}&per_page=100`,
+    )
+    if (!response.ok || response.value.status !== 200) return undefined
+    const runs = (response.value.json as { workflow_runs?: RawActionsRun[] } | null)?.workflow_runs
+    if (!Array.isArray(runs)) return undefined
+    return runs.find((run) => run?.check_suite_id === suiteId && actionsRunMatches(run, sha))
+  }
+
+  private async failedActionsJobs(
+    host: string,
+    slug: string,
+    run: RawActionsRun,
+    safe: (value: string) => string,
+  ): Promise<CiFailureEvidence['jobs']> {
+    const response = await this.request(
+      host,
+      `/repos/${slug}/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs?per_page=100`,
+    )
+    if (!response.ok || response.value.status !== 200) return []
+    const raw = response.value.json as {
+      jobs?: {
+        name: string
+        conclusion: string
+        steps?: { name: string; conclusion: string }[]
+      }[]
+    } | null
+    if (!Array.isArray(raw?.jobs)) return []
+    return raw.jobs
+      .filter((job) => job?.conclusion === 'failure' && typeof job.name === 'string')
+      .slice(0, 8)
+      .map((job) => ({
+        name: safe(job.name),
+        failedSteps: Array.isArray(job.steps)
+          ? job.steps
+              .filter((step) => step?.conclusion === 'failure' && typeof step.name === 'string')
+              .slice(0, 5)
+              .map((step) => safe(step.name))
+          : [],
+      }))
+  }
+
+  async rerunFailedCi(input: CiWaitInput, target: CiRerunTarget): Promise<Result<boolean>> {
+    const parsed = parseRemoteUrl(input.remoteUrl)
+    if (!parsed.ok) return parsed
+    if (!Number.isSafeInteger(target.runId) || target.runId <= 0 || target.attempt !== 1)
+      return ok(false)
+    const { host, owner, repo } = parsed.value
+    const path = `/repos/${owner}/${repo}/actions/runs/${target.runId}`
+    const latest = await this.request(host, path)
+    if (!latest.ok) return latest
+    const run = latest.value.json as RawActionsRun | null
+    if (
+      latest.value.status !== 200 ||
+      run === null ||
+      run.id !== target.runId ||
+      run.run_attempt !== target.attempt ||
+      !actionsRunMatches(run, input.headSha)
+    )
+      return ok(false)
+    if (input.prNumber === undefined) return ok(false)
+    const pr = await this.getPullRequest({
+      repoId: input.repoId,
+      remoteUrl: input.remoteUrl,
+      number: input.prNumber,
+    })
+    if (!pr.ok) return pr
+    if (pr.value.state !== 'open' || pr.value.merged || pr.value.headSha !== input.headSha)
+      return ok(false)
+    const result = await this.request(host, `${path}/rerun-failed-jobs`, { method: 'POST' })
+    return result.ok ? ok(result.value.status === 201) : result
   }
 
   /**
