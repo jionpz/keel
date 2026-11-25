@@ -83,3 +83,13 @@ GitHub 已经提供 PR 的 `merged` / `merged_at` / `merge_commit_sha` / `closed
 - 编排器确定性测试覆盖 CI passed 后仍 S-PR_OPEN、PR merged → S-DONE、
   PR closed unmerged → S-ABANDONED；
 - 数据库测试覆盖重驱动的新 Task、Feedback 复用与幂等。
+
+## Issue #164 的后续变更
+
+交付观察以持久绑定的 PR 为准，跨越 `S-PR_OPEN` 和人工等待。issue 关闭和人工等待
+超时都不能替代绑定 PR 的结论。轮询可以对已经合并或未合并关闭的 PR 结算；有正在
+执行的 Run 时延后结算。仅由 PR 观察触发的调用不启动阶段。
+
+实际 CI 读取 PR 当前 head 的最新检查。同一个 PR 与 SHA 最多请求一次 Actions 重跑，
+请求前持久去重，权限不足或结果不确定时仍可读取后续检查。持续失败交给人工判断，
+只有明确批准代码返工并提供修复理由才派 develop。CI 转绿只解除由 CI 触发的等待。

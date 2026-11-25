@@ -8,6 +8,7 @@
  *   - scripts/check-purity.ts（全局层面：Date.now / Math.random / process）
  */
 
+import type { CiFailureEvidence } from '../../shared/ci.js'
 import type { ControlMode, Stage, TaskStatus, TransitionId } from '../../shared/ids.js'
 import type { TransitionTimerKind } from '../../shared/timers.js'
 
@@ -20,7 +21,7 @@ export type TransitionEvent =
   | {
       readonly type: 'RunFailed'
       readonly stage: Stage
-      readonly reason?: 'commit_message_rejected'
+      readonly reason?: 'commit_message_rejected' | 'empty_develop_diff'
     }
   | { readonly type: 'RunTimeout'; readonly stage: Stage }
   /** 无进展超过 stage 阈值（supervisor 或 patrol 判定）；行为与 RunTimeout 相同 */
@@ -37,7 +38,7 @@ export type TransitionEvent =
   | { readonly type: 'CapabilityRequested'; readonly capability: string }
   | { readonly type: 'ArtifactCommitted'; readonly kind: string }
   | { readonly type: 'PolicyEvaluated'; readonly decision: string }
-  | { readonly type: 'HumanApproved' }
+  | { readonly type: 'HumanApproved'; readonly repairCi?: boolean }
   | { readonly type: 'HumanRejected' }
   | { readonly type: 'HumanRequestedRework' }
   /**
@@ -45,7 +46,12 @@ export type TransitionEvent =
    * 用一个必填字段而不是默认值 —— 默认值会让「忘了传」悄悄变成「真 CI」。
    */
   | { readonly type: 'CIPassed'; readonly source: CiSource; readonly headSha?: string }
-  | { readonly type: 'CIFailed'; readonly source: CiSource; readonly headSha?: string }
+  | {
+      readonly type: 'CIFailed'
+      readonly source: CiSource
+      readonly headSha?: string
+      readonly evidence?: CiFailureEvidence
+    }
   /**
    * PR 已合并 —— 这是完成（S-DONE）的唯一入口。
    * `mergedAt` / `mergeSha` 来自 GitHub，响应缺失时 mergeSha 为 null，不本地编造。
@@ -91,6 +97,9 @@ export type CiSource = 'simulated' | 'github'
  * 若这里混入实时查询外部系统的结果，同一次重放就会得到不同结论。
  */
 export interface TransitionFacts {
+  readonly has_bound_pr?: boolean
+  readonly awaiting_ci_review?: boolean
+  readonly has_running_run?: boolean
   /** A-StageOutcome 的 verdict。守卫读的是枚举，不是自由文本 */
   readonly verdict: string | null
   /** pm 阶段的 details.needs_design，区分 T-003 与 T-004 */
@@ -137,6 +146,7 @@ export type SideEffect =
    */
   | { readonly kind: 'ConsumeTimer'; readonly timer: TransitionTimerKind }
   | { readonly kind: 'CancelRun' }
+  | { readonly kind: 'CancelPendingRuns' }
   | { readonly kind: 'CleanWorkspace' }
   /** S-FAILED 刻意保留现场供诊断 */
   | { readonly kind: 'PreserveWorkspace' }

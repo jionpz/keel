@@ -377,11 +377,16 @@ export class WorkflowDriver {
     opts: AdvanceOptions = {},
   ): Promise<Result<AdvanceOutcome>> {
     return asRole('keel_control', async (c) => {
+      // PR 收口与 run 认领共用 task 行锁。观察到已有 run 正在执行时留待下一轮。
+      const prTerminal = event.type === 'PRMerged' || event.type === 'PRClosed'
       const row = await c.query<{
         status: TaskStatus
         control_mode: ControlMode
         current_run_id: string | null
-      }>('SELECT status, control_mode, current_run_id FROM task WHERE id = $1', [taskId])
+      }>(
+        `SELECT status, control_mode, current_run_id FROM task WHERE id = $1${prTerminal ? ' FOR UPDATE' : ''}`,
+        [taskId],
+      )
       const task = row.rows[0]
       if (task === undefined) {
         return err<AdvanceOutcome>(makeError('NOT_FOUND', `找不到 task ${taskId}`))
@@ -394,7 +399,9 @@ export class WorkflowDriver {
         policy: this.policy,
         now,
       })
-      const result = transition(task.status, task.control_mode, event, facts)
+      const transitionEvent =
+        event.type === 'HumanApproved' ? { ...event, repairCi: Boolean(opts.note?.trim()) } : event
+      const result = transition(task.status, task.control_mode, transitionEvent, facts)
 
       // matched:false 不是错误，是「这个事件在当前状态下无事发生」。
       // 暂停中、终态、guard 未过 —— 三者都是正常的业务状态。
@@ -517,6 +524,9 @@ export class WorkflowDriver {
               ? {
                   source: event.source,
                   ...(event.headSha === undefined ? {} : { head_sha: event.headSha }),
+                  ...(event.type === 'CIFailed' && event.evidence !== undefined
+                    ? { ci_failure: event.evidence }
+                    : {}),
                 }
               : {}),
             // 合并是 S-DONE 的事实依据：时间与 merge SHA 必须能从事件流直接查到。
@@ -558,7 +568,18 @@ export class WorkflowDriver {
         await c.query(
           `INSERT INTO event (task_id, type, payload, trace_id, occurred_at)
            VALUES ($1,'HumanDecision',$2::jsonb,$3,$4)`,
-          [taskId, JSON.stringify({ decision: event.type, note }), traceId, now],
+          [
+            taskId,
+            JSON.stringify({
+              decision: event.type,
+              note,
+              ...(event.type === 'HumanApproved' && facts.awaiting_ci_review === true
+                ? { ci_repair_transition_seq: changed.rows[0]?.seq }
+                : {}),
+            }),
+            traceId,
+            now,
+          ],
         )
       }
 

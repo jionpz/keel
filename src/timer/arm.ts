@@ -20,6 +20,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { asRole } from '../fact/db.js'
+import { PR_BINDING_FILTER } from '../fact/task-pull-request.js'
 
 /**
  * 为缺失人工裁决 TTL 的存量任务补齐一条 pending timer。
@@ -45,6 +46,7 @@ export async function armMissingHumanReviewTimers(
        FROM task k
        WHERE k.status = 'S-HUMAN_REVIEW'
          AND k.control_mode = 'auto'
+         AND NOT EXISTS (SELECT 1 FROM event WHERE task_id=k.id AND ${PR_BINDING_FILTER})
          AND NOT EXISTS (
            SELECT 1 FROM timer t
            WHERE t.task_id = k.id

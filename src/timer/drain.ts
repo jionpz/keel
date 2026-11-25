@@ -15,6 +15,7 @@
  */
 
 import { asRole } from '../fact/db.js'
+import { PR_BINDING_FILTER } from '../fact/task-pull-request.js'
 import type { TransitionTimerKind } from '../shared/timers.js'
 
 export interface DueTimer {
@@ -50,6 +51,9 @@ export async function claimDueTimers(now: string, opts: ClaimOptions = {}): Prom
                JOIN task k ON k.id = t.task_id
                WHERE t.kind = $1 AND t.state = 'pending' AND t.due_at <= $2
                  AND k.status = $3`
+    if (kind === 'human_review_ttl') {
+      sql += ` AND NOT EXISTS (SELECT 1 FROM event WHERE task_id=k.id AND ${PR_BINDING_FILTER})`
+    }
     if (opts.taskId !== undefined) {
       params.push(opts.taskId)
       sql += ` AND t.task_id = $${params.length}`

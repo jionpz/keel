@@ -18,6 +18,7 @@ import { resolveGitHubToken, type TokenResolver } from '../fact/github-auth.js'
 import { GitHubProvider, type IssueList } from '../fact/github-provider.js'
 import { parseRemoteUrl } from '../fact/github-remote.js'
 import { acquireResidentLock, lockErrorMessage, type ResidentLock } from '../fact/resident-lock.js'
+import { PR_BINDING_FILTER } from '../fact/task-pull-request.js'
 import {
   createSafeDetail,
   DEFAULT_INTERVAL_MS,
@@ -132,7 +133,7 @@ export async function findTaskStatusByExternalRef(
 }
 
 /**
- * 所有仍在 S-PR_OPEN 的 GitHub 任务。
+ * S-PR_OPEN 与已绑定 PR 的非终态 GitHub 任务。
  *
  * 这些任务不能只靠 open issue 扫描推进：`Closes #n` 生效后 issue 会自动关闭，
  * 而 PR 的 merged 事实仍需要被观察。
@@ -144,24 +145,30 @@ export async function loadPrOpenGithubTasks(): Promise<readonly PrOpenTask[]> {
       external_ref: string
       repo_id: string
       remote_url: string
+      status: TaskStatus
     }>(
       `SELECT DISTINCT ON (t.id)
-              t.id AS task_id, f.external_ref, r.id AS repo_id, r.remote_url
+              t.id AS task_id, f.external_ref, r.id AS repo_id, r.remote_url, t.status
        FROM task t
        JOIN task_feedback tf ON tf.task_id=t.id
        JOIN feedback f ON f.id=tf.feedback_id
        JOIN repo r ON r.id=t.repo_id
-       WHERE t.status='S-PR_OPEN'
+       WHERE NOT (t.status = ANY($1::text[]))
+         AND (t.status='S-PR_OPEN' OR EXISTS (
+           SELECT 1 FROM event WHERE task_id=t.id AND ${PR_BINDING_FILTER}
+         ))
          AND f.source='github'
          AND f.external_ref ~ '^[^#]+#[1-9][0-9]*$'
          AND r.provider='github'
        ORDER BY t.id, f.received_at`,
+      [[...TERMINAL_STATUSES]],
     )
     return r.rows.map((row) => ({
       taskId: row.task_id,
       externalRef: row.external_ref,
       repoId: row.repo_id,
       remoteUrl: row.remote_url,
+      ...(row.status === 'S-PR_OPEN' ? {} : { observeOnly: true }),
     }))
   })
 }
@@ -183,9 +190,11 @@ export async function loadIngestedGithubTasks(): Promise<readonly IngestedTask[]
       status: TaskStatus
       external_ref: string
       remote_url: string
+      has_bound_pr: boolean
     }>(
       `SELECT DISTINCT ON (t.id)
-              t.id AS task_id, t.status, f.external_ref, r.remote_url
+              t.id AS task_id, t.status, f.external_ref, r.remote_url,
+              EXISTS (SELECT 1 FROM event WHERE task_id=t.id AND ${PR_BINDING_FILTER}) AS has_bound_pr
        FROM task t
        JOIN task_feedback tf ON tf.task_id = t.id
        JOIN feedback f ON f.id = tf.feedback_id
@@ -202,6 +211,7 @@ export async function loadIngestedGithubTasks(): Promise<readonly IngestedTask[]
       status: row.status,
       externalRef: row.external_ref,
       remoteUrl: row.remote_url,
+      hasBoundPr: row.has_bound_pr,
     }))
   })
 }
@@ -406,6 +416,7 @@ export async function buildPollerRuntime(
           ci: options.ci,
           harness: options.harness,
           ...(input.redrive === undefined ? {} : { redrive: true }),
+          ...(input.observePrOnly === true && options.ci === 'real' ? { observePrOnly: true } : {}),
           ...(options.model === undefined ? {} : { model: options.model }),
           ...(options.modelRouting === undefined ? {} : { modelRouting: options.modelRouting }),
           ...(options.wallClockS === undefined ? {} : { wallClockS: options.wallClockS }),
