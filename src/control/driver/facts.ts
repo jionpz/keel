@@ -11,6 +11,7 @@
 
 import type { PoolClient } from 'pg'
 import type { DecisionPoint, FactSet, PolicyEngine } from '../../contracts/policy-engine.js'
+import { LATEST_CI_REVIEW_SQL, PR_BINDING_FILTER } from '../../fact/task-pull-request.js'
 import type { TransitionEvent, TransitionFacts } from '../transition/types.js'
 
 /** 重试上限。v0.1 写死，日后从配置读 */
@@ -90,8 +91,19 @@ export async function loadTransitionFacts(
   const stageAttempts = eventStage === undefined ? 0 : await attemptsOf(c, taskId, eventStage)
 
   const isCapability = event.type === 'CapabilityRequested'
+  const pr = await c.query<{
+    has_bound_pr: boolean
+    awaiting_ci_review: boolean
+    has_running_run: boolean
+  }>(
+    `SELECT EXISTS (SELECT 1 FROM event WHERE task_id=$1 AND ${PR_BINDING_FILTER}) AS has_bound_pr,
+            COALESCE((${LATEST_CI_REVIEW_SQL}), false) AS awaiting_ci_review,
+            EXISTS (SELECT 1 FROM run WHERE task_id=$1 AND status='RUNNING') AS has_running_run`,
+    [taskId],
+  )
 
   return {
+    ...pr.rows[0],
     verdict: outcome?.verdict ?? null,
     needs_design: outcome?.needs_design ?? false,
     dev_attempts: devAttempts,

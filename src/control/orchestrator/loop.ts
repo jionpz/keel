@@ -41,7 +41,9 @@ import { commitArtifactOn } from '../../fact/artifact-store.js'
 import { materialize } from '../../fact/blob.js'
 import { asRole } from '../../fact/db.js'
 import type { GitWorkspace, PreparedProject } from '../../fact/git-workspace.js'
+import { LATEST_CI_REVIEW_SQL, readTaskPullRequestRef } from '../../fact/task-pull-request.js'
 import { ensureTraceId } from '../../fact/trace.js'
+import { EMPTY_DEVELOP_DIFF } from '../../shared/ci.js'
 import {
   COMMIT_POLICY_COLUMNS,
   commitPolicyFromRow,
@@ -61,6 +63,7 @@ import type { StallEvidence } from '../liveness/supervisor.js'
 import { runSessionUntilValid, ZERO_USAGE } from '../proposal/pipeline.js'
 import { loadDeclaredPolicyFacts } from '../proposal/validate.js'
 import type { TransitionEvent } from '../transition/types.js'
+import { shouldWaitForCiRerun } from './ci-recovery.js'
 import { expectedArtifact, promptFor, ROLE_INSTRUCTIONS } from './prompts.js'
 
 /**
@@ -175,6 +178,7 @@ const TERMINAL: readonly string[] = ['S-DONE', 'S-REJECTED', 'S-ABANDONED', 'S-F
 export interface RunOptions {
   /** 硬上限，防止失控 */
   readonly maxSteps?: number
+  readonly observePrOnly?: boolean
   /**
    * 注入外部事实（CI 结果）的回调。
    *
@@ -201,7 +205,7 @@ export interface RunOptions {
 }
 
 export type ExternalPrObservation =
-  | { readonly state: 'open' }
+  | { readonly state: 'open'; readonly headSha?: string }
   | { readonly state: 'merged'; readonly mergedAt: string; readonly mergeSha: string | null }
   | { readonly state: 'closed'; readonly closedAt: string | null }
 
@@ -234,6 +238,102 @@ export async function runTaskToCompletion(
     if (state.control_mode !== 'auto') {
       return ok({ finalStatus: state.status, steps, stopReason: 'paused' })
     }
+
+    // 人工等待期间仍观察已绑定 PR；开工前的人工审批没有 PR，不走这里。
+    if (
+      (state.status === 'S-PR_OPEN' ||
+        state.status === 'S-HUMAN_REVIEW' ||
+        opts.observePrOnly === true) &&
+      deps.workspace.mode === 'worktree' &&
+      opts.pullRequests !== undefined &&
+      opts.externalPr === undefined &&
+      opts.ci?.observeCi !== undefined
+    ) {
+      const pr = await readTaskPullRequestRef(taskId)
+      if (pr !== null) {
+        const repoId = deps.workspace.repoId
+        const remote = await readRemoteUrl(repoId)
+        if (!remote.ok) return remote
+        const observed = await opts.pullRequests.getPullRequest({
+          repoId,
+          remoteUrl: remote.value,
+          number: pr.number,
+        })
+        if (!observed.ok) return observed
+        if (observed.value.number !== pr.number)
+          return err(makeError('PROTOCOL_ERROR', '观察到的 PR 编号与任务绑定不符'))
+        const observation = toExternalPrObservation(observed.value)
+        if (!observation.ok) return observation
+        const finished = prTerminalEvent(observation.value)
+        if (finished !== null) {
+          const advanced = await deps.driver.advance(taskId, finished, deps.now())
+          if (!advanced.ok) return advanced
+          steps.push(record(state.status, advanced, null, '已核对绑定 PR 的远端终态'))
+          if (!advanced.value.advanced)
+            return ok({ finalStatus: advanced.value.to, steps, stopReason: 'awaiting-pr-merge' })
+          continue
+        }
+
+        const inReview = state.status === 'S-HUMAN_REVIEW'
+        if (!inReview && state.status !== 'S-PR_OPEN')
+          return ok({ finalStatus: state.status, steps, stopReason: 'awaiting-pr-merge' })
+        if (inReview) {
+          const reason = await asRole('keel_control', (c) =>
+            c.query<{ awaiting_ci_review: boolean }>(LATEST_CI_REVIEW_SQL, [taskId]),
+          )
+          if (reason.rows[0]?.awaiting_ci_review !== true)
+            return ok({ finalStatus: state.status, steps, stopReason: 'awaiting-human' })
+        }
+        const waiting = inReview ? 'awaiting-human' : 'awaiting-external-ci'
+        const headSha = observation.value.state === 'open' ? observation.value.headSha : undefined
+        if (headSha === undefined)
+          return ok({ finalStatus: state.status, steps, stopReason: waiting })
+        const input = { repoId, remoteUrl: remote.value, headSha, prNumber: pr.number }
+        const ci = await opts.ci.observeCi(input)
+        if (!ci.ok) return ci
+        if (ci.value.state === 'passed') {
+          const known = await readLatestCiResult(taskId, headSha)
+          if (inReview || known?.result !== 'passed' || known.source !== 'github') {
+            const advanced = await deps.driver.advance(
+              taskId,
+              { type: 'CIPassed', source: 'github', headSha },
+              deps.now(),
+            )
+            if (!advanced.ok) return advanced
+            steps.push(record(state.status, advanced, null, '当前 PR head 的 CI 已通过'))
+            if (inReview) continue
+          }
+          return ok({ finalStatus: state.status, steps, stopReason: 'awaiting-pr-merge' })
+        }
+        if (ci.value.state === 'failed' && !inReview) {
+          const waitForRerun = await shouldWaitForCiRerun(
+            taskId,
+            opts.ci,
+            input,
+            ci.value,
+            deps.now(),
+          )
+          if (!waitForRerun) {
+            const advanced = await deps.driver.advance(
+              taskId,
+              {
+                type: 'CIFailed',
+                source: 'github',
+                headSha,
+                evidence: ci.value.evidence,
+              },
+              deps.now(),
+            )
+            if (!advanced.ok) return advanced
+            steps.push(record(state.status, advanced, null, 'CI 仍失败，等待有依据的处理'))
+            return ok({ finalStatus: advanced.value.to, steps, stopReason: 'awaiting-human' })
+          }
+        }
+        return ok({ finalStatus: state.status, steps, stopReason: waiting })
+      }
+    }
+    if (opts.observePrOnly === true)
+      return err(makeError('NOT_FOUND', 'PR 观察需要持久绑定和真实 GitHub 网关'))
 
     // ── S-NEW：踢一脚 ──
     if (state.status === 'S-NEW') {
@@ -825,8 +925,7 @@ async function executeClaimedRun(
         if (diff.files_changed.length > 0 || diff.commits.length > 0) return null
         return makeError(
           'PROTOCOL_ERROR',
-          'develop 声称 implemented，但工作区在 git 上没有任何改动（0 文件、0 提交）。' +
-            '这一轮不算成功（可重试，T-030）：要么真的没干活，要么改动落在工作区之外。',
+          `${EMPTY_DEVELOP_DIFF}（0 文件、0 提交）。本轮未留下实现证据。`,
         )
       },
     },
@@ -1159,32 +1258,6 @@ async function readLatestCiResult(
 }
 
 /**
- * 从事件流读取 T-021 / CreatePullRequest 留下的 PR 引用。
- *
- * PR 编号是观察合并状态的唯一定位符；URL 只用于日志与重驱动上下文。
- */
-async function readPullRequestRef(
-  taskId: string,
-): Promise<{ readonly number: number; readonly url: string } | null> {
-  const r = await asRole('keel_control', (c) =>
-    c.query<{ pr_number: string | null; pr_url: string | null }>(
-      `SELECT payload->>'pr_number' AS pr_number, payload->>'pr_url' AS pr_url
-       FROM event
-       WHERE task_id=$1
-         AND type IN ('SideEffectApplied','SideEffectSkipped')
-         AND payload->>'kind'='CreatePullRequest'
-       ORDER BY seq DESC LIMIT 1`,
-      [taskId],
-    ),
-  )
-  const row = r.rows[0]
-  if (row === undefined) return null
-  const number = Number(row.pr_number)
-  if (!Number.isSafeInteger(number) || number <= 0) return null
-  return { number, url: row.pr_url ?? '' }
-}
-
-/**
  * 观察 PR 最终状态。
  *
  * 三种来源互斥：注入回调（测试）、真实网关（生产）、无（只能停在等合并）。
@@ -1202,7 +1275,7 @@ async function observePullRequest(
     return err(makeError('WORKSPACE_ERROR', '观察 PR 需要 worktree 模式才能读取仓库信息'))
   }
 
-  const ref = await readPullRequestRef(taskId)
+  const ref = await readTaskPullRequestRef(taskId)
   if (ref === null) {
     return err(
       makeError('NOT_FOUND', `task ${taskId} 在 S-PR_OPEN，但事件流里没有可观察的 PR 编号`),
@@ -1236,7 +1309,28 @@ function toExternalPrObservation(state: PullRequestState): Result<ExternalPrObse
     return ok({ state: 'merged', mergedAt: state.mergedAt, mergeSha: state.mergeSha })
   }
   if (state.state === 'closed') return ok({ state: 'closed', closedAt: state.closedAt })
-  return ok({ state: 'open' })
+  return ok({ state: 'open', ...(state.headSha === null ? {} : { headSha: state.headSha }) })
+}
+
+function prTerminalEvent(observation: ExternalPrObservation): TransitionEvent | null {
+  switch (observation.state) {
+    case 'open':
+      return null
+    case 'merged':
+      return {
+        type: 'PRMerged',
+        source: 'github',
+        mergedAt: observation.mergedAt,
+        mergeSha: observation.mergeSha,
+      }
+    case 'closed':
+      return {
+        type: 'PRClosed',
+        source: 'github',
+        closedAt: observation.closedAt,
+        reason: 'pr_closed_unmerged',
+      }
+  }
 }
 
 async function readState(
@@ -1312,9 +1406,7 @@ async function readDeferredRunEvent(taskId: string): Promise<{
         event: {
           type: row.event,
           stage: row.stage,
-          ...(row.event === 'RunFailed' && row.error_detail?.startsWith('commit_message_rejected:')
-            ? { reason: 'commit_message_rejected' as const }
-            : {}),
+          ...(row.event === 'RunFailed' ? runFailureReason(row.error_detail) : {}),
         },
         runId: row.run_id,
       }
@@ -1514,15 +1606,20 @@ async function failRunAndAdvance(
         : ({
             type: 'RunFailed',
             stage: pending.stage,
-            ...(runErr.detail.startsWith('commit_message_rejected:')
-              ? { reason: 'commit_message_rejected' as const }
-              : {}),
+            ...runFailureReason(runErr.detail),
           } as const)
 
   const adv = await deps.driver.advance(taskId, event, deps.now())
   if (!adv.ok) return 'error'
   steps.push(record(state.status, adv, pending.stage, `${pending.stage} 失败(${runErr.kind})`))
   return 'advanced'
+}
+
+function runFailureReason(detail: string | null) {
+  if (detail?.startsWith('commit_message_rejected:'))
+    return { reason: 'commit_message_rejected' } as const
+  if (detail?.startsWith(EMPTY_DEVELOP_DIFF)) return { reason: 'empty_develop_diff' } as const
+  return {}
 }
 
 async function readPolicyDecision(taskId: string): Promise<string | null> {

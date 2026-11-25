@@ -12,7 +12,7 @@
  * 刻意不做的事：
  *   - **不重新驱动 closed issue 的任务**：`ingestIssue` 的关闭闸门是授权边界，
  *     对账不绕过它；
- *   - **不把「关闭」当成万能取消信号**：S-PR_OPEN 有显式守卫（`cancellationApplies`）。
+ *   - **已绑定 PR 的任务由 PR 事实收口**，issue 关闭不触发取消。
  *
  * 依赖全部可注入，所以对账逻辑可以脱离数据库与 GitHub 单测。
  */
@@ -27,6 +27,7 @@ export interface IngestedTask {
   /** `owner/repo#n` —— 与 feedback(source='github') 的唯一键同源 */
   readonly externalRef: string
   readonly remoteUrl: string
+  readonly hasBoundPr?: boolean
 }
 
 /** issue 现状。`closed_at` 原样来自 GitHub，缺失时是 null，不本地补时间 */
@@ -61,7 +62,7 @@ export interface ReconcileStats {
   readonly checked: number
   /** 真的走成了 T-040 的任务数 */
   readonly cancelled: number
-  /** issue 已关闭但按守卫刻意不取消的任务数（S-PR_OPEN） */
+  /** 由绑定 PR 收口、跳过 issue 关闭对账的任务数 */
   readonly skipped: number
   readonly errors: number
 }
@@ -76,15 +77,13 @@ const EXTERNAL_REF_NUMBER = /^[^#]+#(\d+)$/
 /**
  * 关闭是否等于取消 —— T-040 的显式守卫。
  *
- * `S-PR_OPEN` 是唯一的例外：PR 已经开出去了，交付物落在 PR 上继续收口
- * （等 CI / 等合并），issue 被关不等于这项工作被撤回。其余非终态没有任何
- * 脱离 issue 仍然成立的交付物，issue 关闭就是撤单。
+ * PR 开出后交付物在 PR 上继续收口。绑定跨越 CI 和人工等待状态。
  *
  * 刻意写成白名单式的显式判断，而不是「默认取消、遇到问题再说」：
  * 关闭被误判成取消不可逆（终态 I8），宁可漏取消也不能错取消。
  */
-export function cancellationApplies(status: TaskStatus): boolean {
-  return status !== 'S-PR_OPEN'
+export function cancellationApplies(status: TaskStatus, hasBoundPr = false): boolean {
+  return !hasBoundPr && status !== 'S-PR_OPEN'
 }
 
 /**
@@ -112,7 +111,7 @@ export async function reconcileClosedIssues(
     // 本轮 open 列表里见过 → issue 仍 open，连查都不用查
     if (openRefs.has(task.externalRef)) continue
 
-    if (!cancellationApplies(task.status)) {
+    if (!cancellationApplies(task.status, task.hasBoundPr)) {
       skipped += 1
       deps.log({
         ts: deps.now(),
@@ -120,7 +119,7 @@ export async function reconcileClosedIssues(
         ref: task.externalRef,
         task: task.taskId,
         status: task.status,
-        reason: 'pr_open',
+        reason: task.hasBoundPr ? 'bound_pr' : 'pr_open',
       })
       continue
     }

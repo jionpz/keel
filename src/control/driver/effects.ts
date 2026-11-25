@@ -713,6 +713,17 @@ export async function applyEffects(
       case 'ConsumeTimer':
         applied.push(await consumeTimer(c, ctx, e))
         break
+      case 'CancelPendingRuns': {
+        const cancelled = await c.query(
+          `UPDATE run SET status='CANCELLED', ended_at=$2
+           WHERE task_id=$1 AND status IN ('PENDING','CLAIMED')`,
+          [ctx.taskId, ctx.now],
+        )
+        const count = cancelled.rowCount ?? 0
+        await emit(c, ctx, 'SideEffectApplied', { kind: e.kind, cancelled: count }, ctx.now)
+        applied.push({ kind: e.kind, outcome: 'applied', detail: String(count) })
+        break
+      }
       // CreateTask 只出现在 T-001，而 T-001 不经 applyEffects（见 driver.intake）。
       // 走到这里说明有人把它加进了别的转移 —— 编程错误，不是可预期失败。
       case 'CreateTask':

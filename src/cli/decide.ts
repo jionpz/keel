@@ -289,7 +289,7 @@ function usageDecide(): string {
   rework    T-016 回炉重新出方案            → S-BRAINSTORM
 
 选项:
-  --note <text>   裁决理由，落一条 HumanDecision 事件（不进 prompt、不参与判定）`
+  --note <text>   裁决理由。批准 CI 返工时必填，作为下一轮的修复依据。`
 }
 
 export async function decideMain(argv: readonly string[]): Promise<void> {

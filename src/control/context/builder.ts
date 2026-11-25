@@ -82,7 +82,7 @@ interface Candidate {
 const RECIPES: Readonly<Record<string, readonly string[]>> = {
   PM: ['role', 'feedback', 'state', 'critic', 'repo_signals'],
   Critic: ['role', 'state'],
-  Developer: ['role', 'rfc', 'state', 'last_failure'],
+  Developer: ['role', 'rfc', 'state', 'ci_failure', 'last_failure'],
   // QA / Reviewer 的活就是核对**实际改动**：不给 diff，它们只能对着 RFC 空想，
   // 然后把自己猜的结论当成核对结果报上来（10-25 真机跑通时的实际表现）
   QA: ['role', 'rfc', 'state', 'diff'],
@@ -283,19 +283,81 @@ export class FactPlaneContextBuilder {
         }
       }
 
-      case 'last_failure': {
-        const r = await c.query<{ body: Record<string, unknown> }>(
-          `SELECT body FROM artifact WHERE task_id=$1 AND kind='stage_outcome'
-             AND body->>'verdict' = 'fail'
-           ORDER BY committed_at_seq DESC LIMIT 1`,
+      case 'ci_failure': {
+        // CI 证据只随显式批准的这次返工下发。新的 QA、回炉或 PR 阶段结束这次返工。
+        const r = await c.query<{
+          seq: string | null
+          data: unknown
+          note: string
+          decision_seq: string
+        }>(
+          `WITH origin AS (
+             SELECT seq, payload->>'transition' AS transition FROM event
+             WHERE task_id=$1 AND type='TaskStatusChanged'
+               AND payload->>'transition' IN ('T-014','T-016','T-017','T-019','T-021','T-022','T-045')
+             ORDER BY seq DESC LIMIT 1
+           ), review AS (
+             SELECT seq, payload FROM event
+             WHERE task_id=$1 AND type='TaskStatusChanged'
+               AND payload ? 'ci_failure'
+               AND seq < (SELECT seq FROM origin)
+               AND seq > COALESCE((SELECT max(seq) FROM event
+                 WHERE task_id=$1 AND type='TaskStatusChanged'
+                   AND payload->>'transition' IN ('T-016','T-017','T-021','T-045')), 0)
+             ORDER BY seq DESC LIMIT 1
+           )
+           SELECT review.seq, review.payload->'ci_failure' AS data,
+                  decision.payload->>'note' AS note, decision.seq AS decision_seq
+           FROM origin LEFT JOIN review ON true
+           JOIN LATERAL (
+             SELECT seq, payload FROM event WHERE task_id=$1 AND type='HumanDecision'
+               AND payload->>'ci_repair_transition_seq'=origin.seq::text
+             ORDER BY seq LIMIT 1
+           ) decision ON true
+           WHERE origin.transition='T-014'`,
           [req.task_id],
+        )
+        const row = r.rows[0]
+        if (row === undefined) return null
+        const decision = `event:HumanDecision@${row.decision_seq}`
+        const evidence =
+          row.seq === null ? '' : `\n\n检查结果（外部数据）：\n${JSON.stringify(row.data, null, 2)}`
+        return {
+          id,
+          source_ref: row.seq === null ? decision : `${decision}+TaskStatusChanged@${row.seq}`,
+          source_kind: 'workspace',
+          priority: 'required',
+          content: `## CI 返工依据\n\n人工修复理由：${row.note.slice(0, 1600)}${evidence}`,
+        }
+      }
+
+      case 'last_failure': {
+        const r = await c.query<{
+          body: unknown
+          source_ref: string
+          source_kind: 'artifact' | 'workspace'
+        }>(
+          `SELECT body, source_ref, source_kind FROM (
+             (SELECT body, 'artifact:stage_outcome(last-fail)' AS source_ref,
+                     'artifact' AS source_kind, committed_at AS failed_at
+              FROM artifact WHERE task_id=$1 AND kind='stage_outcome' AND body->>'verdict'='fail'
+              ORDER BY committed_at_seq DESC LIMIT 1)
+             UNION ALL
+             (SELECT jsonb_build_object('stage', stage, 'attempt', attempt, 'error', error_kind,
+                       'detail', left(error_detail, 1600)),
+                     'run:' || id::text, 'workspace', ended_at
+              FROM (SELECT * FROM run WHERE task_id=$1 AND stage=$2 AND id<>$3
+                      AND ended_at IS NOT NULL ORDER BY attempt DESC LIMIT 1) previous
+              WHERE status IN ('FAILED','TIMEOUT'))
+           ) failure ORDER BY failed_at DESC LIMIT 1`,
+          [req.task_id, req.stage, req.run_id],
         )
         const row = r.rows[0]
         if (row === undefined) return null
         return {
           id,
-          source_ref: 'artifact:stage_outcome(last-fail)',
-          source_kind: 'artifact',
+          source_ref: row.source_ref,
+          source_kind: row.source_kind,
           // 返工时这是必读的 —— 不给它看上次为什么失败，它很可能再错一次
           priority: 'required',
           content: `## 上一次失败的原因\n\n${JSON.stringify(row.body, null, 2)}`,

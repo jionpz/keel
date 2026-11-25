@@ -332,6 +332,7 @@ export function warnWallClockOverride(
 export interface RunTaskOptions {
   readonly maxSteps?: number
   readonly ci?: CiMode
+  readonly observePrOnly?: boolean
   /** 显式覆盖 stage 墙钟硬上限(秒)。省略时 progress 模式按 stage 策略,wallclock 模式 180s。 */
   readonly wallClockS?: number
   /**
@@ -470,6 +471,7 @@ export async function runTask(
       },
       {
         maxSteps,
+        ...(opts.observePrOnly === true ? { observePrOnly: true } : {}),
         ...(gateway.value === undefined
           ? { externalCi: async () => (ci === 'failed' ? 'failed' : 'passed') }
           : { ci: gateway.value, pullRequests: gateway.value }),

@@ -52,6 +52,7 @@ export interface PollIssueInput {
   readonly label: string
   /** 已确认可重驱动的前序候选；只在前序 Task 因 PR 未合并关闭时出现 */
   readonly redrive?: RedriveCandidate
+  readonly observePrOnly?: boolean
 }
 
 export interface PollIssueOutcome {
@@ -106,6 +107,7 @@ export interface PrOpenTask {
   readonly externalRef: string
   readonly repoId: string
   readonly remoteUrl: string
+  readonly observeOnly?: boolean
 }
 
 export interface PollStats extends ScanStats {
@@ -279,8 +281,7 @@ export async function scanOnce(
     if (stopped) break
   }
 
-  // S-PR_OPEN 是唯一在 issue 关闭后仍需继续驱动的状态：交付物在 PR 上，
-  // issue 因 `Closes #n` 自动关闭正是合并成功的常态。
+  // PR 收口独立于 open issue 扫描；合并触发 `Closes #n` 是正常路径。
   if (!stopped && deps.listPrOpenTasks !== undefined) {
     for (const task of await deps.listPrOpenTasks()) {
       if (shouldStop()) {
@@ -312,6 +313,7 @@ export async function scanOnce(
           issueUrl: issueUrlFor(parsed.value, issueNumber),
           repoId: task.repoId,
           label: '',
+          ...(task.observeOnly === true ? { observePrOnly: true } : {}),
         },
       })
     }

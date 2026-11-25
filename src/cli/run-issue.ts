@@ -22,6 +22,7 @@ import {
 import { loadConfiguredToolPolicy, type ToolPolicyDocument } from '../execution/tool-policy.js'
 import type { TokenResolver } from '../fact/github-auth.js'
 import { type GitHubProvider, ownerRepo, parseIssueUrl } from '../fact/github-provider.js'
+import { readTaskPullRequestRef } from '../fact/task-pull-request.js'
 import { findLatestGithubTask } from '../ingress/redrive.js'
 import { parseArgs } from './argv.js'
 import { resolveHumanReviewTtlMs } from './human-review-ttl.js'
@@ -51,6 +52,7 @@ export interface RunIssueOptions {
   readonly ci?: CiMode
   /** 只允许前序 Task 因 PR 未合并关闭时重驱动 */
   readonly redrive?: boolean
+  readonly observePrOnly?: boolean
   /** 透传 runTask;显式覆盖 stage 墙钟硬上限 */
   readonly wallClockS?: number
   /** 透传 runTask 的 `--model`；省略则按 harness 解析 */
@@ -143,7 +145,7 @@ export async function runIssue(opts: RunIssueOptions): Promise<Result<RunIssueRe
     opts.toolPolicy === undefined ? await loadConfiguredToolPolicy() : ok(opts.toolPolicy)
   if (!toolPolicy.ok) return toolPolicy
 
-  const drive = (taskId: string) =>
+  const drive = (taskId: string, observePrOnly = false) =>
     runTask(taskId, {
       ...(opts.maxSteps === undefined ? {} : { maxSteps: opts.maxSteps }),
       ...(opts.wallClockS === undefined ? {} : { wallClockS: opts.wallClockS }),
@@ -154,6 +156,7 @@ export async function runIssue(opts: RunIssueOptions): Promise<Result<RunIssueRe
       humanReviewTtlMs: humanReviewTtl.value,
       ...(opts.tokenResolver === undefined ? {} : { tokenResolver: opts.tokenResolver }),
       toolPolicy: toolPolicy.value,
+      observePrOnly,
       ci,
     })
 
@@ -162,10 +165,18 @@ export async function runIssue(opts: RunIssueOptions): Promise<Result<RunIssueRe
   const externalRef = `${slug.value}#${target.value.number}`
   const existing = await findLatestGithubTask(externalRef)
 
-  // S-PR_OPEN 已经是现有 Task 的收口阶段：issue 可能因 PR 合并而关闭，
-  // 不能重新走 ingest 的「issue 必须 open」闸门；直接继续观察 PR。
-  if (existing?.status === 'S-PR_OPEN' && opts.redrive !== true) {
-    const run = await drive(existing.taskId)
+  // 已绑定的 PR 可以在 issue 关闭后继续观察。开工前的人工门禁仍须走 ingest。
+  const prOnly =
+    ci === 'real' &&
+    existing !== undefined &&
+    (opts.observePrOnly === true || existing.status === 'S-HUMAN_REVIEW') &&
+    (await readTaskPullRequestRef(existing.taskId)) !== null
+  if (
+    existing !== undefined &&
+    opts.redrive !== true &&
+    (existing.status === 'S-PR_OPEN' || prOnly)
+  ) {
+    const run = await drive(existing.taskId, ci === 'real')
     if (!run.ok) {
       return err(
         makeError(
@@ -183,6 +194,8 @@ export async function runIssue(opts: RunIssueOptions): Promise<Result<RunIssueRe
       redrive: false,
     })
   }
+  if (opts.observePrOnly === true)
+    return err(makeError('CONFLICT', '待观察任务已失去绑定 PR；本轮不重新 ingest'))
 
   const ingested = await ingestIssue({
     issueUrl: opts.issueUrl,

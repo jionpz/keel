@@ -17,8 +17,9 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import type { CiGateway, CiWaitInput } from '../../contracts/ci-gateway.js'
+import type { CiGateway, CiObservation, CiWaitInput } from '../../contracts/ci-gateway.js'
 import type { Result } from '../../contracts/errors.js'
+import { err, makeError, ok } from '../../contracts/errors.js'
 import type {
   HarnessAdapter,
   HarnessDescriptor,
@@ -32,8 +33,9 @@ import type {
 import type { Proposal } from '../../contracts/types.js'
 import { HarnessSessionManager } from '../../execution/session/manager.js'
 import { PgArtifactStore } from '../../fact/artifact-store.js'
-import { asOwner, closePool } from '../../fact/db.js'
+import { asOwner, asRole, closePool } from '../../fact/db.js'
 import { branchFor, GitWorkspace, type PreparedProject } from '../../fact/git-workspace.js'
+import { FactPlaneContextBuilder } from '../context/builder.js'
 import { WorkflowDriver } from '../driver/driver.js'
 import { RuleBasedPolicyEngine } from '../policy/engine.js'
 import { DEFAULT_RULESET } from '../policy/ruleset.js'
@@ -201,6 +203,214 @@ function depsFor(repoId: string, git: GitWorkspace, project: PreparedProject) {
     now: () => '2026-08-23T13:00:00Z',
   }
 }
+
+describe('绑定 PR 的真实 CI 恢复', () => {
+  const headSha = 'a'.repeat(40)
+  const mergeSha = 'b'.repeat(40)
+  const failed: CiObservation = {
+    state: 'failed',
+    rerun: { runId: 42, attempt: 1 },
+    evidence: {
+      key: 'first-attempt',
+      checks: [{ name: 'test', conclusion: 'failure' }],
+      jobs: [{ name: 'test', failedSteps: ['Run Vitest'] }],
+      url: 'https://github.com/acme/widget/actions/runs/42',
+    },
+  }
+
+  async function scenario(rerunFailedCi: NonNullable<CiGateway['rerunFailedCi']>) {
+    const { taskId, repoId } = await seedTaskAtPrOpen()
+    await seedPullRequest(taskId)
+    const git = new GitWorkspace({ root })
+    const deps = depsFor(repoId, git, await prepareFor(git, repoId))
+    let ci: CiObservation = failed
+    let merged = false
+    const drive = (observePrOnly = false) =>
+      runTaskToCompletion(taskId, deps, {
+        observePrOnly,
+        ci: {
+          waitForCi: async () => {
+            throw new Error('不得复用旧终态')
+          },
+          observeCi: async (input) => {
+            expect(input).toMatchObject({ prNumber: 7, headSha })
+            return ok(ci)
+          },
+          rerunFailedCi,
+        },
+        pullRequests: {
+          getPullRequest: async () =>
+            ok({
+              number: 7,
+              url: 'https://github.com/acme/widget/pull/7',
+              state: merged ? 'closed' : 'open',
+              merged,
+              mergedAt: merged ? '2026-08-23T13:00:00Z' : null,
+              mergeSha: merged ? mergeSha : null,
+              closedAt: merged ? '2026-08-23T13:00:00Z' : null,
+              headSha,
+            }),
+        },
+      })
+    const developRuns = () =>
+      asOwner(
+        async (c) =>
+          (await c.query("SELECT 1 FROM run WHERE task_id=$1 AND stage='develop'", [taskId]))
+            .rowCount,
+      )
+    return {
+      taskId,
+      deps,
+      drive,
+      developRuns,
+      observe: (value: CiObservation) => {
+        ci = value
+      },
+      merge: () => {
+        merged = true
+      },
+    }
+  }
+
+  it('同一 SHA 失败只请求重跑一次，转绿及合并全程不派 develop', async () => {
+    let requested = 0
+    const task = await scenario(async () => {
+      requested++
+      return ok(true)
+    })
+    const failing = await Promise.all([task.drive(), task.drive()])
+    for (const result of failing)
+      expect(result).toMatchObject({ ok: true, value: { stopReason: 'awaiting-external-ci' } })
+    expect(requested).toBe(1)
+    task.observe({ state: 'pending' })
+    expect(await task.drive()).toMatchObject({
+      ok: true,
+      value: { stopReason: 'awaiting-external-ci' },
+    })
+    task.observe({ state: 'passed' })
+    expect(await task.drive()).toMatchObject({
+      ok: true,
+      value: { stopReason: 'awaiting-pr-merge' },
+    })
+    task.merge()
+    expect(await task.drive()).toMatchObject({ ok: true, value: { finalStatus: 'S-DONE' } })
+    expect(await task.developRuns()).toBe(1)
+  })
+
+  it('重跑权限不足进入 CI 等待，重复轮询和关闭 issue 都不丢交付', async () => {
+    let requested = 0
+    const task = await scenario(async () => {
+      requested++
+      return err(makeError('AUTH_FAILED', '没有 Actions 写权限'))
+    })
+    expect(await task.drive()).toMatchObject({ ok: true, value: { finalStatus: 'S-HUMAN_REVIEW' } })
+    await task.drive()
+    expect(requested).toBe(1)
+    const cancelled = await task.deps.driver.advance(
+      task.taskId,
+      { type: 'Cancelled', reason: 'issue_closed' },
+      task.deps.now(),
+    )
+    expect(cancelled).toMatchObject({ ok: true, value: { advanced: false } })
+    task.merge()
+    expect(await task.drive()).toMatchObject({ ok: true, value: { finalStatus: 'S-DONE' } })
+    const recorded = await asOwner((c) =>
+      c.query("SELECT payload FROM event WHERE task_id=$1 AND payload->>'transition'='T-043'", [
+        task.taskId,
+      ]),
+    )
+    expect(recorded.rows[0]?.payload).toMatchObject({ merge_sha: mergeSha })
+    expect(await task.developRuns()).toBe(1)
+  })
+
+  it('已合并 PR 可以在待返工时收口，并取消尚未认领的 develop', async () => {
+    const task = await scenario(async () => ok(false))
+    await task.drive()
+    await task.deps.driver.advance(task.taskId, { type: 'HumanApproved' }, task.deps.now(), {
+      note: '明确修复已确认的断言',
+    })
+    task.merge()
+    expect(await task.drive(true)).toMatchObject({ ok: true, value: { finalStatus: 'S-DONE' } })
+    const run = await asOwner((c) =>
+      c.query("SELECT status FROM run WHERE task_id=$1 AND stage='develop' AND attempt=2", [
+        task.taskId,
+      ]),
+    )
+    expect(run.rows[0]?.status).toBe('CANCELLED')
+  })
+
+  it('存量的 CI 自动返工零改动等待也能消费同一 SHA 的新结果', async () => {
+    const task = await scenario(async () => ok(false))
+    await asOwner(async (c) => {
+      await c.query("UPDATE task SET status='S-HUMAN_REVIEW' WHERE id=$1", [task.taskId])
+      await c.query(
+        `INSERT INTO event (task_id,type,payload) VALUES
+         ($1,'TaskStatusChanged','{"transition":"T-025","source":"github","to":"S-DEVELOPING"}'),
+         ($1,'TaskStatusChanged','{"transition":"T-031","to":"S-HUMAN_REVIEW"}')`,
+        [task.taskId],
+      )
+      await c.query(
+        `INSERT INTO run (id,task_id,stage,role,attempt,status,idempotency_key,error_detail,ended_at)
+         VALUES ($1,$2,'develop','DEV',2,'FAILED',$3,$4,now())`,
+        [
+          randomUUID(),
+          task.taskId,
+          `${task.taskId}/develop/2`,
+          'develop 声称 implemented，但工作区在 git 上没有任何改动（0 文件、0 提交）。',
+        ],
+      )
+    })
+    task.observe({ state: 'passed' })
+    expect(await task.drive()).toMatchObject({ ok: true, value: { finalStatus: 'S-PR_OPEN' } })
+    expect(await task.developRuns()).toBe(2)
+  })
+
+  it('转绿解除 CI 等待；重复失败时人工必须提供修复理由并传给 develop', async () => {
+    const recovered = await scenario(async () => ok(false))
+    await recovered.drive()
+    recovered.observe({ state: 'passed' })
+    expect(await recovered.drive()).toMatchObject({
+      ok: true,
+      value: { finalStatus: 'S-PR_OPEN', steps: [{ transition: 'T-045' }] },
+    })
+    expect(await recovered.developRuns()).toBe(1)
+
+    const task = await scenario(async () => ok(true))
+    await task.drive()
+    task.observe({ ...failed, evidence: { ...failed.evidence, key: 'second-attempt' } })
+    expect(await task.drive()).toMatchObject({ ok: true, value: { finalStatus: 'S-HUMAN_REVIEW' } })
+    const driver = new WorkflowDriver(new RuleBasedPolicyEngine(DEFAULT_RULESET))
+    const denied = await driver.advance(task.taskId, { type: 'HumanApproved' }, task.deps.now())
+    expect(denied).toMatchObject({ ok: true, value: { advanced: false } })
+    const approved = await driver.advance(
+      task.taskId,
+      { type: 'HumanApproved', repairCi: true },
+      task.deps.now(),
+      { note: '修复 Vitest 输出中已确认的断言' },
+    )
+    expect(approved).toMatchObject({ ok: true, value: { advanced: true } })
+    const context = await asRole('keel_control', async (c) => {
+      const run = await c.query<{ id: string }>(
+        "SELECT id FROM run WHERE task_id=$1 AND stage='develop' AND attempt=2",
+        [task.taskId],
+      )
+      const runId = run.rows[0]?.id
+      if (runId === undefined) throw new Error('返工 run 不存在')
+      return new FactPlaneContextBuilder({ Developer: 'developer' }).build(c, {
+        task_id: task.taskId,
+        run_id: runId,
+        role: 'Developer',
+        stage: 'develop',
+        budget_tokens: 5000,
+      })
+    })
+    expect(
+      context.ok
+        ? context.value.sections.find((s) => s.id === 'ci_failure')?.content
+        : context.error,
+    ).toMatch(/修复 Vitest.*[\s\S]+Run Vitest/)
+  })
+})
 
 /** managed 绑定 + 开工前同步 —— 裸仓库落在 `<root>/repos/<repoId>.git` */
 async function prepareFor(git: GitWorkspace, repoId: string): Promise<PreparedProject> {
