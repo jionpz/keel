@@ -280,6 +280,44 @@ async function bindWorkflowIssue(
 }
 
 describe('managed ticket runtime', () => {
+  it('评审用选定 Harness 的工具集和执行器，其他阶段继续用默认执行器', async () => {
+    const { taskId, root } = await seed()
+    const base = happyWorker(root)
+    const reviewed: string[] = []
+    const worker: ManagedTicketWorker = {
+      ...base,
+      selectStage: (stage) =>
+        stage === 'review'
+          ? {
+              harness: 'claude-code',
+              toolInventory: ['Read', 'Bash', 'Task'],
+              run: async (input) => {
+                reviewed.push(input.tool_plan.harness)
+                expect(input.tool_plan.native_tools).toContain('Read')
+                expect(input.tool_plan.native_tools).not.toContain('read')
+                expect(input.tool_plan.degradations).toMatchObject([
+                  { capability: 'grep', fallback_native: 'Bash' },
+                  { capability: 'find', fallback_native: 'Bash' },
+                  { capability: 'ls', fallback_native: 'Bash' },
+                ])
+                return base.run(input)
+              },
+            }
+          : base,
+    }
+    for (const stage of ['execute', 'verify', 'review']) {
+      expect(await tickManagedTicket(worker, taskId)).toMatchObject({
+        ok: true,
+        value: { stage, status: 'READY' },
+      })
+    }
+    expect(reviewed).toEqual(['claude-code'])
+    expect(await getManagedTicket(taskId)).toMatchObject({
+      ok: true,
+      value: { current_stage: 'land' },
+    })
+  })
+
   it('人工暂停撤回正在运行的 worker，迟到结果不改变暂停态和证据', async () => {
     const { taskId } = await seed()
     let started: (() => void) | undefined

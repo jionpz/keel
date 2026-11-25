@@ -29,6 +29,7 @@ const WORKFLOW = {
 const ENV_KEYS = [
   'PATH',
   'KEEL_HARNESS',
+  'KEEL_MANAGED_HARNESS_ROUTING_FILE',
   'KEEL_MODEL',
   'KEEL_MODEL_PROFILE',
   'KEEL_MODEL_PROFILES_FILE',
@@ -171,6 +172,67 @@ describe('managed worker · 模型路由预检', () => {
       process.env.KEEL_MODEL_PROFILE = 'team-a'
 
       await expect(createManagedTicketWorker({ harness: 'omp' })).rejects.toThrow(/harness=omp/)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('managed worker · 按阶段选择 Harness', () => {
+  it('使用阶段覆盖与默认值，并按实际 Harness 的阶段超时计算租约上限', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'keel-harness-routing-'))
+    try {
+      await writeFile(join(dir, 'pi'), '#!/bin/sh\nexit 0\n', { mode: 0o700 })
+      await writeFile(join(dir, 'claude'), '#!/bin/sh\nprintf \'{"loggedIn":true}\\n\'\n', {
+        mode: 0o700,
+      })
+      process.env.PATH = `${dir}:${process.env.PATH ?? ''}`
+      process.env.KEEL_HARNESS = 'omp'
+      delete process.env.KEEL_MODEL
+      delete process.env.KEEL_MODEL_ALLOWLIST
+      const modelConfig = join(dir, 'models.json')
+      await writeFile(
+        modelConfig,
+        JSON.stringify({
+          profiles: {
+            routing: {
+              pi: { stages: { review: { timeout_s: 3600 } } },
+              claude: { stages: { review: { timeout_s: 1200 } } },
+            },
+          },
+        }),
+      )
+      process.env.KEEL_MODEL_PROFILES_FILE = modelConfig
+      process.env.KEEL_MODEL_PROFILE = 'routing'
+
+      const harnessConfig = join(dir, 'harnesses.json')
+      process.env.KEEL_MANAGED_HARNESS_ROUTING_FILE = harnessConfig
+      await writeFile(
+        harnessConfig,
+        JSON.stringify({ default_harness: 'pi', stage_harnesses: { review: 'claude' } }),
+      )
+      const worker = await createManagedTicketWorker()
+      expect(worker.harness).toBe('pi')
+      expect(worker.selectStage?.('execute').harness).toBe('pi')
+      expect(worker.selectStage?.('review').harness).toBe('claude-code')
+      expect(worker.maxRunMs).toBe(1_200_000)
+
+      const forced = await createManagedTicketWorker({ harness: 'pi' })
+      expect(forced.harness).toBe('pi')
+      expect(forced.selectStage).toBeUndefined()
+      expect(forced.maxRunMs).toBe(3_600_000)
+
+      await writeFile(
+        modelConfig,
+        JSON.stringify({
+          profiles: { routing: { pi: { stages: { review: { timeout_s: 3600 } } } } },
+        }),
+      )
+      await expect(createManagedTicketWorker()).rejects.toThrow(/harness=claude/)
+      await writeFile(harnessConfig, JSON.stringify({ stage_harnesses: { qa: 'omp' } }))
+      await expect(createManagedTicketWorker()).rejects.toThrow(/未知阶段 stage_harnesses.qa/)
+      await writeFile(harnessConfig, JSON.stringify({ stage_harnesses: { review: 'codex' } }))
+      await expect(createManagedTicketWorker()).rejects.toThrow(/stage_harnesses.review/)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

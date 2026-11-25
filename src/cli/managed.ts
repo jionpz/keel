@@ -65,18 +65,28 @@ import { requirePiBinary } from '../execution/adapters/pi.js'
 import {
   createIsolatedManagedInference,
   createIsolatedTicketWorker,
+  stageTimeoutsFor,
 } from '../execution/isolated-ticket-worker.js'
 import {
   loadModelRoutingSettings,
   type ModelRoutingSettings,
   preflightModelRouting,
+  TIMEOUT_STAGES,
+  type TimeoutStage,
 } from '../execution/model-routing.js'
 import { asRole } from '../fact/db.js'
 import { GitCliPushGateway } from '../fact/git-push.js'
 import { GitHubProvider } from '../fact/github-provider.js'
 import type { DelegationPolicyVersion } from '../generated/managed.js'
 import { createStopToken, interruptibleSleep } from '../ingress/poller.js'
-import { createHarnessAdapter, resolveHarness, resolveOptionalModel } from './run-task.js'
+import { MANAGED_STAGE_TIMEOUT_MS } from '../shared/managed-limits.js'
+import { loadManagedHarnessRouting, type ManagedHarnessRouting } from './managed-harness-routing.js'
+import {
+  createHarnessAdapter,
+  type HarnessId,
+  resolveHarness,
+  resolveOptionalModel,
+} from './run-task.js'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -246,6 +256,7 @@ memory-retrieve PROJECT_UUID --query TEXT [--key DECISION_KEY] [--request UUID] 
 memory-promote REQUEST_UUID --revision N --key DECISION_KEY [--statement TEXT] [--valid-from TIME] [--valid-until TIME] [--supersedes UUID]
 调查模式的天问只在 E3 明确决定或 E1 可逆默认范围内自动答复。
 policy-* 是本机 owner 的显式授权入口；天问和执行 worker 没有调用路径。
+KEEL_MANAGED_HARNESS_ROUTING_FILE 可指定阶段 Harness；--harness 显式覆盖。
 workflow 模式由 jstack 规划 XS/S/M/L/XL 依赖图，每个节点仍按固定包完成
 execute→verify→review→land；阶段执行器不 push，
 受控 action gateway 创建 PR，check gateway 在准确 SHA 的必需检查通过后推进 pr_ready。`)
@@ -802,35 +813,16 @@ async function runWorker(argv: readonly string[]): Promise<void> {
 
 export interface ManagedWorkerSelection {
   readonly harness?: string
+  readonly harnessRouting?: ManagedHarnessRouting
   readonly model?: string
   readonly modelRouting?: ModelRoutingSettings
 }
 
-/** 构造 managed 执行器；供 managed CLI 与统一 serve 共用同一启动预检。 */
-export async function createManagedTicketWorker(
-  selection: ManagedWorkerSelection = {},
-): Promise<ManagedTicketWorker> {
-  const harnessRaw = selection.harness
-  const modelRaw = selection.model
-  const harness = resolveHarness(harnessRaw, process.env.KEEL_HARNESS)
-  if (!harness.ok) throw new Error(harness.error.detail)
-  const model = resolveOptionalModel(modelRaw, process.env.KEEL_MODEL)
-  if (!model.ok) throw new Error(model.error.detail)
-  const routing =
-    selection.modelRouting === undefined
-      ? loadModelRoutingSettings(process.env)
-      : ok(selection.modelRouting)
-  if (!routing.ok) throw new Error(routing.error.detail)
-  const preflight = preflightModelRouting({
-    harness: harness.value,
-    routing: routing.value,
-    ...(model.value === undefined ? {} : { override: model.value }),
-  })
-  if (!preflight.ok) throw new Error(preflight.error.detail)
-  if (harness.value === 'claude') {
+function requireTicketHarness(harness: HarnessId): void {
+  if (harness === 'claude') {
     const ready = requireClaudeReady()
     if (!ready.ok) throw new Error(ready.error.detail)
-  } else if (harness.value === 'pi') {
+  } else if (harness === 'pi') {
     const ready = requirePiBinary()
     if (!ready.ok) throw new Error(ready.error.detail)
   } else {
@@ -840,13 +832,63 @@ export async function createManagedTicketWorker(
       throw new Error('找不到可用的 omp CLI；ticket worker 未认领任务')
     }
   }
-  const adapter = createHarnessAdapter(harness.value, undefined)
-  return createIsolatedTicketWorker({
-    harness: harness.value,
-    ...(model.value === undefined ? {} : { model: model.value }),
-    routing: routing.value,
-    descriptor: adapter.describe(),
-  })
+}
+
+/** 构造 managed 执行器；供 managed CLI 与统一 serve 共用同一启动预检。 */
+export async function createManagedTicketWorker(
+  selection: ManagedWorkerSelection = {},
+): Promise<ManagedTicketWorker> {
+  const harnessRouting =
+    selection.harnessRouting ?? loadManagedHarnessRouting(selection.harness, process.env)
+  const model = resolveOptionalModel(selection.model, process.env.KEEL_MODEL)
+  if (!model.ok) throw new Error(model.error.detail)
+  const routing =
+    selection.modelRouting === undefined
+      ? loadModelRoutingSettings(process.env)
+      : ok(selection.modelRouting)
+  if (!routing.ok) throw new Error(routing.error.detail)
+  const modelRouting = routing.value
+  const override = model.value
+  const { defaultHarness, stages } = harnessRouting
+  const harnessFor = (stage: TimeoutStage) => stages[stage] ?? defaultHarness
+  const harnesses = new Set([defaultHarness, ...TIMEOUT_STAGES.map(harnessFor)])
+  for (const harness of harnesses) {
+    const preflight = preflightModelRouting({
+      harness,
+      routing: modelRouting,
+      ...(override === undefined ? {} : { override }),
+    })
+    if (!preflight.ok) throw new Error(preflight.error.detail)
+  }
+  const workers = new Map<HarnessId, ReturnType<typeof createIsolatedTicketWorker>>()
+  for (const harness of harnesses) {
+    requireTicketHarness(harness)
+    workers.set(
+      harness,
+      createIsolatedTicketWorker({
+        harness,
+        ...(override === undefined ? {} : { model: override }),
+        routing: modelRouting,
+        descriptor: createHarnessAdapter(harness, undefined).describe(),
+      }),
+    )
+  }
+  const workerFor = (harness: HarnessId) => {
+    const worker = workers.get(harness)
+    if (worker === undefined) throw new Error(`managed worker 未初始化 harness=${harness}`)
+    return worker
+  }
+  const worker = workerFor(defaultHarness)
+  if (harnesses.size === 1) return worker
+  return {
+    ...worker,
+    plan: workerFor(harnessFor('plan')).plan,
+    selectStage: (stage) => workerFor(harnessFor(stage)),
+    maxRunMs: Math.max(
+      MANAGED_STAGE_TIMEOUT_MS,
+      ...TIMEOUT_STAGES.map((stage) => stageTimeoutsFor(modelRouting, harnessFor(stage))(stage)),
+    ),
+  }
 }
 
 async function createTicketWorker(flags: Map<string, FlagValue>): Promise<ManagedTicketWorker> {

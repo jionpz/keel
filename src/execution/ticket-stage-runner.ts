@@ -216,7 +216,7 @@ export function ticketWorkerFromAdapter(
       stage: 'plan',
       harness,
       inventory: toolInventory,
-      allowShellFallback: false,
+      allowGrantedSearchFallback: true,
     })
     if (!resolved.ok) return { ok: false, error: resolved.error, usage: ZERO_USAGE }
     return runStructured<JstackRoutePlan>(

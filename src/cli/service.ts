@@ -38,6 +38,7 @@ import { type PollerSignalSource, runPollerForever } from '../ingress/poller.js'
 import { parseArgs } from './argv.js'
 import { resolveHumanReviewTtlMs } from './human-review-ttl.js'
 import { createManagedTicketWorker } from './managed.js'
+import { loadManagedHarnessRouting } from './managed-harness-routing.js'
 import { buildPollerRuntime } from './poller.js'
 import {
   type CiMode,
@@ -105,7 +106,7 @@ export const SERVICE_HELP = `用法: keel serve [选项]
 到达安全边界后退出。
 
 选项:
-  --harness omp|claude|pi   缺省读取 KEEL_HARNESS；启动时预检可执行文件
+  --harness omp|claude|pi   显式指定时统一覆盖 managed 阶段的 Harness
   --model <id>              也可设 KEEL_MODEL；未指定时不传模型
   --no-ingress              不运行 GitHub issue 接入 poller（默认运行）
   --ci passed|failed|real   ingress 使用的 CI 模式，缺省 real
@@ -122,6 +123,7 @@ export const SERVICE_HELP = `用法: keel serve [选项]
 
 说明:
   ingress 仍驱动 legacy-v01 issue 任务；--no-ingress 时只管理已持久化的 managed 工作。
+  KEEL_MANAGED_HARNESS_ROUTING_FILE 提供 managed 阶段路由；缺省读取 KEEL_HARNESS。
   KEEL_MODEL_PROFILES_FILE / KEEL_MODEL_PROFILE 提供部署方模型路由；项目不预设模型。
   摘要组件只生成 DRAFT，发布/回滚仍需 owner 显式命令。
   同一数据库只允许一个 serve；启用 ingress 时还会与独立 poller 互斥。`
@@ -265,22 +267,26 @@ export async function serveMain(
       if (!allowed.has(key)) throw new Error(`未知选项：--${key}`)
     }
 
-    const harness = resolveHarness(optionalString(flags, 'harness'), process.env.KEEL_HARNESS)
-    if (!harness.ok) throw new Error(harness.error.detail)
-    const model = resolveOptionalModel(optionalString(flags, 'model'), process.env.KEEL_MODEL)
-    if (!model.ok) throw new Error(model.error.detail)
-    const routing = loadModelRoutingSettings(process.env)
-    if (!routing.ok) throw new Error(routing.error.detail)
-    const preflight = preflightModelRouting({
-      harness: harness.value,
-      routing: routing.value,
-      ...(model.value === undefined ? {} : { override: model.value }),
-    })
-    if (!preflight.ok) throw new Error(preflight.error.detail)
     if (flags.ingress === true && flags['no-ingress'] === true)
       throw new Error('--ingress 与 --no-ingress 不能同时使用')
     // 单一服务入口默认覆盖接入；--no-ingress 仅用于明确只处理已持久化 managed 工作。
     const withIngress = flags['no-ingress'] !== true
+    const cliHarness = optionalString(flags, 'harness')
+    const harnessRouting = loadManagedHarnessRouting(cliHarness, process.env)
+    const ingressHarness = withIngress ? resolveHarness(cliHarness, process.env.KEEL_HARNESS) : null
+    if (ingressHarness !== null && !ingressHarness.ok) throw new Error(ingressHarness.error.detail)
+    const model = resolveOptionalModel(optionalString(flags, 'model'), process.env.KEEL_MODEL)
+    if (!model.ok) throw new Error(model.error.detail)
+    const routing = loadModelRoutingSettings(process.env)
+    if (!routing.ok) throw new Error(routing.error.detail)
+    if (ingressHarness !== null) {
+      const preflight = preflightModelRouting({
+        harness: ingressHarness.value,
+        routing: routing.value,
+        ...(model.value === undefined ? {} : { override: model.value }),
+      })
+      if (!preflight.ok) throw new Error(preflight.error.detail)
+    }
     const ci = ciMode(flags)
     const concurrency = positiveInteger(flags, 'concurrency', 3)
     if (concurrency > 3) throw new Error('--concurrency 不能超过全局 RUNNING 上限 3')
@@ -297,16 +303,16 @@ export async function serveMain(
     const worker =
       deps.worker ??
       (await createManagedTicketWorker({
-        harness: harness.value,
+        harnessRouting,
         ...(model.value === undefined ? {} : { model: model.value }),
         modelRouting: routing.value,
       }))
 
     let ingressDeps: Awaited<ReturnType<typeof buildPollerRuntime>>['deps'] | undefined
-    if (withIngress) {
+    if (ingressHarness !== null) {
       const built = await buildPollerRuntime({
         ci,
-        harness: harness.value,
+        harness: ingressHarness.value,
         ...(model.value === undefined ? {} : { model: model.value }),
         modelRouting: routing.value,
         ...(wallClock.value === undefined ? {} : { wallClockS: wallClock.value }),
@@ -334,7 +340,7 @@ export async function serveMain(
       liveness = new LivenessStore()
       components = buildDefaultComponents({
         worker,
-        harness: harness.value,
+        harness: harnessRouting.defaultHarness,
         ...(model.value === undefined ? {} : { model: model.value }),
         modelRouting: routing.value,
         now,

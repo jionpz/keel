@@ -224,8 +224,9 @@ verify 的 command/result 是隔离执行器产出的结构化证据，并由 Ke
 - `land → releaser`
 
 Keel 用当前 harness 的 `tool_inventory` 解析原生工具，只把解析结果放进
-`permissions.allowed_tools`，模式固定 `deny_unlisted`。profile、harness 映射或必需能力
-缺失时任务进入 `PAUSED`，不会静默降级或按品牌猜测工具名。
+`permissions.allowed_tools`，模式固定 `deny_unlisted`。规划和 ticket 阶段缺少原生
+搜索工具时，仅使用固定包声明且由该阶段另一项必需能力已授予的回退工具，并记录降级。
+profile、harness 映射或仍无法满足的必需能力缺失时，任务进入 `PAUSED`。
 
 工作区标识为 `untrusted=true`，遵守 Adapter 的 `CAP-UNTRUSTED_WORKSPACE` 契约；
 JT-02A 的环境 allowlist、macOS 操作系统沙箱、容器规格门禁和 agent 级凭据负例仍是
@@ -260,7 +261,7 @@ managed 模式的阶段记账由 Keel 维护；固定 provider 包中的源路�
   先进入天问；天问只有在精确委托范围内才能代批，否则返回 `owner_required` 并等待
   本机操作员。
 - `blocked` 且带 `decision`：保留模型提出的选项，追加一个“停止并等待人工处理”
-  选项；请求初始为 `PROCESSING`。worker 用与阶段相同的 harness/model 运行天问，
+  选项；请求初始为 `PROCESSING`。worker 用默认 Harness 和天问的模型路由运行天问，
   产出 `TianwenProposal` 并交给确定性接纳器。只有 E3 项目决定或 E1 可逆委托默认
   支撑的 `delegated` 才把任务放回 `READY`；`owner_required`、`denied`、模型超时或
   协议错误都会升级为 `WAITING_HUMAN`，不会自动继续。
