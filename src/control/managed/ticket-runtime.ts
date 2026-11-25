@@ -77,15 +77,19 @@ import {
   invalidateNodeEvidence,
 } from './workflow-store.js'
 
-export interface ManagedTicketWorker {
+export interface ManagedTicketStageWorker {
   readonly harness: string
   readonly toolInventory: readonly string[]
+  readonly run: ManagedTicketStageRunner
+}
+
+export interface ManagedTicketWorker extends ManagedTicketStageWorker {
+  readonly selectStage?: (stage: ManagedTicketStageName) => ManagedTicketStageWorker
   /**
    * 该 worker 单次运行（阶段、路线规划或天问）的最长墙钟，毫秒。
    * ticket 与 workflow 的租约由它派生；缺省为 managed 的缺省阶段上限。
    */
   readonly maxRunMs?: number
-  readonly run: ManagedTicketStageRunner
   readonly decide?: ManagedTicketDecisionRunner
   readonly plan?: ManagedWorkflowPlanRunner
 }
@@ -464,7 +468,7 @@ function toolPlan(
   policy: ToolPolicyDocument,
   stage: ManagedTicketStageName,
   profile: string,
-  worker: ManagedTicketWorker,
+  worker: ManagedTicketStageWorker,
 ): Result<ManagedTicketToolPlan> {
   if (policy.profiles[profile] === undefined)
     return err(makeError('CAPABILITY_UNSUPPORTED', `tool profile 缺失：${profile}`))
@@ -474,7 +478,7 @@ function toolPlan(
     stage,
     harness: worker.harness,
     inventory: worker.toolInventory,
-    allowShellFallback: false,
+    allowGrantedSearchFallback: true,
   })
   if (!resolved.ok) return resolved
   return ok({
@@ -1586,7 +1590,8 @@ export async function tickManagedTicket(
   const stageDefinition = ticketPackage.stages.find((entry) => entry.stage === stage)
   if (stageDefinition === undefined)
     return pauseTicketWithError(claim, 'PROTOCOL_ERROR', `固定包缺少阶段 ${stage}`)
-  const plan = toolPlan(loaded.value.toolPolicy, stage, stageDefinition.tool_profile, worker)
+  const stageWorker = worker.selectStage?.(stage) ?? worker
+  const plan = toolPlan(loaded.value.toolPolicy, stage, stageDefinition.tool_profile, stageWorker)
   if (!plan.ok) return pauseTicketWithError(claim, 'TOOL_PROFILE_MISSING', plan.error.detail)
 
   const workflowNode = await workflowNodeForTicket(claim.task.id)
@@ -1798,7 +1803,7 @@ export async function tickManagedTicket(
   }, 500)
   let outcome: Awaited<ReturnType<ManagedTicketStageRunner>>
   try {
-    outcome = await worker.run(stageInput)
+    outcome = await stageWorker.run(stageInput)
   } catch {
     return failStage(claim, stageId, 'HARNESS_UNAVAILABLE', ZERO_USAGE, false)
   } finally {

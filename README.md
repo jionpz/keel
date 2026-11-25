@@ -284,6 +284,8 @@ pending 归并、runner 无 omp),记录见任务 `prd.md`。
 换模型:`KEEL_MODEL=<id>` 或 `keel run-issue <url> --model <id>`;未指定时不传 `--model`,由 harness 自己的配置决定(项目不预设模型;空白拒绝)。
 按部署配置路由:`KEEL_MODEL_PROFILES_FILE` 指向 profile JSON,`KEEL_MODEL_PROFILE` 选择其中一个 profile;
 配置按 harness 的 stage / role 指定模型与可选 thinking,示例见 `docs/examples/model-profiles.example.json`。
+managed 工作流可设置 `KEEL_MANAGED_HARNESS_ROUTING_FILE` 为规划、实现、验证、评审或交付选择 Harness。
+参见 [配置示例与优先级](docs/spec/backend/model-routing.md#managed-阶段的-harness)。
 managed 的 `plan` / `execute` / `verify` / `review` / `land` 阶段条目还可以用 `timeout_s` 调整墙钟上限(60 到 14400 秒,缺省 900);
 写在其他位置会在启动时拒绝,规则见 `docs/spec/backend/model-routing.md`。
 `KEEL_MODEL_ALLOWLIST=<id,...>` 可限制允许的最终模型;启动时按选中 profile 的全部条目预检,清单外直接拒绝(不会先 ingest 再失败)。

@@ -68,6 +68,8 @@ export interface ResolveToolPolicyOptions {
   readonly harness: string
   readonly inventory: readonly string[]
   readonly allowShellFallback?: boolean
+  /** managed 阶段可用已经独立授予的工具替代缺失的原生搜索工具。 */
+  readonly allowGrantedSearchFallback?: boolean
 }
 
 export const KEEL_STAGE_PROFILE: Readonly<Record<Stage, string>> = {
@@ -424,6 +426,7 @@ export function resolveToolPolicy(
     }
     return null
   }
+  const granted = opts.allowGrantedSearchFallback ? new Set(profile.capabilities.map(pick)) : null
 
   for (const capability of profile.capabilities) {
     const direct = pick(capability)
@@ -433,23 +436,23 @@ export function resolveToolPolicy(
     }
     const expected = mapping.value[capability]?.native ?? []
     const fallback = mapping.value[capability]?.fallback
-    if (fallback !== undefined && shellAllowed && inventory.has(fallback)) {
+    const useGranted =
+      fallback !== undefined &&
+      SEARCH_CAPABILITIES.has(capability) &&
+      granted?.has(fallback) === true
+    if (fallback !== undefined && (shellAllowed || useGranted) && inventory.has(fallback)) {
       add(fallback)
-      if (SEARCH_CAPABILITIES.has(capability)) {
-        degradations.push({
-          capability,
-          expected_native: expected,
-          fallback_native: fallback,
-          reason: '当前 harness 清单没有原生搜索工具，调用方显式允许 Bash 回退',
-        })
-      } else {
-        degradations.push({
-          capability,
-          expected_native: expected,
-          fallback_native: fallback,
-          reason: '当前 harness 清单没有原生工具，调用方显式允许 shell 回退',
-        })
-      }
+      const reason = useGranted
+        ? '当前 harness 清单没有原生搜索工具，复用阶段已经授予的工具'
+        : SEARCH_CAPABILITIES.has(capability)
+          ? '当前 harness 清单没有原生搜索工具，调用方显式允许 Bash 回退'
+          : '当前 harness 清单没有原生工具，调用方显式允许 shell 回退'
+      degradations.push({
+        capability,
+        expected_native: expected,
+        fallback_native: fallback,
+        reason,
+      })
       continue
     }
     return err(

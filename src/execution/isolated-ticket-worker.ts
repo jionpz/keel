@@ -67,7 +67,10 @@ export function stageTimeoutsFor(
  */
 export function createIsolatedTicketWorker(
   options: IsolatedTicketWorkerOptions,
-): ManagedTicketWorker {
+): ManagedTicketWorker & {
+  readonly decide: ManagedTicketDecisionRunner
+  readonly plan: ManagedWorkflowPlanRunner
+} {
   const harness =
     options.descriptor.harness_id === 'claude' ? 'claude-code' : options.descriptor.harness_id
   const routeFor = (stage: ModelStage, role: ModelRole): ReturnType<typeof resolveModelRoute> =>

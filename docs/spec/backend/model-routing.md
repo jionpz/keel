@@ -1,7 +1,38 @@
 # 执行面模型路由
 
 > 代码：`src/execution/model-routing.ts`；落库列：`run.requested_model`。
-> 现行接口从 issue #156 的修复开始：managed 与 legacy 共用同一套路由。
+> 现行模型路由从 issue #156 的修复开始，managed 与 legacy 共用解析逻辑。
+
+## managed 阶段的 Harness
+
+设置 `KEEL_MANAGED_HARNESS_ROUTING_FILE` 指向部署端的 JSON 文件：
+
+```json
+{
+  "default_harness": "pi",
+  "stage_harnesses": {
+    "plan": "claude",
+    "review": "claude"
+  }
+}
+```
+
+- `stage_harnesses` 可指定 `plan`、`execute`、`verify`、`review`、`land`，
+  Harness 取值为 `omp`、`claude`、`pi`。
+- 优先级为显式 `--harness` → 对应阶段 → `default_harness` → `KEEL_HARNESS` → `omp`。
+  `--harness` 会跳过阶段路由文件，所有阶段统一用该 Harness。
+- `serve` 和 managed 的 `ticket-*`、`workflow-*` 执行入口使用此配置。ticket 天问及
+  `serve` 内的只读调查由默认 Harness 处理。独立调查 worker 和 legacy ingress
+  继续使用各自的 `--harness` / `KEEL_HARNESS`。
+- 启动时校验配置并预检所选 Harness 的 CLI 和模型 profile。加载了模型 profile 时，每种
+  所选 Harness 都需要自己的表。`--model` / `KEEL_MODEL` 仍全局覆盖所选 Harness 的模型。
+- 每个阶段先选 Harness，再使用该 Harness 的工具清单解析固定包中的工具策略，按该
+  Harness 的模型配置和超时执行。租约按实际路由中最长的阶段上限计算，并覆盖天问的固定上限。
+  远程交付仍由动作网关负责。
+- ticket 阶段可选的 Harness 取决于固定 jstack 包及实际工具能力。仓库随附的
+  工具策略包含 Pi 与 Claude Code 的映射。ticket 阶段路由到 OMP 需要固定包提供 OMP 映射。
+
+实现入口为 `src/cli/managed-harness-routing.ts` 和 `src/cli/managed.ts`。
 
 ---
 

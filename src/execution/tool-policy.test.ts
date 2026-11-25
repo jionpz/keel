@@ -148,6 +148,26 @@ describe('tool policy 解析与解析器', () => {
     expect(rejected.error.detail).toContain('需要显式允许')
   })
 
+  it('managed 搜索回退复用已授予的工具，不单独授予 shell', () => {
+    const policy = makePolicy()
+    const options = {
+      harness: 'claude-code',
+      inventory: ['Read', 'Bash'],
+      allowGrantedSearchFallback: true,
+    }
+    expect(resolveToolPolicy(policy, { ...options, stage: 'verify' })).toMatchObject({
+      ok: true,
+      value: {
+        native_tools: ['Read', 'Bash'],
+        degradations: [{ capability: 'grep', fallback_native: 'Bash' }],
+      },
+    })
+    expect(resolveToolPolicy(policy, { ...options, stage: 'clarify' })).toMatchObject({
+      ok: false,
+      error: { kind: 'CAPABILITY_UNSUPPORTED' },
+    })
+  })
+
   it('只读 profile 拒绝 shell 回退，除非调用方显式允许', () => {
     const policy = makePolicy()
     const rejected = resolveToolPolicy(policy, {
