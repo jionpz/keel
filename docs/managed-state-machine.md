@@ -39,7 +39,11 @@ workflow `PR_READY`，ticket 的执行状态按现有节点映射处理。枚举
 已归档/取消的节点不再回退；`FAILED` 节点只允许显式重试或已恢复 ticket 将其转回
 `READY`，遵守数据库触发器。
 
-每次推进期间持有 workflow lease。结算必须验证相同 token 与未过期租约；验证失败
+每次推进期间持有 workflow lease。内联执行 ticket 阶段后还可能继续调用天问，
+外层 workflow 以持有的 token 每 30 秒续约，不延长 ticket 自己的阶段租约；续约只能
+延长仍有效的认领，不得复活过期/被替换的 token。内层完成后若续约失败，
+直接返回 `CONFLICT`，不写回一个伪造的成功终态。worker 崩溃时续约停止，
+原租约自然到期后再由其他 worker 认领。结算必须验证相同 token 与未过期租约；验证失败
 返回 `CONFLICT`，不能把尚未落库的状态作为成功结果。状态结算记录
 `ManagedWorkflowStatusChanged`，归档失败记录 `ManagedWorkflowArchiveFailed`。
 

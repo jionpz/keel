@@ -32,7 +32,9 @@ import {
 import {
   claimManagedWorkflow,
   insertWorkflowEvidence,
+  renewManagedWorkflowLease,
   withManagedWorkflowClaim,
+  withManagedWorkflowHeartbeat,
 } from './workflow-store.js'
 
 // 这些用例会真实启动 PostgreSQL、Git 子进程并执行多阶段编排；5 秒默认预算在隔离环境中会截断正常执行。
@@ -394,7 +396,7 @@ describe('managed workflow cancellation', () => {
 
   it('拒绝正在执行的 workflow 或 ticket，保留原租约', async () => {
     const seeded = await materialized()
-    const workflowClaim = await claimManagedWorkflow(now(), seeded.workflowId)
+    const workflowClaim = await claimManagedWorkflow(new Date().toISOString(), seeded.workflowId)
     if (workflowClaim === null) throw new Error('missing workflow claim')
     expect((await cancelManagedWorkflow(seeded.workflowId, 1, reason, now())).ok).toBe(false)
     expect((await withManagedWorkflowClaim(workflowClaim, async () => true)).ok).toBe(true)
@@ -411,7 +413,7 @@ describe('managed workflow cancellation', () => {
 
   it('完成静止交接后拒绝旧 ticket 和 workflow 的迟到结果', async () => {
     const seeded = await materialized()
-    const workflowClaim = await claimManagedWorkflow(now(), seeded.workflowId)
+    const workflowClaim = await claimManagedWorkflow(new Date().toISOString(), seeded.workflowId)
     const ticketClaim = await claimManagedTicketTask(now(), seeded.node.ticket_task_id)
     if (workflowClaim === null || ticketClaim === null) throw new Error('missing claim')
     await pauseManagedTicket(seeded.node.ticket_task_id, 'quiesce', now())
@@ -764,6 +766,67 @@ describe('managed workflow runtime', () => {
       lease_until: null,
       last_error: result.value?.error,
     })
+  })
+
+  it('renews a live workflow claim while an inline operation exceeds its initial lease', async () => {
+    const seeded = await seedWorkflow(fixtureRoutePlan('S', 1), {
+      completionTarget: 'branch_ready',
+    })
+    const claim = await claimManagedWorkflow(new Date().toISOString(), seeded.workflowId, 2)
+    expect(claim).not.toBeNull()
+    if (claim === null) return
+    // 不睡数秒：缩短这一条认领的剩余有效期，heartbeat 按实际 token 重新续约。
+    await asRole('keel_control', (c) =>
+      c.query(
+        `UPDATE managed_workflow SET lease_until=clock_timestamp() + interval '90 milliseconds'
+         WHERE id=$1 AND lease_token=$2`,
+        [seeded.workflowId, claim.token],
+      ),
+    )
+    const guarded = await withManagedWorkflowHeartbeat(
+      claim,
+      2,
+      async () => {
+        await new Promise((resolve) => setTimeout(resolve, 160))
+        return 'completed'
+      },
+      15,
+    )
+    expect(guarded).toEqual({ ok: true, value: 'completed' })
+    const settled = await withManagedWorkflowClaim(claim, async (c) =>
+      c.query(`SELECT lease_until > clock_timestamp() AS live FROM managed_workflow WHERE id=$1`, [
+        seeded.workflowId,
+      ]),
+    )
+    expect(settled.ok).toBe(true)
+    if (settled.ok) expect(settled.value.rows[0]?.live).toBe(true)
+  })
+
+  it('never renews an expired or replaced workflow token', async () => {
+    const seeded = await seedWorkflow(fixtureRoutePlan('S', 1))
+    const claim = await claimManagedWorkflow(new Date().toISOString(), seeded.workflowId, 2)
+    expect(claim).not.toBeNull()
+    if (claim === null) return
+    await asRole('keel_control', (c) =>
+      c.query(`UPDATE managed_workflow SET lease_token=$2 WHERE id=$1`, [
+        seeded.workflowId,
+        randomUUID(),
+      ]),
+    )
+    const renewed = await renewManagedWorkflowLease(claim, 2)
+    expect(renewed.ok).toBe(false)
+    if (!renewed.ok) expect(renewed.error.kind).toBe('CONFLICT')
+    const guarded = await withManagedWorkflowHeartbeat(
+      claim,
+      2,
+      async () => {
+        await new Promise((resolve) => setTimeout(resolve, 65))
+        return 'late-result'
+      },
+      10,
+    )
+    expect(guarded.ok).toBe(false)
+    if (!guarded.ok) expect(guarded.error.kind).toBe('CONFLICT')
   })
 
   it('holds its workflow lease while a ticket stage is executing', async () => {

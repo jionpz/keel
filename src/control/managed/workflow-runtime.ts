@@ -56,6 +56,7 @@ import {
   setNodeStatus,
   unlockWorkflow,
   withManagedWorkflowClaim,
+  withManagedWorkflowHeartbeat,
   workflowEvent,
 } from './workflow-store.js'
 
@@ -1019,7 +1020,15 @@ export async function tickManagedWorkflow(
   const nodes = await listWorkflowNodes(claim.workflow.id, claim.workflow.current_graph_version)
   const ready = nodes.find((node) => node.status === 'READY' && node.ticket_task_id !== null)
   if (ready !== undefined && ready.ticket_task_id !== null) {
-    const ticked = await tickManagedTicket(worker, ready.ticket_task_id)
+    // ticket 阶段完成后可能内联调用一次天问，两次推理不得让外层 workflow lease 过期。
+    const ticketId = ready.ticket_task_id
+    const guarded = await withManagedWorkflowHeartbeat(
+      claim,
+      managedExecutionLeaseSeconds(worker.maxRunMs),
+      () => tickManagedTicket(worker, ticketId),
+    )
+    if (!guarded.ok) return guarded
+    const ticked = guarded.value
     if (!ticked.ok) return finish('PAUSED', 'ticketed', ticked.error.detail)
     const summary = await recomputeWorkflowStatus(claim, routePackage)
     if (!summary.ok) return summary
