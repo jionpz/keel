@@ -224,7 +224,9 @@ describe('绑定 PR 的真实 CI 恢复', () => {
     const git = new GitWorkspace({ root })
     const deps = depsFor(repoId, git, await prepareFor(git, repoId))
     let ci: CiObservation = failed
+    let currentHead = headSha
     let merged = false
+    let onPullRead = () => {}
     const drive = (observePrOnly = false) =>
       runTaskToCompletion(taskId, deps, {
         observePrOnly,
@@ -233,14 +235,15 @@ describe('绑定 PR 的真实 CI 恢复', () => {
             throw new Error('不得复用旧终态')
           },
           observeCi: async (input) => {
-            expect(input).toMatchObject({ prNumber: 7, headSha })
+            expect(input).toMatchObject({ prNumber: 7 })
             return ok(ci)
           },
           rerunFailedCi,
         },
         pullRequests: {
-          getPullRequest: async () =>
-            ok({
+          getPullRequest: async () => {
+            onPullRead()
+            return ok({
               number: 7,
               url: 'https://github.com/acme/widget/pull/7',
               state: merged ? 'closed' : 'open',
@@ -248,8 +251,9 @@ describe('绑定 PR 的真实 CI 恢复', () => {
               mergedAt: merged ? '2026-08-23T13:00:00Z' : null,
               mergeSha: merged ? mergeSha : null,
               closedAt: merged ? '2026-08-23T13:00:00Z' : null,
-              headSha,
-            }),
+              headSha: currentHead,
+            })
+          },
         },
       })
     const developRuns = () =>
@@ -265,6 +269,12 @@ describe('绑定 PR 的真实 CI 恢复', () => {
       developRuns,
       observe: (value: CiObservation) => {
         ci = value
+      },
+      moveHead: (sha: string) => {
+        currentHead = sha
+      },
+      whenReadingPr: (callback: () => void) => {
+        onPullRead = callback
       },
       merge: () => {
         merged = true
@@ -321,6 +331,113 @@ describe('绑定 PR 的真实 CI 恢复', () => {
     )
     expect(recorded.rows[0]?.payload).toMatchObject({ merge_sha: mergeSha })
     expect(await task.developRuns()).toBe(1)
+  })
+
+  it('重跑检查期间 PR head 改变，旧失败不会进入人工等待', async () => {
+    let requested = 0
+    const nextHead = 'c'.repeat(40)
+    const task = await scenario(async (input) => {
+      expect(input.headSha).toBe(headSha)
+      requested++
+      task.moveHead(nextHead)
+      return ok(false)
+    })
+    expect(await task.drive()).toMatchObject({
+      ok: true,
+      value: { finalStatus: 'S-PR_OPEN', stopReason: 'awaiting-external-ci' },
+    })
+    task.observe({ state: 'passed' })
+    expect(await task.drive()).toMatchObject({
+      ok: true,
+      value: { finalStatus: 'S-PR_OPEN', stopReason: 'awaiting-pr-merge' },
+    })
+    expect(requested).toBe(1)
+    expect(await task.developRuns()).toBe(1)
+    const observations = await asOwner((c) =>
+      c.query(
+        `SELECT payload->>'event' AS event, payload->>'head_sha' AS head FROM event
+         WHERE task_id=$1 AND payload->>'event' IN ('CIFailed','CIPassed') ORDER BY seq`,
+        [task.taskId],
+      ),
+    )
+    expect(observations.rows).toEqual([{ event: 'CIPassed', head: nextHead }])
+  })
+
+  it('重跑请求拒绝后已观察到同一提交的新检查轮次，旧失败不会进入人工等待', async () => {
+    let requested = 0
+    const task = await scenario(async () => {
+      requested++
+      task.observe({
+        state: 'failed',
+        evidence: { ...failed.evidence, key: 'second-attempt' },
+      })
+      return ok(false)
+    })
+    expect(await task.drive()).toMatchObject({
+      ok: true,
+      value: { finalStatus: 'S-PR_OPEN', stopReason: 'awaiting-external-ci' },
+    })
+    expect(await task.drive()).toMatchObject({
+      ok: true,
+      value: { finalStatus: 'S-HUMAN_REVIEW', stopReason: 'awaiting-human' },
+    })
+    expect(requested).toBe(1)
+    expect(await task.developRuns()).toBe(1)
+  })
+
+  it('网关已证明轮次过期时，后续轮询也不消费仍可见的旧失败', async () => {
+    let requested = 0
+    const task = await scenario(async () => {
+      requested++
+      return err(makeError('STALE_EVIDENCE', 'Actions 轮次已变化'))
+    })
+    for (let poll = 0; poll < 2; poll++)
+      expect(await task.drive()).toMatchObject({
+        ok: true,
+        value: { finalStatus: 'S-PR_OPEN', stopReason: 'awaiting-external-ci' },
+      })
+    task.observe({
+      state: 'failed',
+      evidence: { ...failed.evidence, key: 'second-attempt' },
+    })
+    expect(await task.drive()).toMatchObject({
+      ok: true,
+      value: { finalStatus: 'S-HUMAN_REVIEW', stopReason: 'awaiting-human' },
+    })
+    expect(requested).toBe(1)
+    expect(await task.developRuns()).toBe(1)
+  })
+
+  it('复核 PR 时同一 SHA 开始新一轮检查，旧失败不会进入人工等待', async () => {
+    const task = await scenario(async () => ok(false))
+    let reads = 0
+    task.whenReadingPr(() => {
+      if (++reads === 2) task.observe({ state: 'pending' })
+    })
+    expect(await task.drive()).toMatchObject({
+      ok: true,
+      value: { finalStatus: 'S-PR_OPEN', stopReason: 'awaiting-external-ci' },
+    })
+    expect(await task.developRuns()).toBe(1)
+  })
+
+  it('PR 恢复原 SHA 后可以重新观察该提交的真实失败', async () => {
+    let requested = 0
+    const task = await scenario(async () => {
+      requested++
+      task.moveHead('c'.repeat(40))
+      return err(makeError('CONFLICT', 'PR head SHA 已变化'))
+    })
+    expect(await task.drive()).toMatchObject({
+      ok: true,
+      value: { finalStatus: 'S-PR_OPEN', stopReason: 'awaiting-external-ci' },
+    })
+    task.moveHead(headSha)
+    expect(await task.drive()).toMatchObject({
+      ok: true,
+      value: { finalStatus: 'S-HUMAN_REVIEW', stopReason: 'awaiting-human' },
+    })
+    expect(requested).toBe(1)
   })
 
   it('已合并 PR 可以在待返工时收口，并取消尚未认领的 develop', async () => {

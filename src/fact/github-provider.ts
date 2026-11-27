@@ -756,13 +756,10 @@ export class GitHubProvider
     const latest = await this.request(host, path)
     if (!latest.ok) return latest
     const run = latest.value.json as RawActionsRun | null
-    if (
-      latest.value.status !== 200 ||
-      run === null ||
-      run.id !== target.runId ||
-      run.run_attempt !== target.attempt ||
-      !actionsRunMatches(run, input.headSha)
-    )
+    if (latest.value.status !== 200 || run === null || run.id !== target.runId) return ok(false)
+    if (Number.isSafeInteger(run.run_attempt) && run.run_attempt > target.attempt)
+      return err(makeError('STALE_EVIDENCE', 'Actions 检查已进入新轮次'))
+    if (run.run_attempt !== target.attempt || !actionsRunMatches(run, input.headSha))
       return ok(false)
     if (input.prNumber === undefined) return ok(false)
     const pr = await this.getPullRequest({
@@ -772,7 +769,7 @@ export class GitHubProvider
     })
     if (!pr.ok) return pr
     if (pr.value.state !== 'open' || pr.value.merged || pr.value.headSha !== input.headSha)
-      return ok(false)
+      return err(makeError('CONFLICT', 'PR 状态或 head SHA 已变化'))
     const result = await this.request(host, `${path}/rerun-failed-jobs`, { method: 'POST' })
     return result.ok ? ok(result.value.status === 201) : result
   }

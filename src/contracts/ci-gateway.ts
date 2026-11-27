@@ -40,6 +40,6 @@ export interface CiGateway {
   waitForCi(input: CiWaitInput): Promise<Result<'passed' | 'failed'>>
   /** 真实轮询使用最新观察；等待超时和无人上报都没有失败证据。 */
   observeCi?(input: CiWaitInput): Promise<Result<CiObservation>>
-  /** 对已观察到的 Actions 轮次请求重跑，返回是否被 GitHub 接受。 */
+  /** 对已观察到的 Actions 轮次请求重跑。轮次过期返回 STALE_EVIDENCE，PR 变化返回 CONFLICT。 */
   rerunFailedCi?(input: CiWaitInput, target: CiRerunTarget): Promise<Result<boolean>>
 }

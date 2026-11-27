@@ -812,7 +812,7 @@ describe('managed ticket runtime', () => {
     expect(tick).toMatchObject({ ok: true, value: { status: 'READY', stage: 'verify' } })
     expect(await getManagedTicket(taskId)).toMatchObject({
       ok: true,
-      value: { status: 'READY', current_stage: 'execute', rework_count: 1, last_error: null },
+      value: { status: 'READY', current_stage: 'execute', rework_count: 0, last_error: null },
     })
 
     const failed = (await listManagedTicketStages(taskId)).find((stage) => stage.stage === 'verify')
@@ -849,7 +849,7 @@ describe('managed ticket runtime', () => {
         stageId: failed?.id,
         stage: 'verify',
         findings: [],
-        reworkCount: 1,
+        reworkCount: 0,
         reason: 'VERIFICATION_FAILED',
         failedChecks: [
           {
@@ -885,7 +885,7 @@ describe('managed ticket runtime', () => {
     const sections = contexts.get('execute')?.sections ?? []
     const guidance = sections.find((entry) => entry.id === 'verify_rework')?.content ?? ''
     expect(guidance).toContain(`上一轮 verify 在提交 ${failedCommit} 上运行完整检查，有 1 条未通过`)
-    expect(guidance).toContain('第 1/3 轮返工')
+    expect(guidance).toContain('已用 0/3 轮代码返工')
     expect(guidance).toContain('修复根因并提交新 commit')
     expect(guidance).toContain('不是代码造成')
     expect(guidance).toContain('error=VERIFICATION_FAILED 那条 verify 的 summary')
@@ -964,7 +964,7 @@ describe('managed ticket runtime', () => {
       })
       expect(await getManagedTicket(taskId)).toMatchObject({
         ok: true,
-        value: { current_stage: 'execute', rework_count: index + 1 },
+        value: { current_stage: 'execute', rework_count: index },
       })
     }
     await tickManagedTicket(worker, taskId)
@@ -999,6 +999,42 @@ describe('managed ticket runtime', () => {
     expect(paused.rows.map((row) => row.payload)).toMatchObject([
       { stage: 'verify', error: 'REWORK_LIMIT', status: 'PAUSED', detail: reason.slice(14) },
     ])
+  })
+
+  it('verify 后的空返工提交不能进入下一轮验证', async () => {
+    const { root, taskId } = await seed()
+    await tickManagedTicket(happyWorker(root), taskId)
+    const failing = workerWith(async () =>
+      success('verify', {
+        checks: [
+          {
+            command: 'node --test',
+            exit_code: 1,
+            passed: false,
+            output_digest: '0'.repeat(64),
+            output_excerpt: 'assertion failed',
+          },
+        ],
+      }),
+    )
+    await tickManagedTicket(failing, taskId)
+    const empty = workerWith(async () => {
+      await git(root, 'commit', '--allow-empty', '-m', 'empty rework')
+      const commit = await head(root)
+      return success('execute', { commit, worktree_head: commit })
+    })
+    expect(await tickManagedTicket(empty, taskId)).toMatchObject({
+      ok: true,
+      value: { status: 'PAUSED', stage: 'execute' },
+    })
+    expect(await getManagedTicket(taskId)).toMatchObject({
+      ok: true,
+      value: {
+        current_stage: 'execute',
+        rework_count: 0,
+        last_error: 'STAGE_GATE_FAILED: verify 返工提交没有改动',
+      },
+    })
   })
 
   it.each([
@@ -1164,27 +1200,59 @@ describe('managed ticket runtime', () => {
     })
   })
 
-  it('verify 失败不是代码造成时 execute 上报 blocked，恢复决定接纳后在同一提交上重新验证', async () => {
+  const environmentCases = [
+    { name: '恢复通过', stillFailing: false, oldCharge: 0 },
+    { name: '继续失败', stillFailing: true, oldCharge: 0 },
+    { name: '升级前已计费', stillFailing: false, oldCharge: 1 },
+  ]
+
+  it.each(environmentCases)('环境重验不扣返工额度：$name', async ({ stillFailing, oldCharge }) => {
     const { repoId, root, taskId } = await seed()
     await bindWorkflowIssue(repoId, taskId, '#134', ['feature.txt'])
     const happy = happyWorker(root)
     await tickManagedTicket(happy, taskId)
     const commit = await head(root)
-    const environmentFailure = workerWith(async () =>
-      success('verify', {
-        worktree_head: commit,
-        checks: [
-          {
-            command: 'pnpm run check:isolated',
-            exit_code: 1,
-            passed: false,
-            output_digest: '0'.repeat(64),
-            output_excerpt: 'initdb 失败：listen EPERM',
-          },
-        ],
-      }),
-    )
-    await tickManagedTicket(environmentFailure, taskId)
+    const failure = success('verify', {
+      worktree_head: commit,
+      checks: [
+        {
+          command: 'pnpm run check:isolated',
+          exit_code: 1,
+          passed: false,
+          output_digest: '0'.repeat(64),
+          output_excerpt: 'initdb 失败：listen EPERM',
+        },
+      ],
+    })
+    const environmentFailure = workerWith(async () => failure)
+    if (oldCharge > 0) {
+      await asOwner(async (c) => {
+        await c.query(
+          `INSERT INTO managed_ticket_stage (
+             id,task_id,stage,attempt,status,package_digest,baseline_commit,input_commit,
+             input_digest,output_commit,result,evidence,error,ended_at
+           )
+           SELECT $2,id,'verify',attempts+1,'REWORK',package_digest,baseline_commit,$3,
+             $4,$3,$5::jsonb,$6::jsonb,'VERIFICATION_FAILED',now()
+           FROM managed_ticket_task WHERE id=$1`,
+          [
+            taskId,
+            randomUUID(),
+            commit,
+            '0'.repeat(64),
+            JSON.stringify(failure),
+            JSON.stringify({ checks: failure.checks }),
+          ],
+        )
+        await c.query(
+          `UPDATE managed_ticket_task SET current_stage='execute',attempts=attempts+1,
+             rework_count=$2 WHERE id=$1`,
+          [taskId, oldCharge],
+        )
+      })
+    } else {
+      await tickManagedTicket(environmentFailure, taskId)
+    }
 
     // 没有恢复决定时，确认原提交仍过不了 execute 门禁。
     const reconfirm = workerWith(async (input) =>
@@ -1227,7 +1295,11 @@ describe('managed ticket runtime', () => {
       waiting.value.pending_decision_revision === null
     )
       throw new Error('missing decision')
-    expect(waiting.value).toMatchObject({ status: 'WAITING_HUMAN', current_stage: 'execute' })
+    expect(waiting.value).toMatchObject({
+      status: 'WAITING_HUMAN',
+      current_stage: 'execute',
+      rework_count: oldCharge,
+    })
     expect(
       await answerManagedTicketDecision(
         waiting.value.pending_decision_id,
@@ -1274,8 +1346,32 @@ describe('managed ticket runtime', () => {
     expect(await archivable('execute')).toBe(1)
     expect(await getManagedTicket(taskId)).toMatchObject({
       ok: true,
-      value: { status: 'READY', current_stage: 'verify', rework_count: 1 },
+      value: { status: 'READY', current_stage: 'verify', rework_count: 0 },
     })
+
+    if (stillFailing) {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        if (attempt > 0)
+          expect(await resumeManagedTicket(taskId, new Date().toISOString())).toMatchObject({
+            ok: true,
+          })
+        expect(await tickManagedTicket(environmentFailure, taskId)).toMatchObject({
+          ok: true,
+          value: { status: 'PAUSED', stage: 'verify' },
+        })
+        expect(await getManagedTicket(taskId)).toMatchObject({
+          ok: true,
+          value: {
+            current_stage: 'verify',
+            rework_count: 0,
+            last_error: expect.stringContaining('同一提交'),
+          },
+        })
+      }
+      expect(await archivable('execute')).toBe(1)
+      expect(await archivable('verify')).toBe(0)
+      return
+    }
 
     // 同一提交上的 verify 必须真实重跑，失败的那次不能被当作可复用证据。
     let verifyRuns = 0

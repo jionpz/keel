@@ -72,12 +72,13 @@ outbox 并撤销 `VALID` permit。详细约束见
 | `managed_ticket_task` | `READY`、`RUNNING`、`WAITING_HUMAN`、`WAITING_GATEWAY`、`PAUSED`、`PR_OPENED`、`CHECKING`、`PR_READY`、`PR_CHECKS_FAILED`、`DONE`、`FAILED`、`CANCELLED` | `ticket-runtime.ts` / `ticket-store.ts` 管阶段；control/decision/action/check 模块只写各自职责下的转移 |
 | `managed_ticket_stage` | `RUNNING`、`SUCCEEDED`、`REUSED`、`REWORK`、`FAILED`、`MUST_STOP` | 一行是一次尝试；结束后不可改写；失败产物只供诊断 |
 
-阶段固定为 `execute → verify → review → land`。`review` 有 open finding，或
-`verify` 有 check 未通过时回 `execute`，新 commit 会改变 verify/review 的绑定，
-旧证据失效。verify 的失败检查留在那次尝试的记录里，并进入下一轮 execute 的上下文。
-两种返工共用三轮上限，用完后任务按 `REWORK_LIMIT` 进入 `PAUSED`。`REWORK` 是阶段尝试
-结果，不是 workflow 成功状态。managed XS/S 也走 review，这是 managed 固定包的
-安全覆盖，不是交互式 route 的规模规则。
+阶段固定为 `execute → verify → review → land`。`review` 有 open finding，或 `verify`
+有 check 未通过且尚有预算时回 `execute`。verify 的失败检查保留在阶段记录中并进入
+execute 上下文。review 回退和 verify 失败后被接纳的实际代码修复共用三轮上限，用完后
+按 `REWORK_LIMIT` 进入 `PAUSED`。每个提交的 verify 失败只自动派回 execute 一次。
+经恢复决定同提交重验时保留原代码返工计数，继续失败则以 `VERIFICATION_FAILED` 暂停在
+verify。新 commit 会改变 verify/review 的绑定，旧证据随之失效。`REWORK` 是阶段尝试
+结果。managed XS/S 也走 review，这是 managed 固定包的安全覆盖。
 
 暂停/取消递增 `control_generation`，撤销未开始动作的 permit 并阻断 outbox；已开始
 执行的外部动作必须回查，不能把本地暂停声称为外部副作用撤销。

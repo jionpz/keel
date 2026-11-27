@@ -120,6 +120,11 @@
 | `T-044` | 任一非终态 | `PRClosed` | 已绑定 GitHub PR 未合并关闭且无在跑 Run | `S-ABANDONED` ★ | 记录 PR 的关闭事实，取消待执行 Run 和定时器，清理工作区 |
 | `T-045` | `S-HUMAN_REVIEW` | `CIPassed` | 人工等待由 CI 触发且已绑定 GitHub PR 检查通过 | `S-PR_OPEN` | 取消人工等待定时器，继续等 PR 合并/关闭 |
 
+真实 GitHub 轮询在记录 CI 终态之前重新核对绑定 PR 的编号、状态和 head SHA。
+未获准重跑或重跑等待结束后，编排器在两次 PR 核对之间重新观察失败证据。网关确认
+Actions 轮次已过期时，后续轮询跳过同一旧结果。PR head 变化时重新观察当前提交，包括
+PR 恢复到之前 head 的情况。
+
 ### 2.1 通用规则（适用于全部**阶段态**）
 
 阶段态 = `{S-PM_ANALYZING, S-BRAINSTORM, S-RFC_DRAFT, S-DEVELOPING, S-QA, S-REVIEW}`。

@@ -153,7 +153,7 @@ verify 的 `checks` 每项都是硬门禁，只包含当前阶段必需的验收
 | 阶段 | 门禁 |
 |---|---|
 | `execute` | 输出等于 HEAD 且为输入后代，工作树干净；通常必须产生新 commit，只有上述已提交完整恢复点、以及 verify 失败后被接纳的恢复决定允许重新确认 |
-| `verify` | 至少一条 check；每条必须有 command、exit code、passed、输出摘要/摘录；`output_digest` 必须与实际摘录一致；HEAD 不能变化；任一 check 未通过只能进入 rework |
+| `verify` | 至少一条 check；每条必须有 command、exit code、passed、输出摘要/摘录；`output_digest` 必须与实际摘录一致；HEAD 不能变化；检查失败后按下述预算回到 execute 或暂停 |
 | `review` | `reviewed_commit` 必须等于当前 HEAD；`diff_digest` 必须等于 Keel 重新计算的 baseline..HEAD diff；open finding 只能进入 rework |
 | `land` | `land.commit` 必须等于当前 HEAD；branch 必须是 `ai/*` 且不等于 base；只登记 `push_and_pr` intent/outbox，不执行 push/PR |
 
@@ -161,9 +161,8 @@ review 的 diff 摘要由 Control 运行 `git diff --binary baseline..HEAD` 计�
 旧 SHA、旧 diff 或旧 verify 证据都会被拒绝。review 提出 open finding 时任务回到
 `execute`，保留 findings 作为下一轮上下文。
 
-verify 已完成且至少一条 check 未通过时，任务同样回到 `execute`，不暂停。verify 的
-阶段指令要求检查未通过时仍输出 `completed` 并保留 `passed=false`，这样失败才带着
-证据进入返工：
+verify 已完成且至少一条 check 未通过时，符合预算的任务回到 `execute` 研判原因。verify
+仍输出 `completed` 并保留 `passed=false`，将实际检查证据交给下一阶段：
 
 - 这次 verify 记为 `REWORK`，`error` 为 `VERIFICATION_FAILED`，全部 checks（命令、
   退出码、输出摘录与 Keel 重算的摘要）留在该行的 result/evidence 里；
@@ -175,7 +174,8 @@ verify 已完成且至少一条 check 未通过时，任务同样回到 `execute
   先判断原因。带入上下文的最多 8 条，每条命令保留开头 500 字符、摘录保留末尾 4000
   字符，长度按写进事实 JSON 后（含转义）计算，避免失败输出撑爆上下文预算；完整内容在
   阶段记录里。execute 交出下一个成功结果后，这两项不再下发，history 仍保留该次尝试。
-- 由改动造成的失败：修复并提交新 commit，verify 在新提交上重跑。
+- 确认由改动造成的失败：修复并提交有实际改动的 commit。Keel 接纳该提交时计一轮
+  代码返工，verify 在新提交上重跑。空改动的提交按 `STAGE_GATE_FAILED` 拒绝。
 - 不是代码造成的失败（检查环境起不来、依赖或工具缺失等）：execute 不改代码，输出
   `blocked` 与 `kind=recovery` 决策。该决定按 §3 的恢复规则被接纳、且现场没有任何
   改动时，execute 可以确认原提交，verify 在同一提交上重跑；execute 这时不重跑完整
@@ -183,12 +183,12 @@ verify 已完成且至少一条 check 未通过时，任务同样回到 `execute
   确认原提交会让该节点在同一提交上旧的 execute workflow 证据失效并写入这次的证据，
   archive 核对的是最后一条 execute 记录。
 
-返工有上限：review 的 open finding 与 verify 的检查失败共用 `rework_count`，最多三轮。
-两者每一轮的代价相同，共用才有一个确定的上限；分开计数最坏会到六轮。每次 verify 失败
-回退都计一轮，包括最后判定不是代码造成的那些。用完后再次要求返工的那次尝试记为
-`FAILED`/`REWORK_LIMIT`，任务暂停。由 verify 触发时 `last_error` 写明是检查未通过并
-列出失败命令与退出码；由 review 触发时仍是 `REWORK_LIMIT`。暂停后人工 `resume` 会在
-同一提交上重跑当前阶段。
+`rework_count` 最多三轮。review 提出 open finding 时计一轮，verify 失败则在接纳
+修复提交时计一轮。环境故障或原因不明时，按既有授权在同一提交上重验，计数保持原值。
+每个提交最多自动派回 execute 处理一次 verify 失败，额度由持久阶段记录确定。重验
+持续失败时在 `verify` 按 `VERIFICATION_FAILED` 暂停并记录命令和退出码。三轮代码返工
+用完后，后续回退按 `REWORK_LIMIT` 暂停。人工 `resume` 可重跑当前阶段，已用额度保留。
+升级前已计数的 verify 回退在接纳实际修复时沿用原计数，经批准确认原提交时退回这一轮额度。
 
 被 workflow 节点绑定的 ticket 还会在 execute 后检查 `baseline..HEAD` 的实际改动文件：
 每个路径必须落在节点 `scope_paths` 内，否则阶段失败为 `SCOPE_VIOLATION`。

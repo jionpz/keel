@@ -87,6 +87,7 @@ describe('observeCi / rerunFailedCi', () => {
     const actions = '/repos/acme/widget/actions/runs'
     const commit = `/repos/acme/widget/commits/${headSha}`
     let runAttempt = 1
+    let prHead = headSha
     let state = 'failure'
     let posts = 0
     const workflow = () => ({
@@ -135,7 +136,7 @@ describe('observeCi / rerunFailedCi', () => {
     routes.set(routeKey('GET', `${actions}/42`), () => ({ status: 200, json: workflow() }))
     routes.set(routeKey('GET', '/repos/acme/widget/pulls/7'), () => ({
       status: 200,
-      json: { number: 7, state: 'open', merged: false, head: { sha: headSha } },
+      json: { number: 7, state: 'open', merged: false, head: { sha: prHead } },
     }))
     routes.set(routeKey('POST', `${actions}/42/rerun-failed-jobs`), () => {
       posts++
@@ -157,12 +158,18 @@ describe('observeCi / rerunFailedCi', () => {
     runAttempt = 2
     state = 'queued'
     expect(await gh.observeCi(input)).toEqual({ ok: true, value: { state: 'pending' } })
-    expect(await gh.rerunFailedCi(input, { runId: 42, attempt: 1 })).toEqual({
-      ok: true,
-      value: false,
+    expect(await gh.rerunFailedCi(input, { runId: 42, attempt: 1 })).toMatchObject({
+      ok: false,
+      error: { kind: 'STALE_EVIDENCE' },
     })
     state = 'success'
     expect(await gh.observeCi(input)).toEqual({ ok: true, value: { state: 'passed' } })
+    runAttempt = 1
+    prHead = 'b'.repeat(40)
+    expect(await gh.rerunFailedCi(input, { runId: 42, attempt: 1 })).toMatchObject({
+      ok: false,
+      error: { kind: 'CONFLICT' },
+    })
     expect(posts).toBe(1)
   })
 })
