@@ -19,8 +19,13 @@ export async function shouldWaitForCiRerun(
       [taskId],
     )
     if (task.rowCount === 0) return 'stop'
-    const history = await c.query<{ type: string; key: string; occurred_at: Date }>(
-      `SELECT type, payload->>'failure_key' AS key, occurred_at
+    const history = await c.query<{
+      type: string
+      key: string | null
+      reason: string | null
+      occurred_at: Date
+    }>(
+      `SELECT type, payload->>'failure_key' AS key, payload->>'reason' AS reason, occurred_at
        FROM event WHERE task_id=$1 AND type IN ('CiRerunClaimed','CiRerunUnconfirmed')
          AND payload->>'head_sha'=$2 AND payload->>'pr_number'=$3
        ORDER BY seq DESC LIMIT 1`,
@@ -28,11 +33,14 @@ export async function shouldWaitForCiRerun(
     )
     const previous = history.rows[0]
     if (previous !== undefined) {
-      return previous.type === 'CiRerunClaimed' &&
-        previous.key === failure.evidence.key &&
+      if (previous.key !== failure.evidence.key) return 'handoff'
+      if (previous.reason === 'STALE_EVIDENCE') return 'stop'
+      if (
+        previous.type === 'CiRerunClaimed' &&
         Date.parse(now) - previous.occurred_at.getTime() < RERUN_SETTLE_MS
-        ? 'stop'
-        : 'handoff'
+      )
+        return 'stop'
+      return 'handoff'
     }
     if (gateway.rerunFailedCi === undefined || failure.rerun === undefined) return 'handoff'
     const trace = await ensureTraceId(c, taskId, now)
@@ -70,6 +78,7 @@ export async function shouldWaitForCiRerun(
         JSON.stringify({
           pr_number: input.prNumber,
           head_sha: input.headSha,
+          failure_key: failure.evidence.key,
           reason: result.ok ? 'attempt_changed_or_rejected' : result.error.kind,
         }),
         trace,
@@ -77,5 +86,5 @@ export async function shouldWaitForCiRerun(
       ],
     )
   })
-  return false
+  return !result.ok && (result.error.kind === 'STALE_EVIDENCE' || result.error.kind === 'CONFLICT')
 }

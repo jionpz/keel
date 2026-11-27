@@ -254,11 +254,9 @@ export async function runTaskToCompletion(
         const repoId = deps.workspace.repoId
         const remote = await readRemoteUrl(repoId)
         if (!remote.ok) return remote
-        const observed = await opts.pullRequests.getPullRequest({
-          repoId,
-          remoteUrl: remote.value,
-          number: pr.number,
-        })
+        const pullRequests = opts.pullRequests
+        const prInput = { repoId, remoteUrl: remote.value, number: pr.number }
+        const observed = await pullRequests.getPullRequest(prInput)
         if (!observed.ok) return observed
         if (observed.value.number !== pr.number)
           return err(makeError('PROTOCOL_ERROR', '观察到的 PR 编号与任务绑定不符'))
@@ -289,47 +287,81 @@ export async function runTaskToCompletion(
         if (headSha === undefined)
           return ok({ finalStatus: state.status, steps, stopReason: waiting })
         const input = { repoId, remoteUrl: remote.value, headSha, prNumber: pr.number }
+        const waitForCi = ok<RunToCompletionResult>({
+          finalStatus: state.status,
+          steps,
+          stopReason: waiting,
+        })
         const ci = await opts.ci.observeCi(input)
         if (!ci.ok) return ci
-        if (ci.value.state === 'passed') {
-          const known = await readLatestCiResult(taskId, headSha)
-          if (inReview || known?.result !== 'passed' || known.source !== 'github') {
-            const advanced = await deps.driver.advance(
-              taskId,
-              { type: 'CIPassed', source: 'github', headSha },
-              deps.now(),
-            )
-            if (!advanced.ok) return advanced
-            steps.push(record(state.status, advanced, null, '当前 PR head 的 CI 已通过'))
-            if (inReview) continue
-          }
-          return ok({ finalStatus: state.status, steps, stopReason: 'awaiting-pr-merge' })
+        if (
+          ci.value.state === 'pending' ||
+          ci.value.state === 'unreported' ||
+          (ci.value.state === 'failed' && inReview)
+        )
+          return waitForCi
+
+        if (
+          ci.value.state === 'failed' &&
+          (await shouldWaitForCiRerun(taskId, opts.ci, input, ci.value, deps.now()))
+        )
+          return waitForCi
+
+        const stillCurrentHead = async (): Promise<Result<boolean>> => {
+          const current = await pullRequests.getPullRequest(prInput)
+          if (!current.ok) return current
+          if (current.value.number !== pr.number)
+            return err(makeError('PROTOCOL_ERROR', '观察到的 PR 编号与任务绑定不符'))
+          return ok(
+            current.value.state === 'open' &&
+              !current.value.merged &&
+              current.value.headSha === headSha,
+          )
         }
-        if (ci.value.state === 'failed' && !inReview) {
-          const waitForRerun = await shouldWaitForCiRerun(
+        const current = await stillCurrentHead()
+        if (!current.ok) return current
+        if (!current.value) return waitForCi
+
+        if (ci.value.state === 'failed') {
+          const latest = await opts.ci.observeCi(input)
+          if (!latest.ok) return latest
+          if (
+            latest.value.state !== 'failed' ||
+            latest.value.evidence.key !== ci.value.evidence.key ||
+            latest.value.evidence.url !== ci.value.evidence.url ||
+            latest.value.rerun?.runId !== ci.value.rerun?.runId ||
+            latest.value.rerun?.attempt !== ci.value.rerun?.attempt
+          )
+            return waitForCi
+          const finalHead = await stillCurrentHead()
+          if (!finalHead.ok) return finalHead
+          if (!finalHead.value) return waitForCi
+          const advanced = await deps.driver.advance(
             taskId,
-            opts.ci,
-            input,
-            ci.value,
+            {
+              type: 'CIFailed',
+              source: 'github',
+              headSha,
+              evidence: latest.value.evidence,
+            },
             deps.now(),
           )
-          if (!waitForRerun) {
-            const advanced = await deps.driver.advance(
-              taskId,
-              {
-                type: 'CIFailed',
-                source: 'github',
-                headSha,
-                evidence: ci.value.evidence,
-              },
-              deps.now(),
-            )
-            if (!advanced.ok) return advanced
-            steps.push(record(state.status, advanced, null, 'CI 仍失败，等待有依据的处理'))
-            return ok({ finalStatus: advanced.value.to, steps, stopReason: 'awaiting-human' })
-          }
+          if (!advanced.ok) return advanced
+          steps.push(record(state.status, advanced, null, 'CI 仍失败，等待有依据的处理'))
+          return ok({ finalStatus: advanced.value.to, steps, stopReason: 'awaiting-human' })
         }
-        return ok({ finalStatus: state.status, steps, stopReason: waiting })
+        const known = await readLatestCiResult(taskId, headSha)
+        if (inReview || known?.result !== 'passed' || known.source !== 'github') {
+          const advanced = await deps.driver.advance(
+            taskId,
+            { type: 'CIPassed', source: 'github', headSha },
+            deps.now(),
+          )
+          if (!advanced.ok) return advanced
+          steps.push(record(state.status, advanced, null, '当前 PR head 的 CI 已通过'))
+          if (inReview) continue
+        }
+        return ok({ finalStatus: state.status, steps, stopReason: 'awaiting-pr-merge' })
       }
     }
     if (opts.observePrOnly === true)

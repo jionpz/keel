@@ -1025,7 +1025,7 @@ it('MUST_STOP 检查不能复用为正式 verify 证据', async () => {
   expect(verified).toMatchObject({ ok: true, value: { status: 'READY', stage: 'verify' } })
   expect(await getManagedTicket(fixture.taskId)).toMatchObject({
     ok: true,
-    value: { status: 'READY', current_stage: 'execute', rework_count: 1 },
+    value: { status: 'READY', current_stage: 'execute', rework_count: 0 },
   })
   expect(
     (await listManagedTicketStages(fixture.taskId)).map((stage) => [stage.status, stage.error]),
