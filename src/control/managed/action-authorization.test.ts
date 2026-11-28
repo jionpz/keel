@@ -124,6 +124,19 @@ describe('managed action authorization', () => {
     })
   })
 
+  it('项目门禁与委托门禁共同绑定到执行许可', () => {
+    const policies = [policy({}, { required_checks: ['ci', 'frontend'] })]
+    const withProject = authorizeAction(
+      request({ project_required_checks: ['backend', 'frontend'] }),
+      policies,
+    )
+    expect(withProject).toMatchObject({
+      ok: true,
+      required_checks: ['backend', 'ci', 'frontend'],
+    })
+    expect(withProject).not.toEqual(authorizeAction(request(), policies))
+  })
+
   it('required_checks 并集超过 16 条时拒绝自动许可', () => {
     const first = policy(
       {},

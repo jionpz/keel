@@ -128,6 +128,7 @@ export function createIsolatedTicketWorker(
   return {
     harness,
     toolInventory: options.descriptor.tool_inventory ?? [],
+    verifyTimeoutMs: stageTimeoutMs('verify'),
     // 天问固定用缺省上限，所以最长的一次运行不会短于它。
     maxRunMs: Math.max(MANAGED_STAGE_TIMEOUT_MS, ...TIMEOUT_STAGES.map(stageTimeoutMs)),
     run,

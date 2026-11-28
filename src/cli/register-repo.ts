@@ -18,6 +18,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { open } from 'node:fs/promises'
 import { err, makeError, ok, type Result } from '../contracts/errors.js'
 import { asOwner, asOwnerTx } from '../fact/db.js'
 import { validateAttachedDir } from '../fact/project-root.js'
@@ -28,9 +29,27 @@ import {
   commitPolicyFromRow,
   validateCommitPolicy,
 } from '../shared/commit-policy.js'
+import { parseRepoVerification } from '../shared/project-verification.js'
 import { parseArgs } from './argv.js'
 
 const PG_UNIQUE_VIOLATION = '23505'
+
+async function readVerificationContract(path: string) {
+  try {
+    const file = await open(path)
+    try {
+      const limit = 64 * 1024
+      const buffer = Buffer.alloc(limit + 1)
+      const { bytesRead } = await file.read(buffer)
+      if (bytesRead > limit) return err(makeError('SCHEMA_VIOLATION', '项目验证配置超过 64 KiB'))
+      return parseRepoVerification(JSON.parse(buffer.subarray(0, bytesRead).toString('utf8')))
+    } finally {
+      await file.close()
+    }
+  } catch {
+    return err(makeError('SCHEMA_VIOLATION', '无法读取项目验证配置 JSON'))
+  }
+}
 
 /**
  * `--default-branch` 的取值纪律（与 `--model` / `--wall-clock` 同一套）：
@@ -66,7 +85,7 @@ export async function registerRepoMain(argv: readonly string[]): Promise<void> {
                           [--commit-author 'Name <email>']
                           [--commit-message-template '{type}({scope}): {summary}']
                           [--commit-types feat,fix] [--commit-scopes control,fact]
-                          [--commit-message-check '<header 正则>|hook']
+                          [--commit-message-check '<header 正则>|hook'] [--verification-contract FILE]
 
 按 remote_url 幂等注册 repo。remoteUrl 示例:
   https://github.com/owner/repo.git
@@ -78,7 +97,8 @@ export async function registerRepoMain(argv: readonly string[]): Promise<void> {
   --issue-label <name>     poller 扫描用的 Issue label(默认 keel)。
                            重复执行时不传该参数会保留原值。
   --issue-writeback <mode> Issue 回写：off / comment / comment_and_close（默认 off）。
-                           重复执行时不传该参数会保留原值。`)
+                           重复执行时不传该参数会保留原值。
+  --verification-contract FILE  管理员审核的项目验证 JSON。省略时保留原值。`)
     return
   }
   const remoteUrl = positionals[0]
@@ -94,6 +114,22 @@ export async function registerRepoMain(argv: readonly string[]): Promise<void> {
     return
   }
   const defaultBranch = defaultBranchFlag.value
+  const verificationFlag = flags['verification-contract']
+  let verificationJson: string | undefined
+  if (verificationFlag !== undefined) {
+    if (typeof verificationFlag !== 'string' || verificationFlag.trim() === '') {
+      console.error('register-repo: --verification-contract 需要 JSON 文件路径')
+      process.exitCode = 1
+      return
+    }
+    const contract = await readVerificationContract(verificationFlag)
+    if (!contract.ok) {
+      console.error(`register-repo: ${contract.error.detail}`)
+      process.exitCode = 1
+      return
+    }
+    verificationJson = JSON.stringify(contract.value)
+  }
   const issueWriteback = flags['issue-writeback']
   if (
     issueWriteback !== undefined &&
@@ -187,8 +223,9 @@ export async function registerRepoMain(argv: readonly string[]): Promise<void> {
         const id = randomUUID()
         await c.query(
           `INSERT INTO repo (id, provider, remote_url, default_branch, local_path, issue_label, issue_writeback,
+             verification_contract,
              ${COMMIT_POLICY_COLUMNS.join(', ')})
-           VALUES ($1, 'github', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+           VALUES ($1, 'github', $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12)`,
           [
             id,
             remoteUrl,
@@ -196,6 +233,7 @@ export async function registerRepoMain(argv: readonly string[]): Promise<void> {
             canonicalPath ?? null,
             issueLabel ?? 'keel',
             issueWriteback ?? 'off',
+            verificationJson ?? null,
             ...commitValues,
           ],
         )
@@ -207,7 +245,13 @@ export async function registerRepoMain(argv: readonly string[]): Promise<void> {
       const nextPath = canonicalPath !== undefined && row.local_path !== canonicalPath
       const nextLabel = issueLabel !== undefined && row.issue_label !== issueLabel
       const nextCommitPolicy = Object.keys(commitFlags).length > 0
-      if (!nextPath && !nextLabel && issueWriteback === undefined && !nextCommitPolicy)
+      if (
+        !nextPath &&
+        !nextLabel &&
+        issueWriteback === undefined &&
+        !nextCommitPolicy &&
+        verificationJson === undefined
+      )
         return row.id
 
       updatingRepoId = row.id
@@ -219,6 +263,12 @@ export async function registerRepoMain(argv: readonly string[]): Promise<void> {
       }
       if (issueWriteback !== undefined) {
         await c.query('UPDATE repo SET issue_writeback=$1 WHERE id=$2', [issueWriteback, row.id])
+      }
+      if (verificationJson !== undefined) {
+        await c.query('UPDATE repo SET verification_contract=$1::jsonb WHERE id=$2', [
+          verificationJson,
+          row.id,
+        ])
       }
       if (nextCommitPolicy) {
         await c.query(

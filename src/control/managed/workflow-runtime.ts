@@ -17,10 +17,16 @@ import type { PullRequestStateGateway } from '../../contracts/pull-request-state
 import type { Context, ContextSection } from '../../contracts/types.js'
 import { asRole } from '../../fact/db.js'
 import { indexManagedWorkspace } from '../../fact/managed-files.js'
-import type { JstackRoutePackage, JstackRoutePlan } from '../../generated/managed.js'
+import type {
+  JstackRoutePackage,
+  JstackRoutePlan,
+  RepoVerificationContract,
+} from '../../generated/managed.js'
 import { MANAGED_SCHEMAS } from '../../generated/managed.js'
 import { canonicalJson, sha256CanonicalJson, sha256Text } from '../../shared/canonical-json.js'
 import { managedExecutionLeaseSeconds } from '../../shared/managed-limits.js'
+import { parseRepoVerification } from '../../shared/project-verification.js'
+import { readRepoVerification } from '../project-verification.js'
 import {
   type BoundPullRequest,
   checkGateMatchesEvidence,
@@ -237,6 +243,8 @@ export async function createManagedWorkflow(
   const digest = routePackageDigest(validated.value.package)
   const id = randomUUID()
   const configDigest = await repoConfigDigest(repo.value.local_path)
+  const verification = await readRepoVerification(repoId)
+  if (!verification.ok) return verification
   try {
     await asRole('keel_control', async (c) => {
       const inserted = await c.query(
@@ -259,8 +267,8 @@ export async function createManagedWorkflow(
       await c.query(
         `INSERT INTO managed_workflow(
           id,repo_id,package_digest,repo_config_digest,baseline_commit,worktree_root,
-          request,scope_paths,external_issue,completion_target,status
-        ) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,'ROUTING')`,
+          request,scope_paths,external_issue,completion_target,status,verification_contract
+        ) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,'ROUTING',$11::jsonb)`,
         [
           id,
           repoId,
@@ -272,6 +280,7 @@ export async function createManagedWorkflow(
           JSON.stringify(scopes.value),
           externalIssue ?? null,
           validated.value.package.completion_target,
+          JSON.stringify(verification.value),
         ],
       )
       if (externalIssue !== undefined) {
@@ -289,6 +298,8 @@ export async function createManagedWorkflow(
         sourceCommit: validated.value.package.source_commit,
         baselineCommit: resolvedBaseline,
         repoConfigDigest: configDigest,
+        projectVerificationConfigDigest:
+          verification.value === null ? null : sha256CanonicalJson(verification.value),
         worktreeRoot: root.value,
         scopePaths: scopes.value,
         externalIssue: externalIssue ?? null,
@@ -357,6 +368,7 @@ async function commitPlanLocked(
   plan: JstackRoutePlan,
   digest: string,
   allowReplan: boolean,
+  replanVerification?: RepoVerificationContract | null,
 ): Promise<{ readonly version: number; readonly nodeKeys: readonly string[] }> {
   const locked = await c.query<ManagedWorkflow>(
     'SELECT * FROM managed_workflow WHERE id=$1 FOR UPDATE',
@@ -438,10 +450,21 @@ async function commitPlanLocked(
      WHERE id=$1`,
     [workflow.id, version],
   )
+  if (replanVerification !== undefined)
+    await c.query('UPDATE managed_workflow SET verification_contract=$2::jsonb WHERE id=$1', [
+      workflow.id,
+      JSON.stringify(replanVerification),
+    ])
   await workflowEvent(c, workflow.id, 'ManagedWorkflowGraphCommitted', {
     version,
     planDigest: digest,
     routeSize: plan.route_size,
+    ...(replanVerification === undefined
+      ? {}
+      : {
+          projectVerificationConfigDigest:
+            replanVerification === null ? null : sha256CanonicalJson(replanVerification),
+        }),
     tickets: plan.tickets.map((ticket) => ({
       key: ticket.key,
       ticketId: ticket.ticket_id,
@@ -464,6 +487,8 @@ export async function commitManagedWorkflowPlan(
   if (!loaded.ok) return loaded
   const plan = validateRoutePlan(rawPlan, loaded.value.package, workflow.scope_paths)
   if (!plan.ok) return plan
+  const verification = allowReplan ? await readRepoVerification(workflow.repo_id) : ok(undefined)
+  if (!verification.ok) return verification
   for (const ticket of plan.value.plan.tickets) {
     if (
       ticket.external_issue !== undefined &&
@@ -480,6 +505,7 @@ export async function commitManagedWorkflowPlan(
         plan.value.plan,
         plan.value.digest,
         allowReplan,
+        verification.value,
       ),
     )
     return ok(value)
@@ -632,11 +658,20 @@ async function materializeOneNode(
       if (ticket === undefined) throw makeError('PROTOCOL_ERROR', '图节点不在当前计划中')
       const ticketPackage = buildTicketPackageForNode(routePackage, ticket)
       if (!ticketPackage.ok) throw ticketPackage.error
+      const rawVerification = claim.workflow.verification_contract
+      const verification =
+        rawVerification == null ? ok(null) : parseRepoVerification(rawVerification)
+      if (!verification.ok) throw verification.error
       const created = await createManagedTicketTaskFromPackage(
         claim.workflow.repo_id,
         ticketPackage.value,
         worktree.value.path,
-        { baselineCommit: base.value.commit, taskId: node.id },
+        {
+          baselineCommit: base.value.commit,
+          taskId: node.id,
+          verificationBaselineCommit: claim.workflow.baseline_commit,
+          verificationContract: verification.value,
+        },
       )
       if (!created.ok) throw created.error
       await attachNodeTicket(c, node.id, {

@@ -114,6 +114,9 @@ pnpm run console     # http://127.0.0.1:4321（口令见启动终端）
 keel register-repo https://github.com/you/project --local-path ~/code/project
 ```
 
+需要固定仓库检查时，按[项目验证接入](docs/spec/guides/project-verification.md)
+使用 `--verification-contract` 注册本地命令与远端检查。
+
 之后每个 Task 仍在 `$KEEL_HOME/worktrees/<taskId>/` 里跑（分支 `ai/task-<前 8 位>`），
 只是对象库换成了你的工作树 —— Keel 只对它执行 `fetch` / `worktree add`，
 不 commit、不 checkout、不改文件。
