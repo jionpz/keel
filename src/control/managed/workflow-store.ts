@@ -146,14 +146,22 @@ export async function claimManagedWorkflow(
            AND (
              candidate.status IN ('ROUTING','READY')
              OR (candidate.status='RUNNING' AND candidate.lease_until <= clock_timestamp())
-             OR (candidate.status IN ('WAITING_HUMAN','WAITING_GATEWAY') AND EXISTS (
+             OR (candidate.status IN ('WAITING_HUMAN','WAITING_GATEWAY','PAUSED') AND EXISTS (
                SELECT 1 FROM managed_workflow_node n
                JOIN managed_ticket_task t ON t.id=n.ticket_task_id
                WHERE n.workflow_id=candidate.id
                  AND n.graph_version=candidate.current_graph_version
                  AND n.status NOT IN ('ARCHIVED','CANCELLED')
                  AND n.status IS DISTINCT FROM ($2::jsonb ->> t.status)
-                 AND (n.status<>'FAILED' OR ($2::jsonb ->> t.status)='READY')
+                 AND (
+                   (candidate.status<>'PAUSED' AND (n.status<>'FAILED' OR t.status='READY'))
+                   OR (n.status='FAILED' AND n.last_error LIKE 'CHECK_FAILED:%'
+                       AND t.status IN ('CHECKING','PR_READY') AND EXISTS (
+                     SELECT 1 FROM managed_check_target ct WHERE ct.task_id=t.id
+                       AND ct.reobserve_deadline_at IS NOT NULL
+                       AND ct.status IN ('CHECKING','READY')
+                   ))
+                 )
              ))
            )
          ORDER BY candidate.repo_id,candidate.updated_at,candidate.id
@@ -165,7 +173,7 @@ export async function claimManagedWorkflow(
     )
     const workflow = candidates.rows[0]
     if (workflow === undefined) return null
-    const resumed = workflow.status === 'WAITING_HUMAN' || workflow.status === 'WAITING_GATEWAY'
+    const resumed = ['WAITING_HUMAN', 'WAITING_GATEWAY', 'PAUSED'].includes(workflow.status)
     if (workflow.status === 'RUNNING') {
       await workflowEvent(c, workflow.id, 'ManagedWorkflowLeaseExpired', {
         token: workflow.lease_token,

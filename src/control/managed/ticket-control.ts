@@ -1,6 +1,7 @@
 import type { PoolClient } from 'pg'
 import { err, makeError, ok, type Result } from '../../contracts/errors.js'
 import { asRole } from '../../fact/db.js'
+import { ticketHasBoundCheckTarget } from './check-store.js'
 import { ticketEvent } from './ticket-store.js'
 
 export interface ManagedActionControlBoundary {
@@ -180,6 +181,13 @@ export async function resumeManagedTicket(
     if (row === undefined) return err(makeError('NOT_FOUND', '找不到 managed ticket task'))
     if (row.status !== 'PAUSED')
       return err(makeError('CONFLICT', `ticket task 当前是 ${row.status}，不是 PAUSED`))
+    if (await ticketHasBoundCheckTarget(taskId, c))
+      return err(
+        makeError(
+          'CONFLICT',
+          `ticket 已绑定 PR，请用 action-checks --task ${taskId} 查找 target，再用 action-check-reconcile 只读对账`,
+        ),
+      )
     const generation = Number(row.control_generation) + 1
     await c.query(
       `UPDATE managed_ticket_task

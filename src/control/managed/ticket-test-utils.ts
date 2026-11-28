@@ -1,9 +1,28 @@
 import { readFileSync } from 'node:fs'
+import type { PoolClient } from 'pg'
+import { expect } from 'vitest'
 import type { ManagedTicketStageInput, ManagedTicketStageName } from '../../contracts/managed.js'
 import type { ToolPolicyDocument } from '../../execution/tool-policy.js'
 import type { JstackTicketPackage } from '../../generated/managed.js'
 import { sha256CanonicalJson, sha256Text } from '../../shared/canonical-json.js'
 import { ticketPackageDigest } from './ticket-protocol.js'
+
+export async function waitForTicketLockWaiter(locker: PoolClient): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        await locker.query('SELECT pg_stat_clear_snapshot()')
+        const result = await locker.query(
+          `SELECT pid FROM pg_stat_activity
+           WHERE pg_backend_pid()=ANY(pg_blocking_pids(pid))
+             AND query LIKE '%managed_ticket_task%FOR UPDATE%'`,
+        )
+        return result.rowCount
+      },
+      { timeout: 5000 },
+    )
+    .toBe(1)
+}
 
 interface RawToolPolicy {
   readonly protocol_version: '1.0'

@@ -259,6 +259,7 @@ interface PullRequestObservation {
   readonly number: number
   readonly url: string
   readonly state: 'open' | 'closed'
+  readonly merged?: boolean
   readonly headBranch: string
   readonly baseBranch: string
   readonly headSha: string
@@ -608,6 +609,8 @@ export class GitHubProvider
       mergeSha: pr.merge_commit_sha ?? null,
       closedAt: pr.closed_at ?? null,
       headSha: pr.head?.sha ?? null,
+      ...(typeof pr.head?.ref === 'string' ? { headBranch: pr.head.ref } : {}),
+      ...(typeof pr.base?.ref === 'string' ? { baseBranch: pr.base.ref } : {}),
     })
   }
 
@@ -825,6 +828,8 @@ export class GitHubProvider
       return err(makeError('PROTOCOL_ERROR', `PR ${prNumber} 响应缺少准确编号`))
     const state = isOpenState(raw.state)
     if (state === null) return err(makeError('PROTOCOL_ERROR', `PR ${prNumber} 状态无效`))
+    if (raw.merged === true && state !== 'closed')
+      return err(makeError('PROTOCOL_ERROR', `PR ${prNumber} 的合并与开放状态冲突`))
     if (typeof raw.head?.ref !== 'string' || raw.head.ref.trim() === '')
       return err(makeError('PROTOCOL_ERROR', `PR ${prNumber} 缺少 head branch`))
     if (typeof raw.base?.ref !== 'string' || raw.base.ref.trim() === '')
@@ -839,6 +844,7 @@ export class GitHubProvider
       number: raw.number,
       url,
       state,
+      ...(typeof raw.merged === 'boolean' ? { merged: raw.merged } : {}),
       headBranch: raw.head.ref,
       baseBranch: raw.base.ref,
       headSha: raw.head.sha,
@@ -1181,6 +1187,7 @@ export class GitHubProvider
       after.value.headSha !== before.value.headSha ||
       after.value.headBranch !== before.value.headBranch ||
       after.value.baseBranch !== before.value.baseBranch ||
+      after.value.merged !== before.value.merged ||
       after.value.state !== before.value.state
     )
       return err(makeError('CONFLICT', 'PR 在观测期间发生变化；本次 check 证据作废'))
@@ -1192,6 +1199,7 @@ export class GitHubProvider
       prNumber: before.value.number,
       prUrl: before.value.url,
       prState: before.value.state,
+      ...(before.value.merged === undefined ? {} : { prMerged: before.value.merged }),
       headBranch: before.value.headBranch,
       baseBranch: before.value.baseBranch,
       headSha: before.value.headSha,

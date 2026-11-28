@@ -8,6 +8,7 @@ import { ticketEvent } from './ticket-store.js'
 
 export type ManagedCheckTargetStatus = 'PENDING' | 'CHECKING' | 'READY' | 'FAILED'
 export type ManagedCheckSource = 'check_run' | 'commit_status' | 'none'
+export type ManagedCheckFailure = 'CHECK_RED' | 'CHECK_TIMEOUT' | 'BLOCKED'
 
 export interface ManagedCheckTargetRecord {
   readonly id: string
@@ -33,6 +34,8 @@ export interface ManagedCheckTargetRecord {
   readonly next_attempt_at: string | null
   readonly last_observed_at: string | null
   readonly deadline_at: string
+  readonly reobserve_deadline_at: string | null
+  readonly failure_kind: ManagedCheckFailure | null
   readonly evidence_digest: string | null
   readonly last_error: string | null
   readonly created_at: string
@@ -123,6 +126,8 @@ function targetRow(row: Record<string, unknown>): ManagedCheckTargetRecord {
     next_attempt_at: iso(row.next_attempt_at as Date | string | null),
     last_observed_at: iso(row.last_observed_at as Date | string | null),
     deadline_at: iso(row.deadline_at as Date | string) ?? String(row.deadline_at),
+    reobserve_deadline_at: iso(row.reobserve_deadline_at as Date | string | null),
+    failure_kind: row.failure_kind as ManagedCheckFailure | null,
     evidence_digest: row.evidence_digest === null ? null : String(row.evidence_digest),
     last_error: row.last_error === null ? null : String(row.last_error),
     created_at: iso(row.created_at as Date | string) ?? String(row.created_at),
@@ -151,6 +156,36 @@ function observationRow(row: Record<string, unknown>): ManagedCheckObservationRe
     observed_at: iso(row.observed_at as Date | string) ?? String(row.observed_at),
     created_at: iso(row.created_at as Date | string) ?? String(row.created_at),
   }
+}
+
+export async function lockCheckTargetForRecovery(
+  c: PoolClient,
+  targetId: string,
+): Promise<ManagedCheckTargetRecord | null> {
+  const row = (
+    await c.query<Record<string, unknown>>(
+      'SELECT * FROM managed_check_target WHERE id=$1 FOR UPDATE NOWAIT',
+      [targetId],
+    )
+  ).rows[0]
+  return row === undefined ? null : targetRow(row)
+}
+
+export async function checkAuthorizationAvailable(
+  c: PoolClient,
+  target: ManagedCheckTargetRecord,
+  controlGeneration: number,
+  now: string,
+): Promise<boolean> {
+  const binding = await c.query<{ available: boolean }>(
+    `SELECT managed_action_policy_available(p.authorization_id,p.project_id,p.authorization_version,$2)
+       AS available
+     FROM managed_execution_permit p JOIN repo r ON r.id=p.repo_id
+     WHERE p.id=$1 AND p.status='CONSUMED' AND p.task_control_generation=$3
+       AND r.remote_url=$4 AND r.default_branch=$5`,
+    [target.permit_id, now, controlGeneration, target.remote_url, target.base_branch],
+  )
+  return binding.rows[0]?.available === true
 }
 
 export async function insertCheckTarget(
@@ -206,7 +241,7 @@ export async function claimCheckTarget(
          JOIN managed_ticket_task task ON task.id=t.task_id
          WHERE t.status IN ('PENDING','CHECKING')
            AND (t.next_attempt_at IS NULL OR t.next_attempt_at <= $1)
-           AND (t.lease_until IS NULL OR t.lease_until <= $1)
+           AND (t.lease_until IS NULL OR t.lease_until <= clock_timestamp())
            AND task.status IN ('PR_OPENED','CHECKING')
          ORDER BY t.created_at,t.id
          FOR UPDATE OF t SKIP LOCKED
@@ -217,14 +252,15 @@ export async function claimCheckTarget(
     if (row === undefined) return null
     const previous = row.status as ManagedCheckTargetStatus
     const leaseToken = randomUUID()
-    const leaseUntil = new Date(Date.parse(now) + leaseMs).toISOString()
     const updated = (
       await c.query<Record<string, unknown>>(
         `UPDATE managed_check_target
-         SET status='CHECKING',lease_token=$2,lease_until=$3,attempts=attempts+1,updated_at=$1
+         SET status='CHECKING',lease_token=$2,
+           lease_until=clock_timestamp() + $3::double precision * interval '1 millisecond',
+           attempts=attempts+1,updated_at=$1
          WHERE id=$4
          RETURNING *`,
-        [now, leaseToken, leaseUntil, row.id],
+        [now, leaseToken, leaseMs, row.id],
       )
     ).rows[0]
     if (updated === undefined) throw makeError('CONFLICT', 'check target 认领失败')
@@ -285,20 +321,23 @@ async function insertObservations(
   }
 }
 
-async function lockLease(
-  c: PoolClient,
-  claim: ManagedCheckClaim,
-): Promise<Record<string, unknown>> {
+async function lockLease(c: PoolClient, claim: ManagedCheckClaim): Promise<void> {
   const row = (
     await c.query<Record<string, unknown>>(
       `SELECT * FROM managed_check_target
        WHERE id=$1 AND status='CHECKING' AND lease_token=$2
+         AND lease_until > clock_timestamp()
        FOR UPDATE`,
       [claim.target.id, claim.target.lease_token],
     )
   ).rows[0]
   if (row === undefined) throw makeError('CONFLICT', 'check target lease 已过期')
-  return row
+  const task = await c.query(
+    `SELECT id FROM managed_ticket_task
+     WHERE id=$1 AND status='CHECKING' AND control_generation=$2 FOR UPDATE`,
+    [claim.target.task_id, claim.task.control_generation],
+  )
+  if (task.rowCount !== 1) throw makeError('CONFLICT', 'ticket check 控制代次已变化')
 }
 
 function resultError(cause: unknown): KeelError {
@@ -330,6 +369,7 @@ export async function deferCheck(
                next_attempt_at=$2,
                lease_token=NULL,lease_until=NULL,updated_at=$1
              WHERE id=$6 AND status='CHECKING' AND lease_token=$7
+               AND lease_until > clock_timestamp()
              RETURNING *`,
             [
               now,
@@ -343,11 +383,17 @@ export async function deferCheck(
           )
         ).rows[0]
         if (updated === undefined) throw makeError('CONFLICT', 'check target lease 已过期')
-        await c.query(
+        const task = await c.query(
           `UPDATE managed_ticket_task SET last_error=$2,updated_at=$1
-           WHERE id=$3 AND status='CHECKING'`,
-          [now, error === null ? null : `CHECK_PENDING: ${error}`, claim.target.task_id],
+           WHERE id=$3 AND status='CHECKING' AND control_generation=$4`,
+          [
+            now,
+            error === null ? null : `CHECK_PENDING: ${error}`,
+            claim.target.task_id,
+            claim.task.control_generation,
+          ],
         )
+        if (task.rowCount !== 1) throw makeError('CONFLICT', 'ticket check 控制代次已变化')
         await ticketEvent(c, claim.target.task_id, 'ManagedChecksPending', {
           targetId: claim.target.id,
           attempt: claim.target.attempts,
@@ -374,21 +420,26 @@ export async function finalizeCheckReady(
   observations: readonly ManagedCheckObservationDraft[],
   evidenceDigest: string,
   handoff: unknown,
-  now: string,
+  timing: { readonly checkedAt: string; readonly now: () => string },
 ): Promise<Result<ManagedCheckTargetRecord>> {
   try {
     return ok(
       await asRole('keel_control', async (c) => {
         await lockLease(c, claim)
+        const now = timing.now()
+        const { target, task: claimedTask } = claim
+        if (!(await checkAuthorizationAvailable(c, target, claimedTask.control_generation, now)))
+          throw makeError('CONFLICT', '结算时原 PR 绑定、授权或控制代次已失效')
         await insertObservations(c, claim, observations)
         const updated = (
           await c.query<Record<string, unknown>>(
             `UPDATE managed_check_target
              SET status='READY',last_observed_at=$2,evidence_digest=$3,last_error=NULL,
-               next_attempt_at=NULL,lease_token=NULL,lease_until=NULL,updated_at=$1
+               failure_kind=NULL,next_attempt_at=NULL,lease_token=NULL,lease_until=NULL,updated_at=$1
              WHERE id=$4 AND status='CHECKING' AND lease_token=$5
+               AND lease_until > clock_timestamp()
              RETURNING *`,
-            [now, now, evidenceDigest, claim.target.id, claim.target.lease_token],
+            [now, timing.checkedAt, evidenceDigest, claim.target.id, claim.target.lease_token],
           )
         ).rows[0]
         if (updated === undefined) throw makeError('CONFLICT', 'check target lease 已过期')
@@ -396,8 +447,8 @@ export async function finalizeCheckReady(
           `UPDATE managed_ticket_task
            SET status='PR_READY',last_error=NULL,
              handoff=COALESCE(handoff,'{}'::jsonb) || $2::jsonb,updated_at=$1
-           WHERE id=$3 AND status='CHECKING'`,
-          [now, JSON.stringify(handoff), claim.target.task_id],
+           WHERE id=$3 AND status='CHECKING' AND control_generation=$4`,
+          [now, JSON.stringify(handoff), claim.target.task_id, claim.task.control_generation],
         )
         if (task.rowCount !== 1) throw makeError('CONFLICT', 'ticket task 不在 CHECKING')
         await ticketEvent(c, claim.target.task_id, 'ManagedChecksPassed', {
@@ -421,6 +472,7 @@ export async function finalizeCheckFailed(
   error: string,
   handoff: unknown,
   now: string,
+  failureKind: ManagedCheckFailure = 'BLOCKED',
 ): Promise<Result<ManagedCheckTargetRecord>> {
   try {
     return ok(
@@ -430,10 +482,11 @@ export async function finalizeCheckFailed(
         const updated = (
           await c.query<Record<string, unknown>>(
             `UPDATE managed_check_target
-             SET status='FAILED',
+             SET status='FAILED',failure_kind=$7,
                last_observed_at=COALESCE($3::timestamptz,$4::timestamptz),last_error=$2,
                next_attempt_at=NULL,lease_token=NULL,lease_until=NULL,updated_at=$1
              WHERE id=$5 AND status='CHECKING' AND lease_token=$6
+               AND lease_until > clock_timestamp()
              RETURNING *`,
             [
               now,
@@ -442,6 +495,7 @@ export async function finalizeCheckFailed(
               now,
               claim.target.id,
               claim.target.lease_token,
+              failureKind,
             ],
           )
         ).rows[0]
@@ -450,8 +504,14 @@ export async function finalizeCheckFailed(
           `UPDATE managed_ticket_task
            SET status='PR_CHECKS_FAILED',last_error=$2,
              handoff=COALESCE(handoff,'{}'::jsonb) || $3::jsonb,updated_at=$1
-           WHERE id=$4 AND status='CHECKING'`,
-          [now, `CHECK_FAILED: ${error}`, JSON.stringify(handoff), claim.target.task_id],
+           WHERE id=$4 AND status='CHECKING' AND control_generation=$5`,
+          [
+            now,
+            `CHECK_FAILED: ${error}`,
+            JSON.stringify(handoff),
+            claim.target.task_id,
+            claim.task.control_generation,
+          ],
         )
         if (task.rowCount !== 1) throw makeError('CONFLICT', 'ticket task 不在 CHECKING')
         await ticketEvent(c, claim.target.task_id, 'ManagedChecksFailed', {
@@ -460,6 +520,7 @@ export async function finalizeCheckFailed(
           prNumber: claim.target.pr_number,
           headSha: claim.target.head_sha,
           error,
+          failureKind,
         })
         return targetRow(updated)
       }),
@@ -473,25 +534,43 @@ export async function listCheckEvidence(options: {
   readonly taskId?: string
   readonly targetId?: string
 }): Promise<readonly ManagedCheckEvidenceView[]> {
-  return asRole('keel_control', async (c) => {
-    const targets = await c.query<Record<string, unknown>>(
-      `SELECT * FROM managed_check_target
+  return asRole('keel_control', (c) => listCheckEvidenceInTx(c, options))
+}
+
+export async function ticketHasBoundCheckTarget(
+  taskId: string,
+  client?: PoolClient,
+): Promise<boolean> {
+  const run = async (c: PoolClient) => {
+    const found = await c.query('SELECT id FROM managed_check_target WHERE task_id=$1 LIMIT 1', [
+      taskId,
+    ])
+    return found.rowCount === 1
+  }
+  return client === undefined ? asRole('keel_control', run) : run(client)
+}
+
+export async function listCheckEvidenceInTx(
+  c: PoolClient,
+  options: { readonly taskId?: string; readonly targetId?: string },
+): Promise<readonly ManagedCheckEvidenceView[]> {
+  const targets = await c.query<Record<string, unknown>>(
+    `SELECT * FROM managed_check_target
        WHERE ($1::uuid IS NULL OR task_id=$1)
          AND ($2::uuid IS NULL OR id=$2)
        ORDER BY created_at DESC`,
-      [options.taskId ?? null, options.targetId ?? null],
-    )
-    const out: ManagedCheckEvidenceView[] = []
-    for (const row of targets.rows) {
-      const target = targetRow(row)
-      const observations = await c.query<Record<string, unknown>>(
-        `SELECT * FROM managed_check_observation
+    [options.taskId ?? null, options.targetId ?? null],
+  )
+  const out: ManagedCheckEvidenceView[] = []
+  for (const row of targets.rows) {
+    const target = targetRow(row)
+    const observations = await c.query<Record<string, unknown>>(
+      `SELECT * FROM managed_check_observation
          WHERE target_id=$1
          ORDER BY attempt,check_name,source`,
-        [target.id],
-      )
-      out.push({ target, observations: observations.rows.map(observationRow) })
-    }
-    return out
-  })
+      [target.id],
+    )
+    out.push({ target, observations: observations.rows.map(observationRow) })
+  }
+  return out
 }
