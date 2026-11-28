@@ -34,6 +34,7 @@
 | [PR Description](./pr-description.md) | PR 标题模板回退与 header 校验、问题/根因/改动/验证章节、artifact 来源、兼容标记 |
 | [Service Runtime](./service-runtime.md) | 单一 `serve` 入口、角色健康、公平调度、SIGTERM 边界、一致性备份与隔离恢复校验 |
 | [Trial Readiness](./trial-readiness.md) | `doctor` 支持矩阵、单 owner 试运行账本、7 天/30 代决/5 完成任务门槛与证据边界 |
+| [可靠性故障回放](./reliability-replay.md) | 隔离回放入口、证据记录和可靠性指标口径 |
 
 **暂无统一日志模块规范**：不保留没有对应实现的空白 `logging-guidelines.md`。已有日志脱敏、健康检查和审计要求以各运行模块的实现、测试及上表具体规范为准。
 
