@@ -158,7 +158,8 @@ stage/evidence 也不能跨 workflow 冒充新图通过。
 - execute、verify、review、land 的最新尝试成功或复用，输出 head、包、门禁摘要与当前
   `VALID` workflow 证据匹配；
 - handoff 提供准确 40 位 head SHA，工作树仍干净，当前 HEAD 与 diff 均匹配 handoff；
-- `pr_ready` 目标还要求 check gate 为 `READY`，绑定相同 head 与有效证据摘要。
+- `pr_ready` 目标还要求当前远端 PR 与原绑定一致，且仍开放或已经合并。
+  check gate 必须为 `READY`，与持久 check 观察绑定同一 head、分支和证据摘要。
 
 归档写 `archive` 证据并记录 archive gate 摘要；成功后节点变 `ARCHIVED`，所有节点
 归档后 workflow 变 `DONE`。归档失败写节点 `FAILED` 与持久错误；无其他可推进节点时

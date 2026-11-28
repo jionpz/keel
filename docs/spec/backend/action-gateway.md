@@ -117,7 +117,9 @@ push 或 PR 结果不确定时：
 并取消仍在等待的 decision request。已经 `EXECUTING` 的动作不会被谎报为已撤销；
 系统写入 `ManagedActionControlBoundary`，要求回查远端或执行补偿。
 
-`ticket-resume` 只接受 `PAUSED`，再次递增控制代次；旧 permit、旧 worker 和旧决定
+`ticket-resume` 只接受未绑定 check target 的 `PAUSED` ticket，并再次递增控制代次。
+已绑定 PR 的暂停 ticket 可通过 `action-checks --task <task-uuid>` 找到 target，
+再用 `action-check-reconcile <target-uuid>` 只读对账。旧 permit、旧 worker 和旧决定
 都不能恢复执行。`ticket-override` 在任务继续前创建 `revision + 1` 的人工决议，并
 先阻断未执行动作。`policy-revoke` 会暂停仍指向该策略且处于 `WAITING_GATEWAY` 的
 任务，撤销其 `VALID` permit；policy 发布/撤销只接受本机 CLI 显式 owner 身份与
@@ -162,6 +164,9 @@ pnpm keel managed action-retry <outbox-uuid>
 pnpm keel managed action-check-gateway --once
 pnpm keel managed action-check-gateway --interval 10000
 pnpm keel managed action-checks --task <task-uuid>
+pnpm keel managed action-check-reconcile <target-uuid>
+pnpm keel managed action-check-reobserve <target-uuid>
+pnpm keel managed action-check-reobserve <target-uuid> --request <request-uuid> --revision N --option option-1
 pnpm keel managed ticket-pause <task-uuid> --reason '...'
 pnpm keel managed ticket-cancel <task-uuid> --reason '...'
 pnpm keel managed ticket-resume <task-uuid>
@@ -174,6 +179,17 @@ pnpm keel managed policy-revoke <policy-uuid> --owner <owner> --reason '...' --c
 `action-retry` 只允许对 `BLOCKED` / `FAILED` 使用；`UNCERTAIN` 必须先回查。
 `action-gateway --check-timeout-ms` 设置新 check target 的等待上限；
 `action-checks` 输出 target 与全部观察历史，供审计和 02F 验收引用。
+
+`action-check-reconcile` 只读核对绑定的 PR。它可以在等待人工答复时执行，并区分
+`OPEN`、`MERGED`、`CLOSED_UNMERGED` 和绑定漂移。`missingCheckEvidence` 为 `true`
+表示缺少可用于交付的本地检查证据。若已合并的 PR 缺少归档证据，workflow 保留阻塞原因
+`PR_MERGED_EVIDENCE_MISSING`。
+
+检查红灯或观测超时后，运行 `action-check-reobserve <target-uuid>` 获取恢复请求。
+使用返回的请求 ID、版本和选项答复。`option-1` 在原 PR 仍开放且绑定复核通过时，
+排队同一 SHA 的新观测。每个 target 有一次独立窗口，时长等于原观测窗口。
+`option-2` 关闭请求并保留失败。该命令只读远端，不启动 CI，不重跑 ticket 阶段。
+同一个请求只能结算一次。使用 `action-checks` 查看原失败和新观测。
 
 ## 9. 未完成
 

@@ -31,6 +31,8 @@ export interface PullRequestState {
   readonly closedAt: string | null
   /** PR 当前 head SHA；响应缺失时为 null */
   readonly headSha: string | null
+  readonly headBranch?: string
+  readonly baseBranch?: string
 }
 
 export interface PullRequestStateGateway {

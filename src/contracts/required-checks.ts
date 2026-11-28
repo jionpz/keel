@@ -26,6 +26,7 @@ export interface RequiredCheckSnapshot {
   readonly prNumber: number
   readonly prUrl: string
   readonly prState: 'open' | 'closed'
+  readonly prMerged?: boolean
   readonly headBranch: string
   readonly baseBranch: string
   readonly headSha: string

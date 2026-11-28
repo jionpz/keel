@@ -116,11 +116,14 @@ archive 要求 ticket 达到其固定目标：`branch_ready` 必须为 `DONE`，
 - 当前 baseline..HEAD diff 等于 handoff。
 - 每个阶段的最新尝试为 `SUCCEEDED` / `REUSED`，输出 commit、包与门禁摘要匹配。
 - 对应 workflow 证据仍为 `VALID`，绑定当前图、stage、head、diff 与证据摘要。
-- `pr_ready` 的 check gate 为 `READY`，head 与 handoff 相同，证据摘要有效。
+- `pr_ready` 的 check gate 为 `READY`。归档核对绑定 PR 的当前仓库、编号、URL、
+  分支与 head，并重算持久观察的证据摘要。PR 可以仍开放，也可以已合并。
+  PR 已关闭且未合并时归档失败。
 
 失败时节点记为 `FAILED` 并保留具体原因；没有其他可推进节点时 workflow 为
 `PAUSED`。后续轮次不反复尝试失败的 archive；修复后通过 `workflow-retry` 显式重试。
 archive 留存证据，不自动关闭远端 Issue。legacy Issue 回写属于另一条受控路径。
+已合并的绑定 PR 缺本地证据时，归档报告 `PR_MERGED_EVIDENCE_MISSING` 并保留未完成节点。
 
 ## 决策与记忆
 
@@ -145,6 +148,12 @@ archive 留存证据，不自动关闭远端 Issue。legacy Issue 回写属于�
 action 成功只使 ticket 进入 `PR_OPENED`；check gateway 才能推进
 `CHECKING → PR_READY`。执行进程、租约、outbox、PR 和 CI 各有独立状态，不能从其中
 一个推断另一个成功。
+
+`PR_CHECKS_FAILED` 的检查红灯与观测超时可以请求人工 `DecisionRequest`。若绑定的 PR
+仍开放，且原授权、控制代次、分支、提交和 diff 全部通过复核，可由操作员答复精确
+请求版本，消耗 target 的一次独立观测窗口并回到 `CHECKING`。原截止时间、阶段历史、
+执行预算和返工预算保留。观测结算须持相同 token 与尚未过期的租约。
+等待答复期间可只读对账。已合并、关闭未合并和 head 漂移会分别报告。
 
 ## 调查影子路径与保留边界
 
