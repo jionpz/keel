@@ -223,7 +223,7 @@ describe('绑定 PR 的真实 CI 恢复', () => {
     await seedPullRequest(taskId)
     const git = new GitWorkspace({ root })
     const deps = depsFor(repoId, git, await prepareFor(git, repoId))
-    let ci: CiObservation = failed
+    let ci: () => Result<CiObservation> = () => ok(failed)
     let currentHead = headSha
     let merged = false
     let onPullRead = () => {}
@@ -236,7 +236,7 @@ describe('绑定 PR 的真实 CI 恢复', () => {
           },
           observeCi: async (input) => {
             expect(input).toMatchObject({ prNumber: 7 })
-            return ok(ci)
+            return ci()
           },
           rerunFailedCi,
         },
@@ -268,6 +268,9 @@ describe('绑定 PR 的真实 CI 恢复', () => {
       drive,
       developRuns,
       observe: (value: CiObservation) => {
+        ci = () => ok(value)
+      },
+      setObservation: (value: () => Result<CiObservation>) => {
         ci = value
       },
       moveHead: (sha: string) => {
@@ -281,6 +284,30 @@ describe('绑定 PR 的真实 CI 恢复', () => {
       },
     }
   }
+
+  it('暂不可用仅触发有界重观测，持续冲突不会派发 develop', async () => {
+    const task = await scenario(async () => {
+      throw new Error('观测冲突没有可重跑的失败轮次')
+    })
+    let reads = 0
+    task.setObservation(() => {
+      reads++
+      return err(makeError('CONFLICT', 'fixture 观测冲突'))
+    })
+    expect(await task.drive()).toMatchObject({
+      ok: false,
+      error: { kind: 'CONFLICT', detail: 'fixture 观测冲突' },
+    })
+    expect(reads).toBe(3)
+    expect(await task.developRuns()).toBe(1)
+    const observations = await asOwner((c) =>
+      c.query(
+        `SELECT 1 FROM event WHERE task_id=$1 AND payload->>'event' IN ('CIFailed','CIPassed')`,
+        [task.taskId],
+      ),
+    )
+    expect(observations.rowCount).toBe(0)
+  })
 
   it('同一 SHA 失败只请求重跑一次，转绿及合并全程不派 develop', async () => {
     let requested = 0

@@ -14,6 +14,7 @@ export interface RequiredCheckObservationInput {
   readonly repoId: string
   readonly remoteUrl: string
   readonly prNumber: number
+  readonly expectedHeadSha?: string
   readonly requiredChecks: readonly string[]
   readonly observedAt: string
 }

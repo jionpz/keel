@@ -17,7 +17,12 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import type { CiGateway } from '../../contracts/ci-gateway.js'
+import { setTimeout as sleep } from 'node:timers/promises'
+import {
+  type CiGateway,
+  type CiObservation,
+  isTransientCiObservation,
+} from '../../contracts/ci-gateway.js'
 import { err, type KeelError, makeError, ok, type Result } from '../../contracts/errors.js'
 import type {
   HarnessAdapter,
@@ -292,7 +297,10 @@ export async function runTaskToCompletion(
           steps,
           stopReason: waiting,
         })
-        const ci = await opts.ci.observeCi(input)
+        const observe = async (): Promise<Result<CiObservation>> =>
+          opts.ci?.observeCi?.(input) ??
+          err(makeError('CAPABILITY_UNSUPPORTED', '缺少实时 CI 观察网关'))
+        const ci = await observeCiWithBackoff(observe)
         if (!ci.ok) return ci
         if (
           ci.value.state === 'pending' ||
@@ -510,6 +518,8 @@ export async function runTaskToCompletion(
         let ci: 'passed' | 'failed'
         let source: 'github' | 'simulated'
         if (opts.ci !== undefined) {
+          if (opts.ci.observeCi !== undefined)
+            return err(makeError('NOT_FOUND', '真实 CI 观察需要持久 PR 绑定'))
           const ciResult = await opts.ci.waitForCi({
             repoId: repoId as string,
             remoteUrl: remoteUrl as string,
@@ -682,6 +692,18 @@ export async function runTaskToCompletion(
         .join(' → ')}`,
     ),
   )
+}
+
+async function observeCiWithBackoff(
+  observe: () => Promise<Result<CiObservation>>,
+): Promise<Result<CiObservation>> {
+  let observation = await observe()
+  for (const delay of [250, 500]) {
+    if (observation.ok || !isTransientCiObservation(observation.error)) break
+    await sleep(delay)
+    observation = await observe()
+  }
+  return observation
 }
 
 /**

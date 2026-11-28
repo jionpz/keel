@@ -133,8 +133,8 @@ push 或 PR 结果不确定时：
    与 commit statuses；两次读取之间 PR head 变化则整次证据作废；
 4. 每个 required check 只接受 `success`。`missing`、`pending`、`neutral`、
    `skipped`、`cancelled`、`timed_out`、`failure` 均不能完成；
-5. 缺失或仍在运行的 check 保持 `CHECKING` 并持久化观察；到截止时间仍未全绿则
-   `FAILED`；
+5. 缺失或仍在运行的 check 保持 `CHECKING` 并持久化观察。快照冲突或服务暂不可用时
+   只记录诊断并退避重读。到截止时间仍未全绿则以观测超时结束。
 6. 全部成功后 target `READY`、task `PR_READY`，handoff 写入 evidence digest。
 
 每次观察写入 `managed_check_observation`，保存 repo、PR 号、实际 PR head SHA、
@@ -142,8 +142,7 @@ head/base branch、PR 状态、check 名称、事实源、结论、外部 id 与
 观察表 append-only；SHA-A 的绿色结论无法挂到 SHA-B，因为查询路径和证据行都绑定
 实际 head SHA，控制层还会比较 intent/permit/worktree 的完整 SHA。
 
-不调用 legacy `CiGateway.waitForCi()` 的“无人上报静默后视为通过”语义。required 列表
-是策略事实；即使仓库没有配置 CI，只要策略要求了 check，缺失就会在超时后失败。
+required 列表是策略事实。缺失必需检查会在超时后失败，共用的 CI 观察路径保留该独立门禁。
 
 ## 7. 凭据
 

@@ -34,6 +34,7 @@ type Handler = (
 ) => {
   status: number
   json: unknown
+  headers?: Record<string, string>
 }
 
 const routes = new Map<string, Handler>()
@@ -66,7 +67,7 @@ beforeEach(async () => {
         status: 500,
         json: { message: `no route for ${req.method} ${req.url}` },
       }
-      res.writeHead(out.status, { 'Content-Type': 'application/json' })
+      res.writeHead(out.status, { 'Content-Type': 'application/json', ...out.headers })
       res.end(JSON.stringify(out.json))
     })
   })
@@ -79,48 +80,127 @@ afterEach(async () => {
 })
 
 const REMOTE = 'https://github.com/acme/widget.git'
+const CI_SHA = 'a'.repeat(40)
+const OTHER_SHA = 'b'.repeat(40)
+const CI_INPUT = { repoId: 'r1', remoteUrl: REMOTE, headSha: CI_SHA }
+const CI_PR_PATH = '/repos/acme/widget/pulls/7'
+const CHECKS_PATH = `/repos/acme/widget/commits/${CI_SHA}/check-runs?filter=all`
+const STATUS_PATH = `/repos/acme/widget/commits/${CI_SHA}/status?`
+const ACTIONS_PATH = '/repos/acme/widget/actions/runs'
+const ACTIONS_LIST_PATH = `${ACTIONS_PATH}?head_sha=${CI_SHA}`
+const ACTIONS_JOBS_PATH = `${ACTIONS_PATH}/42/jobs?filter=latest`
+const ACTIONS_RUN_PATH = `${ACTIONS_PATH}/42`
+
+function pullRequest(sha = CI_SHA) {
+  return {
+    number: 7,
+    html_url: 'https://github.com/acme/widget/pull/7',
+    state: 'open',
+    merged: false,
+    head: { ref: 'ai/task-7', sha },
+    base: { ref: 'main' },
+  }
+}
+
+function checkRun(id: number, name: string, conclusion: string | null) {
+  return {
+    id,
+    name,
+    head_sha: CI_SHA,
+    status: conclusion === null ? 'in_progress' : 'completed',
+    conclusion,
+  }
+}
+
+function checkRuns(checks: readonly unknown[] = []) {
+  return { total_count: checks.length, check_runs: checks }
+}
+
+function combinedStatus(statuses: readonly unknown[] = [], sha = CI_SHA) {
+  return { sha, total_count: statuses.length, statuses }
+}
+
+function ciRoutes({
+  checks = [],
+  statuses = [],
+}: {
+  checks?: readonly unknown[]
+  statuses?: readonly unknown[]
+} = {}): void {
+  routes.set(routeKey('GET', CHECKS_PATH), () => ({ status: 200, json: checkRuns(checks) }))
+  routes.set(routeKey('GET', STATUS_PATH), () => ({ status: 200, json: combinedStatus(statuses) }))
+  routes.set(routeKey('GET', ACTIONS_LIST_PATH), () => ({
+    status: 200,
+    json: { total_count: 0, workflow_runs: [] },
+  }))
+}
+
+function actionsCheck(id: number, conclusion: string | null) {
+  return {
+    ...checkRun(id, 'verify', conclusion),
+    app: { id: 1, slug: 'github-actions' },
+    check_suite: { id: 11 },
+  }
+}
+
+function actionsRun(attempt: number, conclusion: string | null) {
+  return {
+    id: 42,
+    head_sha: CI_SHA,
+    check_suite_id: 11,
+    run_attempt: attempt,
+    status: conclusion === null ? 'in_progress' : 'completed',
+    conclusion,
+    event: 'pull_request',
+    pull_requests: [{ number: 7, head: { sha: CI_SHA } }],
+  }
+}
+
+function actionsJob(check: ReturnType<typeof actionsCheck>, attempt: number) {
+  return {
+    check_run_url: `https://api.github.com/repos/acme/widget/check-runs/${check.id}`,
+    head_sha: check.head_sha,
+    run_id: 42,
+    run_attempt: attempt,
+    name: check.name,
+    status: check.status,
+    conclusion: check.conclusion,
+  }
+}
 
 describe('observeCi / rerunFailedCi', () => {
   it('读取准确 SHA 的失败步骤，且仅对仍失败的首轮 Actions 请求重跑', async () => {
-    const headSha = 'a'.repeat(40)
-    const input = { repoId: 'repo', remoteUrl: REMOTE, headSha, prNumber: 7 }
-    const actions = '/repos/acme/widget/actions/runs'
-    const commit = `/repos/acme/widget/commits/${headSha}`
+    const input = { ...CI_INPUT, prNumber: 7 }
+    const firstCheck = actionsCheck(100, 'failure')
     let runAttempt = 1
-    let prHead = headSha
-    let state = 'failure'
+    let prHead = CI_SHA
+    let conclusion: string | null = 'failure'
     let posts = 0
-    const workflow = () => ({
-      id: 42,
-      head_sha: headSha,
-      check_suite_id: 11,
-      run_attempt: runAttempt,
-      status: 'completed',
-      conclusion: 'failure',
-    })
-    routes.set(routeKey('GET', `${commit}/check-runs?`), () => ({
+    const workflow = () => actionsRun(runAttempt, conclusion)
+    const currentCheck = () => actionsCheck(99 + runAttempt, conclusion)
+    ciRoutes()
+    routes.set(routeKey('GET', CHECKS_PATH), () => ({
+      status: 200,
+      json: checkRuns(runAttempt === 1 ? [currentCheck()] : [currentCheck(), firstCheck]),
+    }))
+    routes.set(routeKey('GET', ACTIONS_LIST_PATH), () => ({
       status: 200,
       json: {
-        check_runs: [
-          {
-            id: 99 + runAttempt,
-            head_sha: headSha,
-            name: 'tests',
-            check_suite: { id: 11 },
-            status: state === 'queued' ? 'queued' : 'completed',
-            conclusion: state === 'queued' ? null : state,
-          },
+        total_count: 2,
+        workflow_runs: [
+          { ...workflow(), id: 41, check_suite_id: 10, event: 'push', pull_requests: [] },
+          workflow(),
         ],
       },
     }))
-    routes.set(routeKey('GET', `${commit}/statuses?`), () => ({ status: 200, json: [] }))
-    routes.set(routeKey('GET', `${actions}?head_sha=${headSha}`), () => ({
+    routes.set(routeKey('GET', ACTIONS_JOBS_PATH), () => ({
       status: 200,
-      json: { workflow_runs: [{ ...workflow(), id: 41, check_suite_id: 10 }, workflow()] },
+      json: { total_count: 1, jobs: [actionsJob(currentCheck(), runAttempt)] },
     }))
-    routes.set(routeKey('GET', `${actions}/42/attempts/1/jobs?`), () => ({
+    routes.set(routeKey('GET', `${ACTIONS_RUN_PATH}/attempts/1/jobs?`), () => ({
       status: 200,
       json: {
+        total_count: 1,
         jobs: [
           {
             name: 'verify',
@@ -133,12 +213,12 @@ describe('observeCi / rerunFailedCi', () => {
         ],
       },
     }))
-    routes.set(routeKey('GET', `${actions}/42`), () => ({ status: 200, json: workflow() }))
-    routes.set(routeKey('GET', '/repos/acme/widget/pulls/7'), () => ({
+    routes.set(routeKey('GET', ACTIONS_RUN_PATH), () => ({ status: 200, json: workflow() }))
+    routes.set(routeKey('GET', CI_PR_PATH), () => ({
       status: 200,
-      json: { number: 7, state: 'open', merged: false, head: { sha: prHead } },
+      json: pullRequest(prHead),
     }))
-    routes.set(routeKey('POST', `${actions}/42/rerun-failed-jobs`), () => {
+    routes.set(routeKey('POST', `${ACTIONS_RUN_PATH}/rerun-failed-jobs`), () => {
       posts++
       return { status: 201, json: {} }
     })
@@ -156,21 +236,175 @@ describe('observeCi / rerunFailedCi', () => {
       value: true,
     })
     runAttempt = 2
-    state = 'queued'
+    conclusion = null
     expect(await gh.observeCi(input)).toEqual({ ok: true, value: { state: 'pending' } })
     expect(await gh.rerunFailedCi(input, { runId: 42, attempt: 1 })).toMatchObject({
       ok: false,
       error: { kind: 'STALE_EVIDENCE' },
     })
-    state = 'success'
+    conclusion = 'success'
     expect(await gh.observeCi(input)).toEqual({ ok: true, value: { state: 'passed' } })
+    expect(
+      await gh.observeRequiredChecks({
+        ...input,
+        expectedHeadSha: CI_SHA,
+        requiredChecks: ['verify'],
+        observedAt: '2026-11-11T00:00:00.000Z',
+      }),
+    ).toMatchObject({
+      ok: true,
+      value: {
+        headSha: CI_SHA,
+        checks: [{ name: 'verify', source: 'check_run', conclusion: 'success', externalId: '101' }],
+      },
+    })
     runAttempt = 1
-    prHead = 'b'.repeat(40)
+    conclusion = 'failure'
+    prHead = OTHER_SHA
     expect(await gh.rerunFailedCi(input, { runId: 42, attempt: 1 })).toMatchObject({
       ok: false,
       error: { kind: 'CONFLICT' },
     })
     expect(posts).toBe(1)
+  })
+
+  it.each([
+    { scenario: 'check-runs 仍返回首轮失败', jobsCheck: actionsCheck(101, 'success'), attempt: 2 },
+    {
+      scenario: 'Checks 和 Jobs 同时返回首轮失败',
+      jobsCheck: actionsCheck(100, 'failure'),
+      attempt: 2,
+    },
+    { scenario: '工作流在复查前进入新轮次', jobsCheck: actionsCheck(100, 'failure'), attempt: 1 },
+  ])('$scenario 时返回 CONFLICT', async ({ jobsCheck, attempt }) => {
+    ciRoutes({ checks: [actionsCheck(100, 'failure')] })
+    routes.set(routeKey('GET', ACTIONS_LIST_PATH), () => ({
+      status: 200,
+      json: { total_count: 1, workflow_runs: [actionsRun(attempt, jobsCheck.conclusion)] },
+    }))
+    routes.set(routeKey('GET', ACTIONS_JOBS_PATH), () => ({
+      status: 200,
+      json: { total_count: 1, jobs: [actionsJob(jobsCheck, 1)] },
+    }))
+    routes.set(routeKey('GET', ACTIONS_RUN_PATH), () => ({
+      status: 200,
+      json: actionsRun(2, jobsCheck.conclusion),
+    }))
+    expect(await provider().observeCi(CI_INPUT)).toMatchObject({
+      ok: false,
+      error: { kind: 'CONFLICT' },
+    })
+  })
+
+  it.each([null, 'success'] as const)(
+    '绑定 PR 的 workflow 未发布 checks（%s）时拒绝同 SHA 的 push 绿灯',
+    async (conclusion) => {
+      const pushCheck = { ...actionsCheck(101, 'success'), check_suite: { id: 10 } }
+      ciRoutes({ checks: [pushCheck] })
+      routes.set(routeKey('GET', CI_PR_PATH), () => ({ status: 200, json: pullRequest() }))
+      routes.set(routeKey('GET', ACTIONS_LIST_PATH), () => ({
+        status: 200,
+        json: {
+          total_count: 2,
+          workflow_runs: [
+            {
+              ...actionsRun(1, 'success'),
+              id: 41,
+              check_suite_id: 10,
+              event: 'push',
+              pull_requests: [],
+            },
+            actionsRun(1, conclusion),
+          ],
+        },
+      }))
+      const bound = { ...CI_INPUT, prNumber: 7 }
+      const gh = provider()
+      expect(await gh.observeCi(bound)).toEqual({
+        ok: true,
+        value: { state: 'pending' },
+      })
+      expect(
+        await gh.observeRequiredChecks({
+          ...bound,
+          expectedHeadSha: CI_SHA,
+          requiredChecks: ['verify'],
+          observedAt: '2026-11-11T00:00:00.000Z',
+        }),
+      ).toMatchObject({ ok: true, value: { checks: [] } })
+    },
+  )
+
+  it('PR 工作流缺少关联信息时拒绝其检查', async () => {
+    ciRoutes({ checks: [actionsCheck(100, 'success')] })
+    routes.set(routeKey('GET', CI_PR_PATH), () => ({ status: 200, json: pullRequest() }))
+    routes.set(routeKey('GET', ACTIONS_LIST_PATH), () => ({
+      status: 200,
+      json: {
+        total_count: 1,
+        workflow_runs: [{ ...actionsRun(1, 'success'), pull_requests: [] }],
+      },
+    }))
+    expect(await provider().observeCi({ ...CI_INPUT, prNumber: 7 })).toMatchObject({
+      ok: false,
+      error: { kind: 'CONFLICT' },
+    })
+  })
+
+  it('同 SHA 的另一个 PR 的同名检查不覆盖目标 PR', async () => {
+    const check = actionsCheck(100, 'success')
+    const target = actionsRun(1, 'success')
+    ciRoutes({
+      checks: [check, { ...actionsCheck(101, 'failure'), check_suite: { id: 10 } }],
+    })
+    routes.set(routeKey('GET', CI_PR_PATH), () => ({ status: 200, json: pullRequest() }))
+    routes.set(routeKey('GET', ACTIONS_LIST_PATH), () => ({
+      status: 200,
+      json: {
+        total_count: 2,
+        workflow_runs: [
+          {
+            ...target,
+            id: 41,
+            check_suite_id: 10,
+            pull_requests: [{ number: 8, head: { sha: CI_SHA } }],
+          },
+          target,
+        ],
+      },
+    }))
+    routes.set(routeKey('GET', ACTIONS_JOBS_PATH), () => ({
+      status: 200,
+      json: { total_count: 1, jobs: [actionsJob(check, 1)] },
+    }))
+    routes.set(routeKey('GET', ACTIONS_RUN_PATH), () => ({ status: 200, json: target }))
+    expect(await provider().observeCi({ ...CI_INPUT, prNumber: 7 })).toEqual({
+      ok: true,
+      value: { state: 'passed' },
+    })
+  })
+
+  it.each([1000, 1001])('按声明总数区分完整第十页与截断（%i）', async (total) => {
+    ciRoutes()
+    routes.set(routeKey('GET', CHECKS_PATH), ({ url }) => {
+      const page = Number(new URL(url, 'https://fixture.test').searchParams.get('page'))
+      const start = (page - 1) * 100
+      return {
+        status: 200,
+        json: {
+          total_count: total,
+          check_runs: Array.from({ length: 100 }, (_, offset) => {
+            const id = start + offset + 1
+            return checkRun(id, `check-${id}`, 'success')
+          }),
+        },
+      }
+    })
+    expect(await provider().observeCi(CI_INPUT)).toMatchObject(
+      total === 1000
+        ? { ok: true, value: { state: 'passed' } }
+        : { ok: false, error: { kind: 'CONFLICT' } },
+    )
   })
 })
 
@@ -493,176 +727,277 @@ describe('token 解析（按 host）', () => {
   })
 })
 
-describe('waitForCi 四态归并', () => {
-  function ciRoutes(checks: unknown, status: unknown): void {
-    routes.set(routeKey('GET', '/repos/acme/widget/commits/sha-x/check-runs'), () => ({
+describe('waitForCi', () => {
+  it.each(['success', 'skipped'])('准确 SHA 上的 %s check 可以通过', async (conclusion) => {
+    ciRoutes({ checks: [checkRun(11, 'tests', conclusion)] })
+    routes.set(routeKey('GET', STATUS_PATH), () => ({
       status: 200,
-      json: checks,
+      json: { ...combinedStatus(), state: 'pending' },
     }))
-    routes.set(routeKey('GET', '/repos/acme/widget/commits/sha-x/status'), () => ({
-      status: 200,
-      json: status,
-    }))
-  }
+    expect(await provider({ pollTimeoutMs: 0 }).waitForCi(CI_INPUT)).toEqual({
+      ok: true,
+      value: 'passed',
+    })
+  })
 
-  it('任一 check failed → failed', async () => {
-    ciRoutes(
-      {
+  it.each([
+    { source: 'check-run', checks: [checkRun(11, 'tests', 'failure')], statuses: [] },
+    {
+      source: 'commit status',
+      checks: [checkRun(11, 'tests', 'success')],
+      statuses: [{ id: 21, context: 'ci/legacy', state: 'failure' }],
+    },
+  ])('准确 SHA 上可信的 $source 失败会结束等待', async ({ checks, statuses }) => {
+    ciRoutes({ checks, statuses })
+    expect(await provider({ pollTimeoutMs: 0 }).waitForCi(CI_INPUT)).toEqual({
+      ok: true,
+      value: 'failed',
+    })
+  })
+
+  it.each([
+    {
+      from: '进行中',
+      initial: [checkRun(11, 'tests', null)],
+      conclusion: 'success',
+      end: 'passed',
+    },
+    { from: '未上报', initial: [], conclusion: 'failure', end: 'failed' },
+    {
+      from: '读到旧 SHA 的失败',
+      initial: [{ ...checkRun(10, 'tests', 'failure'), head_sha: OTHER_SHA }],
+      conclusion: 'success',
+      end: 'passed',
+    },
+  ])('$from 后重新读取，直到可信终态 $end', async ({ initial, conclusion, end }) => {
+    ciRoutes()
+    let polls = 0
+    routes.set(routeKey('GET', CHECKS_PATH), () => ({
+      status: 200,
+      json: checkRuns(polls++ === 0 ? initial : [checkRun(11, 'tests', conclusion)]),
+    }))
+    const gh = provider({ pollIntervalMs: 1, pollTimeoutMs: 1_000 })
+    expect(await gh.waitForCi(CI_INPUT)).toEqual({
+      ok: true,
+      value: end,
+    })
+    expect(polls).toBeGreaterThanOrEqual(2)
+  })
+
+  it('已上报 pending 的 commit status 耗尽预算时返回 RUN_TIMEOUT', async () => {
+    ciRoutes({ statuses: [{ id: 21, context: 'ci/legacy', state: 'pending' }] })
+    const gh = provider({ pollTimeoutMs: 0, emptySettleMs: 0 })
+    expect(await gh.observeCi(CI_INPUT)).toEqual({ ok: true, value: { state: 'pending' } })
+    expect(await gh.waitForCi({ ...CI_INPUT, allowUnreported: true })).toMatchObject({
+      ok: false,
+      error: { kind: 'RUN_TIMEOUT' },
+    })
+  })
+
+  it('无人上报默认耗尽观测预算，显式允许时才可在静默期后通过', async () => {
+    ciRoutes()
+    const gh = provider({ pollTimeoutMs: 0, emptySettleMs: 0 })
+    expect(await gh.observeCi(CI_INPUT)).toEqual({ ok: true, value: { state: 'unreported' } })
+    expect(await gh.waitForCi(CI_INPUT)).toMatchObject({
+      ok: false,
+      error: { kind: 'RUN_TIMEOUT' },
+    })
+    expect(await gh.waitForCi({ ...CI_INPUT, allowUnreported: true })).toEqual({
+      ok: true,
+      value: 'passed',
+    })
+  })
+
+  it('显式允许无人上报时，静默期内继续轮询', async () => {
+    ciRoutes()
+    let polls = 0
+    routes.set(routeKey('GET', CHECKS_PATH), () => {
+      polls++
+      return { status: 200, json: checkRuns() }
+    })
+    const gh = provider({ pollIntervalMs: 1, pollTimeoutMs: 1_000, emptySettleMs: 20 })
+    expect(await gh.waitForCi({ ...CI_INPUT, allowUnreported: true })).toEqual({
+      ok: true,
+      value: 'passed',
+    })
+    expect(polls).toBeGreaterThanOrEqual(2)
+  })
+
+  it('持续读取到旧 SHA 时返回 RUN_TIMEOUT 并保留冲突分类', async () => {
+    ciRoutes({ checks: [{ ...checkRun(11, 'tests', 'failure'), head_sha: OTHER_SHA }] })
+    const gh = provider({ pollIntervalMs: 1, pollTimeoutMs: 25, emptySettleMs: 0 })
+    expect(await gh.waitForCi({ ...CI_INPUT, allowUnreported: true })).toMatchObject({
+      ok: false,
+      error: { kind: 'RUN_TIMEOUT', cause: { kind: 'CONFLICT' } },
+    })
+  })
+})
+
+describe('observeCi 的证据边界', () => {
+  it.each([
+    {
+      source: 'check-run',
+      path: CHECKS_PATH,
+      json: checkRuns([
+        checkRun(12, 'tests', 'success'),
+        { ...checkRun(11, 'lint', 'success'), head_sha: OTHER_SHA },
+      ]),
+    },
+    {
+      source: 'combined status',
+      path: STATUS_PATH,
+      json: combinedStatus([{ id: 21, context: 'ci/legacy', state: 'failure' }], OTHER_SHA),
+    },
+  ])('$source 返回旧 SHA 时报告冲突', async ({ path, json }) => {
+    ciRoutes()
+    routes.set(routeKey('GET', path), () => ({ status: 200, json }))
+    expect(await provider().observeCi(CI_INPUT)).toMatchObject({
+      ok: false,
+      error: { kind: 'CONFLICT' },
+    })
+  })
+
+  it.each([
+    {
+      source: 'check-run 缺少 SHA',
+      path: CHECKS_PATH,
+      json: checkRuns([{ ...checkRun(11, 'tests', 'success'), head_sha: undefined }]),
+    },
+    {
+      source: 'combined status 缺少 SHA',
+      path: STATUS_PATH,
+      json: { ...combinedStatus(), sha: undefined },
+    },
+    {
+      source: 'combined status 的 SHA 被截短',
+      path: STATUS_PATH,
+      json: combinedStatus([], CI_SHA.slice(0, 7)),
+    },
+  ])('$source 时以协议错误结束等待', async ({ path, json }) => {
+    ciRoutes({ checks: [checkRun(11, 'tests', 'success')] })
+    routes.set(routeKey('GET', path), () => ({ status: 200, json }))
+    const gh = provider({ pollTimeoutMs: 0 })
+    expect(await gh.waitForCi(CI_INPUT)).toMatchObject({
+      ok: false,
+      error: { kind: 'PROTOCOL_ERROR' },
+    })
+  })
+
+  it('PR 换头后，旧 head 的失败失效，新 head 的成功可独立观察', async () => {
+    ciRoutes()
+    let head = CI_SHA
+    routes.set(routeKey('GET', CI_PR_PATH), () => ({ status: 200, json: pullRequest(head) }))
+    routes.set(routeKey('GET', CHECKS_PATH), () => {
+      head = OTHER_SHA
+      return { status: 200, json: checkRuns([checkRun(11, 'tests', 'failure')]) }
+    })
+    routes.set(
+      routeKey('GET', `/repos/acme/widget/commits/${OTHER_SHA}/check-runs?filter=all`),
+      () => ({
+        status: 200,
+        json: checkRuns([{ ...checkRun(12, 'tests', 'success'), head_sha: OTHER_SHA }]),
+      }),
+    )
+    routes.set(routeKey('GET', `/repos/acme/widget/commits/${OTHER_SHA}/status?`), () => ({
+      status: 200,
+      json: combinedStatus([], OTHER_SHA),
+    }))
+    routes.set(routeKey('GET', `${ACTIONS_PATH}?head_sha=${OTHER_SHA}`), () => ({
+      status: 200,
+      json: { total_count: 0, workflow_runs: [] },
+    }))
+    const gh = provider()
+    const input = { ...CI_INPUT, prNumber: 7 }
+    expect(await gh.observeCi(input)).toMatchObject({ ok: false, error: { kind: 'CONFLICT' } })
+    expect(await gh.observeCi({ ...input, headSha: OTHER_SHA })).toEqual({
+      ok: true,
+      value: { state: 'passed' },
+    })
+  })
+
+  it.each([
+    {
+      source: 'check-runs',
+      path: CHECKS_PATH,
+      json: { ...checkRuns([checkRun(11, 'tests', 'success')]), total_count: 2 },
+    },
+    {
+      source: 'combined status',
+      path: STATUS_PATH,
+      json: {
+        ...combinedStatus([{ id: 21, context: 'ci/legacy', state: 'success' }]),
         total_count: 2,
-        check_runs: [
-          { status: 'completed', conclusion: 'success' },
-          { status: 'completed', conclusion: 'failure' },
-        ],
       },
-      { state: 'success' },
-    )
-    const r = await provider().waitForCi({ repoId: 'r1', remoteUrl: REMOTE, headSha: 'sha-x' })
-    expect(r.ok && r.value).toBe('failed')
+    },
+  ])('$source 的响应少于声明的总数时拒绝通过', async ({ path, json }) => {
+    ciRoutes({ checks: [checkRun(11, 'tests', 'success')] })
+    routes.set(routeKey('GET', path), () => ({ status: 200, json }))
+    expect(await provider().observeCi(CI_INPUT)).toMatchObject({
+      ok: false,
+      error: { kind: 'CONFLICT' },
+    })
   })
 
-  it('全部 success → passed', async () => {
-    ciRoutes(
-      { total_count: 1, check_runs: [{ status: 'completed', conclusion: 'success' }] },
-      { state: null },
+  it('第二页的失败会影响结论，重复标识则使整次观测失效', async () => {
+    ciRoutes()
+    const firstPage = Array.from({ length: 100 }, (_, index) =>
+      checkRun(index + 1, `checks/${index + 1}`, 'success'),
     )
-    const r = await provider().waitForCi({ repoId: 'r1', remoteUrl: REMOTE, headSha: 'sha-x' })
-    expect(r.ok && r.value).toBe('passed')
-  })
-
-  it('skipped conclusion 不算失败', async () => {
-    ciRoutes(
-      { total_count: 1, check_runs: [{ status: 'completed', conclusion: 'skipped' }] },
-      { state: 'success' },
-    )
-    const r = await provider().waitForCi({ repoId: 'r1', remoteUrl: REMOTE, headSha: 'sha-x' })
-    expect(r.ok && r.value).toBe('passed')
-  })
-
-  it('进行中 → pending → 轮询后 passed(用毫秒级间隔验证轮询真的发生)', async () => {
-    let polls = 0
-    routes.set(routeKey('GET', '/repos/acme/widget/commits/sha-x/check-runs'), () => {
-      polls += 1
-      return polls < 2
-        ? {
-            status: 200,
-            json: { total_count: 1, check_runs: [{ status: 'in_progress', conclusion: null }] },
-          }
+    const next = `${CHECKS_PATH}&per_page=100&page=2`
+    let secondPage = [checkRun(101, 'tests', 'failure')]
+    routes.set(routeKey('GET', CHECKS_PATH), ({ url }) => {
+      const page = new URL(url, baseUrl).searchParams.get('page')
+      return page === '2'
+        ? { status: 200, json: { total_count: 101, check_runs: secondPage } }
         : {
             status: 200,
-            json: { total_count: 1, check_runs: [{ status: 'completed', conclusion: 'success' }] },
+            json: { total_count: 101, check_runs: firstPage },
+            headers: { Link: `<${baseUrl}${next}>; rel="next"` },
           }
     })
-    routes.set(routeKey('GET', '/repos/acme/widget/commits/sha-x/status'), () => ({
-      status: 200,
-      json: { state: null },
-    }))
-
-    const r = await provider({ pollIntervalMs: 5 }).waitForCi({
-      repoId: 'r1',
-      remoteUrl: REMOTE,
-      headSha: 'sha-x',
+    const gh = provider()
+    expect(await gh.observeCi(CI_INPUT)).toMatchObject({
+      ok: true,
+      value: { state: 'failed', evidence: { checks: [{ name: 'tests', conclusion: 'failure' }] } },
     })
-    expect(polls).toBeGreaterThanOrEqual(2)
-    expect(r.ok && r.value).toBe('passed')
+    secondPage = [checkRun(1, 'checks/1', 'success')]
+    expect(await gh.observeCi(CI_INPUT)).toMatchObject({
+      ok: false,
+      error: { kind: 'CONFLICT' },
+    })
   })
 
-  it('Commit Status failure 也算失败(Checks 不是唯一事实源)', async () => {
-    ciRoutes({ total_count: 0, check_runs: [] }, { state: 'failure' })
-    const r = await provider().waitForCi({ repoId: 'r1', remoteUrl: REMOTE, headSha: 'sha-x' })
-    expect(r.ok && r.value).toBe('failed')
+  it.each([
+    { status: 401, headers: {}, kind: 'AUTH_FAILED', retryable: false },
+    { status: 403, headers: {}, kind: 'AUTH_FAILED', retryable: false },
+    { status: 403, headers: { 'Retry-After': '1' }, kind: 'HARNESS_UNAVAILABLE', retryable: true },
+    { status: 429, headers: { 'Retry-After': '1' }, kind: 'HARNESS_UNAVAILABLE', retryable: true },
+  ])('HTTP $status 的观察错误分类为 $kind', async ({ status, headers, kind, retryable }) => {
+    ciRoutes({ checks: [checkRun(11, 'tests', 'success')] })
+    routes.set(routeKey('GET', STATUS_PATH), () => ({ status, headers, json: {} }))
+    const gh = provider({ pollTimeoutMs: 0 })
+    expect(await gh.observeCi(CI_INPUT)).toMatchObject({ ok: false, error: { kind, retryable } })
+    expect(await gh.waitForCi(CI_INPUT)).toMatchObject({
+      ok: false,
+      error: retryable ? { kind: 'RUN_TIMEOUT', cause: { kind } } : { kind },
+    })
   })
 
-  it('Commit Status state=pending 且无 status 上报 → passed(Actions-only 仓库的真实形态)', async () => {
-    ciRoutes(
-      { total_count: 1, check_runs: [{ status: 'completed', conclusion: 'success' }] },
-      {
-        state: 'pending',
-        statuses: [],
+  it('网络拒绝归类为暂不可用，耗尽预算时保留原因', async () => {
+    const gh = provider({
+      pollTimeoutMs: 0,
+      fetchFn: async () => {
+        throw new TypeError('connection reset')
       },
-    )
-    const r = await provider().waitForCi({ repoId: 'r1', remoteUrl: REMOTE, headSha: 'sha-x' })
-    expect(r.ok && r.value).toBe('passed')
-  })
-
-  it('Commit Status 有真实上报且 pending → 继续等待', async () => {
-    ciRoutes(
-      { total_count: 0, check_runs: [] },
-      {
-        state: 'pending',
-        statuses: [{ state: 'pending', context: 'ci/legacy' }],
-      },
-    )
-    const r = await provider({ pollIntervalMs: 1, pollTimeoutMs: 10 }).waitForCi({
-      repoId: 'r1',
-      remoteUrl: REMOTE,
-      headSha: 'sha-x',
     })
-    // 轮询到硬超时仍 pending → failed(不是永远等)
-    expect(r.ok && r.value).toBe('failed')
-  })
-
-  it('无任何 CI 配置 + 静默期已过 → passed(仓库不该永远卡死)', async () => {
-    ciRoutes({ total_count: 0, check_runs: [] }, { state: null })
-    const r = await provider({ emptySettleMs: 0 }).waitForCi({
-      repoId: 'r1',
-      remoteUrl: REMOTE,
-      headSha: 'sha-x',
+    expect(await gh.observeCi(CI_INPUT)).toMatchObject({
+      ok: false,
+      error: { kind: 'HARNESS_UNAVAILABLE', retryable: true },
     })
-    expect(r.ok && r.value).toBe('passed')
-  })
-
-  // ── 假绿反例(2026-08-28 第六次真实验收实录)────────────────────────────────
-  //
-  // Actions-only 仓库建 PR 后的头几秒:check-runs 还没注册(total_count=0),
-  // commit status 恒为 pending + 空 statuses —— 两个端点都读不到东西。
-  // 旧实现把这一瞬间当 passed,PR 建好 3.5 秒就流出 T-024,而真实 check-run
-  // 是又过 5 秒才启动的。判据要的是「通过 CI 的 PR」,那个结论是假的。
-
-  it('check-run 尚未注册时不得当成 passed —— 等到真结果为 failed(假绿反例)', async () => {
-    let polls = 0
-    routes.set(routeKey('GET', '/repos/acme/widget/commits/sha-x/check-runs'), () => {
-      polls += 1
-      return polls === 1
-        ? { status: 200, json: { total_count: 0, check_runs: [] } }
-        : {
-            status: 200,
-            json: { total_count: 1, check_runs: [{ status: 'completed', conclusion: 'failure' }] },
-          }
+    expect(await gh.waitForCi(CI_INPUT)).toMatchObject({
+      ok: false,
+      error: { kind: 'RUN_TIMEOUT', cause: { kind: 'HARNESS_UNAVAILABLE' } },
     })
-    routes.set(routeKey('GET', '/repos/acme/widget/commits/sha-x/status'), () => ({
-      status: 200,
-      json: { state: 'pending', statuses: [] },
-    }))
-
-    // 静默期远大于轮询间隔:第一次「什么都没读到」必须继续等,不能下结论
-    const r = await provider({ pollIntervalMs: 5, emptySettleMs: 10_000 }).waitForCi({
-      repoId: 'r1',
-      remoteUrl: REMOTE,
-      headSha: 'sha-x',
-    })
-    expect(polls).toBeGreaterThanOrEqual(2)
-    expect(r.ok && r.value).toBe('failed')
-  })
-
-  it('静默期内无人上报 → 继续轮询,期满才认定「没配 CI」', async () => {
-    let polls = 0
-    routes.set(routeKey('GET', '/repos/acme/widget/commits/sha-x/check-runs'), () => {
-      polls += 1
-      return { status: 200, json: { total_count: 0, check_runs: [] } }
-    })
-    routes.set(routeKey('GET', '/repos/acme/widget/commits/sha-x/status'), () => ({
-      status: 200,
-      json: { state: 'pending', statuses: [] },
-    }))
-
-    const r = await provider({
-      pollIntervalMs: 5,
-      emptySettleMs: 40,
-      pollTimeoutMs: 10_000,
-    }).waitForCi({ repoId: 'r1', remoteUrl: REMOTE, headSha: 'sha-x' })
-    // 期满前至少轮询过两次 —— 证明没有第一次就早退
-    expect(polls).toBeGreaterThanOrEqual(2)
-    expect(r.ok && r.value).toBe('passed')
   })
 })
 
@@ -789,63 +1124,30 @@ describe('getPullRequest', () => {
 })
 
 describe('observeRequiredChecks', () => {
-  const SHA = '1111111111111111111111111111111111111111'
-  const OTHER = '2222222222222222222222222222222222222222'
-  const PR_PATH = '/repos/acme/widget/pulls/7'
-  const CHECKS_PATH = `/repos/acme/widget/commits/${SHA}/check-runs`
-  const STATUSES_PATH = `/repos/acme/widget/commits/${SHA}/statuses`
-
-  function pr(sha = SHA, state = 'open'): unknown {
-    return {
-      number: 7,
-      html_url: 'https://github.com/acme/widget/pull/7',
-      state,
-      head: { ref: 'ai/task-7', sha },
-      base: { ref: 'main' },
-    }
+  const input = {
+    repoId: CI_INPUT.repoId,
+    remoteUrl: CI_INPUT.remoteUrl,
+    prNumber: 7,
+    expectedHeadSha: CI_SHA,
+    requiredChecks: ['test'],
+    observedAt: '2026-11-11T00:00:00.000Z',
   }
 
-  function setup(
-    options: { readonly runs?: readonly unknown[]; readonly statuses?: readonly unknown[] } = {},
-  ): void {
-    routes.set(routeKey('GET', PR_PATH), () => ({ status: 200, json: pr() }))
-    routes.set(routeKey('GET', CHECKS_PATH), () => ({
-      status: 200,
-      json: { total_count: options.runs?.length ?? 0, check_runs: options.runs ?? [] },
-    }))
-    routes.set(routeKey('GET', STATUSES_PATH), () => ({
-      status: 200,
-      json: options.statuses ?? [],
-    }))
-  }
+  beforeEach(() => {
+    routes.set(routeKey('GET', CI_PR_PATH), () => ({ status: 200, json: pullRequest() }))
+  })
 
   it('返回准确 PR head SHA 上匹配 required check 的显式结论', async () => {
-    setup({
-      runs: [
+    ciRoutes({
+      checks: [
         {
-          id: 12,
-          name: 'test',
-          head_sha: SHA,
-          status: 'completed',
-          conclusion: 'success',
+          ...checkRun(12, 'test', 'success'),
           details_url: 'https://example.test/check/12',
         },
-        {
-          id: 13,
-          name: 'unrelated',
-          head_sha: SHA,
-          status: 'completed',
-          conclusion: 'failure',
-        },
+        checkRun(13, 'unrelated', 'failure'),
       ],
     })
-    const result = await provider().observeRequiredChecks({
-      repoId: 'r1',
-      remoteUrl: REMOTE,
-      prNumber: 7,
-      requiredChecks: ['test'],
-      observedAt: '2026-11-11T00:00:00.000Z',
-    })
+    const result = await provider().observeRequiredChecks(input)
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.value).toMatchObject({
@@ -854,7 +1156,7 @@ describe('observeRequiredChecks', () => {
       prState: 'open',
       headBranch: 'ai/task-7',
       baseBranch: 'main',
-      headSha: SHA,
+      headSha: CI_SHA,
     })
     expect(result.value.checks).toEqual([
       {
@@ -867,66 +1169,57 @@ describe('observeRequiredChecks', () => {
     ])
   })
 
-  it('required check 未上报时返回空事实，不伪造 conclusion', async () => {
-    setup()
-    const result = await provider().observeRequiredChecks({
-      repoId: 'r1',
-      remoteUrl: REMOTE,
-      prNumber: 7,
-      requiredChecks: ['test'],
-      observedAt: '2026-11-11T00:00:00.000Z',
+  it('其他检查已经成功时，未上报的 required check 仍无事实', async () => {
+    ciRoutes({
+      checks: [checkRun(12, 'unrelated', 'success')],
+      statuses: [{ id: 21, context: 'ci/legacy', state: 'success' }],
     })
-    expect(result.ok).toBe(true)
-    if (result.ok) expect(result.value.checks).toEqual([])
+    expect(await provider().observeRequiredChecks(input)).toMatchObject({
+      ok: true,
+      value: { headSha: CI_SHA, checks: [] },
+    })
   })
 
-  it('check-run 返回不同 head_sha 时拒绝，SHA-A 不能冒充 SHA-B', async () => {
-    setup({
-      runs: [
-        {
-          id: 14,
-          name: 'test',
-          head_sha: OTHER,
-          status: 'completed',
-          conclusion: 'success',
-        },
-      ],
+  it('required check 来自其他 SHA 时报告冲突', async () => {
+    ciRoutes({
+      checks: [{ ...checkRun(14, 'test', 'success'), head_sha: OTHER_SHA }],
     })
-    const result = await provider().observeRequiredChecks({
-      repoId: 'r1',
-      remoteUrl: REMOTE,
-      prNumber: 7,
-      requiredChecks: ['test'],
-      observedAt: '2026-11-11T00:00:00.000Z',
+    expect(await provider().observeRequiredChecks(input)).toMatchObject({
+      ok: false,
+      error: { kind: 'CONFLICT' },
     })
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.error.kind).toBe('PROTOCOL_ERROR')
   })
 
-  it('PR head 在两次读取之间变化时整次证据作废', async () => {
-    let reads = 0
-    routes.set(routeKey('GET', PR_PATH), () => {
-      reads++
-      return { status: 200, json: pr(reads === 1 ? SHA : OTHER) }
-    })
-    routes.set(routeKey('GET', CHECKS_PATH), () => ({
+  it('读到的 PR head 与调用方指定的 SHA 不同时报告冲突', async () => {
+    routes.set(routeKey('GET', CI_PR_PATH), () => ({
       status: 200,
-      json: { total_count: 0, check_runs: [] },
+      json: pullRequest(OTHER_SHA),
     }))
-    routes.set(routeKey('GET', STATUSES_PATH), () => ({ status: 200, json: [] }))
-    const result = await provider().observeRequiredChecks({
-      repoId: 'r1',
-      remoteUrl: REMOTE,
-      prNumber: 7,
-      requiredChecks: ['test'],
-      observedAt: '2026-11-11T00:00:00.000Z',
+    expect(await provider().observeRequiredChecks(input)).toMatchObject({
+      ok: false,
+      error: { kind: 'CONFLICT' },
     })
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.error.kind).toBe('CONFLICT')
+  })
+
+  it('PR head 在观察中变化时整次证据作废', async () => {
+    ciRoutes()
+    let head = CI_SHA
+    routes.set(routeKey('GET', CI_PR_PATH), () => ({
+      status: 200,
+      json: pullRequest(head),
+    }))
+    routes.set(routeKey('GET', CHECKS_PATH), () => {
+      head = OTHER_SHA
+      return { status: 200, json: checkRuns([checkRun(12, 'test', 'success')]) }
+    })
+    expect(await provider().observeRequiredChecks(input)).toMatchObject({
+      ok: false,
+      error: { kind: 'CONFLICT' },
+    })
   })
 
   it('Commit Status 的 required context 也作为独立事实源返回', async () => {
-    setup({
+    ciRoutes({
       statuses: [
         {
           id: 21,
@@ -937,11 +1230,8 @@ describe('observeRequiredChecks', () => {
       ],
     })
     const result = await provider().observeRequiredChecks({
-      repoId: 'r1',
-      remoteUrl: REMOTE,
-      prNumber: 7,
+      ...input,
       requiredChecks: ['ci/legacy'],
-      observedAt: '2026-11-11T00:00:00.000Z',
     })
     expect(result.ok).toBe(true)
     if (result.ok)
@@ -954,6 +1244,44 @@ describe('observeRequiredChecks', () => {
           detailsUrl: 'https://example.test/status/21',
         },
       ])
+  })
+
+  it.each([
+    {
+      scenario: '同名 check-run 和 commit status 结论相反',
+      checks: [checkRun(12, 'test', 'success')],
+      statuses: [{ id: 21, context: 'test', state: 'failure' }],
+    },
+    {
+      scenario: '不同 app 发布同名 check-run',
+      checks: [
+        { ...checkRun(12, 'test', 'failure'), app: { id: 2 }, check_suite: { id: 10 } },
+        { ...checkRun(13, 'test', 'success'), app: { id: 3 }, check_suite: { id: 10 } },
+      ],
+      statuses: [],
+    },
+    {
+      scenario: '同一 app 在不同 suite 发布同名 check-run',
+      checks: [
+        { ...checkRun(12, 'test', 'failure'), app: { id: 3 }, check_suite: { id: 10 } },
+        { ...checkRun(13, 'test', 'success'), app: { id: 3 }, check_suite: { id: 11 } },
+      ],
+      statuses: [],
+    },
+    {
+      scenario: 'combined status 重复同一个上下文',
+      checks: [checkRun(12, 'test', 'success')],
+      statuses: [
+        { id: 21, context: 'test', state: 'failure' },
+        { id: 22, context: 'test', state: 'success' },
+      ],
+    },
+  ])('$scenario 时两条观察路径都拒绝证据', async ({ checks, statuses }) => {
+    ciRoutes({ checks, statuses })
+    const gh = provider()
+    const conflict = { ok: false, error: { kind: 'CONFLICT' } }
+    expect(await gh.observeRequiredChecks(input)).toMatchObject(conflict)
+    expect(await gh.observeCi(CI_INPUT)).toMatchObject(conflict)
   })
 })
 
