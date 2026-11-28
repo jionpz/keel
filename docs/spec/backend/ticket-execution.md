@@ -140,9 +140,9 @@ revision、resolution id 与 context digest；即使恢复点没有 Git 改动�
 等于原输入且索引没有隐藏改动；批准后出现的同分支后代或 WIP 都按现场漂移拒绝。
 
 结构化阶段结果通过 schema 校验后，先保留 result 与实际 git/检查 evidence，再做
-阶段门禁；验证失败也必须能够回查命令、退出码与输出摘要。FAILED 行的结果只用于
-诊断，没有成功摘要，不能作为成功阶段或可复用证明。检查未通过的 verify 记为
-`REWORK`（见 §4），带 result/evidence 摘要，同样不是成功阶段，不写入 workflow 证据。
+阶段门禁。验证失败时仍可回查命令、退出码和输出摘要。失败行可携带 result 和 evidence
+摘要用于恢复决策；verify 检查未通过时记为 `REWORK`，不提供 workflow 完成证据。
+只有成功或复用的阶段才提供 workflow 完成证据。
 
 verify 的 `checks` 每项都是硬门禁，只包含当前阶段必需的验收检查，失败不能省略。
 探索性环境诊断放在 `summary`；安全负例必须由断言预期拒绝的脚本给出真实成功结果，
@@ -152,8 +152,8 @@ verify 的 `checks` 每项都是硬门禁，只包含当前阶段必需的验收
 
 | 阶段 | 门禁 |
 |---|---|
-| `execute` | 输出等于 HEAD 且为输入后代，工作树干净；通常必须产生新 commit，只有上述已提交完整恢复点、以及 verify 失败后被接纳的恢复决定允许重新确认 |
-| `verify` | 已注册的项目验证契约必须覆盖全部改动路径。Keel 执行所有适用的本地检查，并将适用的远端名称交给 PR 网关。无契约时沿用固定阶段的检查产物，仍要求至少一条 check。两条路径都核对 HEAD 和输出摘要，失败按下述预算返工或暂停 |
+| `execute` | 输出等于 HEAD 且为输入后代，工作树干净。通常必须产生新 commit。已提交的完整恢复点，以及 verify 失败后经决议接纳的恢复决定，允许重新确认 |
+| `verify` | 已注册的项目验证契约必须覆盖全部改动路径。Keel 执行所有适用的本地检查，并将适用的远端名称交给 PR 网关。无契约时沿用固定阶段的检查产物，仍要求至少一条 check。每条 check 都有 command、exit code、passed、输出摘要和摘录；`output_digest` 由 Keel 根据摘录重算。两条路径都核对 HEAD 和分支，保留失败检查证据，并按下述预算返工或暂停 |
 | `review` | `reviewed_commit` 必须等于当前 HEAD；`diff_digest` 必须等于 Keel 重新计算的 baseline..HEAD diff；open finding 只能进入 rework |
 | `land` | `land.commit` 必须等于当前 HEAD；branch 必须是 `ai/*` 且不等于 base；只登记 `push_and_pr` intent/outbox，不执行 push/PR |
 
@@ -161,34 +161,37 @@ review 的 diff 摘要由 Control 运行 `git diff --binary baseline..HEAD` 计�
 旧 SHA、旧 diff 或旧 verify 证据都会被拒绝。review 提出 open finding 时任务回到
 `execute`，保留 findings 作为下一轮上下文。
 
-verify 已完成且至少一条 check 未通过时，符合预算的任务回到 `execute` 研判原因。verify
-仍输出 `completed` 并保留 `passed=false`，将实际检查证据交给下一阶段：
+verify 检查未通过时仍输出 `completed` 并保留失败项与退出码。Keel 要求工作区干净，
+HEAD 和分支与输入相同，自报的 `worktree_head` 也须一致。失败记录携带 result 与 evidence
+摘要供恢复决策，但不作为成功阶段或可复用证明；缺少检查证据或绑定过期时直接暂停。
 
-- 这次 verify 记为 `REWORK`，`error` 为 `VERIFICATION_FAILED`，全部 checks（命令、
-  退出码、输出摘录与 Keel 重算的摘要）留在该行的 result/evidence 里；
-  `ManagedTicketReworkRequested` 事件带 `reason` 与失败检查的命令、退出码、摘要。
-- 失败证据必须绑定被验证的提交才能驱动返工：Keel 观察到的 HEAD 仍等于输入提交，
-  verify 自报了 `worktree_head` 时也必须一致，否则按 `STALE_EVIDENCE` 暂停。
-  `VERIFICATION_EVIDENCE_MISSING`（没有 check 或状态不是 completed）仍然暂停。
-- 下一轮 execute 的 `facts.verify_failure` 给出失败检查，固定段 `verify_rework` 要求
-  先判断原因。带入上下文的最多 8 条，每条命令保留开头 500 字符、摘录保留末尾 4000
-  字符，长度按写进事实 JSON 后（含转义）计算，避免失败输出撑爆上下文预算；完整内容在
-  阶段记录里。execute 交出下一个成功结果后，这两项不再下发，history 仍保留该次尝试。
-- 确认由改动造成的失败：修复并提交有实际改动的 commit。Keel 接纳该提交时计一轮
-  代码返工，verify 在新提交上重跑。空改动的提交按 `STAGE_GATE_FAILED` 拒绝。
-- 不是代码造成的失败（检查环境起不来、依赖或工具缺失等）：execute 不改代码，输出
-  `blocked` 与 `kind=recovery` 决策。该决定按 §3 的恢复规则被接纳、且现场没有任何
-  改动时，execute 可以确认原提交，verify 在同一提交上重跑；execute 这时不重跑完整
-  检查。没有被接纳的恢复决定时，重复确认原提交仍按 `STAGE_GATE_FAILED` 拒绝。
-  确认原提交会让该节点在同一提交上旧的 execute workflow 证据失效并写入这次的证据，
-  archive 核对的是最后一条 execute 记录。
+- [`selectRecovery`](../../../src/control/recovery-policy.ts) 根据结构化失败、目标绑定、
+  历史、各类别剩余额度和定向授权选择恢复动作。阶段记录保留失败检查、动作和指纹。
+  隔离执行器报告的命令、退出码和摘录说明检查未通过。原因必须另有依据。
+- 首次原因未明的 check 失败写入 `FAILED/VERIFICATION_FAILED`。成功的 `execute` 证据须
+  匹配同一提交、包、分支和 diff。符合条件时，任务保持在 `verify` 并实跑一次完整检查，
+  保留原 execute 证据。重验必须包含原失败检查的命令和结果，缺少时暂停为
+  `VERIFICATION_EVIDENCE_MISSING`。重验通过只说明这次检查已恢复。
+- 重验仍失败且有代码返工额度时，任务等待 `ticket.verify.targeted-rework`。该
+  `DecisionRequest` 绑定失败阶段、固定包、工作区和证据摘要。人工根据独立证据选择
+  批准定向返工或停止。Keel 重新核对决议版本、控制代次、工作区和证据，在持有原租约
+  的事务中登记 `ManagedTicketReworkRequested` 并转到 `execute`。
+- 需要基线对照时，人工须在独立隔离的工作区核对检查定义、依赖和执行环境的可比性。
+  当前阶段契约只保存检查命令与结果，缺少受信任的执行环境标识。Keel 不自动执行失败
+  记录中的命令或推断基线结论。缺少独立证据时，失败原因保持未明，任务等待人工。
+- 定向返工只获得一次派发。只有既有恢复门禁验证通过并带有实际改动的恢复点可以继续
+  这次派发。确认原提交或空提交会停在 `STAGE_GATE_FAILED`。接纳真实修复时计一轮代码
+  返工，随后在新提交上运行 verify。`rework_count` 与 review 共用三轮上限。
+- 暂时的 verify 执行基础设施故障只重试一次原阶段。权限和协议错误直接暂停。重验、
+  基础设施重试和定向返工从不可变阶段记录和事件读取额度。重启、`resume`、过期租约
+  和重复审批保留已用额度。
+- `facts.verify_failure` 将失败事实交给同提交重验或定向返工。上下文最多带 8 条，
+  每条命令保留开头 500 字符，摘录保留末尾 4000 字符，按转义后长度计数并先脱敏。
+  阶段记录保留原始失败证据。
 
-`rework_count` 最多三轮。review 提出 open finding 时计一轮，verify 失败则在接纳
-修复提交时计一轮。环境故障或原因不明时，按既有授权在同一提交上重验，计数保持原值。
-每个提交最多自动派回 execute 处理一次 verify 失败，额度由持久阶段记录确定。重验
-持续失败时在 `verify` 按 `VERIFICATION_FAILED` 暂停并记录命令和退出码。三轮代码返工
-用完后，后续回退按 `REWORK_LIMIT` 暂停。人工 `resume` 可重跑当前阶段，已用额度保留。
-升级前已计数的 verify 回退在接纳实际修复时沿用原计数，经批准确认原提交时退回这一轮额度。
+升级前已经进入 `execute` 的 verify `REWORK` 记录继续使用原恢复门禁。历史中已计费
+的返工在接纳真实修复时沿用原计数，经已绑定决议确认原提交时扣回一轮。继续验证时
+保留原有预算限制。
 
 被 workflow 节点绑定的 ticket 还会在 execute 后检查 `baseline..HEAD` 的实际改动文件：
 每个路径必须落在节点 `scope_paths` 内，否则阶段失败为 `SCOPE_VIOLATION`。

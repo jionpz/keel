@@ -156,19 +156,25 @@ if (!root.ok) return root
 
 ---
 
-## required checks 观察（JT-02E）
+## CI 观察
 
-`GitHubProvider.observeRequiredChecks()` 是 managed `pr_ready` 的只读事实入口：
+legacy `observeCi()` 与 managed `observeRequiredChecks()` 共用按仓库和完整 SHA 取证的路径。
+有 PR 绑定时，读取检查前后都核对 PR。managed 另核对 head/base ref 和目标 SHA。
 
-1. `GET /repos/{owner}/{repo}/pulls/{number}` 读取当前 head SHA 与 head/base ref；
-2. 按该**完整 SHA** 分页读取 `check-runs` 与 `commit statuses`；
-3. 同一 required 名称只保留最新一次 check-run / status 观察；
-4. 再读一次 PR；head SHA、head/base ref 或状态在观察期间变化则返回 `CONFLICT`，
-   不产生可复用证据。
+- `check-runs` 每条记录须有完整 `head_sha`。combined commit status 的每页响应也须回传同一 `sha`。
+  两类列表都检查总数、分页完整性与唯一标识。缺失或格式错误的 SHA 属于协议错误。
+- 同名 check-run 须来自同一个 GitHub App 和 check suite，才可依据检查标识选更新的一轮。
+  GitHub Actions 额外比对当前工作流轮次的 job 和 check-run 标识，并复查工作流轮次。
+  同名的 check-run 和 commit status 各自保留证据，结论冲突时整次作废。
+- 旧 SHA、轮次切换、来源冲突或分页不完整返回 `CONFLICT`。网络、429、明确限流的
+  403 和服务端错误返回 `HARNESS_UNAVAILABLE`。普通 401/403 返回 `AUTH_FAILED`。
+  控制层只对 `CONFLICT` 和 `HARNESS_UNAVAILABLE` 做有界退避，不生成 CI 失败证据。
+- managed 记录缺失检查并等待，只有每项必需检查显式 `success` 才能进入 `PR_READY`。
+  legacy 把无人上报和通过分开。`waitForCi()` 到期返回观测超时，只有调用方显式允许
+  无 CI 时，连续静默达到设定时长才可放行。
 
-required 名称未出现在响应中时返回空事实，由控制层记录 `missing` 并等待；
-provider 不把“无人上报”解释成 success。check-run 的 `head_sha` 与 PR head 不一致时
-返回 `PROTOCOL_ERROR`，防止 SHA-A 的绿色结果挂到 SHA-B。
+GitHub 不提供跨 PR、Checks、Statuses 与 Actions 的原子读。读前后复核和轮次比对能拒绝
+已观测到的不一致。来自 Actions 的终态检查需要凭据具有该仓库 Actions 读取权限。
 
 ---
 

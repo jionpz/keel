@@ -72,13 +72,19 @@ outbox 并撤销 `VALID` permit。详细约束见
 | `managed_ticket_task` | `READY`、`RUNNING`、`WAITING_HUMAN`、`WAITING_GATEWAY`、`PAUSED`、`PR_OPENED`、`CHECKING`、`PR_READY`、`PR_CHECKS_FAILED`、`DONE`、`FAILED`、`CANCELLED` | `ticket-runtime.ts` / `ticket-store.ts` 管阶段；control/decision/action/check 模块只写各自职责下的转移 |
 | `managed_ticket_stage` | `RUNNING`、`SUCCEEDED`、`REUSED`、`REWORK`、`FAILED`、`MUST_STOP` | 一行是一次尝试；结束后不可改写；失败产物只供诊断 |
 
-阶段固定为 `execute → verify → review → land`。`review` 有 open finding，或 `verify`
-有 check 未通过且尚有预算时回 `execute`。verify 的失败检查保留在阶段记录中并进入
-execute 上下文。review 回退和 verify 失败后被接纳的实际代码修复共用三轮上限，用完后
-按 `REWORK_LIMIT` 进入 `PAUSED`。每个提交的 verify 失败只自动派回 execute 一次。
-经恢复决定同提交重验时保留原代码返工计数，继续失败则以 `VERIFICATION_FAILED` 暂停在
-verify。新 commit 会改变 verify/review 的绑定，旧证据随之失效。`REWORK` 是阶段尝试
-结果。managed XS/S 也走 review，这是 managed 固定包的安全覆盖。
+阶段固定为 `execute → verify → review → land`。首次 check 未通过时，`verify` 记录
+失败并回到 `READY/verify`，在相同提交、固定包和工作区上实跑一次。Keel 核对干净的
+工作区和已有成功的 `execute` 证据。重验通过后进入 `review`。再次失败时，有返工
+预算的 ticket 进入 `WAITING_HUMAN`，等待绑定该次失败的定向返工决议。普通暂停恢复
+和重复批准都保留已用额度。权限或协议错误直接暂停，暂时的执行基础设施故障另有一次
+原阶段重试。重验缺少任一原失败命令的结果时暂停。
+
+`review` 有 open finding 时回 `execute`。`verify` 失败须有符合
+[恢复策略](spec/backend/ticket-execution.md#4-阶段门禁)的证据才能回 `execute`。
+review 回退和接纳的实际代码修复共用三轮上限。同一提交最多派发一次定向返工。
+失败证据留在阶段记录，相关尝试收到脱敏、限长的摘录。新提交会改变 verify 和 review
+的证据绑定。升级前记录为 `REWORK` 的 verify 回退继续沿用原有恢复规则。
+managed XS/S 同样经过 review。
 
 暂停/取消递增 `control_generation`，撤销未开始动作的 permit 并阻断 outbox；已开始
 执行的外部动作必须回查，不能把本地暂停声称为外部副作用撤销。
@@ -110,11 +116,14 @@ archive 要求 ticket 达到其固定目标：`branch_ready` 必须为 `DONE`，
 - 当前 baseline..HEAD diff 等于 handoff。
 - 每个阶段的最新尝试为 `SUCCEEDED` / `REUSED`，输出 commit、包与门禁摘要匹配。
 - 对应 workflow 证据仍为 `VALID`，绑定当前图、stage、head、diff 与证据摘要。
-- `pr_ready` 的 check gate 为 `READY`，head 与 handoff 相同，证据摘要有效。
+- `pr_ready` 的 check gate 为 `READY`。归档核对绑定 PR 的当前仓库、编号、URL、
+  分支与 head，并重算持久观察的证据摘要。PR 可以仍开放，也可以已合并。
+  PR 已关闭且未合并时归档失败。
 
 失败时节点记为 `FAILED` 并保留具体原因；没有其他可推进节点时 workflow 为
 `PAUSED`。后续轮次不反复尝试失败的 archive；修复后通过 `workflow-retry` 显式重试。
 archive 留存证据，不自动关闭远端 Issue。legacy Issue 回写属于另一条受控路径。
+已合并的绑定 PR 缺本地证据时，归档报告 `PR_MERGED_EVIDENCE_MISSING` 并保留未完成节点。
 
 ## 决策与记忆
 
@@ -139,6 +148,12 @@ archive 留存证据，不自动关闭远端 Issue。legacy Issue 回写属于�
 action 成功只使 ticket 进入 `PR_OPENED`；check gateway 才能推进
 `CHECKING → PR_READY`。执行进程、租约、outbox、PR 和 CI 各有独立状态，不能从其中
 一个推断另一个成功。
+
+`PR_CHECKS_FAILED` 的检查红灯与观测超时可以请求人工 `DecisionRequest`。若绑定的 PR
+仍开放，且原授权、控制代次、分支、提交和 diff 全部通过复核，可由操作员答复精确
+请求版本，消耗 target 的一次独立观测窗口并回到 `CHECKING`。原截止时间、阶段历史、
+执行预算和返工预算保留。观测结算须持相同 token 与尚未过期的租约。
+等待答复期间可只读对账。已合并、关闭未合并和 head 漂移会分别报告。
 
 ## 调查影子路径与保留边界
 

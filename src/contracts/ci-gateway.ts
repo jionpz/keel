@@ -6,7 +6,11 @@
  */
 
 import type { CiFailureEvidence } from '../shared/ci.js'
-import type { Result } from './errors.js'
+import type { KeelError, Result } from './errors.js'
+
+export function isTransientCiObservation(error: KeelError): boolean {
+  return error.kind === 'CONFLICT' || error.kind === 'HARNESS_UNAVAILABLE'
+}
 
 export interface CiWaitInput {
   readonly repoId: string
@@ -16,6 +20,7 @@ export interface CiWaitInput {
   readonly headSha: string
   /** 已知 PR 编号时传入，便于直接查 PR checks */
   readonly prNumber?: number
+  readonly allowUnreported?: boolean
 }
 
 export interface CiRerunTarget {
@@ -35,7 +40,7 @@ export interface CiGateway {
   /**
    * 等待 CI 到达终态。
    *
-   * 返回 'passed' | 'failed'；超时或不可恢复错误按失败处理（由调用方决定是否重试/升人工）。
+   * 只对可信 CI 终态返回 'passed' | 'failed'。超时或取证失败由调用方单独处理。
    */
   waitForCi(input: CiWaitInput): Promise<Result<'passed' | 'failed'>>
   /** 真实轮询使用最新观察；等待超时和无人上报都没有失败证据。 */

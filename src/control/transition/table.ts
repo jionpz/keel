@@ -33,13 +33,13 @@ const nextRun = (stage: Stage | 'SAME'): SideEffect => ({
 const devUnderLimit = (f: TransitionFacts) => f.dev_attempts < f.max_dev_attempts
 const devAtLimit = (f: TransitionFacts) => f.dev_attempts >= f.max_dev_attempts
 
-export function emptyCiRepair(facts: TransitionFacts, event: TransitionEvent): boolean {
+export function blockedCiRepair(facts: TransitionFacts, event: TransitionEvent): boolean {
   return (
     facts.has_bound_pr === true &&
     facts.awaiting_ci_review === true &&
     event.type === 'RunFailed' &&
     event.stage === 'develop' &&
-    event.reason === 'empty_develop_diff'
+    (event.reason === 'empty_develop_diff' || event.reason === 'ci_repair_target_changed')
   )
 }
 
@@ -222,8 +222,8 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
     id: 'T-014',
     from: 'S-HUMAN_REVIEW',
     on: ['HumanApproved'],
-    guard: (f, e) => !f.awaiting_ci_review || (e.type === 'HumanApproved' && e.repairCi === true),
-    guardText: '非 CI 等待或附 CI 修复理由',
+    guard: (f) => f.ci_repair_allowed ?? !f.awaiting_ci_review,
+    guardText: '非 CI 等待或当前证据的定向返工获准且有预算',
     to: 'S-DEVELOPING',
     // 离开人工闸门必须取消 TTL，否则 pending 行会在下一次进入时挡住新的 StartTimer
     effects: [
@@ -368,8 +368,12 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
     id: 'T-025',
     from: 'S-PR_OPEN',
     on: ['CIFailed'],
-    guard: (f, e) => e.type === 'CIFailed' && e.evidence === undefined && devUnderLimit(f),
-    guardText: '无结构化 CI 证据且 dev_attempts < max',
+    guard: (f, e) =>
+      e.type === 'CIFailed' &&
+      e.source === 'simulated' &&
+      e.evidence === undefined &&
+      devUnderLimit(f),
+    guardText: '模拟 CI 无结构化证据且 dev_attempts < max',
     to: 'S-DEVELOPING',
     effects: [nextRun('develop')],
     ignoresControlMode: false,
@@ -378,8 +382,9 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
     id: 'T-026',
     from: 'S-PR_OPEN',
     on: ['CIFailed'],
-    guard: (f, e) => e.type === 'CIFailed' && (e.evidence !== undefined || devAtLimit(f)),
-    guardText: '有结构化 CI 证据或 dev_attempts ≥ max',
+    guard: (f, e) =>
+      e.type === 'CIFailed' && (e.source === 'github' || e.evidence !== undefined || devAtLimit(f)),
+    guardText: '真实 CI 确认失败、有结构化证据或 dev_attempts ≥ max',
     to: 'S-HUMAN_REVIEW',
     effects: [
       { kind: 'NotifyHuman', reason: 'ci_retries_exhausted' },
@@ -468,8 +473,8 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
     id: 'T-030',
     from: 'ANY_STAGE',
     on: ['RunFailed', 'RunTimeout', 'RunStalled'],
-    guard: (f, e) => !emptyCiRepair(f, e) && f.stage_attempts < f.max_stage_attempts,
-    guardText: '未达阶段重试上限且非 CI 返工零改动',
+    guard: (f, e) => !blockedCiRepair(f, e) && f.stage_attempts < f.max_stage_attempts,
+    guardText: '未达阶段重试上限且 CI 返工未因目标过期或零改动受阻',
     to: 'SELF',
     effects: [nextRun('SAME')],
     ignoresControlMode: false,
@@ -479,8 +484,8 @@ export const TASK_TRANSITIONS: readonly TransitionRule[] = [
     from: 'ANY_STAGE',
     on: ['RunFailed', 'RunTimeout', 'RunStalled'],
     // 提交消息拒绝的 RunFailed 携带闭合 reason；transition() 保留该人工审查理由。
-    guard: (f, e) => emptyCiRepair(f, e) || f.stage_attempts >= f.max_stage_attempts,
-    guardText: '已达阶段重试上限或 CI 返工零改动',
+    guard: (f, e) => blockedCiRepair(f, e) || f.stage_attempts >= f.max_stage_attempts,
+    guardText: '已达阶段重试上限或 CI 返工目标过期或零改动',
     to: 'S-HUMAN_REVIEW',
     effects: [
       { kind: 'NotifyHuman', reason: 'stage_retries_exhausted' },

@@ -15,11 +15,12 @@
  */
 
 import { createHash } from 'node:crypto'
-import type {
-  CiGateway,
-  CiObservation,
-  CiRerunTarget,
-  CiWaitInput,
+import {
+  type CiGateway,
+  type CiObservation,
+  type CiRerunTarget,
+  type CiWaitInput,
+  isTransientCiObservation,
 } from '../contracts/ci-gateway.js'
 import { err, makeError, ok, type Result } from '../contracts/errors.js'
 import type {
@@ -66,13 +67,9 @@ export function apiRootForHost(host: string): string {
 
 const POLL_INTERVAL_MS = 10_000
 const POLL_TIMEOUT_MS = 30 * 60_000
-/**
- * 「无人上报」静默期 —— 见 combinedStatus 关于 `unreported` 的说明。
- * 90s 用来盖住 Actions 从 push/建 PR 到 check-run 出现在 API 上的排队延迟
- * (2026-08-28 实测约 3–10s),取一个宽裕值:多等一会儿不伤正确性,
- * 早下结论会造出假绿。
- */
 const EMPTY_SETTLE_MS = 90_000
+const CI_PAGE_SIZE = 100
+const CI_MAX_PAGES = 10
 
 export interface GitHubProviderOptions {
   /** 覆盖 API 根地址 —— 测试用 stub server 注入 */
@@ -204,6 +201,7 @@ interface RawCheckRun {
   readonly started_at?: string
   readonly completed_at?: string
   readonly check_suite?: { readonly id?: number }
+  readonly app?: { readonly id?: number; readonly slug?: string }
   readonly output?: { readonly title?: string | null }
 }
 
@@ -212,6 +210,21 @@ interface RawActionsRun {
   readonly head_sha: string
   readonly check_suite_id: number
   readonly run_attempt: number
+  readonly status: string
+  readonly conclusion: string | null
+  readonly event?: string
+  readonly pull_requests?: readonly {
+    readonly number?: number
+    readonly head?: { readonly sha?: string }
+  }[]
+}
+
+interface RawActionsJob {
+  readonly check_run_url?: string
+  readonly head_sha?: string
+  readonly run_id?: number
+  readonly run_attempt?: number
+  readonly name: string
   readonly status: string
   readonly conclusion: string | null
 }
@@ -229,17 +242,24 @@ function actionsRunMatches(run: RawActionsRun, sha: string): boolean {
 }
 
 interface RawCommitStatus {
-  readonly id?: number
+  readonly id: number
   readonly context: string
-  readonly state: string | null
+  readonly state: string
   readonly target_url?: string
-  readonly created_at?: string
+}
+
+interface CommitCheckSnapshot {
+  readonly checks: readonly RawCheckRun[]
+  readonly statuses: readonly RawCommitStatus[]
+  readonly workflows: ReadonlyMap<number, RawActionsRun>
+  readonly actionsPending: boolean
 }
 
 interface PullRequestObservation {
   readonly number: number
   readonly url: string
   readonly state: 'open' | 'closed'
+  readonly merged?: boolean
   readonly headBranch: string
   readonly baseBranch: string
   readonly headSha: string
@@ -250,23 +270,50 @@ function isOpenState(value: string | undefined): 'open' | 'closed' | null {
 }
 
 function validHeadSha(value: string | undefined): value is string {
-  return value !== undefined && /^[a-f0-9]{40}$/.test(value)
+  return typeof value === 'string' && /^[a-f0-9]{40}$/.test(value)
 }
 
-function checkRunNewer(left: RawCheckRun, right: RawCheckRun): boolean {
-  const leftAt = Date.parse(left.started_at ?? left.completed_at ?? '')
-  const rightAt = Date.parse(right.started_at ?? right.completed_at ?? '')
-  if (Number.isFinite(leftAt) && Number.isFinite(rightAt) && leftAt !== rightAt)
-    return leftAt > rightAt
-  return left.id > right.id
+function checkConclusion(run: RawCheckRun): string {
+  return run.status === 'completed' ? (run.conclusion ?? 'unknown') : 'pending'
 }
 
-function statusNewer(left: RawCommitStatus, right: RawCommitStatus): boolean {
-  const leftAt = Date.parse(left.created_at ?? '')
-  const rightAt = Date.parse(right.created_at ?? '')
-  if (Number.isFinite(leftAt) && Number.isFinite(rightAt) && leftAt !== rightAt)
-    return leftAt > rightAt
-  return (left.id ?? 0) > (right.id ?? 0)
+function positiveId(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+}
+
+function isPullRequestWorkflow(workflow: RawActionsRun): boolean {
+  return workflow.event === 'pull_request' || workflow.event === 'pull_request_target'
+}
+
+function workflowBelongsToPullRequest(
+  workflow: RawActionsRun,
+  number: number | undefined,
+  sha: string,
+): boolean {
+  return (
+    number === undefined ||
+    (isPullRequestWorkflow(workflow) &&
+      Array.isArray(workflow.pull_requests) &&
+      workflow.pull_requests.some((pull) => pull?.number === number && pull.head?.sha === sha))
+  )
+}
+
+const CHECK_STATUSES = ['queued', 'in_progress', 'completed', 'waiting', 'requested', 'pending']
+const CHECK_CONCLUSIONS = [
+  'success',
+  'failure',
+  'neutral',
+  'cancelled',
+  'skipped',
+  'timed_out',
+  'action_required',
+  'stale',
+  'startup_failure',
+]
+
+function verdict(conclusion: string): 'pending' | 'passed' | 'failed' {
+  if (conclusion === 'pending') return 'pending'
+  return ['success', 'skipped', 'neutral'].includes(conclusion) ? 'passed' : 'failed'
 }
 
 export class GitHubProvider
@@ -379,7 +426,7 @@ export class GitHubProvider
     host: string,
     path: string,
     init: { method?: string; body?: unknown } = {},
-  ): Promise<Result<{ status: number; json: unknown }>> {
+  ): Promise<Result<{ status: number; json: unknown; hasNextPage: boolean }>> {
     const token = await this.tokenFor(host)
     if (token === undefined) {
       return err(
@@ -414,13 +461,16 @@ export class GitHubProvider
       return err(makeError('HARNESS_UNAVAILABLE', `GitHub API 请求失败:${path}`))
     }
 
-    if (res.status === 401 || res.status === 403) {
+    const limited =
+      res.status === 403 &&
+      (res.headers.get('x-ratelimit-remaining') === '0' || res.headers.has('retry-after'))
+    if ((res.status === 401 || res.status === 403) && !limited) {
       return err(makeError('AUTH_FAILED', `GitHub 认证失败(HTTP ${res.status})`))
     }
     if (res.status === 404) {
       return err(makeError('NOT_FOUND', `GitHub 资源不存在:${path}`))
     }
-    if (res.status >= 500 || res.status === 429) {
+    if (limited || res.status >= 500 || res.status === 429) {
       return err(makeError('HARNESS_UNAVAILABLE', `GitHub API 暂不可用(HTTP ${res.status})`))
     }
 
@@ -432,14 +482,19 @@ export class GitHubProvider
     }
     try {
       const json: unknown = text === '' ? null : JSON.parse(text)
-      return ok({ status: res.status, json })
+      return ok({
+        status: res.status,
+        json,
+        hasNextPage: /;\s*rel="next"/.test(res.headers.get('link') ?? ''),
+      })
     } catch {
       return err(makeError('PROTOCOL_ERROR', 'GitHub API 响应不是 JSON'))
     }
   }
 
   async readJson(host: string, path: string): Promise<Result<{ status: number; json: unknown }>> {
-    return this.request(host, path)
+    const response = await this.request(host, path)
+    return response.ok ? ok({ status: response.value.status, json: response.value.json }) : response
   }
 
   /**
@@ -554,40 +609,42 @@ export class GitHubProvider
       mergeSha: pr.merge_commit_sha ?? null,
       closedAt: pr.closed_at ?? null,
       headSha: pr.head?.sha ?? null,
+      ...(typeof pr.head?.ref === 'string' ? { headBranch: pr.head.ref } : {}),
+      ...(typeof pr.base?.ref === 'string' ? { baseBranch: pr.base.ref } : {}),
     })
   }
 
-  /**
-   * 等 CI 到终态。四个出口:
-   *   - 读到 passed / failed → 直接返回;
-   *   - 有人上报但没跑完(pending)→ 继续轮询;
-   *   - 无人上报(unreported)且已过静默期 → 认定该仓库没配 CI,返回 passed;
-   *   - 硬超时 → 按失败返回,由编排器转成 CIFailed(T-025),人可介入。
-   */
   async waitForCi(input: CiWaitInput): Promise<Result<'passed' | 'failed'>> {
-    const parsed = parseRemoteUrl(input.remoteUrl)
-    if (!parsed.ok) return parsed
-    const { host, owner, repo } = parsed.value
-    const slug = `${owner}/${repo}`
-
-    const start = Date.now()
-    const deadline = start + this.pollTimeoutMs
+    const deadline = Date.now() + this.pollTimeoutMs
+    let unreportedSince: number | undefined
+    let interval = this.pollIntervalMs
     for (;;) {
-      const combined = await this.combinedStatus(host, slug, input.headSha)
-      if (!combined.ok) return combined
-
-      if (combined.value === 'passed' || combined.value === 'failed') return ok(combined.value)
-
-      // 无人上报:先把静默期走完,才敢下「这仓库没有 CI」的结论。
-      if (combined.value === 'unreported' && Date.now() - start >= this.emptySettleMs) {
-        return ok('passed')
+      const observation = await this.observeCi(input)
+      const now = Date.now()
+      if (observation.ok) {
+        const { state } = observation.value
+        if (state === 'passed' || state === 'failed') return ok(state)
+        unreportedSince = state === 'unreported' ? (unreportedSince ?? now) : undefined
+        if (
+          input.allowUnreported === true &&
+          unreportedSince !== undefined &&
+          now - unreportedSince >= this.emptySettleMs
+        )
+          return ok('passed')
+      } else {
+        if (!isTransientCiObservation(observation.error)) return observation
+        unreportedSince = undefined
       }
-
-      if (Date.now() > deadline) {
-        // 硬超时按失败处理 —— 由编排器转成 CIFailed(T-025),人可介入
-        return ok('failed')
-      }
-      await sleep(this.pollIntervalMs)
+      if (now >= deadline)
+        return err(
+          makeError(
+            'RUN_TIMEOUT',
+            'CI 观测截止时尚无可信终态',
+            observation.ok ? undefined : observation.error,
+          ),
+        )
+      await sleep(Math.min(interval, deadline - now))
+      interval = Math.min(interval * 2, this.pollIntervalMs * 4)
     }
   }
 
@@ -598,51 +655,30 @@ export class GitHubProvider
     const slug = `${owner}/${repo}`
     if (!validHeadSha(input.headSha)) return err(makeError('PROTOCOL_ERROR', 'CI head SHA 无效'))
 
-    const [checks, statuses] = await Promise.all([
-      this.checkRuns(host, slug, input.headSha),
-      this.commitStatuses(host, slug, input.headSha),
-    ])
-    if (!checks.ok) return checks
-    if (!statuses.ok) return statuses
+    if (input.prNumber !== undefined) {
+      const before = await this.boundCiPullRequest(input, input.prNumber)
+      if (!before.ok) return before
+    }
+    const snapshot = await this.commitCheckSnapshot(host, slug, input.headSha, input.prNumber)
+    if (!snapshot.ok) return snapshot
+    if (input.prNumber !== undefined) {
+      const after = await this.boundCiPullRequest(input, input.prNumber)
+      if (!after.ok) return after
+    }
+    const { checks, statuses, workflows, actionsPending } = snapshot.value
     if (
-      checks.value.some(
-        (run) =>
-          !run ||
-          typeof run.id !== 'number' ||
-          typeof run.name !== 'string' ||
-          typeof run.status !== 'string',
-      ) ||
-      statuses.value.some((status) => !status || typeof status.context !== 'string')
-    ) {
-      return err(makeError('PROTOCOL_ERROR', 'CI 响应缺少检查或状态的标识'))
-    }
-    const latestStatuses = new Map<string, RawCommitStatus>()
-    for (const status of statuses.value) {
-      const current = latestStatuses.get(status.context)
-      if (current === undefined || statusNewer(status, current))
-        latestStatuses.set(status.context, status)
-    }
-    const currentStatuses = [...latestStatuses.values()]
-    if (checks.value.some((run) => run.head_sha !== undefined && run.head_sha !== input.headSha)) {
-      return err(makeError('PROTOCOL_ERROR', '检查结果的 SHA 与请求不符'))
-    }
-    if (
-      checks.value.some((run) => run.status !== 'completed') ||
-      currentStatuses.some(({ state }) => state === 'pending')
+      actionsPending ||
+      checks.some((run) => checkConclusion(run) === 'pending') ||
+      statuses.some(({ state }) => state === 'pending')
     )
       return ok({ state: 'pending' })
 
-    const failedChecks = checks.value.filter(
-      ({ conclusion }) =>
-        conclusion !== null && !['success', 'skipped', 'neutral'].includes(conclusion),
+    const failedChecks = checks.filter(
+      (check) => !['success', 'skipped', 'neutral'].includes(checkConclusion(check)),
     )
-    const failedStatuses = currentStatuses.filter(
-      ({ state }) => state === 'failure' || state === 'error',
-    )
+    const failedStatuses = statuses.filter(({ state }) => state === 'failure' || state === 'error')
     if (failedChecks.length === 0 && failedStatuses.length === 0) {
-      const reported =
-        checks.value.some(({ conclusion }) => conclusion === 'success') ||
-        currentStatuses.some(({ state }) => state === 'success')
+      const reported = checks.length > 0 || statuses.length > 0
       return ok({ state: reported ? 'passed' : 'unreported' })
     }
 
@@ -652,7 +688,7 @@ export class GitHubProvider
       failedStatuses.length === 0 &&
       suiteId !== undefined &&
       failedChecks.every((check) => check.check_suite?.id === suiteId)
-        ? await this.failedActionsRun(host, slug, input.headSha, suiteId)
+        ? workflows.get(suiteId)
         : undefined
     const safe = (value: string) =>
       redactSecrets(value, gitAuthSecrets(this.tokenCache.get(host) ?? this.explicitToken?.value))
@@ -668,6 +704,7 @@ export class GitHubProvider
           statuses: failedStatuses
             .map(({ id, context, state }) => `${id}:${context}:${state}`)
             .sort(),
+          ...(workflow === undefined ? {} : { run: workflow.id, attempt: workflow.run_attempt }),
         }),
       )
       .digest('hex')
@@ -697,20 +734,17 @@ export class GitHubProvider
     })
   }
 
-  private async failedActionsRun(
-    host: string,
-    slug: string,
-    sha: string,
-    suiteId: number,
-  ): Promise<RawActionsRun | undefined> {
-    const response = await this.request(
-      host,
-      `/repos/${slug}/actions/runs?head_sha=${sha}&per_page=100`,
-    )
-    if (!response.ok || response.value.status !== 200) return undefined
-    const runs = (response.value.json as { workflow_runs?: RawActionsRun[] } | null)?.workflow_runs
-    if (!Array.isArray(runs)) return undefined
-    return runs.find((run) => run?.check_suite_id === suiteId && actionsRunMatches(run, sha))
+  private async boundCiPullRequest(input: CiWaitInput, number: number): Promise<Result<void>> {
+    const pr = await this.getPullRequest({
+      repoId: input.repoId,
+      remoteUrl: input.remoteUrl,
+      number,
+    })
+    if (!pr.ok) return pr
+    if (pr.value.number !== number) return err(makeError('PROTOCOL_ERROR', 'PR 编号与 CI 目标不符'))
+    if (pr.value.state !== 'open' || pr.value.merged || pr.value.headSha !== input.headSha)
+      return err(makeError('CONFLICT', 'PR 状态或 head SHA 已变化'))
+    return ok(undefined)
   }
 
   private async failedActionsJobs(
@@ -759,7 +793,11 @@ export class GitHubProvider
     if (latest.value.status !== 200 || run === null || run.id !== target.runId) return ok(false)
     if (Number.isSafeInteger(run.run_attempt) && run.run_attempt > target.attempt)
       return err(makeError('STALE_EVIDENCE', 'Actions 检查已进入新轮次'))
-    if (run.run_attempt !== target.attempt || !actionsRunMatches(run, input.headSha))
+    if (
+      run.run_attempt !== target.attempt ||
+      !actionsRunMatches(run, input.headSha) ||
+      !workflowBelongsToPullRequest(run, input.prNumber, input.headSha)
+    )
       return ok(false)
     if (input.prNumber === undefined) return ok(false)
     const pr = await this.getPullRequest({
@@ -772,62 +810,6 @@ export class GitHubProvider
       return err(makeError('CONFLICT', 'PR 状态或 head SHA 已变化'))
     const result = await this.request(host, `${path}/rerun-failed-jobs`, { method: 'POST' })
     return result.ok ? ok(result.value.status === 201) : result
-  }
-
-  /**
-   * 合并 Checks 与 Commit Status 为四态:
-   *   任一 failed → failed;有人上报但未跑完 → pending;
-   *   有人上报且全绿 → passed;**一个都没人上报** → unreported。
-   *
-   * CI 是外部事实源,这里只读取并归并,**绝不制造结论**。
-   *
-   * `unreported` 必须与 `passed` 分开(2026-08-28 假绿实测教训):
-   * Actions-only 仓库的 `commits/{sha}/status` 恒为 `state=pending` + 空 statuses,
-   * 而 check-run 要过几秒才出现在 `commits/{sha}/check-runs` 上。建 PR 后的那几秒里
-   * 两个端点都读不到任何东西,与「这仓库压根没配 CI」在数据上完全同形。
-   * 旧实现把它当 passed,于是 PR 建好 3.5 秒就流出了 T-024 ——
-   * CI 还没开始跑,系统已经宣布它过了(2026-08-28 第六次验收实录:
-   * PR 15:45:53 建成,T-024 15:45:56,真实 check-run 15:46:01 才启动)。
-   * 判据要的是「通过 CI 的 PR」,这种结论是假绿。等多久算「真的没人上报」
-   * 是策略,归 waitForCi 的静默期;本函数只负责如实分辨两者。
-   */
-  private async combinedStatus(
-    host: string,
-    slug: string,
-    sha: string,
-  ): Promise<Result<'passed' | 'failed' | 'pending' | 'unreported'>> {
-    const checks = await this.request(host, `/repos/${slug}/commits/${sha}/check-runs`)
-    if (!checks.ok) return checks
-    const statuses = await this.request(host, `/repos/${slug}/commits/${sha}/status`)
-    if (!statuses.ok) return statuses
-
-    const cj = checks.value.json as {
-      total_count: number
-      check_runs: { status: string; conclusion: string | null }[]
-    } | null
-    const checkRuns = cj !== null && Array.isArray(cj.check_runs) ? cj.check_runs : []
-    for (const run of checkRuns) {
-      if (
-        run.status === 'completed' &&
-        run.conclusion !== 'success' &&
-        run.conclusion !== 'skipped'
-      ) {
-        return ok('failed')
-      }
-      if (run.status !== 'completed') return ok('pending')
-    }
-
-    const sj = statuses.value.json as { state: string | null; statuses: unknown[] } | null
-    if (sj !== null && sj.state !== null && sj.state !== 'pending') {
-      return ok(sj.state === 'success' ? 'passed' : 'failed')
-    }
-    // state=pending:有显式 status 上报才是「还在跑」;
-    // 无上报时本端点对结论毫无贡献(Actions-only 仓库恒如此),不能当成结论。
-    if (sj !== null && Array.isArray(sj.statuses) && sj.statuses.length > 0) return ok('pending')
-
-    // Commit Status 给不出结论,只剩 Checks 可依据:
-    // 有 check 且已全绿 → passed(上面的循环已经放过 failed/未完成);一条都没有 → 无人上报。
-    return ok(checkRuns.length > 0 ? 'passed' : 'unreported')
   }
 
   private async pullRequestObservation(
@@ -846,6 +828,8 @@ export class GitHubProvider
       return err(makeError('PROTOCOL_ERROR', `PR ${prNumber} 响应缺少准确编号`))
     const state = isOpenState(raw.state)
     if (state === null) return err(makeError('PROTOCOL_ERROR', `PR ${prNumber} 状态无效`))
+    if (raw.merged === true && state !== 'closed')
+      return err(makeError('PROTOCOL_ERROR', `PR ${prNumber} 的合并与开放状态冲突`))
     if (typeof raw.head?.ref !== 'string' || raw.head.ref.trim() === '')
       return err(makeError('PROTOCOL_ERROR', `PR ${prNumber} 缺少 head branch`))
     if (typeof raw.base?.ref !== 'string' || raw.base.ref.trim() === '')
@@ -860,72 +844,295 @@ export class GitHubProvider
       number: raw.number,
       url,
       state,
+      ...(typeof raw.merged === 'boolean' ? { merged: raw.merged } : {}),
       headBranch: raw.head.ref,
       baseBranch: raw.base.ref,
       headSha: raw.head.sha,
     })
   }
 
-  private async checkRuns(
+  private async ciPages(
     host: string,
-    slug: string,
-    sha: string,
-  ): Promise<Result<readonly RawCheckRun[]>> {
-    const runs: RawCheckRun[] = []
-    for (let page = 1; page <= 10; page++) {
+    path: string,
+    field: 'check_runs' | 'statuses' | 'workflow_runs' | 'jobs',
+    expectedSha?: string,
+  ): Promise<Result<readonly unknown[]>> {
+    const entries: unknown[] = []
+    let total: number | undefined
+    const separator = path.includes('?') ? '&' : '?'
+    for (let page = 1; page <= CI_MAX_PAGES; page++) {
       const response = await this.request(
         host,
-        `/repos/${slug}/commits/${sha}/check-runs?per_page=100&page=${page}`,
+        `${path}${separator}per_page=${CI_PAGE_SIZE}&page=${page}`,
       )
       if (!response.ok) return response
       if (response.value.status !== 200)
-        return err(
-          makeError(
-            'WORKSPACE_ERROR',
-            `读取 check-runs 返回非预期状态 HTTP ${response.value.status}`,
-          ),
-        )
-      const raw = response.value.json as {
-        readonly total_count?: number
-        readonly check_runs?: unknown
-      } | null
-      if (raw === null || !Array.isArray(raw.check_runs))
-        return err(makeError('PROTOCOL_ERROR', 'check-runs 响应缺少数组'))
-      runs.push(...(raw.check_runs as RawCheckRun[]))
-      if (raw.check_runs.length < 100) return ok(runs)
-      if (page === 10)
-        return err(makeError('PROTOCOL_ERROR', 'check-runs 超过 1000 条，拒绝静默截断'))
+        return err(makeError('PROTOCOL_ERROR', `${field} 返回 HTTP ${response.value.status}`))
+      const raw = response.value.json as Record<string, unknown> | null
+      const batch = raw?.[field]
+      const count = raw?.total_count
+      if (!Array.isArray(batch) || (count !== 0 && !positiveId(count)))
+        return err(makeError('PROTOCOL_ERROR', `${field} 响应缺少列表或有效总数`))
+      if (batch.length > CI_PAGE_SIZE)
+        return err(makeError('PROTOCOL_ERROR', `${field} 超过单页大小`))
+      if (
+        count > CI_PAGE_SIZE * CI_MAX_PAGES ||
+        (field === 'workflow_runs' && count === CI_PAGE_SIZE * CI_MAX_PAGES)
+      )
+        return err(makeError('CONFLICT', `${field} 触及分页上限`))
+      if (expectedSha !== undefined) {
+        if (typeof raw?.sha !== 'string' || !validHeadSha(raw.sha))
+          return err(makeError('PROTOCOL_ERROR', `${field} 响应缺少有效 SHA`))
+        if (raw.sha !== expectedSha) return err(makeError('CONFLICT', `${field} 响应属于其他 SHA`))
+      }
+      total ??= count
+      entries.push(...batch)
+      if (count === total && entries.length === total && !response.value.hasNextPage)
+        return ok(entries)
+      if (
+        count !== total ||
+        batch.length === 0 ||
+        entries.length >= total ||
+        (!response.value.hasNextPage && batch.length < CI_PAGE_SIZE)
+      )
+        break
     }
-    return err(makeError('PROTOCOL_ERROR', 'check-runs 分页异常'))
+    return err(makeError('CONFLICT', `${field} 分页截断或观测期间发生变化`))
   }
 
-  private async commitStatuses(
+  private async actionsForChecks(
     host: string,
     slug: string,
     sha: string,
-  ): Promise<Result<readonly RawCommitStatus[]>> {
-    const statuses: RawCommitStatus[] = []
-    for (let page = 1; page <= 10; page++) {
-      const response = await this.request(
-        host,
-        `/repos/${slug}/commits/${sha}/statuses?per_page=100&page=${page}`,
-      )
-      if (!response.ok) return response
-      if (response.value.status !== 200)
-        return err(
-          makeError(
-            'WORKSPACE_ERROR',
-            `读取 commit statuses 返回非预期状态 HTTP ${response.value.status}`,
-          ),
-        )
-      if (!Array.isArray(response.value.json))
-        return err(makeError('PROTOCOL_ERROR', 'commit statuses 响应不是数组'))
-      statuses.push(...(response.value.json as RawCommitStatus[]))
-      if (response.value.json.length < 100) return ok(statuses)
-      if (page === 10)
-        return err(makeError('PROTOCOL_ERROR', 'commit statuses 超过 1000 条，拒绝静默截断'))
+    checks: readonly RawCheckRun[],
+    candidates: readonly RawActionsRun[],
+    prNumber: number | undefined,
+  ): Promise<Result<ReadonlyMap<number, RawActionsRun>>> {
+    const suites = new Map<number, RawCheckRun[]>()
+    for (const check of checks) {
+      if (check.app?.slug !== 'github-actions') continue
+      const suite = check.check_suite?.id
+      if (!positiveId(suite))
+        return err(makeError('PROTOCOL_ERROR', 'Actions 检查缺少有效 check suite'))
+      const existing = suites.get(suite) ?? []
+      existing.push(check)
+      suites.set(suite, existing)
     }
-    return err(makeError('PROTOCOL_ERROR', 'commit statuses 分页异常'))
+    const current = new Map<number, RawActionsRun>()
+    if (suites.size === 0) return ok(current)
+    const runsBase = `/repos/${slug}/actions/runs`
+    for (const [suite, suiteChecks] of suites) {
+      const linked = candidates.filter((workflow) => workflow?.check_suite_id === suite)
+      if (linked.length !== 1)
+        return err(makeError('CONFLICT', 'Actions check suite 未能绑定唯一工作流'))
+      const workflow = linked[0]
+      if (
+        !workflow ||
+        !positiveId(workflow.id) ||
+        !positiveId(workflow.run_attempt) ||
+        !validHeadSha(workflow.head_sha)
+      )
+        return err(makeError('PROTOCOL_ERROR', 'Actions 响应缺少有效工作流轮次'))
+      if (workflow.head_sha !== sha) return err(makeError('CONFLICT', 'Actions 工作流属于其他 SHA'))
+      if (suiteChecks.every((check) => check.status !== 'completed')) continue
+      const jobs = await this.ciPages(host, `${runsBase}/${workflow.id}/jobs?filter=latest`, 'jobs')
+      if (!jobs.ok) return jobs
+      const latest = jobs.value as RawActionsJob[]
+      for (const check of suiteChecks) {
+        const matches = latest.filter(
+          (job) =>
+            typeof job?.check_run_url === 'string' &&
+            job.check_run_url.endsWith(`/check-runs/${check.id}`),
+        )
+        const job = matches[0]
+        if (
+          job !== undefined &&
+          (!validHeadSha(job.head_sha) || !positiveId(job.run_id) || !positiveId(job.run_attempt))
+        )
+          return err(makeError('PROTOCOL_ERROR', 'Actions job 缺少有效 SHA 或轮次'))
+        if (
+          matches.length !== 1 ||
+          job?.name !== check.name ||
+          job.run_id !== workflow.id ||
+          job.run_attempt !== workflow.run_attempt ||
+          job.head_sha !== sha ||
+          job.status !== check.status ||
+          job.conclusion !== check.conclusion
+        )
+          return err(makeError('CONFLICT', 'Actions 检查与当前轮次的 job 不一致'))
+      }
+      const reread = await this.request(host, `${runsBase}/${workflow.id}`)
+      if (!reread.ok) return reread
+      const verified = reread.value.json as RawActionsRun | null
+      if (
+        reread.value.status !== 200 ||
+        verified?.id !== workflow.id ||
+        verified.check_suite_id !== suite ||
+        verified.head_sha !== sha ||
+        verified.run_attempt !== workflow.run_attempt ||
+        verified.status !== workflow.status ||
+        verified.conclusion !== workflow.conclusion ||
+        verified.status !== 'completed' ||
+        !workflowBelongsToPullRequest(verified, prNumber, sha)
+      )
+        return err(makeError('CONFLICT', 'Actions 轮次尚未完成或在观测期间发生变化'))
+      if (actionsRunMatches(verified, sha)) current.set(suite, verified)
+    }
+    return ok(current)
+  }
+
+  private async commitCheckSnapshot(
+    host: string,
+    slug: string,
+    sha: string,
+    prNumber?: number,
+    required?: ReadonlySet<string>,
+  ): Promise<Result<CommitCheckSnapshot>> {
+    const commit = `/repos/${slug}/commits/${sha}`
+    const [checks, statuses] = await Promise.all([
+      this.ciPages(host, `${commit}/check-runs?filter=all`, 'check_runs'),
+      this.ciPages(host, `${commit}/status`, 'statuses', sha),
+    ])
+    if (!checks.ok && !isTransientCiObservation(checks.error)) return checks
+    if (!statuses.ok && !isTransientCiObservation(statuses.error)) return statuses
+    if (!checks.ok) return checks
+    if (!statuses.ok) return statuses
+
+    const candidates = checks.value as RawCheckRun[]
+    let workflows: readonly RawActionsRun[] = []
+    let scopedWorkflows: readonly RawActionsRun[] = []
+    if (
+      (prNumber !== undefined && required === undefined) ||
+      candidates.some((check) => check?.app?.slug === 'github-actions')
+    ) {
+      const observed = await this.ciPages(
+        host,
+        `/repos/${slug}/actions/runs?head_sha=${sha}`,
+        'workflow_runs',
+      )
+      if (!observed.ok) return observed
+      workflows = (observed.value as RawActionsRun[]).filter((workflow) => workflow != null)
+      scopedWorkflows = workflows.filter((workflow) =>
+        workflowBelongsToPullRequest(workflow, prNumber, sha),
+      )
+    }
+    const scopedSuites = new Set(scopedWorkflows.map(({ check_suite_id }) => check_suite_id))
+    const knownSuites = new Map(workflows.map((workflow) => [workflow.check_suite_id, workflow]))
+
+    const latestChecks = new Map<string, RawCheckRun>()
+    const checksByName = new Map<string, RawCheckRun[]>()
+    const checkIds = new Set<number>()
+    for (const check of candidates) {
+      if (
+        !check ||
+        !positiveId(check.id) ||
+        typeof check.name !== 'string' ||
+        check.name.trim() === '' ||
+        !validHeadSha(check.head_sha) ||
+        !CHECK_STATUSES.includes(check.status) ||
+        (check.status === 'completed' &&
+          (check.conclusion === null || !CHECK_CONCLUSIONS.includes(check.conclusion)))
+      )
+        return err(makeError('PROTOCOL_ERROR', 'check-run 缺少有效身份、SHA 或结论'))
+      if (check.head_sha !== sha) return err(makeError('CONFLICT', 'check-run 属于其他 SHA'))
+      if (checkIds.has(check.id)) return err(makeError('CONFLICT', 'check-run 分页返回重复标识'))
+      checkIds.add(check.id)
+      if (required !== undefined && !required.has(check.name)) continue
+      const suiteId = check.check_suite?.id
+      const isActions = check.app?.slug === 'github-actions'
+      if (isActions) {
+        if (!positiveId(suiteId))
+          return err(makeError('PROTOCOL_ERROR', 'Actions 检查缺少有效 check suite'))
+        const workflow = knownSuites.get(suiteId)
+        if (workflow === undefined)
+          return err(makeError('CONFLICT', 'Actions 检查没有匹配的工作流'))
+        if (!scopedSuites.has(suiteId)) {
+          if (
+            workflow.event === undefined ||
+            (isPullRequestWorkflow(workflow) &&
+              (!Array.isArray(workflow.pull_requests) || workflow.pull_requests.length === 0))
+          )
+            return err(makeError('CONFLICT', 'Actions 工作流缺少可验证的 PR 关联'))
+          continue
+        }
+      }
+      const key = isActions ? `actions:${suiteId}:${check.name}` : `check:${check.name}`
+      const previous = latestChecks.get(key)
+      if (
+        previous !== undefined &&
+        (!positiveId(check.check_suite?.id) ||
+          !positiveId(check.app?.id) ||
+          previous.check_suite?.id !== check.check_suite?.id ||
+          previous.app?.id !== check.app?.id)
+      )
+        return err(makeError('CONFLICT', '同名 check-run 来自不同或未知来源'))
+      if (previous === undefined || previous.id < check.id) latestChecks.set(key, check)
+    }
+    for (const check of latestChecks.values()) {
+      const sameName = checksByName.get(check.name) ?? []
+      if (
+        sameName.length > 0 &&
+        (required !== undefined ||
+          check.app?.slug !== 'github-actions' ||
+          sameName.some((previous) => previous.app?.slug !== 'github-actions'))
+      )
+        return err(makeError('CONFLICT', '同名 check-run 来自不同或未知来源'))
+      sameName.push(check)
+      checksByName.set(check.name, sameName)
+    }
+
+    const currentStatuses = new Map<string, RawCommitStatus>()
+    const statusIds = new Set<number>()
+    for (const status of statuses.value as RawCommitStatus[]) {
+      if (
+        !status ||
+        !positiveId(status.id) ||
+        typeof status.context !== 'string' ||
+        status.context.trim() === '' ||
+        !['success', 'error', 'failure', 'pending'].includes(status.state)
+      )
+        return err(makeError('PROTOCOL_ERROR', 'commit status 缺少有效身份或状态'))
+      if (statusIds.has(status.id) || currentStatuses.has(status.context))
+        return err(makeError('CONFLICT', 'combined status 分页返回重复标识或上下文'))
+      statusIds.add(status.id)
+      currentStatuses.set(status.context, status)
+      if (required !== undefined && !required.has(status.context)) continue
+      if (
+        checksByName
+          .get(status.context)
+          ?.some((check) => verdict(checkConclusion(check)) !== verdict(status.state))
+      )
+        return err(makeError('CONFLICT', '同名 check-run 和 commit status 的结论不一致'))
+    }
+    const currentChecks = [...latestChecks.values()]
+    const observedSuites = new Set(currentChecks.map((check) => check.check_suite?.id))
+    const actionsPending =
+      scopedWorkflows.some(
+        ({ status, check_suite_id }) =>
+          status !== 'completed' || !observedSuites.has(check_suite_id),
+      ) ||
+      (prNumber !== undefined &&
+        scopedWorkflows.length === 0 &&
+        candidates.some((check) => check?.app?.slug === 'github-actions'))
+    if (currentChecks.some(({ conclusion }) => conclusion === 'stale'))
+      return err(makeError('CONFLICT', 'check-run 已过期'))
+    const verifiedWorkflows = await this.actionsForChecks(
+      host,
+      slug,
+      sha,
+      currentChecks,
+      scopedWorkflows,
+      prNumber,
+    )
+    if (!verifiedWorkflows.ok) return verifiedWorkflows
+    return ok({
+      checks: currentChecks,
+      statuses: [...currentStatuses.values()].filter(
+        ({ context }) => required?.has(context) ?? true,
+      ),
+      workflows: verifiedWorkflows.value,
+      actionsPending,
+    })
   }
 
   async observeRequiredChecks(
@@ -940,65 +1147,37 @@ export class GitHubProvider
 
     const before = await this.pullRequestObservation(host, slug, input.prNumber)
     if (!before.ok) return before
+    if (input.expectedHeadSha !== undefined && input.expectedHeadSha !== before.value.headSha)
+      return err(makeError('CONFLICT', 'PR head 与 required checks 的目标 SHA 不一致'))
 
     const facts: RequiredCheckFact[] = []
-    const required = [...new Set(input.requiredChecks)]
-    if (required.length > 0) {
-      const runs = await this.checkRuns(host, slug, before.value.headSha)
-      if (!runs.ok) return runs
-      const latestRuns = new Map<string, RawCheckRun>()
-      for (const run of runs.value) {
-        if (!required.includes(run.name)) continue
-        if (run.head_sha !== undefined && run.head_sha !== before.value.headSha)
-          return err(
-            makeError(
-              'PROTOCOL_ERROR',
-              `check ${run.name} 指向 ${run.head_sha}，不是 PR head ${before.value.headSha}`,
-            ),
-          )
-        const existing = latestRuns.get(run.name)
-        if (existing === undefined || checkRunNewer(run, existing)) latestRuns.set(run.name, run)
+    const required = new Set(input.requiredChecks)
+    if (required.size > 0) {
+      const snapshot = await this.commitCheckSnapshot(
+        host,
+        slug,
+        before.value.headSha,
+        input.prNumber,
+        required,
+      )
+      if (!snapshot.ok) return snapshot
+      for (const check of snapshot.value.checks) {
+        facts.push({
+          name: check.name,
+          source: 'check_run',
+          conclusion: checkConclusion(check),
+          externalId: String(check.id),
+          detailsUrl: check.details_url ?? null,
+        })
       }
-
-      const statuses = await this.commitStatuses(host, slug, before.value.headSha)
-      if (!statuses.ok) return statuses
-      const latestStatuses = new Map<string, RawCommitStatus>()
-      for (const status of statuses.value) {
-        if (!required.includes(status.context)) continue
-        const existing = latestStatuses.get(status.context)
-        if (existing === undefined || statusNewer(status, existing))
-          latestStatuses.set(status.context, status)
-      }
-
-      for (const name of required) {
-        const run = latestRuns.get(name)
-        if (run !== undefined) {
-          facts.push({
-            name,
-            source: 'check_run',
-            conclusion: run.status === 'completed' ? (run.conclusion ?? 'unknown') : 'pending',
-            externalId: String(run.id),
-            detailsUrl: run.details_url ?? null,
-          })
-        }
-        const status = latestStatuses.get(name)
-        if (status !== undefined) {
-          facts.push({
-            name,
-            source: 'commit_status',
-            conclusion:
-              status.state === null
-                ? 'pending'
-                : status.state === 'pending'
-                  ? 'pending'
-                  : status.state,
-            externalId:
-              status.id === undefined
-                ? `${status.context}:${status.created_at ?? 'unknown'}`
-                : String(status.id),
-            detailsUrl: status.target_url ?? null,
-          })
-        }
+      for (const status of snapshot.value.statuses) {
+        facts.push({
+          name: status.context,
+          source: 'commit_status',
+          conclusion: status.state,
+          externalId: String(status.id),
+          detailsUrl: status.target_url ?? null,
+        })
       }
     }
 
@@ -1008,6 +1187,7 @@ export class GitHubProvider
       after.value.headSha !== before.value.headSha ||
       after.value.headBranch !== before.value.headBranch ||
       after.value.baseBranch !== before.value.baseBranch ||
+      after.value.merged !== before.value.merged ||
       after.value.state !== before.value.state
     )
       return err(makeError('CONFLICT', 'PR 在观测期间发生变化；本次 check 证据作废'))
@@ -1019,6 +1199,7 @@ export class GitHubProvider
       prNumber: before.value.number,
       prUrl: before.value.url,
       prState: before.value.state,
+      ...(before.value.merged === undefined ? {} : { prMerged: before.value.merged }),
       headBranch: before.value.headBranch,
       baseBranch: before.value.baseBranch,
       headSha: before.value.headSha,

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ok, type Result } from '../../contracts/errors.js'
+import { err, type KeelError, makeError, ok, type Result } from '../../contracts/errors.js'
 import type { PullRequestGateway, PullRequestInfo } from '../../contracts/git-provider.js'
 import type {
   GitPushGateway,
@@ -16,20 +16,37 @@ import type {
 } from '../../contracts/git-push.js'
 import type { ManagedCheckGatewayResult } from '../../contracts/managed.js'
 import type {
+  PullRequestState,
+  PullRequestStateGateway,
+} from '../../contracts/pull-request-state.js'
+import type {
   RequiredCheckFact,
   RequiredCheckGateway,
   RequiredCheckObservationInput,
   RequiredCheckSnapshot,
 } from '../../contracts/required-checks.js'
-import { asOwner, asRole, closePool } from '../../fact/db.js'
+import { asOwner, asOwnerTx, asRole, closePool } from '../../fact/db.js'
 import type { DelegationPolicyVersion } from '../../generated/managed.js'
 import { runActionGatewayOnce } from './action-gateway.js'
 import { enqueueActionIntent } from './action-store.js'
 import { runCheckGatewayOnce } from './check-gateway.js'
-import { listCheckEvidence } from './check-store.js'
-import { recordDelegationPolicy, revokeDelegationPolicy } from './decision-store.js'
+import { reconcileManagedPullRequest } from './check-reconcile.js'
+import { answerCheckReobservation, requestCheckReobservation } from './check-recovery.js'
+import {
+  claimCheckTarget,
+  deferCheck,
+  finalizeCheckFailed,
+  finalizeCheckReady,
+  listCheckEvidence,
+} from './check-store.js'
+import {
+  answerManagedTicketDecision,
+  recordDelegationPolicy,
+  revokeDelegationPolicy,
+} from './decision-store.js'
+import { pauseManagedTicket, resumeManagedTicket } from './ticket-control.js'
 import { createManagedTicketTask, getManagedTicket } from './ticket-runtime.js'
-import { fixtureTicketPackage } from './ticket-test-utils.js'
+import { fixtureTicketPackage, waitForTicketLockWaiter } from './ticket-test-utils.js'
 import { diffDigest } from './ticket-workspace.js'
 
 // 这些用例会真实启动 PostgreSQL、Git 子进程并执行多阶段编排；5 秒默认预算在隔离环境中会截断正常执行。
@@ -76,6 +93,8 @@ class FakePullRequests implements PullRequestGateway {
 
 class FakeChecks implements RequiredCheckGateway {
   calls = 0
+  error?: KeelError
+  expectedHeadSha?: string
   patch: Partial<RequiredCheckSnapshot> = {}
   facts: readonly RequiredCheckFact[] = [
     {
@@ -91,6 +110,8 @@ class FakeChecks implements RequiredCheckGateway {
     input: RequiredCheckObservationInput,
   ): Promise<Result<RequiredCheckSnapshot>> {
     this.calls++
+    if (input.expectedHeadSha !== undefined) this.expectedHeadSha = input.expectedHeadSha
+    if (this.error !== undefined) return err(this.error)
     return ok({
       repoId: input.repoId,
       repo: 'acme/widget',
@@ -155,7 +176,11 @@ beforeEach(async () => {
 afterAll(closePool)
 
 async function seedAction(
-  options: { readonly requiredChecks?: readonly string[]; readonly checkTimeoutMs?: number } = {},
+  options: {
+    readonly requiredChecks?: readonly string[]
+    readonly checkTimeoutMs?: number
+    readonly policyValidUntil?: string
+  } = {},
 ): Promise<Seeded & { readonly checks: FakeChecks; readonly targetId: string }> {
   const base = await mkdtemp(join(tmpdir(), 'keel-check-'))
   const remote = join(base, 'remote.git')
@@ -177,9 +202,18 @@ async function seedAction(
     ),
   )
   const packagePath = join(base, 'ticket-package.json')
-  await writeFile(packagePath, JSON.stringify(fixtureTicketPackage({ ticketId: 'JT-02E' })))
+  await writeFile(
+    packagePath,
+    JSON.stringify({
+      ...fixtureTicketPackage({ ticketId: 'JT-02E' }),
+      completion_target: 'pr_ready',
+    }),
+  )
   const created = await createManagedTicketTask(repoId, packagePath, root)
   if (!created.ok) throw new Error(created.error.detail)
+  await asRole('keel_control', (c) =>
+    c.query(`UPDATE managed_ticket_task SET current_stage='land' WHERE id=$1`, [created.value]),
+  )
   const baseline = await git(root, 'rev-parse', 'HEAD')
   await writeFile(join(root, 'feature.txt'), 'feature\n')
   await git(root, 'add', '-A')
@@ -187,7 +221,10 @@ async function seedAction(
   const head = await git(root, 'rev-parse', 'HEAD')
   const diff = await diffDigest(root, baseline, head)
   if (!diff.ok) throw new Error(diff.error.detail)
-  const policy = policyFor(repoId, options.requiredChecks ?? ['test'])
+  const policy = {
+    ...policyFor(repoId, options.requiredChecks ?? ['test']),
+    ...(options.policyValidUntil === undefined ? {} : { valid_until: options.policyValidUntil }),
+  }
   const recorded = await recordDelegationPolicy(policy)
   if (!recorded.ok) throw new Error(recorded.error.detail)
   await asRole('keel_control', (c) =>
@@ -334,13 +371,45 @@ describe('managed required check gateway', () => {
     const result = requireCheckResult(
       await runCheckGatewayOnce({ checks: seeded.checks, now: () => LATER }),
     )
-    expect(result.status).toBe('FAILED')
+    expect(seeded.checks.expectedHeadSha).toBe(seeded.head)
+    expect(result.status).toBe('CHECKING')
     expect(result.error).toContain('不一致')
     const evidence = await listCheckEvidence({ targetId: seeded.targetId })
-    expect(evidence[0]?.observations[0]?.head_sha).toBe(ALT_SHA)
+    expect(evidence[0]?.observations).toEqual([])
     const task = await getManagedTicket(seeded.taskId)
-    expect(task.ok && task.value.status).toBe('PR_CHECKS_FAILED')
+    expect(task.ok && task.value.status).toBe('CHECKING')
   })
+
+  it.each(['CONFLICT', 'HARNESS_UNAVAILABLE'] as const)(
+    '观测暂不可用 %s 时仅推迟读取',
+    async (kind) => {
+      const seeded = await seedAction()
+      seeded.checks.error = makeError(kind, 'fixture 观测未稳定')
+      const deferred = requireCheckResult(
+        await runCheckGatewayOnce({ checks: seeded.checks, now: () => NOW }),
+      )
+      expect(deferred).toMatchObject({ status: 'CHECKING', error: `${kind}: fixture 观测未稳定` })
+      expect((await listCheckEvidence({ targetId: seeded.targetId }))[0]?.observations).toEqual([])
+      delete seeded.checks.error
+      const recovered = requireCheckResult(
+        await runCheckGatewayOnce({ checks: seeded.checks, now: () => LATER }),
+      )
+      expect(recovered.status).toBe('READY')
+    },
+  )
+
+  it.each(['AUTH_FAILED', 'PROTOCOL_ERROR'] as const)(
+    '观测拒绝 %s 时保留独立诊断',
+    async (kind) => {
+      const seeded = await seedAction()
+      seeded.checks.error = makeError(kind, 'fixture 拒绝')
+      const rejected = requireCheckResult(
+        await runCheckGatewayOnce({ checks: seeded.checks, now: () => NOW }),
+      )
+      expect(rejected).toMatchObject({ status: 'FAILED', error: `${kind}: fixture 拒绝` })
+      expect((await listCheckEvidence({ targetId: seeded.targetId }))[0]?.observations).toEqual([])
+    },
+  )
 
   it('旧批准撤销后不能凭已创建 PR 进入 PR_READY', async () => {
     const seeded = await seedAction()
@@ -399,4 +468,231 @@ describe('managed required check gateway', () => {
     expect(result.status).toBe('FAILED')
     expect(seeded.checks.calls).toBe(0)
   })
+})
+
+function pullRequest(
+  headSha: string,
+  patch: Partial<PullRequestState> = {},
+): PullRequestStateGateway {
+  return {
+    async getPullRequest() {
+      return ok({
+        number: PR_NUMBER,
+        url: PR_URL,
+        state: 'open',
+        merged: false,
+        mergedAt: null,
+        mergeSha: null,
+        closedAt: null,
+        headSha,
+        headBranch: 'ai/ticket-gateway',
+        baseBranch: 'main',
+        ...patch,
+      })
+    },
+  }
+}
+
+describe('managed check recovery', () => {
+  it('等待 ticket 行锁期间授权过期，绿灯观测不能结算为 PR_READY', async () => {
+    const seeded = await seedAction({ policyValidUntil: LATER })
+    let currentTime = NOW
+    const { settlement } = await asOwnerTx(async (locker) => {
+      const checks: RequiredCheckGateway = {
+        async observeRequiredChecks(input) {
+          await locker.query('SELECT id FROM managed_ticket_task WHERE id=$1 FOR UPDATE', [
+            seeded.taskId,
+          ])
+          return seeded.checks.observeRequiredChecks(input)
+        },
+      }
+      const settlement = runCheckGatewayOnce({ checks, now: () => currentTime })
+      await waitForTicketLockWaiter(locker)
+      currentTime = LATER
+      return { settlement }
+    })
+    expect(await settlement).toMatchObject({ ok: false, error: { kind: 'CONFLICT' } })
+    expect(await getManagedTicket(seeded.taskId)).toMatchObject({
+      ok: true,
+      value: { status: 'CHECKING' },
+    })
+    expect(await listCheckEvidence({ targetId: seeded.targetId })).toMatchObject([
+      { target: { status: 'CHECKING', evidence_digest: null }, observations: [] },
+    ])
+  })
+
+  it('暂停且已绑定待检查 PR 的 ticket 拒绝通用恢复，仍可只读对账', async () => {
+    const seeded = await seedAction()
+    expect(await pauseManagedTicket(seeded.taskId, '人工暂停', NOW)).toMatchObject({ ok: true })
+    const paused = await getManagedTicket(seeded.taskId)
+    expect(await listCheckEvidence({ taskId: seeded.taskId })).toMatchObject([
+      { target: { id: seeded.targetId, status: 'PENDING' }, observations: [] },
+    ])
+
+    expect(await resumeManagedTicket(seeded.taskId, LATER)).toMatchObject({
+      ok: false,
+      error: { kind: 'CONFLICT', detail: expect.stringContaining('action-check-reconcile') },
+    })
+    expect(
+      await reconcileManagedPullRequest(seeded.targetId, pullRequest(seeded.head)),
+    ).toMatchObject({
+      ok: true,
+      value: {
+        target: { status: 'PENDING' },
+        pullRequest: { disposition: 'OPEN' },
+        missingCheckEvidence: true,
+      },
+    })
+    expect(await getManagedTicket(seeded.taskId)).toEqual(paused)
+  })
+
+  it('拒绝无接手 worker 的过期结算，允许新认领结算', async () => {
+    const seeded = await seedAction()
+    const expired = await claimCheckTarget(NOW, 10)
+    if (expired === null) throw new Error('fixture 没有认领到 check target')
+    await asOwner((c) => c.query('SELECT pg_sleep(0.03)'))
+    expect(await deferCheck(expired, [], LATER, null, NOW)).toMatchObject({
+      ok: false,
+      error: { kind: 'CONFLICT' },
+    })
+    expect(
+      await finalizeCheckReady(
+        expired,
+        [],
+        'a'.repeat(64),
+        {},
+        {
+          checkedAt: NOW,
+          now: () => NOW,
+        },
+      ),
+    ).toMatchObject({
+      ok: false,
+      error: { kind: 'CONFLICT' },
+    })
+    expect(await finalizeCheckFailed(expired, [], 'expired', {}, NOW)).toMatchObject({
+      ok: false,
+      error: { kind: 'CONFLICT' },
+    })
+    const fresh = requireCheckResult(
+      await runCheckGatewayOnce({ checks: seeded.checks, now: () => NOW }),
+    )
+    expect(fresh.status).toBe('READY')
+    expect(await listCheckEvidence({ targetId: seeded.targetId })).toMatchObject([
+      { observations: [{ attempt: 2, conclusion: 'success' }] },
+    ])
+  })
+
+  it.each(['success', 'failure'] as const)(
+    '同一 SHA 允许一次重观测，结果为 %s',
+    async (conclusion) => {
+      const seeded = await seedAction()
+      const check = {
+        name: 'test',
+        source: 'check_run',
+        conclusion: 'failure',
+        externalId: 'original',
+        detailsUrl: null,
+      } as const
+      seeded.checks.facts = [check]
+      expect(
+        requireCheckResult(await runCheckGatewayOnce({ checks: seeded.checks, now: () => NOW }))
+          .status,
+      ).toBe('FAILED')
+      const before = await getManagedTicket(seeded.taskId)
+      const decision = await requestCheckReobservation(seeded.targetId, LATER)
+      if (!decision.ok) throw new Error(decision.error.detail)
+      const { id, revision } = decision.value
+      expect(await requestCheckReobservation(seeded.targetId, LATER)).toEqual(decision)
+      const input = {
+        targetId: seeded.targetId,
+        requestId: id,
+        revision,
+        optionId: 'option-1',
+      } as const
+      expect(await answerManagedTicketDecision(id, revision, 'option-1', LATER)).toMatchObject({
+        ok: false,
+      })
+      expect(
+        await answerCheckReobservation(
+          { ...input, revision: revision + 1 },
+          pullRequest(seeded.head),
+          () => LATER,
+        ),
+      ).toMatchObject({ ok: false })
+      expect(
+        await reconcileManagedPullRequest(
+          seeded.targetId,
+          pullRequest(seeded.head, {
+            state: 'closed',
+            merged: true,
+          }),
+        ),
+      ).toMatchObject({
+        ok: true,
+        value: { pullRequest: { disposition: 'MERGED' }, missingCheckEvidence: true },
+      })
+      expect(
+        await reconcileManagedPullRequest(
+          seeded.targetId,
+          pullRequest(seeded.head, {
+            state: 'closed',
+          }),
+        ),
+      ).toMatchObject({ ok: true, value: { pullRequest: { disposition: 'CLOSED_UNMERGED' } } })
+      expect(
+        await answerCheckReobservation(
+          input,
+          pullRequest(seeded.head, {
+            state: 'closed',
+            merged: true,
+          }),
+          () => LATER,
+        ),
+      ).toMatchObject({
+        ok: false,
+        error: { detail: expect.stringContaining('PR_MERGED_EVIDENCE_MISSING') },
+      })
+      expect(
+        await answerCheckReobservation(input, pullRequest(ALT_SHA), () => LATER),
+      ).toMatchObject({ ok: false })
+      expect(
+        await answerCheckReobservation(
+          input,
+          pullRequest(seeded.head, { number: PR_NUMBER + 1 }),
+          () => LATER,
+        ),
+      ).toMatchObject({ ok: false })
+      await writeFile(join(seeded.root, 'dirty'), 'drift\n')
+      expect(
+        await answerCheckReobservation(input, pullRequest(seeded.head), () => LATER),
+      ).toMatchObject({ ok: false })
+      await git(seeded.root, 'clean', '-f', '--', 'dirty')
+      const answered = await Promise.all([
+        answerCheckReobservation(input, pullRequest(seeded.head), () => LATER),
+        answerCheckReobservation(input, pullRequest(seeded.head), () => LATER),
+      ])
+      expect(answered.filter((answer) => answer.ok)).toHaveLength(1)
+      await closePool()
+      seeded.checks.facts = [{ ...check, conclusion, externalId: 'rerun' }]
+      expect(
+        requireCheckResult(await runCheckGatewayOnce({ checks: seeded.checks, now: () => LATER }))
+          .status,
+      ).toBe(conclusion === 'success' ? 'READY' : 'FAILED')
+      expect(await requestCheckReobservation(seeded.targetId, LATER)).toMatchObject({ ok: false })
+      expect(await listCheckEvidence({ targetId: seeded.targetId })).toMatchObject([
+        {
+          observations: [
+            { attempt: 1, conclusion: 'failure' },
+            { attempt: 2, conclusion },
+          ],
+        },
+      ])
+      const after = await getManagedTicket(seeded.taskId)
+      expect(before.ok && after.ok && after.value.attempts).toBe(before.ok && before.value.attempts)
+      expect(before.ok && after.ok && after.value.rework_count).toBe(
+        before.ok && before.value.rework_count,
+      )
+    },
+  )
 })

@@ -14,7 +14,7 @@
  */
 
 import { isStageStatus, isTerminal } from '../../shared/ids.js'
-import { emptyCiRepair, TASK_TRANSITIONS } from './table.js'
+import { blockedCiRepair, TASK_TRANSITIONS } from './table.js'
 import type {
   ControlMode,
   TaskStatus,
@@ -97,8 +97,10 @@ export function transition(
     const next = rule.to === 'SELF' ? status : rule.to
     const humanReason =
       rule.id === 'T-031' && event.type === 'RunFailed'
-        ? emptyCiRepair(facts, event)
-          ? 'ci_repair_no_change'
+        ? blockedCiRepair(facts, event)
+          ? event.reason === 'ci_repair_target_changed'
+            ? event.reason
+            : 'ci_repair_no_change'
           : event.reason === 'commit_message_rejected'
             ? event.reason
             : undefined

@@ -14,6 +14,11 @@ import {
   type ManagedCheckGatewayDeps,
   runCheckGatewayOnce,
 } from '../control/managed/check-gateway.js'
+import { reconcileManagedPullRequest } from '../control/managed/check-reconcile.js'
+import {
+  answerCheckReobservation,
+  requestCheckReobservation,
+} from '../control/managed/check-recovery.js'
 import { listCheckEvidence } from '../control/managed/check-store.js'
 import {
   answerManagedTicketDecision,
@@ -57,6 +62,7 @@ import {
   createManagedWorkflow,
   getManagedWorkflowProjection,
   listManagedWorkflowProjections,
+  type ManagedWorkflowWorker,
   retryManagedWorkflow,
   tickManagedWorkflow,
 } from '../control/managed/workflow-runtime.js'
@@ -247,6 +253,8 @@ action-reconcile [--id OUTBOX_UUID] [--once] [--interval MS]
 action-retry OUTBOX_UUID
 action-check-gateway [--once] [--interval MS]
 action-checks [--task TASK_UUID] [--id TARGET_UUID]
+action-check-reconcile TARGET_UUID
+action-check-reobserve TARGET_UUID [--request UUID --revision N --option OPTION]
 memory-status PROJECT_UUID
 memory-summary PROJECT_UUID --generated-by TEXT [--model-version TEXT]
 memory-publish SUMMARY_UUID --project UUID --epoch N [--regression FILE]
@@ -422,10 +430,8 @@ execute→verify→review→land；阶段执行器不 push，
       }
       case 'ticket-resume': {
         if (rest.length !== 1) throw new Error('用法：managed ticket-resume <task UUID>')
-        const result = await resumeManagedTicket(
-          uuid(rest[0] ?? '', 'task ID'),
-          new Date().toISOString(),
-        )
+        const taskId = uuid(rest[0] ?? '', 'task ID')
+        const result = await resumeManagedTicket(taskId, new Date().toISOString())
         if (!result.ok) throw new Error(result.error.detail)
         printJson(result.value)
         return
@@ -566,6 +572,41 @@ execute→verify→review→land；阶段执行器不 push，
             ...(targetRaw === undefined ? {} : { targetId: uuid(targetRaw, '--id') }),
           }),
         )
+        return
+      }
+      case 'action-check-reconcile': {
+        if (rest.length !== 1) throw new Error('用法：managed action-check-reconcile <target UUID>')
+        const result = await reconcileManagedPullRequest(
+          uuid(rest[0] ?? '', 'target ID'),
+          new GitHubProvider(),
+        )
+        if (!result.ok) throw new Error(result.error.detail)
+        printJson(result.value)
+        return
+      }
+      case 'action-check-reobserve': {
+        const targetId = uuid(rest[0] ?? '', 'target ID')
+        const flags = parseFlags(rest.slice(1), ['request', 'revision', 'option'])
+        if (flags.size === 0) {
+          const result = await requestCheckReobservation(targetId, new Date().toISOString())
+          if (!result.ok) throw new Error(result.error.detail)
+          printJson(result.value)
+          return
+        }
+        const optionId = required(flags, 'option')
+        if (optionId !== 'option-1' && optionId !== 'option-2')
+          throw new Error('--option 必须是 option-1 或 option-2')
+        const result = await answerCheckReobservation(
+          {
+            targetId,
+            requestId: uuid(required(flags, 'request'), '--request'),
+            revision: positiveInteger(required(flags, 'revision'), '--revision'),
+            optionId,
+          },
+          new GitHubProvider(),
+        )
+        if (!result.ok) throw new Error(result.error.detail)
+        printJson(result.value)
         return
       }
       case 'action-gateway':
@@ -737,7 +778,7 @@ execute→verify→review→land；阶段执行器不 push，
       }
       default:
         throw new Error(
-          '用法：managed investigate|status|questions|answer|worker|ticket-create|ticket-status|ticket-stages|ticket-tick|ticket-worker|ticket-answer|workflow-create|workflow-plan|workflow-status|workflow-list|workflow-retry|workflow-tick|workflow-worker|action-list|action-gateway|action-reconcile|action-retry|action-check-gateway|action-checks|memory-status|memory-summary|memory-publish|memory-reject|memory-rollback|memory-retrieve|memory-promote',
+          '用法：managed investigate|status|questions|answer|worker|ticket-create|ticket-status|ticket-stages|ticket-tick|ticket-worker|ticket-answer|workflow-create|workflow-plan|workflow-status|workflow-list|workflow-retry|workflow-tick|workflow-worker|action-list|action-gateway|action-reconcile|action-retry|action-check-gateway|action-checks|action-check-reconcile|action-check-reobserve|memory-status|memory-summary|memory-publish|memory-reject|memory-rollback|memory-retrieve|memory-promote',
         )
     }
   } catch (error) {
@@ -837,7 +878,7 @@ function requireTicketHarness(harness: HarnessId): void {
 /** 构造 managed 执行器；供 managed CLI 与统一 serve 共用同一启动预检。 */
 export async function createManagedTicketWorker(
   selection: ManagedWorkerSelection = {},
-): Promise<ManagedTicketWorker> {
+): Promise<ManagedWorkflowWorker> {
   const harnessRouting =
     selection.harnessRouting ?? loadManagedHarnessRouting(selection.harness, process.env)
   const model = resolveOptionalModel(selection.model, process.env.KEEL_MODEL)
@@ -878,7 +919,7 @@ export async function createManagedTicketWorker(
     if (worker === undefined) throw new Error(`managed worker 未初始化 harness=${harness}`)
     return worker
   }
-  const worker = workerFor(defaultHarness)
+  const worker = { ...workerFor(defaultHarness), pullRequests: new GitHubProvider() }
   if (harnesses.size === 1) return worker
   return {
     ...worker,
@@ -891,7 +932,7 @@ export async function createManagedTicketWorker(
   }
 }
 
-async function createTicketWorker(flags: Map<string, FlagValue>): Promise<ManagedTicketWorker> {
+async function createTicketWorker(flags: Map<string, FlagValue>): Promise<ManagedWorkflowWorker> {
   const harness = optional(flags, 'harness')
   const model = optional(flags, 'model')
   return createManagedTicketWorker({

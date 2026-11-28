@@ -28,6 +28,7 @@ import { blockPendingActionsInTx } from './ticket-control.js'
 import { ticketEvent } from './ticket-store.js'
 
 const TIANWEN_ACTOR_ID = 'tianwen-service'
+export const CHECK_REOBSERVATION_CATEGORY = 'check_reobservation'
 
 /** 停止类选项必须显式识别；无法识别时按“不继续”处理，避免 must-stop 被默认放行。 */
 export function isStopDecisionOption(text: string): boolean {
@@ -823,8 +824,9 @@ export async function resolveTianwenProposalInTx(
 export async function readDecisionResolution(
   requestId: string,
   revision: number,
+  client?: PoolClient,
 ): Promise<DecisionResolution | null> {
-  const row = await asRole('keel_control', async (c) =>
+  const run = (c: PoolClient) =>
     c.query<{ body: unknown }>(
       `SELECT jsonb_strip_nulls(to_jsonb(r)) AS body
        FROM (
@@ -837,8 +839,8 @@ export async function readDecisionResolution(
          WHERE request_id=$1 AND request_revision=$2
        ) r`,
       [requestId, revision],
-    ),
-  )
+    )
+  const row = await (client === undefined ? asRole('keel_control', run) : run(client))
   const body = row.rows[0]?.body
   if (body === undefined) return null
   const checked = validateDecisionResolution(body)
@@ -855,15 +857,20 @@ export async function recheckTicketDecisionAuthority(
     readonly digest: string
   },
   now: string,
+  client?: PoolClient,
 ): Promise<boolean> {
-  const resolution = await readDecisionResolution(reference.request_id, reference.request_revision)
+  const resolution = await readDecisionResolution(
+    reference.request_id,
+    reference.request_revision,
+    client,
+  )
   if (
     resolution === null ||
     resolution.id !== reference.resolution_id ||
     resolution.context_digest !== reference.digest
   )
     return false
-  return asRole('keel_control', async (c) => {
+  const run = async (c: PoolClient): Promise<boolean> => {
     const request = await requestBody(c, reference.request_id, reference.request_revision)
     if (request?.status !== 'RESOLVED' || request.managed_ticket_task_id !== taskId) return false
     if (request.expires_at !== undefined && Date.parse(request.expires_at) <= Date.parse(now))
@@ -897,7 +904,8 @@ export async function recheckTicketDecisionAuthority(
       checked.value.disposition === 'delegated' &&
       checked.value.answer_option_id === resolution.answer_option_id
     )
-  })
+  }
+  return client === undefined ? asRole('keel_control', run) : run(client)
 }
 
 async function currentRequestForQuestion(
@@ -1003,6 +1011,36 @@ async function insertHumanResolution(
   )
   if (updated.rowCount !== 1) throw makeError('CONFLICT', 'decision request 已不是可答复状态')
   return resolution
+}
+
+export async function resolveCheckReobservationDecision(
+  c: PoolClient,
+  input: {
+    readonly requestId: string
+    readonly revision: number
+    readonly taskId: string
+    readonly decisionKey: string
+    readonly optionId: string
+    readonly now: string
+  },
+): Promise<DecisionResolution> {
+  const locked = await c.query(
+    'SELECT id FROM managed_decision_request WHERE id=$1 AND revision=$2 FOR UPDATE NOWAIT',
+    [input.requestId, input.revision],
+  )
+  if (locked.rowCount !== 1) throw makeError('NOT_FOUND', '找不到 check 恢复决定版本')
+  const request = await requestBody(c, input.requestId, input.revision)
+  if (
+    request?.status !== 'WAITING_HUMAN' ||
+    request.managed_ticket_task_id !== input.taskId ||
+    request.action_category !== CHECK_REOBSERVATION_CATEGORY ||
+    request.decision_key !== input.decisionKey ||
+    (request.expires_at !== undefined && Date.parse(request.expires_at) <= Date.parse(input.now))
+  )
+    throw makeError('CONFLICT', 'check 恢复决定与当前失败记录不匹配或已结算')
+  const option = request.options.find((entry) => entry.id === input.optionId)
+  if (option === undefined) throw makeError('SCHEMA_VIOLATION', '答案不在 check 恢复选项内')
+  return insertHumanResolution(c, request, option, option.text, input.now)
 }
 
 async function supersedeRequest(
@@ -1325,6 +1363,8 @@ export async function answerManagedTicketDecision(
       if (request === null) return err(makeError('NOT_FOUND', '找不到 decision request'))
       if (request.managed_ticket_task_id === undefined)
         return err(makeError('CONFLICT', '该请求不属于 managed ticket task'))
+      if (request.action_category === CHECK_REOBSERVATION_CATEGORY)
+        return err(makeError('CONFLICT', 'check 恢复需通过 action-check-reobserve 答复'))
       if (request.status !== 'WAITING_HUMAN')
         return err(makeError('CONFLICT', `decision request 当前是 ${request.status}，不可人工答复`))
       const option = request.options.find((entry) => entry.id === optionId)
@@ -1417,6 +1457,8 @@ export async function overrideManagedTicketDecision(
     if (request === null) return err(makeError('NOT_FOUND', '找不到 decision request'))
     if (request.managed_ticket_task_id === undefined)
       return err(makeError('CONFLICT', '该请求不属于 managed ticket task'))
+    if (request.action_category === CHECK_REOBSERVATION_CATEGORY)
+      return err(makeError('CONFLICT', 'check 恢复需通过 action-check-reobserve 答复'))
     if (!['OPEN', 'PROCESSING', 'WAITING_HUMAN', 'RESOLVED'].includes(request.status))
       return err(makeError('CONFLICT', `decision request 当前是 ${request.status}，不可覆盖`))
     const option = request.options.find((entry) => entry.id === optionId)
