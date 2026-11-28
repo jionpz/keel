@@ -212,11 +212,18 @@ interface RawActionsRun {
   readonly run_attempt: number
   readonly status: string
   readonly conclusion: string | null
+  readonly event?: string
+  readonly pull_requests?: readonly {
+    readonly number?: number
+    readonly head?: { readonly sha?: string }
+  }[]
 }
 
 interface RawActionsJob {
   readonly check_run_url?: string
   readonly head_sha?: string
+  readonly run_id?: number
+  readonly run_attempt?: number
   readonly name: string
   readonly status: string
   readonly conclusion: string | null
@@ -245,6 +252,7 @@ interface CommitCheckSnapshot {
   readonly checks: readonly RawCheckRun[]
   readonly statuses: readonly RawCommitStatus[]
   readonly workflows: ReadonlyMap<number, RawActionsRun>
+  readonly actionsPending: boolean
 }
 
 interface PullRequestObservation {
@@ -270,6 +278,23 @@ function checkConclusion(run: RawCheckRun): string {
 
 function positiveId(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+}
+
+function isPullRequestWorkflow(workflow: RawActionsRun): boolean {
+  return workflow.event === 'pull_request' || workflow.event === 'pull_request_target'
+}
+
+function workflowBelongsToPullRequest(
+  workflow: RawActionsRun,
+  number: number | undefined,
+  sha: string,
+): boolean {
+  return (
+    number === undefined ||
+    (isPullRequestWorkflow(workflow) &&
+      Array.isArray(workflow.pull_requests) &&
+      workflow.pull_requests.some((pull) => pull?.number === number && pull.head?.sha === sha))
+  )
 }
 
 const CHECK_STATUSES = ['queued', 'in_progress', 'completed', 'waiting', 'requested', 'pending']
@@ -631,14 +656,15 @@ export class GitHubProvider
       const before = await this.boundCiPullRequest(input, input.prNumber)
       if (!before.ok) return before
     }
-    const snapshot = await this.commitCheckSnapshot(host, slug, input.headSha)
+    const snapshot = await this.commitCheckSnapshot(host, slug, input.headSha, input.prNumber)
     if (!snapshot.ok) return snapshot
     if (input.prNumber !== undefined) {
       const after = await this.boundCiPullRequest(input, input.prNumber)
       if (!after.ok) return after
     }
-    const { checks, statuses, workflows } = snapshot.value
+    const { checks, statuses, workflows, actionsPending } = snapshot.value
     if (
+      actionsPending ||
       checks.some((run) => checkConclusion(run) === 'pending') ||
       statuses.some(({ state }) => state === 'pending')
     )
@@ -764,7 +790,11 @@ export class GitHubProvider
     if (latest.value.status !== 200 || run === null || run.id !== target.runId) return ok(false)
     if (Number.isSafeInteger(run.run_attempt) && run.run_attempt > target.attempt)
       return err(makeError('STALE_EVIDENCE', 'Actions 检查已进入新轮次'))
-    if (run.run_attempt !== target.attempt || !actionsRunMatches(run, input.headSha))
+    if (
+      run.run_attempt !== target.attempt ||
+      !actionsRunMatches(run, input.headSha) ||
+      !workflowBelongsToPullRequest(run, input.prNumber, input.headSha)
+    )
       return ok(false)
     if (input.prNumber === undefined) return ok(false)
     const pr = await this.getPullRequest({
@@ -839,7 +869,10 @@ export class GitHubProvider
         return err(makeError('PROTOCOL_ERROR', `${field} 响应缺少列表或有效总数`))
       if (batch.length > CI_PAGE_SIZE)
         return err(makeError('PROTOCOL_ERROR', `${field} 超过单页大小`))
-      if (count >= CI_PAGE_SIZE * CI_MAX_PAGES)
+      if (
+        count > CI_PAGE_SIZE * CI_MAX_PAGES ||
+        (field === 'workflow_runs' && count === CI_PAGE_SIZE * CI_MAX_PAGES)
+      )
         return err(makeError('CONFLICT', `${field} 触及分页上限`))
       if (expectedSha !== undefined) {
         if (typeof raw?.sha !== 'string' || !validHeadSha(raw.sha))
@@ -866,6 +899,8 @@ export class GitHubProvider
     slug: string,
     sha: string,
     checks: readonly RawCheckRun[],
+    candidates: readonly RawActionsRun[],
+    prNumber: number | undefined,
   ): Promise<Result<ReadonlyMap<number, RawActionsRun>>> {
     const suites = new Map<number, RawCheckRun[]>()
     for (const check of checks) {
@@ -880,14 +915,11 @@ export class GitHubProvider
     const current = new Map<number, RawActionsRun>()
     if (suites.size === 0) return ok(current)
     const runsBase = `/repos/${slug}/actions/runs`
-    const runs = await this.ciPages(host, `${runsBase}?head_sha=${sha}`, 'workflow_runs')
-    if (!runs.ok) return runs
-    const workflows = runs.value as RawActionsRun[]
     for (const [suite, suiteChecks] of suites) {
-      const candidates = workflows.filter((workflow) => workflow?.check_suite_id === suite)
-      if (candidates.length !== 1)
+      const linked = candidates.filter((workflow) => workflow?.check_suite_id === suite)
+      if (linked.length !== 1)
         return err(makeError('CONFLICT', 'Actions check suite 未能绑定唯一工作流'))
-      const workflow = candidates[0]
+      const workflow = linked[0]
       if (
         !workflow ||
         !positiveId(workflow.id) ||
@@ -901,14 +933,22 @@ export class GitHubProvider
       if (!jobs.ok) return jobs
       const latest = jobs.value as RawActionsJob[]
       for (const check of suiteChecks) {
-        const matches = latest.filter((job) => job?.name === check.name)
+        const matches = latest.filter(
+          (job) =>
+            typeof job?.check_run_url === 'string' &&
+            job.check_run_url.endsWith(`/check-runs/${check.id}`),
+        )
         const job = matches[0]
-        if (job !== undefined && !validHeadSha(job.head_sha))
-          return err(makeError('PROTOCOL_ERROR', 'Actions job 缺少有效 SHA'))
+        if (
+          job !== undefined &&
+          (!validHeadSha(job.head_sha) || !positiveId(job.run_id) || !positiveId(job.run_attempt))
+        )
+          return err(makeError('PROTOCOL_ERROR', 'Actions job 缺少有效 SHA 或轮次'))
         if (
           matches.length !== 1 ||
-          typeof job?.check_run_url !== 'string' ||
-          !job.check_run_url.endsWith(`/check-runs/${check.id}`) ||
+          job?.name !== check.name ||
+          job.run_id !== workflow.id ||
+          job.run_attempt !== workflow.run_attempt ||
           job.head_sha !== sha ||
           job.status !== check.status ||
           job.conclusion !== check.conclusion
@@ -926,7 +966,8 @@ export class GitHubProvider
         verified.run_attempt !== workflow.run_attempt ||
         verified.status !== workflow.status ||
         verified.conclusion !== workflow.conclusion ||
-        verified.status !== 'completed'
+        verified.status !== 'completed' ||
+        !workflowBelongsToPullRequest(verified, prNumber, sha)
       )
         return err(makeError('CONFLICT', 'Actions 轮次尚未完成或在观测期间发生变化'))
       if (actionsRunMatches(verified, sha)) current.set(suite, verified)
@@ -938,6 +979,7 @@ export class GitHubProvider
     host: string,
     slug: string,
     sha: string,
+    prNumber?: number,
     required?: ReadonlySet<string>,
   ): Promise<Result<CommitCheckSnapshot>> {
     const commit = `/repos/${slug}/commits/${sha}`
@@ -950,9 +992,31 @@ export class GitHubProvider
     if (!checks.ok) return checks
     if (!statuses.ok) return statuses
 
+    const candidates = checks.value as RawCheckRun[]
+    let workflows: readonly RawActionsRun[] = []
+    let scopedWorkflows: readonly RawActionsRun[] = []
+    if (
+      (prNumber !== undefined && required === undefined) ||
+      candidates.some((check) => check?.app?.slug === 'github-actions')
+    ) {
+      const observed = await this.ciPages(
+        host,
+        `/repos/${slug}/actions/runs?head_sha=${sha}`,
+        'workflow_runs',
+      )
+      if (!observed.ok) return observed
+      workflows = (observed.value as RawActionsRun[]).filter((workflow) => workflow != null)
+      scopedWorkflows = workflows.filter((workflow) =>
+        workflowBelongsToPullRequest(workflow, prNumber, sha),
+      )
+    }
+    const scopedSuites = new Set(scopedWorkflows.map(({ check_suite_id }) => check_suite_id))
+    const knownSuites = new Map(workflows.map((workflow) => [workflow.check_suite_id, workflow]))
+
     const latestChecks = new Map<string, RawCheckRun>()
+    const checksByName = new Map<string, RawCheckRun[]>()
     const checkIds = new Set<number>()
-    for (const check of checks.value as RawCheckRun[]) {
+    for (const check of candidates) {
       if (
         !check ||
         !positiveId(check.id) ||
@@ -968,7 +1032,26 @@ export class GitHubProvider
       if (checkIds.has(check.id)) return err(makeError('CONFLICT', 'check-run 分页返回重复标识'))
       checkIds.add(check.id)
       if (required !== undefined && !required.has(check.name)) continue
-      const previous = latestChecks.get(check.name)
+      const suiteId = check.check_suite?.id
+      const isActions = check.app?.slug === 'github-actions'
+      if (isActions) {
+        if (!positiveId(suiteId))
+          return err(makeError('PROTOCOL_ERROR', 'Actions 检查缺少有效 check suite'))
+        const workflow = knownSuites.get(suiteId)
+        if (workflow === undefined)
+          return err(makeError('CONFLICT', 'Actions 检查没有匹配的工作流'))
+        if (!scopedSuites.has(suiteId)) {
+          if (
+            workflow.event === undefined ||
+            (isPullRequestWorkflow(workflow) &&
+              (!Array.isArray(workflow.pull_requests) || workflow.pull_requests.length === 0))
+          )
+            return err(makeError('CONFLICT', 'Actions 工作流缺少可验证的 PR 关联'))
+          continue
+        }
+      }
+      const key = isActions ? `actions:${suiteId}:${check.name}` : `check:${check.name}`
+      const previous = latestChecks.get(key)
       if (
         previous !== undefined &&
         (!positiveId(check.check_suite?.id) ||
@@ -977,7 +1060,19 @@ export class GitHubProvider
           previous.app?.id !== check.app?.id)
       )
         return err(makeError('CONFLICT', '同名 check-run 来自不同或未知来源'))
-      if (previous === undefined || previous.id < check.id) latestChecks.set(check.name, check)
+      if (previous === undefined || previous.id < check.id) latestChecks.set(key, check)
+    }
+    for (const check of latestChecks.values()) {
+      const sameName = checksByName.get(check.name) ?? []
+      if (
+        sameName.length > 0 &&
+        (required !== undefined ||
+          check.app?.slug !== 'github-actions' ||
+          sameName.some((previous) => previous.app?.slug !== 'github-actions'))
+      )
+        return err(makeError('CONFLICT', '同名 check-run 来自不同或未知来源'))
+      sameName.push(check)
+      checksByName.set(check.name, sameName)
     }
 
     const currentStatuses = new Map<string, RawCommitStatus>()
@@ -996,21 +1091,41 @@ export class GitHubProvider
       statusIds.add(status.id)
       currentStatuses.set(status.context, status)
       if (required !== undefined && !required.has(status.context)) continue
-      const check = latestChecks.get(status.context)
-      if (check !== undefined && verdict(checkConclusion(check)) !== verdict(status.state))
+      if (
+        checksByName
+          .get(status.context)
+          ?.some((check) => verdict(checkConclusion(check)) !== verdict(status.state))
+      )
         return err(makeError('CONFLICT', '同名 check-run 和 commit status 的结论不一致'))
     }
     const currentChecks = [...latestChecks.values()]
+    const observedSuites = new Set(currentChecks.map((check) => check.check_suite?.id))
+    const actionsPending =
+      scopedWorkflows.some(
+        ({ status, check_suite_id }) =>
+          status !== 'completed' || !observedSuites.has(check_suite_id),
+      ) ||
+      (prNumber !== undefined &&
+        scopedWorkflows.length === 0 &&
+        candidates.some((check) => check?.app?.slug === 'github-actions'))
     if (currentChecks.some(({ conclusion }) => conclusion === 'stale'))
       return err(makeError('CONFLICT', 'check-run 已过期'))
-    const workflows = await this.actionsForChecks(host, slug, sha, currentChecks)
-    if (!workflows.ok) return workflows
+    const verifiedWorkflows = await this.actionsForChecks(
+      host,
+      slug,
+      sha,
+      currentChecks,
+      scopedWorkflows,
+      prNumber,
+    )
+    if (!verifiedWorkflows.ok) return verifiedWorkflows
     return ok({
       checks: currentChecks,
       statuses: [...currentStatuses.values()].filter(
         ({ context }) => required?.has(context) ?? true,
       ),
-      workflows: workflows.value,
+      workflows: verifiedWorkflows.value,
+      actionsPending,
     })
   }
 
@@ -1032,7 +1147,13 @@ export class GitHubProvider
     const facts: RequiredCheckFact[] = []
     const required = new Set(input.requiredChecks)
     if (required.size > 0) {
-      const snapshot = await this.commitCheckSnapshot(host, slug, before.value.headSha, required)
+      const snapshot = await this.commitCheckSnapshot(
+        host,
+        slug,
+        before.value.headSha,
+        input.prNumber,
+        required,
+      )
       if (!snapshot.ok) return snapshot
       for (const check of snapshot.value.checks) {
         facts.push({

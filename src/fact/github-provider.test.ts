@@ -129,6 +129,10 @@ function ciRoutes({
 } = {}): void {
   routes.set(routeKey('GET', CHECKS_PATH), () => ({ status: 200, json: checkRuns(checks) }))
   routes.set(routeKey('GET', STATUS_PATH), () => ({ status: 200, json: combinedStatus(statuses) }))
+  routes.set(routeKey('GET', ACTIONS_LIST_PATH), () => ({
+    status: 200,
+    json: { total_count: 0, workflow_runs: [] },
+  }))
 }
 
 function actionsCheck(id: number, conclusion: string | null) {
@@ -147,13 +151,17 @@ function actionsRun(attempt: number, conclusion: string | null) {
     run_attempt: attempt,
     status: conclusion === null ? 'in_progress' : 'completed',
     conclusion,
+    event: 'pull_request',
+    pull_requests: [{ number: 7, head: { sha: CI_SHA } }],
   }
 }
 
-function actionsJob(check: ReturnType<typeof actionsCheck>) {
+function actionsJob(check: ReturnType<typeof actionsCheck>, attempt: number) {
   return {
     check_run_url: `https://api.github.com/repos/acme/widget/check-runs/${check.id}`,
     head_sha: check.head_sha,
+    run_id: 42,
+    run_attempt: attempt,
     name: check.name,
     status: check.status,
     conclusion: check.conclusion,
@@ -179,12 +187,15 @@ describe('observeCi / rerunFailedCi', () => {
       status: 200,
       json: {
         total_count: 2,
-        workflow_runs: [{ ...workflow(), id: 41, check_suite_id: 10 }, workflow()],
+        workflow_runs: [
+          { ...workflow(), id: 41, check_suite_id: 10, event: 'push', pull_requests: [] },
+          workflow(),
+        ],
       },
     }))
     routes.set(routeKey('GET', ACTIONS_JOBS_PATH), () => ({
       status: 200,
-      json: { total_count: 1, jobs: [actionsJob(currentCheck())] },
+      json: { total_count: 1, jobs: [actionsJob(currentCheck(), runAttempt)] },
     }))
     routes.set(routeKey('GET', `${ACTIONS_RUN_PATH}/attempts/1/jobs?`), () => ({
       status: 200,
@@ -259,6 +270,11 @@ describe('observeCi / rerunFailedCi', () => {
 
   it.each([
     { scenario: 'check-runs 仍返回首轮失败', jobsCheck: actionsCheck(101, 'success'), attempt: 2 },
+    {
+      scenario: 'Checks 和 Jobs 同时返回首轮失败',
+      jobsCheck: actionsCheck(100, 'failure'),
+      attempt: 2,
+    },
     { scenario: '工作流在复查前进入新轮次', jobsCheck: actionsCheck(100, 'failure'), attempt: 1 },
   ])('$scenario 时返回 CONFLICT', async ({ jobsCheck, attempt }) => {
     ciRoutes({ checks: [actionsCheck(100, 'failure')] })
@@ -268,16 +284,127 @@ describe('observeCi / rerunFailedCi', () => {
     }))
     routes.set(routeKey('GET', ACTIONS_JOBS_PATH), () => ({
       status: 200,
-      json: { total_count: 1, jobs: [actionsJob(jobsCheck)] },
+      json: { total_count: 1, jobs: [actionsJob(jobsCheck, 1)] },
     }))
     routes.set(routeKey('GET', ACTIONS_RUN_PATH), () => ({
       status: 200,
-      json: actionsRun(2, 'success'),
+      json: actionsRun(2, jobsCheck.conclusion),
     }))
     expect(await provider().observeCi(CI_INPUT)).toMatchObject({
       ok: false,
       error: { kind: 'CONFLICT' },
     })
+  })
+
+  it.each([null, 'success'] as const)(
+    '绑定 PR 的 workflow 未发布 checks（%s）时拒绝同 SHA 的 push 绿灯',
+    async (conclusion) => {
+      const pushCheck = { ...actionsCheck(101, 'success'), check_suite: { id: 10 } }
+      ciRoutes({ checks: [pushCheck] })
+      routes.set(routeKey('GET', CI_PR_PATH), () => ({ status: 200, json: pullRequest() }))
+      routes.set(routeKey('GET', ACTIONS_LIST_PATH), () => ({
+        status: 200,
+        json: {
+          total_count: 2,
+          workflow_runs: [
+            {
+              ...actionsRun(1, 'success'),
+              id: 41,
+              check_suite_id: 10,
+              event: 'push',
+              pull_requests: [],
+            },
+            actionsRun(1, conclusion),
+          ],
+        },
+      }))
+      const bound = { ...CI_INPUT, prNumber: 7 }
+      const gh = provider()
+      expect(await gh.observeCi(bound)).toEqual({
+        ok: true,
+        value: { state: 'pending' },
+      })
+      expect(
+        await gh.observeRequiredChecks({
+          ...bound,
+          expectedHeadSha: CI_SHA,
+          requiredChecks: ['verify'],
+          observedAt: '2026-11-11T00:00:00.000Z',
+        }),
+      ).toMatchObject({ ok: true, value: { checks: [] } })
+    },
+  )
+
+  it('PR 工作流缺少关联信息时拒绝其检查', async () => {
+    ciRoutes({ checks: [actionsCheck(100, 'success')] })
+    routes.set(routeKey('GET', CI_PR_PATH), () => ({ status: 200, json: pullRequest() }))
+    routes.set(routeKey('GET', ACTIONS_LIST_PATH), () => ({
+      status: 200,
+      json: {
+        total_count: 1,
+        workflow_runs: [{ ...actionsRun(1, 'success'), pull_requests: [] }],
+      },
+    }))
+    expect(await provider().observeCi({ ...CI_INPUT, prNumber: 7 })).toMatchObject({
+      ok: false,
+      error: { kind: 'CONFLICT' },
+    })
+  })
+
+  it('同 SHA 的另一个 PR 的同名检查不覆盖目标 PR', async () => {
+    const check = actionsCheck(100, 'success')
+    const target = actionsRun(1, 'success')
+    ciRoutes({
+      checks: [check, { ...actionsCheck(101, 'failure'), check_suite: { id: 10 } }],
+    })
+    routes.set(routeKey('GET', CI_PR_PATH), () => ({ status: 200, json: pullRequest() }))
+    routes.set(routeKey('GET', ACTIONS_LIST_PATH), () => ({
+      status: 200,
+      json: {
+        total_count: 2,
+        workflow_runs: [
+          {
+            ...target,
+            id: 41,
+            check_suite_id: 10,
+            pull_requests: [{ number: 8, head: { sha: CI_SHA } }],
+          },
+          target,
+        ],
+      },
+    }))
+    routes.set(routeKey('GET', ACTIONS_JOBS_PATH), () => ({
+      status: 200,
+      json: { total_count: 1, jobs: [actionsJob(check, 1)] },
+    }))
+    routes.set(routeKey('GET', ACTIONS_RUN_PATH), () => ({ status: 200, json: target }))
+    expect(await provider().observeCi({ ...CI_INPUT, prNumber: 7 })).toEqual({
+      ok: true,
+      value: { state: 'passed' },
+    })
+  })
+
+  it.each([1000, 1001])('按声明总数区分完整第十页与截断（%i）', async (total) => {
+    ciRoutes()
+    routes.set(routeKey('GET', CHECKS_PATH), ({ url }) => {
+      const page = Number(new URL(url, 'https://fixture.test').searchParams.get('page'))
+      const start = (page - 1) * 100
+      return {
+        status: 200,
+        json: {
+          total_count: total,
+          check_runs: Array.from({ length: 100 }, (_, offset) => {
+            const id = start + offset + 1
+            return checkRun(id, `check-${id}`, 'success')
+          }),
+        },
+      }
+    })
+    expect(await provider().observeCi(CI_INPUT)).toMatchObject(
+      total === 1000
+        ? { ok: true, value: { state: 'passed' } }
+        : { ok: false, error: { kind: 'CONFLICT' } },
+    )
   })
 })
 
@@ -774,6 +901,10 @@ describe('observeCi 的证据边界', () => {
     routes.set(routeKey('GET', `/repos/acme/widget/commits/${OTHER_SHA}/status?`), () => ({
       status: 200,
       json: combinedStatus([], OTHER_SHA),
+    }))
+    routes.set(routeKey('GET', `${ACTIONS_PATH}?head_sha=${OTHER_SHA}`), () => ({
+      status: 200,
+      json: { total_count: 0, workflow_runs: [] },
     }))
     const gh = provider()
     const input = { ...CI_INPUT, prNumber: 7 }

@@ -19,8 +19,8 @@ Keel 在 `S-PR_OPEN` 停下来等 PR 上的 CI 结果。
 > （`PRMerged` → T-024）决定；PR 观测契约见 `git-provider.md` §4。
 
 接口必须回答两个问题：
-1. **等待多久、以什么粒度轮询** —— 硬超时怎么算「失败」;
-2. **多个 CI 信号（Checks + Commit Status）怎么归并成三态** —— 谁说了算。
+1. 如何区分可信的检查结论、尚未上报和暂时无法确定的观测。
+2. 多个 CI 信号如何绑定到仓库、PR、提交和工作流轮次。
 
 ---
 
@@ -31,7 +31,8 @@ interface CiWaitInput {
   repoId: string
   remoteUrl: string        // https://github.com/owner/repo.git
   headSha: string          // PR head 的 commit SHA
-  prNumber?: number        // 已知 PR 编号时传入,便于直接查 PR checks
+  prNumber?: number        // 已知时用于绑定 PR 与 Actions 工作流
+  allowUnreported?: boolean
 }
 
 interface CiGateway {
@@ -39,35 +40,27 @@ interface CiGateway {
 }
 ```
 
-## 2. 归并语义（`combinedStatus`）
+## 2. 观测与归并
 
-Checks 与 Commit Status **合并**成三态：
+两个网关按完整 SHA 分页读取 Checks 和 Commit Status。绑定 PR 时前后复读 PR，
+只接受目标 PR 和 SHA 上的 Actions 工作流。Actions 检查通过 check suite、check ID、
+job 的 run ID 和 `run_attempt` 与工作流绑定，最后复读工作流确认轮次未变化。
+仅有同 SHA 的 push 检查，或远端无法提供足够的 PR / 轮次关联证据时，等待可信观测。
+已知工作流仍在执行或尚未看到检查时，legacy 继续等待。required checks 按声明的检查名取证。
 
-| 条件 | 结果 |
-|---|---|
-| 任一 check `completed` 且 conclusion 不是 `success` / `skipped` | `failed` |
-| 任一 check 未 `completed` | `pending` |
-| 无 checks;Commit Status `state != null` | 按 state:`success` → `passed`;否则 `failed` |
-| Commit Status `state=pending` | 见下 |
-| 无任何 check 也无任何 status | `passed`（没配 CI 的仓库不该永远卡死） |
-
-### 2.1 `pending` 的特殊规则（实测修正,2026-08-24）
-
-`state=pending` 且**无任何 status 上报** = **没人上报**（例如只有 GitHub
-Actions 的仓库 —— Actions 走 check-runs，不写 commit status），
-不是「还在跑」。此时直接判 `passed`。
-
-**只有存在显式 status 时** `pending` 才按等待处理。
-不这样处理，纯 Actions 仓库会永远卡在 pending、掉进硬超时。
+上报中的事实先归并为 `pending`。有可信终态且至少一项失败时归并为 `failed`，
+其余已上报终态归并为 `passed`，legacy 接受 `success`、`skipped` 与 `neutral`。
+Checks 和 Commit Status 都没有上报时返回 `unreported`。只有调用方显式允许
+`allowUnreported` 且静默期已满时，legacy 才能据此通过。
 
 ---
 
 ## 3. 等待与超时
 
-- 轮询间隔 / 上限可用 `pollIntervalMs` / `pollTimeoutMs` 覆盖（测试用毫秒级）;
-- 默认：间隔 10s，上限 30min;
-- **硬超时按 `failed` 处理** —— 由编排器转成 `CIFailed`（T-025），人可介入。
-  这是刻意选择：CI 卡死不是「还在跑」，交给人工而不是无限等。
+- 轮询间隔和上限可用 `pollIntervalMs` / `pollTimeoutMs` 覆盖，默认分别为 10 秒和 30 分钟。
+- `CONFLICT` 与 `HARNESS_UNAVAILABLE` 有限退避重新观测。
+- 达到截止时间返回 `RUN_TIMEOUT`，保留最后的观测错误供编排器诊断。
+  仅可信检查失败产生 `CIFailed`。
 
 ---
 
@@ -81,8 +74,9 @@ Actions 的仓库 —— Actions 走 check-runs，不写 commit status），
 ## 5. 边界
 
 - **只读取，绝不制造结论**：归并逻辑不猜测 CI 意图，只合并外部事实。
-- **不创建 / 不观察 PR** —— 创建是 `PullRequestGateway`，合并/关闭观察是
-  `PullRequestStateGateway`（`git-provider.md` §6）。
+- PR 读取用于验证 CI 绑定。创建由 `PullRequestGateway` 负责，交付状态观察由
+  `PullRequestStateGateway` 负责（`git-provider.md` §6）。
+- 受控重跑仅针对仍失败的首轮 Actions 运行，发出请求前复核绑定和运行轮次。
 - 实现 = `src/contracts/ci-gateway.ts`；单测用 stub HTTP server
   （`github-provider.test.ts`）；真实路径 = `test:acceptance`。
 
