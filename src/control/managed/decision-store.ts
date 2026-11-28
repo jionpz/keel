@@ -823,8 +823,9 @@ export async function resolveTianwenProposalInTx(
 export async function readDecisionResolution(
   requestId: string,
   revision: number,
+  client?: PoolClient,
 ): Promise<DecisionResolution | null> {
-  const row = await asRole('keel_control', async (c) =>
+  const run = (c: PoolClient) =>
     c.query<{ body: unknown }>(
       `SELECT jsonb_strip_nulls(to_jsonb(r)) AS body
        FROM (
@@ -837,8 +838,8 @@ export async function readDecisionResolution(
          WHERE request_id=$1 AND request_revision=$2
        ) r`,
       [requestId, revision],
-    ),
-  )
+    )
+  const row = await (client === undefined ? asRole('keel_control', run) : run(client))
   const body = row.rows[0]?.body
   if (body === undefined) return null
   const checked = validateDecisionResolution(body)
@@ -855,15 +856,20 @@ export async function recheckTicketDecisionAuthority(
     readonly digest: string
   },
   now: string,
+  client?: PoolClient,
 ): Promise<boolean> {
-  const resolution = await readDecisionResolution(reference.request_id, reference.request_revision)
+  const resolution = await readDecisionResolution(
+    reference.request_id,
+    reference.request_revision,
+    client,
+  )
   if (
     resolution === null ||
     resolution.id !== reference.resolution_id ||
     resolution.context_digest !== reference.digest
   )
     return false
-  return asRole('keel_control', async (c) => {
+  const run = async (c: PoolClient): Promise<boolean> => {
     const request = await requestBody(c, reference.request_id, reference.request_revision)
     if (request?.status !== 'RESOLVED' || request.managed_ticket_task_id !== taskId) return false
     if (request.expires_at !== undefined && Date.parse(request.expires_at) <= Date.parse(now))
@@ -897,7 +903,8 @@ export async function recheckTicketDecisionAuthority(
       checked.value.disposition === 'delegated' &&
       checked.value.answer_option_id === resolution.answer_option_id
     )
-  })
+  }
+  return client === undefined ? asRole('keel_control', run) : run(client)
 }
 
 async function currentRequestForQuestion(

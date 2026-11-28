@@ -21,7 +21,10 @@ export type TransitionEvent =
   | {
       readonly type: 'RunFailed'
       readonly stage: Stage
-      readonly reason?: 'commit_message_rejected' | 'empty_develop_diff'
+      readonly reason?:
+        | 'commit_message_rejected'
+        | 'empty_develop_diff'
+        | 'ci_repair_target_changed'
     }
   | { readonly type: 'RunTimeout'; readonly stage: Stage }
   /** 无进展超过 stage 阈值（supervisor 或 patrol 判定）；行为与 RunTimeout 相同 */
@@ -50,6 +53,7 @@ export type TransitionEvent =
       readonly type: 'CIFailed'
       readonly source: CiSource
       readonly headSha?: string
+      readonly prNumber?: number
       readonly evidence?: CiFailureEvidence
     }
   /**
@@ -99,6 +103,7 @@ export type CiSource = 'simulated' | 'github'
 export interface TransitionFacts {
   readonly has_bound_pr?: boolean
   readonly awaiting_ci_review?: boolean
+  readonly ci_repair_allowed?: boolean
   readonly has_running_run?: boolean
   /** A-StageOutcome 的 verdict。守卫读的是枚举，不是自由文本 */
   readonly verdict: string | null

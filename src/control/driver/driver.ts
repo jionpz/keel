@@ -25,6 +25,7 @@ import { enqueueIssueWriteback } from '../issue-writeback.js'
 import { transition } from '../transition/index.js'
 import { TASK_TRANSITIONS } from '../transition/table.js'
 import type { TransitionEvent } from '../transition/types.js'
+import { readCiRepairApproval } from './ci-repair.js'
 import { type AppliedEffect, applyEffects, type WorkspaceBinding } from './effects.js'
 import { loadTransitionFacts } from './facts.js'
 
@@ -95,13 +96,11 @@ export interface AdvanceOutcome {
 /**
  * 人工裁决的附带记录。
  *
- * `note` 只是给人看的理由：不进 prompt、不参与 guard、不影响转移结论。
- * 只有人工命令（`keel decide` / `keel answer`）会传；其它调用不传，
- * 事件流里也就不会凭空多出 `HumanDecision`。
+ * 人工命令用 `note` 记录理由。CI 定向返工要求理由，并将它与批准的失败证据下发。
  */
 export interface AdvanceOptions {
   readonly note?: string
-  readonly expectedRunId?: string
+  readonly expectedRunId?: string | null
 }
 
 export class WorkflowDriver {
@@ -379,12 +378,13 @@ export class WorkflowDriver {
     return asRole('keel_control', async (c) => {
       // PR 收口与 run 认领共用 task 行锁。观察到已有 run 正在执行时留待下一轮。
       const prTerminal = event.type === 'PRMerged' || event.type === 'PRClosed'
+      const lockTask = prTerminal || event.type === 'HumanApproved' || event.type === 'CIFailed'
       const row = await c.query<{
         status: TaskStatus
         control_mode: ControlMode
         current_run_id: string | null
       }>(
-        `SELECT status, control_mode, current_run_id FROM task WHERE id = $1${prTerminal ? ' FOR UPDATE' : ''}`,
+        `SELECT status, control_mode, current_run_id FROM task WHERE id = $1${lockTask ? ' FOR UPDATE' : ''}`,
         [taskId],
       )
       const task = row.rows[0]
@@ -399,14 +399,28 @@ export class WorkflowDriver {
         policy: this.policy,
         now,
       })
-      const transitionEvent =
-        event.type === 'HumanApproved' ? { ...event, repairCi: Boolean(opts.note?.trim()) } : event
-      const result = transition(task.status, task.control_mode, transitionEvent, facts)
+      const note = opts.note?.trim()
+      const repair =
+        event.type === 'HumanApproved' &&
+        task.status === 'S-HUMAN_REVIEW' &&
+        facts.awaiting_ci_review === true
+          ? await readCiRepairApproval(c, taskId, Boolean(note), this.workspace)
+          : undefined
+      const result = transition(
+        task.status,
+        task.control_mode,
+        event,
+        repair === undefined ? facts : { ...facts, ci_repair_allowed: repair.allowed },
+      )
 
       // matched:false 不是错误，是「这个事件在当前状态下无事发生」。
       // 暂停中、终态、guard 未过 —— 三者都是正常的业务状态。
       // 但仍要如实记录，否则事件流会缺失「系统看到了这个事件但没动」这个事实。
       if (!result.matched) {
+        const detail =
+          result.reason === 'guard_failed' && repair?.allowed === false
+            ? repair.reason
+            : result.detail
         const traceId = await ensureTraceId(c, taskId, now)
         await c.query(
           `INSERT INTO event (task_id, type, payload, trace_id, occurred_at)
@@ -418,7 +432,7 @@ export class WorkflowDriver {
               status: task.status,
               control_mode: task.control_mode,
               reason: result.reason,
-              detail: result.detail,
+              detail,
               run_id: task.current_run_id,
               ...('stage' in event ? { stage: event.stage } : {}),
             }),
@@ -432,7 +446,7 @@ export class WorkflowDriver {
           to: task.status,
           transition_id: null,
           effects: [],
-          reason: result.detail,
+          reason: detail,
         })
       }
 
@@ -524,11 +538,15 @@ export class WorkflowDriver {
               ? {
                   source: event.source,
                   ...(event.headSha === undefined ? {} : { head_sha: event.headSha }),
+                  ...(event.type === 'CIFailed' && event.prNumber !== undefined
+                    ? { pr_number: event.prNumber }
+                    : {}),
                   ...(event.type === 'CIFailed' && event.evidence !== undefined
                     ? { ci_failure: event.evidence }
                     : {}),
                 }
               : {}),
+            ...(repair?.allowed === true ? { ci_repair: repair.receipt } : {}),
             // 合并是 S-DONE 的事实依据：时间与 merge SHA 必须能从事件流直接查到。
             ...(event.type === 'PRMerged'
               ? { source: event.source, merged_at: event.mergedAt, merge_sha: event.mergeSha }
@@ -563,7 +581,6 @@ export class WorkflowDriver {
       // 人工理由：与转移同事务落库，避免「状态变了、理由丢了」的中间态。
       // 单独一条事件而不是塞进 TaskStatusChanged —— 时间线要能单独渲染它，
       // 状态变更事件的 payload 只该描述状态变更本身。
-      const note = opts.note?.trim()
       if (note !== undefined && note !== '') {
         await c.query(
           `INSERT INTO event (task_id, type, payload, trace_id, occurred_at)
@@ -573,7 +590,7 @@ export class WorkflowDriver {
             JSON.stringify({
               decision: event.type,
               note,
-              ...(event.type === 'HumanApproved' && facts.awaiting_ci_review === true
+              ...(repair?.allowed === true
                 ? { ci_repair_transition_seq: changed.rows[0]?.seq }
                 : {}),
             }),

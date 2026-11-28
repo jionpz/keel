@@ -23,6 +23,8 @@ import { err, makeError, ok } from '../../contracts/errors.js'
 import type {
   HarnessAdapter,
   HarnessDescriptor,
+  RunHandle,
+  RunSpec,
   WorkspaceDiff,
 } from '../../contracts/harness-adapter.js'
 import type {
@@ -172,7 +174,7 @@ class NoSessionAdapter implements HarnessAdapter {
       limits: { max_input_bytes: null, max_wall_clock_s: null },
     }
   }
-  async startRun(): Promise<never> {
+  async startRun(_spec: RunSpec): Promise<Result<RunHandle>> {
     throw new Error('CI 接线测试不应再起 session')
   }
   async awaitResult(): Promise<never> {
@@ -205,7 +207,7 @@ function depsFor(repoId: string, git: GitWorkspace, project: PreparedProject) {
 }
 
 describe('绑定 PR 的真实 CI 恢复', () => {
-  const headSha = 'a'.repeat(40)
+  let headSha: string
   const mergeSha = 'b'.repeat(40)
   const failed: CiObservation = {
     state: 'failed',
@@ -222,8 +224,34 @@ describe('绑定 PR 的真实 CI 恢复', () => {
     const { taskId, repoId } = await seedTaskAtPrOpen()
     await seedPullRequest(taskId)
     const git = new GitWorkspace({ root })
-    const deps = depsFor(repoId, git, await prepareFor(git, repoId))
+    const project = await prepareFor(git, repoId)
+    const deps = depsFor(repoId, git, project)
+    const worktree = await git.ensureWorktree(project, taskId)
+    if (!worktree.ok) throw new Error(worktree.error.detail)
+    const advanceLocalHead = () => {
+      execFileSync(
+        'git',
+        [
+          '-c',
+          'user.name=fixture',
+          '-c',
+          'user.email=fixture@test',
+          '-c',
+          'commit.gpgsign=false',
+          'commit',
+          '-qm',
+          'new fixture head',
+          '--allow-empty',
+        ],
+        { cwd: worktree.value.path },
+      )
+      return execFileSync('git', ['rev-parse', 'HEAD'], {
+        cwd: worktree.value.path,
+        encoding: 'utf8',
+      }).trim()
+    }
     let ci: () => Result<CiObservation> = () => ok(failed)
+    headSha = project.baseSha
     let currentHead = headSha
     let merged = false
     let onPullRead = () => {}
@@ -267,11 +295,15 @@ describe('绑定 PR 的真实 CI 恢复', () => {
       deps,
       drive,
       developRuns,
+      advanceLocalHead,
       observe: (value: CiObservation) => {
         ci = () => ok(value)
       },
       setObservation: (value: () => Result<CiObservation>) => {
         ci = value
+      },
+      ciUnavailable: () => {
+        ci = () => err(makeError('AUTH_FAILED', '无法读取检查结果'))
       },
       moveHead: (sha: string) => {
         currentHead = sha
@@ -554,6 +586,177 @@ describe('绑定 PR 的真实 CI 恢复', () => {
         : context.error,
     ).toMatch(/修复 Vitest.*[\s\S]+Run Vitest/)
   })
+
+  it('并发审批只派发一次，返工零改动后重启仍拒绝重复审批', async () => {
+    const task = await scenario(async () => ok(false))
+    await task.drive()
+    const approve = () =>
+      new WorkflowDriver(new RuleBasedPolicyEngine(DEFAULT_RULESET)).advance(
+        task.taskId,
+        { type: 'HumanApproved' },
+        task.deps.now(),
+        { note: '修复 Vitest 失败步骤中的断言' },
+      )
+    const approvals = await Promise.all([approve(), approve()])
+    expect(approvals.filter((result) => result.ok && result.value.advanced)).toHaveLength(1)
+    expect(await task.developRuns()).toBe(2)
+    const receipts = await asOwner((c) =>
+      c.query(
+        `SELECT approved.payload->'ci_repair' AS repair, observed.seq, observed.payload
+         FROM event approved JOIN event observed
+           ON observed.task_id=approved.task_id
+          AND observed.seq::text=approved.payload #>> '{ci_repair,evidence_seq}'
+         WHERE approved.task_id=$1 AND approved.payload->>'transition'='T-014'`,
+        [task.taskId],
+      ),
+    )
+    expect(receipts.rows).toEqual([
+      expect.objectContaining({
+        repair: expect.objectContaining({
+          pr_number: 7,
+          failure_key: 'first-attempt',
+          binding: expect.objectContaining({ commit: headSha }),
+        }),
+        payload: expect.objectContaining({ transition: 'T-026', head_sha: headSha }),
+      }),
+    ])
+    await asOwner((c) =>
+      c.query(
+        `UPDATE run SET status='FAILED', ended_at=now(), error_detail=$2
+         WHERE task_id=$1 AND stage='develop' AND attempt=2`,
+        [task.taskId, 'develop 声称 implemented，但工作区在 git 上没有任何改动'],
+      ),
+    )
+    expect(
+      await task.deps.driver.advance(
+        task.taskId,
+        { type: 'RunFailed', stage: 'develop', reason: 'empty_develop_diff' },
+        task.deps.now(),
+      ),
+    ).toMatchObject({ ok: true, value: { transition_id: 'T-031' } })
+    expect(await approve()).toMatchObject({
+      ok: true,
+      value: { advanced: false, to: 'S-HUMAN_REVIEW', reason: expect.stringContaining('已派发') },
+    })
+    expect(await task.developRuns()).toBe(2)
+  })
+
+  it('当前 CI 不可用或新 head 尚无检查时，旧失败不能授权返工', async () => {
+    const task = await scenario(async () => ok(false))
+    const approve = () =>
+      task.deps.driver.advance(task.taskId, { type: 'HumanApproved' }, task.deps.now(), {
+        note: '修复最新检查中的失败',
+      })
+    await task.drive()
+    task.ciUnavailable()
+    expect(await task.drive()).toMatchObject({ ok: false, error: { kind: 'AUTH_FAILED' } })
+    expect(await approve()).toMatchObject({ ok: true, value: { advanced: false } })
+
+    const nextHead = task.advanceLocalHead()
+    task.moveHead(nextHead)
+    task.observe({ state: 'pending' })
+    expect(await task.drive()).toMatchObject({
+      ok: true,
+      value: { finalStatus: 'S-HUMAN_REVIEW', stopReason: 'awaiting-human' },
+    })
+    expect(await approve()).toMatchObject({ ok: true, value: { advanced: false } })
+    expect(await task.developRuns()).toBe(1)
+
+    task.observe({ state: 'failed', evidence: { ...failed.evidence, key: 'next-head' } })
+    await task.drive()
+    expect(await approve()).toMatchObject({ ok: true, value: { transition_id: 'T-014' } })
+    const resolved = await asOwner((c) =>
+      c.query(
+        `SELECT observed.type, observed.payload
+         FROM event approved JOIN event observed
+           ON observed.seq::text=approved.payload #>> '{ci_repair,evidence_seq}'
+         WHERE approved.task_id=$1 AND approved.payload->>'transition'='T-014'`,
+        [task.taskId],
+      ),
+    )
+    expect(resolved.rows).toEqual([
+      {
+        type: 'CiRecoveryObservation',
+        payload: expect.objectContaining({
+          head_sha: nextHead,
+          ci_failure: expect.objectContaining({ key: 'next-head' }),
+        }),
+      },
+    ])
+    const prompts: string[] = []
+    const adapter = new (class extends NoSessionAdapter {
+      override async startRun(spec: RunSpec): Promise<Result<RunHandle>> {
+        prompts.push(spec.context.sections.find(({ id }) => id === 'prompt')?.content ?? '')
+        return err(makeError('RUN_CANCELLED', '已收到返工提示'))
+      }
+    })()
+    await runTaskToCompletion(task.taskId, { ...task.deps, adapter }, { maxSteps: 1 })
+    expect(prompts).toEqual([expect.stringContaining('next-head')])
+    expect(prompts[0]).toContain(nextHead)
+  })
+
+  it('工作分支与获准的 CI SHA 不符时，不启动 session 或另派 develop', async () => {
+    const task = await scenario(async () => ok(false))
+    await task.drive()
+    expect(
+      await task.deps.driver.advance(task.taskId, { type: 'HumanApproved' }, task.deps.now(), {
+        note: '修复 Vitest 中的断言',
+      }),
+    ).toMatchObject({ ok: true, value: { transition_id: 'T-014' } })
+    task.advanceLocalHead()
+    expect(await task.drive()).toMatchObject({
+      ok: true,
+      value: { finalStatus: 'S-HUMAN_REVIEW', steps: [{ transition: 'T-031' }] },
+    })
+    const result = await asOwner((c) =>
+      c.query(
+        `SELECT status, error_kind FROM run WHERE task_id=$1 AND stage='develop' AND attempt=2`,
+        [task.taskId],
+      ),
+    )
+    expect(result.rows).toEqual([{ status: 'FAILED', error_kind: 'STALE_EVIDENCE' }])
+    expect(await task.developRuns()).toBe(2)
+  })
+
+  it('三个不同目标用完返工预算，第四个目标仍须人工处理', async () => {
+    const task = await scenario(async () => ok(false))
+    await task.drive()
+    for (const index of [0, 1, 2, 3]) {
+      const sha = index === 0 ? headSha : task.advanceLocalHead()
+      task.moveHead(sha)
+      task.observe({ state: 'failed', evidence: { ...failed.evidence, key: String(index) } })
+      await task.drive()
+      const approved = await task.deps.driver.advance(
+        task.taskId,
+        { type: 'HumanApproved' },
+        task.deps.now(),
+        { note: '修复当前 SHA 上的失败步骤' },
+      )
+      if (index === 3) {
+        expect(approved).toMatchObject({
+          ok: true,
+          value: { advanced: false, reason: expect.stringContaining('预算已用尽') },
+        })
+        break
+      }
+      expect(approved).toMatchObject({ ok: true, value: { transition_id: 'T-014' } })
+      await asOwner((c) =>
+        c.query(
+          `UPDATE run SET status='FAILED', ended_at=now(), error_detail=$3
+           WHERE task_id=$1 AND stage='develop' AND attempt=$2`,
+          [task.taskId, index + 2, 'develop 声称 implemented，但工作区在 git 上没有任何改动'],
+        ),
+      )
+      expect(
+        await task.deps.driver.advance(
+          task.taskId,
+          { type: 'RunFailed', stage: 'develop', reason: 'empty_develop_diff' },
+          task.deps.now(),
+        ),
+      ).toMatchObject({ ok: true, value: { transition_id: 'T-031' } })
+    }
+    expect(await task.developRuns()).toBe(4)
+  })
 })
 
 /** managed 绑定 + 开工前同步 —— 裸仓库落在 `<root>/repos/<repoId>.git` */
@@ -564,6 +767,26 @@ async function prepareFor(git: GitWorkspace, repoId: string): Promise<PreparedPr
 }
 
 describe('编排器 CI 接线(opts.ci 优先)', () => {
+  it('旧等待入口超时后保留 PR，且没有失败事件或新 develop', async () => {
+    const { taskId, repoId } = await seedTaskAtPrOpen()
+    const git = new GitWorkspace({ root })
+    const project = await prepareFor(git, repoId)
+    const worktree = await git.ensureWorktree(project, taskId)
+    expect(worktree.ok).toBe(true)
+    await runTaskToCompletion(taskId, depsFor(repoId, git, project), {
+      ci: { waitForCi: async () => err(makeError('RUN_TIMEOUT', '检查等待超时')) },
+    })
+    expect(await statusOf(taskId)).toBe('S-PR_OPEN')
+    const events = await asOwner((c) =>
+      c.query(
+        `SELECT 1 FROM event WHERE task_id=$1 AND payload->>'event'='CIFailed'
+         UNION ALL SELECT 1 FROM run WHERE task_id=$1 AND stage='develop' AND attempt>1`,
+        [taskId],
+      ),
+    )
+    expect(events.rows).toEqual([])
+  })
+
   it('waitForCi=passed → T-042 留在 S-PR_OPEN；PR merged → T-024 → S-DONE', async () => {
     const { taskId, repoId } = await seedTaskAtPrOpen()
     await seedPullRequest(taskId)
@@ -803,49 +1026,52 @@ describe('编排器 CI 接线(opts.ci 优先)', () => {
     expect(await statusOf(taskId)).toBe('S-PR_OPEN')
   })
 
-  it('waitForCi=failed → CIFailed → T-025 → 回 S-DEVELOPING 并开新 develop run', async () => {
-    const { taskId, repoId } = await seedTaskAtPrOpen()
-    const git = new GitWorkspace({ root })
-    const project = await prepareFor(git, repoId)
-    execFileSync(
-      'git',
-      ['-C', join(root, 'repos', `${repoId}.git`), 'branch', branchFor(taskId), 'main'],
-      { stdio: 'pipe' },
-    )
+  it.each(['github', 'simulated'] as const)(
+    '%s 无结构化失败证据时保留各自的派发契约',
+    async (source) => {
+      const { taskId, repoId } = await seedTaskAtPrOpen()
+      const git = new GitWorkspace({ root })
+      const project = await prepareFor(git, repoId)
+      execFileSync(
+        'git',
+        ['-C', join(root, 'repos', `${repoId}.git`), 'branch', branchFor(taskId), 'main'],
+        { stdio: 'pipe' },
+      )
 
-    const ci = new FakeCi('failed')
-    // maxSteps=1:推进这一步后就停 —— 我们只关心转移与 run 创建
-    const result = await runTaskToCompletion(taskId, depsFor(repoId, git, project), {
-      maxSteps: 1,
-      ci,
-    })
+      // maxSteps=1:推进这一步后就停 —— 我们只关心转移与 run 创建
+      const result = await runTaskToCompletion(taskId, depsFor(repoId, git, project), {
+        maxSteps: 1,
+        ...(source === 'github'
+          ? { ci: new FakeCi('failed') }
+          : { externalCi: async () => 'failed' as const }),
+      })
 
-    // maxSteps 用尽时循环如实报告「未到终态」—— 这正是我们要的:S-DEVELOPING 非终态
-    expect(result.ok).toBe(false)
-    if (result.ok) return
-    expect(result.error.detail).toContain('S-DEVELOPING')
-    expect(await statusOf(taskId)).toBe('S-DEVELOPING')
+      const expectedStatus = source === 'github' ? 'S-HUMAN_REVIEW' : 'S-DEVELOPING'
+      expect(result.ok).toBe(false)
+      if (result.ok) return
+      expect(result.error.detail).toContain(expectedStatus)
+      expect(await statusOf(taskId)).toBe(expectedStatus)
 
-    const runs = await asOwner((c) =>
-      c.query<{ stage: string; attempt: number }>(
-        'SELECT stage, attempt FROM run WHERE task_id=$1 AND stage=$2 ORDER BY attempt',
-        [taskId, 'develop'],
-      ),
-    )
-    expect(runs.rows.length, '应有第二个 develop run').toBe(2)
-    // 转移轨迹:TaskStatusChanged 记录 CIFailed 驱动的 T-025(S-PR_OPEN → S-DEVELOPING)
-    const events = await asOwner((c) =>
-      c.query<{ type: string; payload: Record<string, unknown> }>(
-        `SELECT type, payload FROM event WHERE task_id=$1 AND type='TaskStatusChanged'
+      const runs = await asOwner((c) =>
+        c.query<{ stage: string; attempt: number }>(
+          'SELECT stage, attempt FROM run WHERE task_id=$1 AND stage=$2 ORDER BY attempt',
+          [taskId, 'develop'],
+        ),
+      )
+      expect(runs.rows.length).toBe(source === 'github' ? 1 : 2)
+      const events = await asOwner((c) =>
+        c.query<{ type: string; payload: Record<string, unknown> }>(
+          `SELECT type, payload FROM event WHERE task_id=$1 AND type='TaskStatusChanged'
          ORDER BY seq DESC LIMIT 1`,
-        [taskId],
-      ),
-    )
-    expect(events.rows[0]?.payload).toMatchObject({
-      from: 'S-PR_OPEN',
-      to: 'S-DEVELOPING',
-      event: 'CIFailed',
-      source: 'github',
-    })
-  })
+          [taskId],
+        ),
+      )
+      expect(events.rows[0]?.payload).toMatchObject({
+        from: 'S-PR_OPEN',
+        to: expectedStatus,
+        event: 'CIFailed',
+        source,
+      })
+    },
+  )
 })

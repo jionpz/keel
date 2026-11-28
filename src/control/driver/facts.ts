@@ -18,6 +18,14 @@ import type { TransitionEvent, TransitionFacts } from '../transition/types.js'
 export const MAX_DEV_ATTEMPTS = 3
 export const MAX_STAGE_ATTEMPTS = 3
 
+export const CURRENT_CI_REVIEW_SQL = `
+  COALESCE((${LATEST_CI_REVIEW_SQL}), false) OR COALESCE((
+    SELECT payload->>'transition'='T-014' AND payload ? 'ci_repair'
+    FROM event WHERE task_id=$1 AND type='TaskStatusChanged'
+      AND payload->>'transition' IN ('T-014','T-016','T-017','T-021','T-025','T-026','T-045')
+    ORDER BY seq DESC LIMIT 1
+  ), false)`
+
 /** 某阶段已用的尝试次数 */
 async function attemptsOf(c: PoolClient, taskId: string, stage: string): Promise<number> {
   const r = await c.query<{ n: string }>(
@@ -97,7 +105,7 @@ export async function loadTransitionFacts(
     has_running_run: boolean
   }>(
     `SELECT EXISTS (SELECT 1 FROM event WHERE task_id=$1 AND ${PR_BINDING_FILTER}) AS has_bound_pr,
-            COALESCE((${LATEST_CI_REVIEW_SQL}), false) AS awaiting_ci_review,
+            (${CURRENT_CI_REVIEW_SQL}) AS awaiting_ci_review,
             EXISTS (SELECT 1 FROM run WHERE task_id=$1 AND status='RUNNING') AS has_running_run`,
     [taskId],
   )
