@@ -141,7 +141,8 @@ revision、resolution id 与 context digest；即使恢复点没有 Git 改动�
 
 结构化阶段结果通过 schema 校验后，先保留 result 与实际 git/检查 evidence，再做
 阶段门禁。验证失败时仍可回查命令、退出码和输出摘要。失败行可携带 result 和 evidence
-摘要用于恢复决策，只有成功或复用的阶段才提供 workflow 完成证据。
+摘要用于恢复决策；verify 检查未通过时记为 `REWORK`，不提供 workflow 完成证据。
+只有成功或复用的阶段才提供 workflow 完成证据。
 
 verify 的 `checks` 每项都是硬门禁，只包含当前阶段必需的验收检查，失败不能省略。
 探索性环境诊断放在 `summary`；安全负例必须由断言预期拒绝的脚本给出真实成功结果，
@@ -151,8 +152,8 @@ verify 的 `checks` 每项都是硬门禁，只包含当前阶段必需的验收
 
 | 阶段 | 门禁 |
 |---|---|
-| `execute` | 输出等于 HEAD 且为输入后代，工作树干净。通常必须产生新 commit。已提交的完整恢复点，以及升级前的 verify 回退经决议接纳后，允许重新确认 |
-| `verify` | 至少一条 check，每条都有 command、exit code、passed、输出摘要和摘录。`output_digest` 由 Keel 根据摘录重算。HEAD 和分支必须保持不变。检查失败按下述规则恢复 |
+| `execute` | 输出等于 HEAD 且为输入后代，工作树干净。通常必须产生新 commit。已提交的完整恢复点，以及 verify 失败后经决议接纳的恢复决定，允许重新确认 |
+| `verify` | 已注册的项目验证契约必须覆盖全部改动路径。Keel 执行所有适用的本地检查，并将适用的远端名称交给 PR 网关。无契约时沿用固定阶段的检查产物，仍要求至少一条 check。每条 check 都有 command、exit code、passed、输出摘要和摘录；`output_digest` 由 Keel 根据摘录重算。两条路径都核对 HEAD 和分支，保留失败检查证据，并按下述预算返工或暂停 |
 | `review` | `reviewed_commit` 必须等于当前 HEAD；`diff_digest` 必须等于 Keel 重新计算的 baseline..HEAD diff；open finding 只能进入 rework |
 | `land` | `land.commit` 必须等于当前 HEAD；branch 必须是 `ai/*` 且不等于 base；只登记 `push_and_pr` intent/outbox，不执行 push/PR |
 
@@ -160,9 +161,9 @@ review 的 diff 摘要由 Control 运行 `git diff --binary baseline..HEAD` 计�
 旧 SHA、旧 diff 或旧 verify 证据都会被拒绝。review 提出 open finding 时任务回到
 `execute`，保留 findings 作为下一轮上下文。
 
-verify 遇到检查失败仍输出 `completed` 并保留失败项与退出码。Keel 要求工作区干净，
-HEAD 和分支与输入相同，自报的 `worktree_head` 也须一致。缺少检查证据或绑定过期时
-直接暂停。
+verify 检查未通过时仍输出 `completed` 并保留失败项与退出码。Keel 要求工作区干净，
+HEAD 和分支与输入相同，自报的 `worktree_head` 也须一致。失败记录携带 result 与 evidence
+摘要供恢复决策，但不作为成功阶段或可复用证明；缺少检查证据或绑定过期时直接暂停。
 
 - [`selectRecovery`](../../../src/control/recovery-policy.ts) 根据结构化失败、目标绑定、
   历史、各类别剩余额度和定向授权选择恢复动作。阶段记录保留失败检查、动作和指纹。
@@ -211,10 +212,28 @@ execute。分工不改变门禁：execute 仍按提交、工作树与 scope 判�
 仍是硬门禁。execute 不再预跑完整检查，完整检查的失败要到 verify 才暴露；这时任务
 按上面的规则自动回到 execute，并带上失败输出。
 
-verify 的 command/result 是隔离执行器产出的结构化证据，并由 Keel 用真实 git HEAD、
-工作树干净状态和 diff 摘要绑定；`output_digest` 由 Keel 从 `output_excerpt` 重新
-计算，不信任模型自报摘要。它不是模型自报的 `completed` 文本。当前切片不重放任意
-项目测试命令；真实端到端模型验收属于 JT-02F。
+### 项目验证绑定
+
+- 管理员通过 `register-repo --verification-contract` 注册检查 ID、本地 argv、远端
+  检查名称和可选的仓库相对路径。仓库规则、CI 配置、脚本和 PR 文本可以提供检查
+  候选。只有管理员注册可以把候选变成项目必要检查。JSON 格式、重复 ID、重复远端
+  名称和非法路径在注册时报告。
+- Keel 从绑定的 Git 基线读取已提交的 `AGENTS.md`。父目录规则适用于子目录，
+  同一事项以更深目录的规则为准。规则以带路径、Git SHA 和摘要的 artifact 进入
+  上下文。固定阶段指令、工具策略及管理员检查配置优先于仓库规则。
+- managed ticket 包摘要包含规则和验证绑定。workflow 在创建时固定注册配置与规则
+  基线，可在节点开工前通过 `--replan` 重新绑定。旧任务继续使用已有绑定。
+- 配置生效时，Keel 以实际提交改动路径选择检查。在独立的只读检出中执行本地
+  argv，并记录检查 ID、退出码、脱敏摘录与摘要。摘录标记为不可信数据。review
+  和 land 核对当前提交、固定包与必要检查覆盖。只有模型自述、旧 SHA、旧包或
+  缺检查的结果都无法通过。
+- 适用的远端必要检查要求 `pr_ready`。PR 网关把项目所需名称与已有策略名称合并，
+  对准确 PR head 验证成功。远端检查无法被文件内容或模型结果代替。
+- legacy-v01 在 `develop` 绑定规则和检查，在 `qa` 执行本地检查，在 `review`
+  核对 QA 证明，并在真实 PR 观察中核对当前 head 和远端检查。无契约仓库继续按
+  既有阶段证据运行。已配置仓库的旧 legacy 任务如缺少绑定，需要回到 `develop`。
+
+注册命令和只读沙箱下的混合栈示例见[项目验证接入](../guides/project-verification.md)。
 
 ## 5. 工具与隔离
 

@@ -124,6 +124,9 @@ async function authorize(
         environment: claim.intent.environment,
         reversibility: claim.intent.reversibility,
         affected_resources: claim.intent.affected_resources,
+        ...(claim.intent.project_required_checks === undefined
+          ? {}
+          : { project_required_checks: claim.intent.project_required_checks }),
         attempts: claim.outbox.attempts,
         now,
       },

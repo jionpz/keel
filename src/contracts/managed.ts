@@ -100,6 +100,7 @@ export interface ManagedTicketTask {
   readonly id: string
   readonly repo_id: string
   readonly package_digest: string
+  readonly project_verification?: unknown
   readonly ticket_id: string
   readonly ticket_title: string
   readonly baseline_commit: string
@@ -211,6 +212,7 @@ export interface ManagedWorkflow {
   readonly id: string
   readonly repo_id: string
   readonly package_digest: string
+  readonly verification_contract?: unknown
   readonly repo_config_digest: string
   readonly baseline_commit: string
   readonly worktree_root: string

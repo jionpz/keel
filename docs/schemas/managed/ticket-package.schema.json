@@ -22,6 +22,7 @@
     "protocol_version": {"const": "1.0"},
     "workflow_id": {"const": "jstack"},
     "mode": {"const": "ticket"},
+    "project_verification_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
     "source_commit": {"type": "string", "minLength": 1, "maxLength": 100},
     "ticket": {
       "type": "object",

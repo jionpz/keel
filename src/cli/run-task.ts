@@ -474,7 +474,7 @@ export async function runTask(
         ...(opts.observePrOnly === true ? { observePrOnly: true } : {}),
         ...(gateway.value === undefined
           ? { externalCi: async () => (ci === 'failed' ? 'failed' : 'passed') }
-          : { ci: gateway.value, pullRequests: gateway.value }),
+          : { ci: gateway.value, pullRequests: gateway.value, requiredChecks: gateway.value }),
       },
     )
     if (!result.ok) return result

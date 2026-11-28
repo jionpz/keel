@@ -7,7 +7,7 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -98,6 +98,33 @@ async function defaultBranchOf(remoteUrl: string): Promise<string> {
   if (row === undefined) throw new Error(`repo 不存在：${remoteUrl}`)
   return row.default_branch
 }
+
+it('通过仓库注册绑定必要检查，拒绝冲突 ID 并保留上次配置', async () => {
+  const url = remote('verification')
+  const file = join(sandbox, 'verification.json')
+  const contract = {
+    version: '1',
+    checks: [
+      { id: 'frontend', kind: 'local', argv: ['pnpm', 'exec', 'vitest'], paths: ['frontend'] },
+      { id: 'backend', kind: 'local', argv: ['python3', '-m', 'pytest'], paths: ['backend'] },
+    ],
+  }
+  writeFileSync(file, JSON.stringify(contract))
+  expect((await run([url, '--verification-contract', file])).exitCode).toBeUndefined()
+  expect((await run([url])).exitCode).toBeUndefined()
+  writeFileSync(
+    file,
+    JSON.stringify({ ...contract, checks: [contract.checks[0], contract.checks[0]] }),
+  )
+  expect(await run([url, '--verification-contract', file])).toMatchObject({
+    exitCode: 1,
+    stderr: expect.stringContaining('检查 ID 冲突'),
+  })
+  const stored = await asOwner((client) =>
+    client.query('SELECT verification_contract FROM repo WHERE remote_url=$1', [url]),
+  )
+  expect(stored.rows).toEqual([{ verification_contract: contract }])
+})
 
 describe('仓库提交配置注册', () => {
   async function policy(url: string) {

@@ -17,6 +17,7 @@ export interface ManagedOsSandbox {
 
 export interface PrepareOsSandboxOptions {
   readonly readOnlyWorkspace?: boolean
+  readonly restrictFileAccess?: boolean
   readonly workspace: string
   readonly root: string
   readonly home: string
@@ -29,6 +30,7 @@ export interface PrepareOsSandboxOptions {
 
 export interface MacSandboxProfileOptions {
   readonly readOnlyWorkspace?: boolean
+  readonly restrictFileAccess?: boolean
   readonly readOnlyGitDirs?: readonly string[]
   readonly root: string
   readonly home: string
@@ -119,6 +121,7 @@ export async function prepareManagedOsSandbox(
       runtimePaths,
       networkPorts,
       readOnlyWorkspace: options.readOnlyWorkspace ?? false,
+      restrictFileAccess: options.restrictFileAccess ?? false,
       readOnlyGitDirs,
     })
     await writeFile(profilePath, profile, { mode: 0o400 })
@@ -141,7 +144,11 @@ export async function prepareManagedOsSandbox(
 export function buildMacSandboxProfile(options: MacSandboxProfileOptions): string {
   const rootPaths = uniquePaths([options.root, options.home, options.tmpdir, options.workspace])
   const readWritePaths = options.readOnlyWorkspace
-    ? uniquePaths([options.root, options.home, options.tmpdir])
+    ? uniquePaths(
+        options.restrictFileAccess
+          ? [options.home, options.tmpdir]
+          : [options.root, options.home, options.tmpdir],
+      )
     : rootPaths
   const readOnlyPaths = uniquePaths([
     ...SYSTEM_READ_PATHS,
@@ -161,6 +168,7 @@ export function buildMacSandboxProfile(options: MacSandboxProfileOptions): strin
   const lines = [
     '(version 1)',
     '(allow default)',
+    ...(options.restrictFileAccess ? ['(deny file-read* file-write*)'] : []),
     `(deny file-read* file-write* (subpath ${sbplString(options.hostHome)}))`,
     ...HOST_DENY_PATHS.map((path) => `(deny file-read* file-write* (subpath ${sbplString(path)}))`),
     `(allow file-read-metadata ${metadataPaths.map((path) => `(literal ${sbplString(path)})`).join(' ')})`,
@@ -176,6 +184,12 @@ export function buildMacSandboxProfile(options: MacSandboxProfileOptions): strin
   for (const path of readWritePaths) {
     lines.push(`(allow file-read* file-write* (subpath ${sbplString(path)}))`)
   }
+  if (options.restrictFileAccess)
+    lines.push(
+      '(allow file-read-data (literal "/"))',
+      '(allow file-read-metadata (literal "/tmp"))',
+      '(allow file-write-data (literal "/dev/null"))',
+    )
 
   lines.push(
     ...KEYCHAIN_MACH_SERVICES.map(
