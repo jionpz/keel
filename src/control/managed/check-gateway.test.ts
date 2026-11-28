@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ok, type Result } from '../../contracts/errors.js'
+import { err, type KeelError, makeError, ok, type Result } from '../../contracts/errors.js'
 import type { PullRequestGateway, PullRequestInfo } from '../../contracts/git-provider.js'
 import type {
   GitPushGateway,
@@ -76,6 +76,8 @@ class FakePullRequests implements PullRequestGateway {
 
 class FakeChecks implements RequiredCheckGateway {
   calls = 0
+  error?: KeelError
+  expectedHeadSha?: string
   patch: Partial<RequiredCheckSnapshot> = {}
   facts: readonly RequiredCheckFact[] = [
     {
@@ -91,6 +93,8 @@ class FakeChecks implements RequiredCheckGateway {
     input: RequiredCheckObservationInput,
   ): Promise<Result<RequiredCheckSnapshot>> {
     this.calls++
+    if (input.expectedHeadSha !== undefined) this.expectedHeadSha = input.expectedHeadSha
+    if (this.error !== undefined) return err(this.error)
     return ok({
       repoId: input.repoId,
       repo: 'acme/widget',
@@ -334,13 +338,45 @@ describe('managed required check gateway', () => {
     const result = requireCheckResult(
       await runCheckGatewayOnce({ checks: seeded.checks, now: () => LATER }),
     )
-    expect(result.status).toBe('FAILED')
+    expect(seeded.checks.expectedHeadSha).toBe(seeded.head)
+    expect(result.status).toBe('CHECKING')
     expect(result.error).toContain('不一致')
     const evidence = await listCheckEvidence({ targetId: seeded.targetId })
-    expect(evidence[0]?.observations[0]?.head_sha).toBe(ALT_SHA)
+    expect(evidence[0]?.observations).toEqual([])
     const task = await getManagedTicket(seeded.taskId)
-    expect(task.ok && task.value.status).toBe('PR_CHECKS_FAILED')
+    expect(task.ok && task.value.status).toBe('CHECKING')
   })
+
+  it.each(['CONFLICT', 'HARNESS_UNAVAILABLE'] as const)(
+    '观测暂不可用 %s 时仅推迟读取',
+    async (kind) => {
+      const seeded = await seedAction()
+      seeded.checks.error = makeError(kind, 'fixture 观测未稳定')
+      const deferred = requireCheckResult(
+        await runCheckGatewayOnce({ checks: seeded.checks, now: () => NOW }),
+      )
+      expect(deferred).toMatchObject({ status: 'CHECKING', error: `${kind}: fixture 观测未稳定` })
+      expect((await listCheckEvidence({ targetId: seeded.targetId }))[0]?.observations).toEqual([])
+      delete seeded.checks.error
+      const recovered = requireCheckResult(
+        await runCheckGatewayOnce({ checks: seeded.checks, now: () => LATER }),
+      )
+      expect(recovered.status).toBe('READY')
+    },
+  )
+
+  it.each(['AUTH_FAILED', 'PROTOCOL_ERROR'] as const)(
+    '观测拒绝 %s 时保留独立诊断',
+    async (kind) => {
+      const seeded = await seedAction()
+      seeded.checks.error = makeError(kind, 'fixture 拒绝')
+      const rejected = requireCheckResult(
+        await runCheckGatewayOnce({ checks: seeded.checks, now: () => NOW }),
+      )
+      expect(rejected).toMatchObject({ status: 'FAILED', error: `${kind}: fixture 拒绝` })
+      expect((await listCheckEvidence({ targetId: seeded.targetId }))[0]?.observations).toEqual([])
+    },
+  )
 
   it('旧批准撤销后不能凭已创建 PR 进入 PR_READY', async () => {
     const seeded = await seedAction()
