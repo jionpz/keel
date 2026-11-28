@@ -18,7 +18,7 @@ const INTENT_JSON = `jsonb_strip_nulls(to_jsonb(i)) AS body
   FROM (
     SELECT id, '1.0'::text AS schema_version, project_id, repo_id, task_id, action,
       remote_url, base_branch, head_branch, head_sha, diff_digest, environment,
-      reversibility, affected_resources, pr_title, pr_body,
+      reversibility, affected_resources, pr_title, pr_body, project_required_checks,
       CASE WHEN decision_request_id IS NULL THEN NULL ELSE jsonb_build_object(
         'request_id', decision_request_id,
         'request_revision', decision_request_revision,
@@ -116,6 +116,7 @@ export interface EnqueueActionInput {
   readonly affected_resources: readonly string[]
   readonly pr_title: string
   readonly pr_body: string
+  readonly project_required_checks?: readonly string[]
   readonly decision?: ManagedActionIntent['decision']
   readonly created_at: string
 }
@@ -137,10 +138,10 @@ export async function enqueueActionIntent(
       id,task_id,project_id,repo_id,action,remote_url,base_branch,head_branch,
       head_sha,diff_digest,environment,reversibility,affected_resources,
       pr_title,pr_body,decision_request_id,decision_request_revision,
-      decision_resolution_id,decision_digest,idempotency_key,created_at
+      decision_resolution_id,decision_digest,idempotency_key,created_at,project_required_checks
     ) VALUES(
       $1,$2,$3,$4,'push_and_pr',$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14,
-      $15,$16,$17,$18,$19,$20
+      $15,$16,$17,$18,$19,$20,$21::jsonb
     )`,
     [
       intentId,
@@ -163,6 +164,9 @@ export async function enqueueActionIntent(
       input.decision?.digest ?? null,
       idempotencyKey,
       input.created_at,
+      input.project_required_checks === undefined
+        ? null
+        : JSON.stringify(input.project_required_checks),
     ],
   )
   await c.query(

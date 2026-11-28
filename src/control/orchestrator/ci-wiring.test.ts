@@ -40,6 +40,7 @@ import { WorkflowDriver } from '../driver/driver.js'
 import { RuleBasedPolicyEngine } from '../policy/engine.js'
 import { DEFAULT_RULESET } from '../policy/ruleset.js'
 import { runTaskToCompletion } from './loop.js'
+import { legacyProjectBinding, runLegacyProjectQa } from './project-verification.js'
 
 const store = new PgArtifactStore()
 
@@ -537,6 +538,91 @@ async function prepareFor(git: GitWorkspace, repoId: string): Promise<PreparedPr
 }
 
 describe('编排器 CI 接线(opts.ci 优先)', () => {
+  it.skipIf(process.platform !== 'darwin')('legacy QA 执行注册检查，PR 拒绝旧 SHA', async () => {
+    const { taskId, repoId } = await seedTaskAtPrOpen()
+    await seedPullRequest(taskId)
+    const git = new GitWorkspace({ root })
+    const project = await prepareFor(git, repoId)
+    const deps = depsFor(repoId, git, project)
+    const worktree = await git.ensureWorktree(project, taskId)
+    if (!worktree.ok) throw new Error(worktree.error.detail)
+    const runId = randomUUID()
+    await asOwner(async (client) => {
+      await client.query('UPDATE repo SET verification_contract=$2::jsonb WHERE id=$1', [
+        repoId,
+        JSON.stringify({
+          version: '1',
+          checks: [{ id: 'guard', kind: 'local', argv: ['/usr/bin/grep', 'fixture', 'README.md'] }],
+        }),
+      ])
+      await client.query(
+        `INSERT INTO run (id,task_id,stage,role,attempt,status,idempotency_key)
+         VALUES ($1,$2,'qa','QA',1,'RUNNING',$3)`,
+        [runId, taskId, `${taskId}/qa/1`],
+      )
+    })
+    const binding = await legacyProjectBinding({
+      taskId,
+      worktree: deps.workspace,
+      path: worktree.value.path,
+      allowBind: true,
+      now: deps.now(),
+    })
+    if (!binding.ok || binding.value === null) throw new Error('缺少 legacy QA 绑定')
+    writeFileSync(join(worktree.value.path, 'README.md'), 'fixture verified\n')
+    const committed = await git.commitAll(taskId, 'fixture ready')
+    if (!committed.ok) throw new Error(committed.error.detail)
+    expect(
+      await runLegacyProjectQa({
+        taskId,
+        worktree: deps.workspace,
+        binding: binding.value,
+        runId,
+        now: deps.now,
+        timeoutMs: 5000,
+      }),
+    ).toMatchObject({ ok: true })
+    const evidence = await asOwner((client) =>
+      client.query(
+        `SELECT payload FROM event WHERE run_id=$1 AND type='ProjectVerificationExecuted'`,
+        [runId],
+      ),
+    )
+    const head = await git.headSha(project, taskId)
+    if (!head.ok) throw new Error(head.error.detail)
+    expect(evidence.rows).toMatchObject([
+      {
+        payload: {
+          head_sha: head.value,
+          required_check_ids: ['guard'],
+          output_trust: 'untrusted',
+          local: [{ id: 'guard', exit_code: 0, output_excerpt: 'fixture verified\n' }],
+        },
+      },
+    ])
+    const merged = (headSha: string) =>
+      new FakePullRequests({
+        number: 7,
+        url: `file://${origin}/pull/7`,
+        state: 'closed',
+        merged: true,
+        mergedAt: '2026-08-24T01:02:03Z',
+        mergeSha: 'b'.repeat(40),
+        closedAt: '2026-08-24T01:02:03Z',
+        headSha,
+      })
+    const ci = new FakeCi('passed')
+    expect(
+      await runTaskToCompletion(taskId, deps, {
+        ci,
+        pullRequests: merged(project.baseSha),
+      }),
+    ).toMatchObject({ ok: false, error: { kind: 'STALE_EVIDENCE' } })
+    expect(
+      await runTaskToCompletion(taskId, deps, { ci, pullRequests: merged(head.value) }),
+    ).toMatchObject({ ok: true, value: { finalStatus: 'S-DONE' } })
+  })
+
   it('waitForCi=passed → T-042 留在 S-PR_OPEN；PR merged → T-024 → S-DONE', async () => {
     const { taskId, repoId } = await seedTaskAtPrOpen()
     await seedPullRequest(taskId)

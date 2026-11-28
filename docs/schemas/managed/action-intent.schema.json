@@ -24,6 +24,12 @@
     "created_at"
   ],
   "properties": {
+    "project_required_checks": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 200}
+    },
     "schema_version": {
       "const": "1.0"
     },

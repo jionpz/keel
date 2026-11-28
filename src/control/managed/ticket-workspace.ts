@@ -18,7 +18,7 @@ export interface TicketWorktreeState {
   readonly clean: boolean
 }
 
-async function git(path: string, args: readonly string[]): Promise<string> {
+async function git(path: string, args: readonly string[], preserveOutput = false): Promise<string> {
   const result = await run('git', [...SAFE_GIT_ARGS, '-C', path, ...args], {
     encoding: 'utf8',
     env: {
@@ -32,7 +32,55 @@ async function git(path: string, args: readonly string[]): Promise<string> {
     maxBuffer: 8 * 1024 * 1024,
     timeout: 15000,
   })
-  return args.includes('-z') ? result.stdout : result.stdout.trim()
+  return preserveOutput || args.includes('-z') ? result.stdout : result.stdout.trim()
+}
+
+export async function committedAgentRules(
+  path: string,
+  commit: string,
+): Promise<Result<readonly { readonly path: string; readonly content: string }[]>> {
+  if (!/^[a-f0-9]{40}$/.test(commit))
+    return err(makeError('WORKSPACE_ERROR', '项目规则需要完整的 Git 基线 SHA'))
+  try {
+    const tree = await git(path, ['ls-tree', '-rz', '--full-tree', commit], true)
+    const rules = tree
+      .split('\0')
+      .flatMap((entry) => {
+        const tab = entry.indexOf('\t')
+        const file = entry.slice(tab + 1)
+        return file === 'AGENTS.md' || file.endsWith('/AGENTS.md')
+          ? [{ path: file, metadata: entry.slice(0, tab) }]
+          : []
+      })
+      .sort(
+        (left, right) =>
+          left.path.split('/').length - right.path.split('/').length ||
+          (left.path < right.path ? -1 : 1),
+      )
+    if (rules.length > 64) throw new Error('AGENTS.md 来源超过 64 个')
+    const result = []
+    let totalBytes = 0
+    for (const rule of rules) {
+      const blob = /^100[67]44 blob ([a-f0-9]{40})$/.exec(rule.metadata)?.[1]
+      if (blob === undefined) throw new Error(`${rule.path} 必须是已提交的普通文件`)
+      const length = Number(await git(path, ['cat-file', '-s', blob]))
+      totalBytes += length
+      if (!Number.isSafeInteger(length) || totalBytes > 65536)
+        throw new Error('AGENTS.md 来源合计超过 64 KiB')
+      const content = await git(path, ['cat-file', 'blob', blob], true)
+      if (content.includes('\uFFFD') || content.includes('\0'))
+        throw new Error(`${rule.path} 必须是 UTF-8 文本`)
+      result.push({ path: rule.path, content })
+    }
+    return ok(result)
+  } catch (error) {
+    return err(
+      makeError(
+        'WORKSPACE_ERROR',
+        `无法发现项目规则：${error instanceof Error ? error.message : String(error)}`,
+      ),
+    )
+  }
 }
 
 export async function inspectTicketWorktree(path: string): Promise<Result<TicketWorktreeState>> {

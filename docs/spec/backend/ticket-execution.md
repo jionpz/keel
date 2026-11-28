@@ -153,7 +153,7 @@ verify 的 `checks` 每项都是硬门禁，只包含当前阶段必需的验收
 | 阶段 | 门禁 |
 |---|---|
 | `execute` | 输出等于 HEAD 且为输入后代，工作树干净；通常必须产生新 commit，只有上述已提交完整恢复点、以及 verify 失败后被接纳的恢复决定允许重新确认 |
-| `verify` | 至少一条 check；每条必须有 command、exit code、passed、输出摘要/摘录；`output_digest` 必须与实际摘录一致；HEAD 不能变化；检查失败后按下述预算回到 execute 或暂停 |
+| `verify` | 已注册的项目验证契约必须覆盖全部改动路径。Keel 执行所有适用的本地检查，并将适用的远端名称交给 PR 网关。无契约时沿用固定阶段的检查产物，仍要求至少一条 check。两条路径都核对 HEAD 和输出摘要，失败按下述预算返工或暂停 |
 | `review` | `reviewed_commit` 必须等于当前 HEAD；`diff_digest` 必须等于 Keel 重新计算的 baseline..HEAD diff；open finding 只能进入 rework |
 | `land` | `land.commit` 必须等于当前 HEAD；branch 必须是 `ai/*` 且不等于 base；只登记 `push_and_pr` intent/outbox，不执行 push/PR |
 
@@ -209,10 +209,28 @@ execute。分工不改变门禁：execute 仍按提交、工作树与 scope 判�
 仍是硬门禁。execute 不再预跑完整检查，完整检查的失败要到 verify 才暴露；这时任务
 按上面的规则自动回到 execute，并带上失败输出。
 
-verify 的 command/result 是隔离执行器产出的结构化证据，并由 Keel 用真实 git HEAD、
-工作树干净状态和 diff 摘要绑定；`output_digest` 由 Keel 从 `output_excerpt` 重新
-计算，不信任模型自报摘要。它不是模型自报的 `completed` 文本。当前切片不重放任意
-项目测试命令；真实端到端模型验收属于 JT-02F。
+### 项目验证绑定
+
+- 管理员通过 `register-repo --verification-contract` 注册检查 ID、本地 argv、远端
+  检查名称和可选的仓库相对路径。仓库规则、CI 配置、脚本和 PR 文本可以提供检查
+  候选。只有管理员注册可以把候选变成项目必要检查。JSON 格式、重复 ID、重复远端
+  名称和非法路径在注册时报告。
+- Keel 从绑定的 Git 基线读取已提交的 `AGENTS.md`。父目录规则适用于子目录，
+  同一事项以更深目录的规则为准。规则以带路径、Git SHA 和摘要的 artifact 进入
+  上下文。固定阶段指令、工具策略及管理员检查配置优先于仓库规则。
+- managed ticket 包摘要包含规则和验证绑定。workflow 在创建时固定注册配置与规则
+  基线，可在节点开工前通过 `--replan` 重新绑定。旧任务继续使用已有绑定。
+- 配置生效时，Keel 以实际提交改动路径选择检查。在独立的只读检出中执行本地
+  argv，并记录检查 ID、退出码、脱敏摘录与摘要。摘录标记为不可信数据。review
+  和 land 核对当前提交、固定包与必要检查覆盖。只有模型自述、旧 SHA、旧包或
+  缺检查的结果都无法通过。
+- 适用的远端必要检查要求 `pr_ready`。PR 网关把项目所需名称与已有策略名称合并，
+  对准确 PR head 验证成功。远端检查无法被文件内容或模型结果代替。
+- legacy-v01 在 `develop` 绑定规则和检查，在 `qa` 执行本地检查，在 `review`
+  核对 QA 证明，并在真实 PR 观察中核对当前 head 和远端检查。无契约仓库继续按
+  既有阶段证据运行。已配置仓库的旧 legacy 任务如缺少绑定，需要回到 `develop`。
+
+注册命令和只读沙箱下的混合栈示例见[项目验证接入](../guides/project-verification.md)。
 
 ## 5. 工具与隔离
 

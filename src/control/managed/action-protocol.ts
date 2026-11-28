@@ -36,6 +36,7 @@ export function actionTargetDigest(
     | 'environment'
     | 'reversibility'
     | 'affected_resources'
+    | 'project_required_checks'
   >,
 ): string {
   return sha256CanonicalJson({
@@ -47,6 +48,9 @@ export function actionTargetDigest(
     environment: intent.environment,
     reversibility: intent.reversibility,
     affected_resources: [...intent.affected_resources].sort(),
+    ...(intent.project_required_checks === undefined
+      ? {}
+      : { project_required_checks: [...intent.project_required_checks].sort() }),
   })
 }
 

@@ -7,6 +7,7 @@ export interface ActionAuthorizationRequest {
   readonly environment: 'local' | 'test' | 'staging' | 'production'
   readonly reversibility: 'reversible' | 'partially_reversible' | 'irreversible'
   readonly affected_resources: readonly string[]
+  readonly project_required_checks?: readonly string[]
   /** 当前 outbox 已认领的尝试次数；用于校验 max_attempts 预算。 */
   readonly attempts?: number
   readonly now: string
@@ -181,7 +182,12 @@ export function authorizeAction(
   if (selected === undefined)
     return { ok: false, reason: '没有可用的 delegated 规则', restrictive: false }
 
-  const requiredChecks = [...new Set(matching.flatMap(({ rule }) => rule.required_checks))].sort()
+  const requiredChecks = [
+    ...new Set([
+      ...matching.flatMap(({ rule }) => rule.required_checks),
+      ...(request.project_required_checks ?? []),
+    ]),
+  ].sort()
   if (requiredChecks.length > 16)
     return {
       ok: false,
