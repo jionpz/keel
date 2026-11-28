@@ -100,7 +100,7 @@
 | `T-011` | `S-RFC_DRAFT` | `ArtifactCommitted(rfc)` | — | `S-RFC_READY` | **冻结 RFC**（不变量 `I7`）；触发 Policy 求值 |
 | `T-012` | `S-RFC_READY` | `PolicyEvaluated` | `decision=auto_develop` | `S-DEVELOPING` | 建工作分支（幂等）；创建 `run(develop, n+1)` |
 | `T-013` | `S-RFC_READY` | `PolicyEvaluated` | `decision != auto_develop` | `S-HUMAN_REVIEW` | 通知人工（`security_review` 同样走这里）；启动 `human_review_ttl` 定时器 |
-| `T-014` | `S-HUMAN_REVIEW` | `HumanApproved` | 非 CI 等待或附 CI 修复理由 | `S-DEVELOPING` | **取消 `human_review_ttl`**；建工作分支（幂等）；创建 `run(develop, n+1)` |
+| `T-014` | `S-HUMAN_REVIEW` | `HumanApproved` | 非 CI 等待或当前证据的定向返工获准且有预算 | `S-DEVELOPING` | **取消 `human_review_ttl`**；建工作分支（幂等）；创建 `run(develop, n+1)` |
 | `T-015` | `S-HUMAN_REVIEW` | `HumanRejected` | — | `S-REJECTED` ★ | **取消 `human_review_ttl`**；清理工作区（分支保留） |
 | `T-016` | `S-HUMAN_REVIEW` | `HumanRequestedRework` | — | `S-BRAINSTORM` | **取消 `human_review_ttl`**；创建 `run(brainstorm, n+1)` |
 | `T-028` | `S-HUMAN_REVIEW` | `TimerFired(human_review_ttl)` | timer=human_review_ttl 且无已绑定 PR | `S-ABANDONED` ★ | **收割 timer（置 fired，T-028 事务内）** |
@@ -112,8 +112,8 @@
 | `T-022` | `S-REVIEW` | `RunSucceeded` | `review_verdict=fail ∧ dev_attempts < max` | `S-DEVELOPING` | 创建 `run(develop, n+1)`，附评审意见 |
 | `T-023` | `S-REVIEW` | `RunSucceeded` | `review_verdict=fail ∧ dev_attempts ≥ max` | `S-HUMAN_REVIEW` | 通知人工；启动 `human_review_ttl` 定时器 |
 | `T-024` | `S-PR_OPEN` | `PRMerged` | — | `S-DONE` ★ | 记录 `merged_at` / merge SHA；清理工作区（分支保留） |
-| `T-025` | `S-PR_OPEN` | `CIFailed` | 无结构化 CI 证据且 dev_attempts < max | `S-DEVELOPING` | 兼容模拟 CI，创建 `run(develop, n+1)` |
-| `T-026` | `S-PR_OPEN` | `CIFailed` | 有结构化 CI 证据或 dev_attempts ≥ max | `S-HUMAN_REVIEW` | 保留 CI 结果；通知人工；启动 `human_review_ttl` 定时器 |
+| `T-025` | `S-PR_OPEN` | `CIFailed` | 模拟 CI 无结构化证据且 dev_attempts < max | `S-DEVELOPING` | 兼容模拟 CI，创建 `run(develop, n+1)` |
+| `T-026` | `S-PR_OPEN` | `CIFailed` | 真实 CI 确认失败、有结构化证据或 dev_attempts ≥ max | `S-HUMAN_REVIEW` | 保留 CI 结果；通知人工；启动 `human_review_ttl` 定时器 |
 | `T-027` | `S-PR_OPEN` | `PRClosed` | — | `S-ABANDONED` ★ | 记录 `pr_closed_unmerged`；清理工作区 |
 | `T-042` | `S-PR_OPEN` | `CIPassed` | — | `S-PR_OPEN` ⟲ | 只记录 CI 通过事实（含 head SHA），继续等 PR 合并/关闭 |
 | `T-043` | 任一非终态 | `PRMerged` | 已绑定 GitHub PR 合并且无在跑 Run | `S-DONE` ★ | 记录合并时间与 merge SHA，取消待执行 Run 和定时器，清理工作区 |
@@ -132,8 +132,8 @@ PR 恢复到之前 head 的情况。
 
 | ID | from | event | guard | to | side-effect |
 |---|---|---|---|---|---|
-| `T-030` | 任一阶段态 | `RunFailed` \| `RunTimeout` \| `RunStalled` | 未达阶段重试上限且非 CI 返工零改动 | 同状态 ⟲ | 创建 `run(stage, n+1)`，附失败原因 |
-| `T-031` | 任一阶段态 | `RunFailed` \| `RunTimeout` \| `RunStalled` | 已达阶段重试上限或 CI 返工零改动 | `S-HUMAN_REVIEW` | 保留失败证据并通知人工；CI 返工零改动标记 `ci_repair_no_change`，下一轮可继续观察该 PR；启动 `human_review_ttl` 定时器 |
+| `T-030` | 任一阶段态 | `RunFailed` \| `RunTimeout` \| `RunStalled` | 未达阶段重试上限且 CI 返工未因目标过期或零改动受阻 | 同状态 ⟲ | 创建 `run(stage, n+1)`，附失败原因 |
+| `T-031` | 任一阶段态 | `RunFailed` \| `RunTimeout` \| `RunStalled` | 已达阶段重试上限或 CI 返工目标过期或零改动 | `S-HUMAN_REVIEW` | 保留失败证据并通知人工；CI 返工受阻标记 `ci_repair_target_changed` 或 `ci_repair_no_change`，可继续观察该 PR；启动 `human_review_ttl` 定时器 |
 
 > `RunTimeout` 与 `RunCancelled` 是 **Run 级**的区分。在 Task 级，
 > 超时与失败走同一条路 —— Task 只关心"这次没成"，原因留在 `run.error_kind`。
@@ -429,8 +429,12 @@ idempotency_key = `${task_id}/${stage}/${attempt}`
 > - 仍 open → 读取绑定 PR 当前 head 的最新检查结果。无人上报、排队和运行中继续等待。
 > - 实际检查失败 → 只有可定位到同一个 Actions 首轮失败时，才登记后请求重跑失败 job，
 >   每个任务的 PR 与 SHA 最多一次。仍失败或无法重跑时，保留检查、失败步骤与链接并等待人工。
->   人工重跑后转绿只解除 CI 引起的等待。明确批准代码返工时，填写修复理由，
->   下一轮 develop 收到该理由和 CI 证据。
+>   人工重跑后转绿只解除 CI 引起的等待。代码返工要求修复理由，以及当前 PR、SHA、失败检查和失败步骤。
+>   基线对照由人工在隔离且条件可比的环境核实。现有 GitHub 检查名称和步骤不能证明两次执行可比。
+>   `T-014` 在任务事务里检查失败证据和返工历史，并随派发记录证据事件序号、失败指纹和目标。
+>   每个任务最多派发三次 CI 定向返工。相同目标的重复审批保留人工等待。下一轮 develop 收到修复理由和 CI 证据。
+>   启动 develop 前核对工作分支 HEAD 与获准的 SHA。发现不符时按 `T-031` 返回人工等待。
+>   等待超时、观测过期或网关不可用时保留观测结果或错误。只有模拟 CI 失败能经 `T-025` 自动派发 develop。
 > - 任务已离开 `S-PR_OPEN` 时，绑定 PR 仍可经 `T-043` / `T-044` 结算，并清除尚未运行的轮次。
 >
 > 未合并关闭后，若 issue 仍 open 且带注册 label，poller 可为同一 issue 创建新 Task
