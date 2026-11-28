@@ -13,6 +13,7 @@ import type {
   ManagedWorkflowStatus,
   ManagedWorkflowTickResult,
 } from '../../contracts/managed.js'
+import type { PullRequestStateGateway } from '../../contracts/pull-request-state.js'
 import type { Context, ContextSection } from '../../contracts/types.js'
 import { asRole } from '../../fact/db.js'
 import { indexManagedWorkspace } from '../../fact/managed-files.js'
@@ -26,6 +27,16 @@ import { canonicalJson, sha256CanonicalJson, sha256Text } from '../../shared/can
 import { managedExecutionLeaseSeconds } from '../../shared/managed-limits.js'
 import { parseRepoVerification } from '../../shared/project-verification.js'
 import { readRepoVerification } from '../project-verification.js'
+import {
+  type BoundPullRequest,
+  checkGateMatchesEvidence,
+  observeBoundPullRequest,
+} from './check-reconcile.js'
+import {
+  listCheckEvidence,
+  listCheckEvidenceInTx,
+  ticketHasBoundCheckTarget,
+} from './check-store.js'
 import {
   buildTicketPackageForNode,
   routePackageDigest,
@@ -85,6 +96,10 @@ export interface ManagedWorkflowRetryResult {
   readonly workflowId: string
   readonly status: ManagedWorkflowStatus
   readonly retriedNodes: readonly string[]
+}
+
+export interface ManagedWorkflowWorker extends ManagedTicketWorker {
+  readonly pullRequests?: PullRequestStateGateway
 }
 
 interface RepoLocation {
@@ -680,7 +695,7 @@ async function materializeOneNode(
 }
 
 async function syncNodeFromTicket(
-  workflowId: string,
+  claim: ManagedWorkflowClaim,
   nodeId: string,
 ): Promise<Result<ManagedWorkflowNode | null>> {
   const node = await asRole('keel_control', (c) =>
@@ -704,15 +719,32 @@ async function syncNodeFromTicket(
     ).rows[0]
     if (locked === undefined) return err(makeError('NOT_FOUND', 'workflow 节点不存在'))
     if (['ARCHIVED', 'CANCELLED'].includes(locked.status)) return ok(locked)
+    const lease = await c.query(
+      `SELECT id FROM managed_workflow
+       WHERE id=$1 AND status='RUNNING' AND lease_token=$2 AND lease_until>clock_timestamp()
+       FOR UPDATE SKIP LOCKED`,
+      [claim.workflow.id, claim.token],
+    )
+    if (lease.rowCount !== 1) return err(makeError('CONFLICT', '无法确认节点同步的 workflow lease'))
     const mapped = nodeStatusForTicket(ticket)
-    if (locked.status === 'FAILED' && mapped.status !== 'READY') return ok(locked)
+    if (locked.status === 'FAILED' && mapped.status !== 'READY') {
+      if (locked.last_error?.startsWith('CHECK_FAILED:') !== true) return ok(locked)
+      if (ticket.status !== 'CHECKING' && ticket.status !== 'PR_READY') return ok(locked)
+      const recovery = await c.query(
+        `SELECT id FROM managed_check_target WHERE task_id=$1
+           AND reobserve_deadline_at IS NOT NULL AND status IN ('CHECKING','READY')`,
+        [ticket.id],
+      )
+      if (recovery.rowCount !== 1) return ok(locked)
+      await setNodeStatus(c, nodeId, 'READY', { lastError: null })
+    }
     const nextStatus = mapped.status
     if (nextStatus === locked.status) return ok(locked)
     await setNodeStatus(c, nodeId, nextStatus, {
       outputCommit: mapped.outputCommit,
       lastError: mapped.lastError,
     })
-    await workflowEvent(c, workflowId, 'ManagedWorkflowNodeUpdated', {
+    await workflowEvent(c, claim.workflow.id, 'ManagedWorkflowNodeUpdated', {
       nodeId,
       from: locked.status,
       to: nextStatus,
@@ -730,11 +762,32 @@ async function archiveNode(
   claim: ManagedWorkflowClaim,
   routePackage: JstackRoutePackage,
   node: ManagedWorkflowNode,
+  pullRequests: PullRequestStateGateway | undefined,
 ): Promise<Result<boolean>> {
   const workflow = claim.workflow
   if (node.ticket_task_id === null) return ok(false)
+  let remote: BoundPullRequest | null = null
+  let remoteTargetId: string | null = null
   try {
-    return await asRole('keel_control', async (c) => {
+    if (workflow.completion_target === 'pr_ready') {
+      const targets = await listCheckEvidence({ taskId: node.ticket_task_id })
+      const bound = targets.length === 1 ? targets[0] : undefined
+      if (bound === undefined) return err(makeError('STALE_EVIDENCE', 'archive 缺少唯一的绑定 PR'))
+      if (pullRequests === undefined)
+        return err(makeError('STAGE_GATE_FAILED', 'archive 缺少可用的 PR 只读对账网关'))
+      const observed = await observeBoundPullRequest(bound.target, pullRequests)
+      if (!observed.ok) return observed
+      if (observed.value.disposition === 'CLOSED_UNMERGED')
+        return err(
+          makeError(
+            'STALE_EVIDENCE',
+            `PR_CLOSED_UNMERGED: PR #${bound.target.pr_number} 已关闭且未合并`,
+          ),
+        )
+      remote = observed.value
+      remoteTargetId = bound.target.id
+    }
+    const archived = await asRole('keel_control', async (c): Promise<Result<boolean>> => {
       const lease = await c.query(
         `SELECT id FROM managed_workflow WHERE id=$1 AND status='RUNNING'
            AND lease_token=$2 AND lease_until>clock_timestamp() FOR UPDATE`,
@@ -792,6 +845,7 @@ async function archiveNode(
           passed === undefined ||
           !['SUCCEEDED', 'REUSED'].includes(passed.status) ||
           passed.evidence_digest === null ||
+          passed.baseline_commit !== ticket.baseline_commit ||
           passed.output_commit !== head ||
           passed.package_digest !== ticket.package_digest ||
           passed.gate_digest !== gateDigest
@@ -825,15 +879,27 @@ async function archiveNode(
         handoff.check_gate !== null && typeof handoff.check_gate === 'object'
           ? (handoff.check_gate as Record<string, unknown>)
           : null
-      if (workflow.completion_target === 'pr_ready' && checkGate?.status !== 'READY')
-        return err(makeError('STAGE_GATE_FAILED', 'archive 缺 PR_READY check gate 证据'))
-      if (
-        workflow.completion_target === 'pr_ready' &&
-        (checkGate?.head_sha !== head ||
-          typeof checkGate.evidence_digest !== 'string' ||
-          !/^[a-f0-9]{64}$/.test(checkGate.evidence_digest))
-      )
-        return err(makeError('STALE_EVIDENCE', 'archive check gate 未绑定当前 head SHA 与证据摘要'))
+      if (remoteTargetId !== null) {
+        const [bound] = await listCheckEvidenceInTx(c, {
+          taskId: ticket.id,
+          targetId: remoteTargetId,
+        })
+        if (
+          bound === undefined ||
+          bound.target.repo_id !== ticket.repo_id ||
+          inspected.value.branch !== bound.target.head_branch ||
+          !checkGateMatchesEvidence(bound, checkGate, head, diff.value)
+        )
+          return err(
+            makeError('STALE_EVIDENCE', 'archive 缺少与当前 PR、分支及提交匹配的持久 check 证据'),
+          )
+        const repo = await c.query(
+          `SELECT id FROM repo WHERE id=$1 AND remote_url=$2 AND default_branch=$3`,
+          [bound.target.repo_id, bound.target.remote_url, bound.target.base_branch],
+        )
+        if (repo.rowCount !== 1)
+          return err(makeError('STALE_EVIDENCE', 'archive 的 repo remote 或默认分支已变化'))
+      }
       const gateDigest = sha256Text(routePackage.archive_gate)
       const target = sha256CanonicalJson({
         node_id: node.id,
@@ -849,6 +915,7 @@ async function archiveNode(
         ticket_task_id: ticket.id,
         head_sha: head,
         pr: checkGate ?? null,
+        ...(remote === null ? {} : { remote_pr: remote }),
         archive_gate: gateDigest,
         stages: stages.map((record) => ({
           stage: record.stage,
@@ -860,6 +927,12 @@ async function archiveNode(
         })),
         note: 'archive 记录关闭门证据；远端 issue 的关闭仍需受控写入口。',
       }
+      const stillLeased = await c.query(
+        `SELECT id FROM managed_workflow WHERE id=$1 AND lease_token=$2 AND lease_until>clock_timestamp()`,
+        [workflow.id, claim.token],
+      )
+      if (stillLeased.rowCount !== 1)
+        return err(makeError('CONFLICT', 'archive workflow lease 已失效'))
       await insertWorkflowEvidence(c, {
         workflow_id: workflow.id,
         graph_version: node.graph_version,
@@ -887,6 +960,14 @@ async function archiveNode(
       })
       return ok(true)
     })
+    if (!archived.ok && archived.error.kind !== 'CONFLICT' && remote?.disposition === 'MERGED')
+      return err(
+        makeError(
+          'STALE_EVIDENCE',
+          `PR_MERGED_EVIDENCE_MISSING: PR #${remote.number} 已合并，${archived.error.detail}`,
+        ),
+      )
+    return archived
   } catch (error) {
     return err(errorFrom(error, 'CONFLICT', 'archive 失败'))
   }
@@ -895,17 +976,18 @@ async function archiveNode(
 async function recomputeWorkflowStatus(
   claim: ManagedWorkflowClaim,
   routePackage: JstackRoutePackage,
+  pullRequests: PullRequestStateGateway | undefined,
 ): Promise<Result<{ status: ManagedWorkflowStatus; lastError: string | null }>> {
   const workflow = claim.workflow
   const nodes = await listWorkflowNodes(workflow.id, workflow.current_graph_version)
   for (const node of nodes) {
-    const synced = await syncNodeFromTicket(workflow.id, node.id)
+    const synced = await syncNodeFromTicket(claim, node.id)
     if (!synced.ok) return synced
     if (synced.value?.status === 'PR_READY') {
-      const archived = await archiveNode(claim, routePackage, synced.value)
+      const archived = await archiveNode(claim, routePackage, synced.value, pullRequests)
       if (!archived.ok && archived.error.kind === 'CONFLICT') return archived
       if (archived.ok && !archived.value) {
-        const latest = await syncNodeFromTicket(workflow.id, node.id)
+        const latest = await syncNodeFromTicket(claim, node.id)
         if (!latest.ok) return latest
         if (latest.value?.status !== 'PR_READY') continue
       }
@@ -947,7 +1029,7 @@ async function recomputeWorkflowStatus(
 }
 
 export async function tickManagedWorkflow(
-  worker: ManagedTicketWorker,
+  worker: ManagedWorkflowWorker,
   workflowId?: string,
 ): Promise<Result<ManagedWorkflowTickResult | null>> {
   const claim = await claimManagedWorkflow(
@@ -1039,7 +1121,8 @@ export async function tickManagedWorkflow(
     claim.workflow.id,
     claim.workflow.current_graph_version,
   )) {
-    const synced = await syncNodeFromTicket(claim.workflow.id, node.id)
+    const synced = await syncNodeFromTicket(claim, node.id)
+    if (!synced.ok && synced.error.kind === 'CONFLICT') return synced
     if (!synced.ok) return finish('PAUSED', 'protocol_error', synced.error.detail)
   }
   const materialized = await materializeOneNode(claim, routePackage)
@@ -1065,7 +1148,7 @@ export async function tickManagedWorkflow(
     if (!guarded.ok) return guarded
     const ticked = guarded.value
     if (!ticked.ok) return finish('PAUSED', 'ticketed', ticked.error.detail)
-    const summary = await recomputeWorkflowStatus(claim, routePackage)
+    const summary = await recomputeWorkflowStatus(claim, routePackage, worker.pullRequests)
     if (!summary.ok) return summary
     return finish(summary.value.status, 'ticketed', summary.value.lastError, {
       nodeKey: ready.node_key,
@@ -1073,7 +1156,7 @@ export async function tickManagedWorkflow(
     })
   }
 
-  const summary = await recomputeWorkflowStatus(claim, routePackage)
+  const summary = await recomputeWorkflowStatus(claim, routePackage, worker.pullRequests)
   if (!summary.ok) return summary
   return finish(summary.value.status, 'waiting', summary.value.lastError)
 }
@@ -1155,6 +1238,13 @@ export async function retryManagedWorkflow(
         const archiveOnly =
           (workflow.completion_target === 'branch_ready' && ticket.status === 'DONE') ||
           (workflow.completion_target === 'pr_ready' && ticket.status === 'PR_READY')
+        if (!archiveOnly && (await ticketHasBoundCheckTarget(ticket.id, c)))
+          return err(
+            makeError(
+              'CONFLICT',
+              `ticket ${ticket.ticket_id} 已绑定 PR，请使用检查对账或原因对应的恢复入口`,
+            ),
+          )
         if (!archiveOnly && !['READY', 'PAUSED', 'FAILED'].includes(ticket.status))
           return err(
             makeError(

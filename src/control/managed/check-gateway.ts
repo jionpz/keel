@@ -1,6 +1,6 @@
 import { isTransientCiObservation } from '../../contracts/ci-gateway.js'
 import { err, type KeelError, makeError, ok, type Result } from '../../contracts/errors.js'
-import type { ManagedCheckGatewayResult } from '../../contracts/managed.js'
+import type { ManagedCheckGatewayResult, ManagedTicketTask } from '../../contracts/managed.js'
 import type {
   RequiredCheckGateway,
   RequiredCheckSnapshot,
@@ -9,6 +9,7 @@ import { asRole } from '../../fact/db.js'
 import { sha256CanonicalJson } from '../../shared/canonical-json.js'
 import { getManagedActionTask, getRepoBinding } from './action-store.js'
 import {
+  checkAuthorizationAvailable,
   claimCheckTarget,
   deferCheck,
   finalizeCheckFailed,
@@ -81,19 +82,6 @@ export function evaluateRequiredChecks(
   return { status: 'READY', detail: null }
 }
 
-async function authorizationAvailable(
-  target: ManagedCheckTargetRecord,
-  now: string,
-): Promise<boolean> {
-  return asRole('keel_control', async (c) => {
-    const row = await c.query<{ available: boolean }>(
-      `SELECT managed_action_policy_available($1,$2,$3,$4::timestamptz) AS available`,
-      [target.authorization_id, target.project_id, target.authorization_version, now],
-    )
-    return row.rows[0]?.available === true
-  })
-}
-
 async function revalidateBinding(
   target: ManagedCheckTargetRecord,
   now: string,
@@ -108,8 +96,17 @@ async function revalidateBinding(
     return err(makeError('CONFLICT', 'repo remote 已变化，check 证据失效'))
   if (repo.default_branch !== target.base_branch)
     return err(makeError('CONFLICT', 'repo base branch 已变化，check 证据失效'))
-  if (!(await authorizationAvailable(target, now)))
-    return err(makeError('PERMISSION_DENIED', '授权策略已撤销、替代或过期'))
+  const authorized = await asRole('keel_control', (c) =>
+    checkAuthorizationAvailable(c, target, task.control_generation, now),
+  )
+  if (!authorized) return err(makeError('PERMISSION_DENIED', '授权策略已撤销、替代或过期'))
+  return validateCheckWorktree(task, target)
+}
+
+export async function validateCheckWorktree(
+  task: ManagedTicketTask,
+  target: ManagedCheckTargetRecord,
+): Promise<Result<null>> {
   const worktree = await inspectTicketWorktree(task.worktree_path)
   if (!worktree.ok) return worktree
   if (!worktree.value.clean)
@@ -209,7 +206,7 @@ function snapshotMismatch(
     )
   if (snapshot.repoId !== target.repo_id || snapshot.remoteUrl !== target.remote_url)
     return makeError('PROTOCOL_ERROR', 'PR 证据的 repo 与 action intent 不一致')
-  if (snapshot.prState !== 'open') return makeError('CONFLICT', `PR 当前是 ${snapshot.prState}`)
+  if (snapshot.prUrl !== target.pr_url) return makeError('PROTOCOL_ERROR', 'PR URL 与绑定不一致')
   if (snapshot.headSha !== target.head_sha)
     return makeError('CONFLICT', `PR head ${snapshot.headSha} 与目标 SHA ${target.head_sha} 不一致`)
   if (snapshot.headBranch !== target.head_branch)
@@ -222,6 +219,21 @@ function snapshotMismatch(
       'CONFLICT',
       `PR base branch ${snapshot.baseBranch} 与 ${target.base_branch} 不一致`,
     )
+  if (snapshot.prState === 'closed') {
+    if (snapshot.prMerged === true)
+      return makeError(
+        'STALE_EVIDENCE',
+        `PR_MERGED_EVIDENCE_MISSING: PR #${target.pr_number} 已合并，缺少已接纳的检查证据`,
+      )
+    if (snapshot.prMerged === false)
+      return makeError(
+        'STALE_EVIDENCE',
+        `PR_CLOSED_UNMERGED: PR #${target.pr_number} 已关闭且未合并`,
+      )
+    return makeError('CONFLICT', `PR #${target.pr_number} 已关闭，合并事实未确认`)
+  }
+  if (snapshot.prMerged === true)
+    return makeError('PROTOCOL_ERROR', 'PR 观测的开放状态与合并事实冲突')
   return null
 }
 
@@ -328,7 +340,14 @@ async function failClaim(
       error,
     },
   }
-  const failed = await finalizeCheckFailed(claim, observations, error, handoff, now)
+  const failed = await finalizeCheckFailed(
+    claim,
+    observations,
+    error,
+    handoff,
+    now,
+    error.startsWith('CHECK_TIMEOUT:') ? 'CHECK_TIMEOUT' : 'BLOCKED',
+  )
   if (!failed.ok) return failed
   return ok(result(claim, 'FAILED', { error }))
 }
@@ -340,7 +359,8 @@ export async function runCheckGatewayOnce(
   const claim = await claimCheckTarget(now)
   if (claim === null) return ok(null)
 
-  if (Date.parse(now) >= Date.parse(claim.target.deadline_at))
+  const deadline = Date.parse(claim.target.reobserve_deadline_at ?? claim.target.deadline_at)
+  if (Date.parse(now) >= deadline)
     return failClaim(
       claim,
       `CHECK_TIMEOUT: 在截止时间前未取得全部 required check 成功证据${claim.target.last_error === null ? '' : `（${claim.target.last_error}）`}`,
@@ -359,14 +379,13 @@ export async function runCheckGatewayOnce(
     requiredChecks: claim.target.required_checks,
     observedAt: now,
   })
+  const checkedAt = clock(deps)
   const deferObservation = async (detail: string): Promise<Result<ManagedCheckGatewayResult>> => {
-    const observedAt = clock(deps)
-    const nowMs = Date.parse(observedAt)
-    const deadline = Date.parse(claim.target.deadline_at)
-    if (nowMs >= deadline) return failClaim(claim, `CHECK_TIMEOUT: ${detail}`, [], observedAt)
+    const nowMs = Date.parse(checkedAt)
+    if (nowMs >= deadline) return failClaim(claim, `CHECK_TIMEOUT: ${detail}`, [], checkedAt)
     const delay = pollInterval(deps) * 2 ** Math.min(3, Math.max(claim.target.attempts - 1, 0))
     const next = new Date(Math.min(nowMs + delay, deadline)).toISOString()
-    const deferred = await deferCheck(claim, [], next, detail, observedAt)
+    const deferred = await deferCheck(claim, [], next, detail, checkedAt)
     return deferred.ok ? ok(result(claim, 'CHECKING', { error: detail })) : deferred
   }
   const observationError = snapshot.ok
@@ -376,14 +395,13 @@ export async function runCheckGatewayOnce(
     const detail = `${observationError.kind}: ${observationError.detail}`
     return isTransientCiObservation(observationError)
       ? deferObservation(detail)
-      : failClaim(claim, detail, [], clock(deps))
+      : failClaim(claim, detail, [], checkedAt)
   }
   if (!snapshot.ok) return snapshot
 
-  const drafts = observationDrafts(snapshot.value, claim.target.required_checks)
-  const checkedAt = clock(deps)
-  if (Date.parse(checkedAt) >= Date.parse(claim.target.deadline_at))
+  if (Date.parse(checkedAt) >= deadline)
     return failClaim(claim, 'CHECK_TIMEOUT: 取得检查证据时已超过观测截止时间', [], checkedAt)
+  const drafts = observationDrafts(snapshot.value, claim.target.required_checks)
   const afterBinding = await revalidateBinding(claim.target, checkedAt)
   if (!afterBinding.ok) return failClaim(claim, afterBinding.error.detail, drafts, checkedAt)
 
@@ -392,12 +410,14 @@ export async function runCheckGatewayOnce(
   if (evaluation.status === 'FAILED') {
     const detail = evaluation.detail ?? 'required check 失败'
     const handoff = checkHandoff(claim, snapshot.value, drafts, 'FAILED', digest, detail)
-    const failed = await finalizeCheckFailed(claim, drafts, detail, handoff, checkedAt)
+    const failed = await finalizeCheckFailed(claim, drafts, detail, handoff, checkedAt, 'CHECK_RED')
     if (!failed.ok) return failed
     return ok(result(claim, 'FAILED', { error: detail }))
   }
   if (evaluation.status === 'PENDING') {
-    const next = new Date(Date.parse(checkedAt) + pollInterval(deps)).toISOString()
+    const next = new Date(
+      Math.min(Date.parse(checkedAt) + pollInterval(deps), deadline),
+    ).toISOString()
     const deferred = await deferCheck(claim, drafts, next, evaluation.detail, checkedAt)
     if (!deferred.ok) return deferred
     return ok(
@@ -406,7 +426,10 @@ export async function runCheckGatewayOnce(
   }
 
   const handoff = checkHandoff(claim, snapshot.value, drafts, 'READY', digest, null)
-  const ready = await finalizeCheckReady(claim, drafts, digest, handoff, checkedAt)
+  const ready = await finalizeCheckReady(claim, drafts, digest, handoff, {
+    checkedAt,
+    now: () => clock(deps),
+  })
   if (!ready.ok) return ready
   return ok(result(claim, 'READY', { evidenceDigest: digest }))
 }

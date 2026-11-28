@@ -1173,6 +1173,7 @@ describe('managed ticket runtime', () => {
       const worker = happyWorker(root)
       const result = await tickManagedTicket(worker, taskId)
       expect(result).toMatchObject({ ok: true, value: { stage: 'execute' } })
+      const failedCommit = await head(root)
       const failingWorker: ManagedTicketWorker = {
         ...worker,
         verifyProject: async () =>
@@ -1205,16 +1206,6 @@ describe('managed ticket runtime', () => {
       expect(JSON.stringify(firstFailure)).not.toContain(basic)
       expect(JSON.stringify(firstFailure)).not.toContain(modelKey)
 
-      expect(await tickManagedTicket(failingWorker, taskId)).toMatchObject({
-        ok: true,
-        value: { stage: 'verify', status: 'WAITING_HUMAN' },
-      })
-      const stages = await listManagedTicketStages(taskId)
-      expect(stages.filter((row) => row.stage === 'verify')).toHaveLength(2)
-      expect(JSON.stringify(stages)).not.toContain(token)
-      expect(JSON.stringify(stages)).not.toContain(basic)
-      expect(JSON.stringify(stages)).not.toContain(modelKey)
-
       let executeContext = ''
       const fixingWorker: ManagedTicketWorker = {
         ...failingWorker,
@@ -1227,6 +1218,14 @@ describe('managed ticket runtime', () => {
         },
       }
       await approveVerifyRework(taskId, fixingWorker)
+      const stages = await listManagedTicketStages(taskId)
+      expect(stages.filter((row) => row.stage === 'verify')).toMatchObject([
+        { status: 'FAILED', input_commit: failedCommit },
+        { status: 'MUST_STOP', input_commit: failedCommit },
+      ])
+      expect(JSON.stringify(stages)).not.toContain(token)
+      expect(JSON.stringify(stages)).not.toContain(basic)
+      expect(JSON.stringify(stages)).not.toContain(modelKey)
       expect(JSON.parse(executeContext)).toMatchObject({
         verify_failure: {
           failed_checks: [{ output_trust: 'untrusted' }],

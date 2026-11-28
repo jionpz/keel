@@ -5,27 +5,35 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ok } from '../../contracts/errors.js'
 import type {
   ManagedTicketStageRunner,
   ManagedWorkflowTickResult,
 } from '../../contracts/managed.js'
 import { ZERO_USAGE } from '../../contracts/types.js'
-import { asOwner, asRole, closePool, getPool } from '../../fact/db.js'
+import { asOwner, asOwnerTx, asRole, closePool, getPool } from '../../fact/db.js'
+import { GitCliPushGateway } from '../../fact/git-push.js'
 import type { DelegationPolicyVersion, JstackRoutePlan } from '../../generated/managed.js'
 import { sha256CanonicalJson, sha256Text } from '../../shared/canonical-json.js'
 import { MANAGED_STAGE_CLEANUP_MS } from '../../shared/managed-limits.js'
+import { runActionGatewayOnce } from './action-gateway.js'
 import { claimActionOutbox, enqueueActionIntent, issuePermit, retryAction } from './action-store.js'
+import { runCheckGatewayOnce } from './check-gateway.js'
+import { answerCheckReobservation, requestCheckReobservation } from './check-recovery.js'
+import { listCheckEvidence } from './check-store.js'
 import { answerManagedTicketDecision, recordDelegationPolicy } from './decision-store.js'
 import { fixtureRoutePackage, fixtureRoutePlan } from './route-test-utils.js'
 import { cancelManagedTicket, pauseManagedTicket } from './ticket-control.js'
 import { type ManagedTicketWorker, tickManagedTicket } from './ticket-runtime.js'
 import { claimManagedTicketTask, withManagedTicketClaim } from './ticket-store.js'
+import { waitForTicketLockWaiter } from './ticket-test-utils.js'
 import { diffDigest } from './ticket-workspace.js'
 import { cancelManagedWorkflow } from './workflow-control.js'
 import {
   commitManagedWorkflowPlan,
   createManagedWorkflow,
   getManagedWorkflowProjection,
+  type ManagedWorkflowWorker,
   retryManagedWorkflow,
   tickManagedWorkflow,
 } from './workflow-runtime.js'
@@ -637,6 +645,173 @@ describe('managed workflow cancellation', () => {
 })
 
 describe('managed workflow runtime', () => {
+  it.each([
+    'remote_head_changed',
+    'closed_unmerged',
+    'merged_missing_evidence',
+    'reobserved',
+  ] as const)('checks the current bound PR and local archive evidence for %s', async (scenario) => {
+    const seeded = await seedWorkflow(fixtureRoutePlan('S', 1), { completionTarget: 'pr_ready' })
+    const at = new Date().toISOString()
+    const policy: DelegationPolicyVersion = {
+      schema_version: '1.0',
+      id: randomUUID(),
+      policy_id: 'fixture-delivery',
+      version: 1,
+      project_id: seeded.repoId,
+      approved_by_owner: 'owner',
+      approved_at: at,
+      valid_from: at,
+      created_at: at,
+      rules: [
+        {
+          id: 'push-pr',
+          decision_kinds: ['approval'],
+          actions: ['push_and_pr'],
+          resource_selectors: ['*'],
+          environments: ['production'],
+          reversibility: 'reversible',
+          impact_limits: {
+            environments: ['production'],
+            reversibilities: ['reversible'],
+            max_affected_resources: 8,
+          },
+          budget_limits: {},
+          required_evidence: [],
+          required_checks: ['test'],
+          mode: 'delegated',
+        },
+      ],
+    }
+    expect(await recordDelegationPolicy(policy)).toMatchObject({ ok: true })
+    const stageWorker = workerWith(async (input) => {
+      const result = await happyWorker().run(input)
+      if (!result.ok) throw new Error(result.error.detail)
+      const output = { ...result.value.output } as Record<string, unknown>
+      delete output.requested_action
+      return output
+    })
+    await tickUntil(seeded.workflowId, stageWorker, (result) => result.status === 'WAITING_GATEWAY')
+    const node = await nodeRow(seeded.workflowId, 'ticket-1')
+    const worktree = join(seeded.worktreeRoot, `${seeded.workflowId.slice(0, 8)}-ticket-1`)
+    const headSha = await head(worktree)
+    const headBranch = await git(worktree, 'branch', '--show-current')
+    const prUrl = 'https://example.test/pull/7'
+    const action = await runActionGatewayOnce({
+      push: new GitCliPushGateway(),
+      pullRequests: {
+        async createPullRequest() {
+          return ok({ number: 7, url: prUrl, created: true })
+        },
+      },
+    })
+    expect(action).toMatchObject({ ok: true, value: { status: 'SUCCEEDED' } })
+    const [view] = await listCheckEvidence({ taskId: node.ticket_task_id })
+    if (view === undefined) throw new Error('fixture 缺少绑定 PR')
+    let checkConclusion = scenario === 'reobserved' ? 'failure' : 'success'
+    const observeChecks = () =>
+      runCheckGatewayOnce({
+        checks: {
+          async observeRequiredChecks(input) {
+            return ok({
+              ...input,
+              repo: 'acme/workflow',
+              prUrl,
+              prState: 'open',
+              headBranch,
+              baseBranch: 'main',
+              headSha,
+              checks: [
+                {
+                  name: 'test',
+                  source: 'check_run',
+                  conclusion: checkConclusion,
+                  externalId: checkConclusion,
+                  detailsUrl: null,
+                },
+              ],
+            })
+          },
+        },
+      })
+    const pullRequests: NonNullable<ManagedWorkflowWorker['pullRequests']> = {
+      async getPullRequest(input) {
+        expect(input).toEqual({
+          repoId: seeded.repoId,
+          remoteUrl: `file://${seeded.repo}`,
+          number: 7,
+        })
+        return ok({
+          number: 7,
+          url: prUrl,
+          state:
+            scenario === 'closed_unmerged' || scenario === 'merged_missing_evidence'
+              ? 'closed'
+              : 'open',
+          merged: scenario === 'merged_missing_evidence',
+          mergedAt: null,
+          mergeSha: null,
+          closedAt: null,
+          headBranch,
+          baseBranch: 'main',
+          headSha: scenario === 'remote_head_changed' ? 'b'.repeat(40) : headSha,
+        })
+      },
+    }
+    const worker = { ...stageWorker, pullRequests }
+    expect(await observeChecks()).toMatchObject({
+      ok: true,
+      value: { status: scenario === 'reobserved' ? 'FAILED' : 'READY' },
+    })
+    if (scenario === 'merged_missing_evidence') {
+      await asRole('keel_control', (c) =>
+        c.query(
+          `UPDATE managed_workflow_evidence SET status='INVALIDATED',invalidated_at=now(),
+             invalidated_reason='fixture invalidated verify'
+           WHERE node_id=$1 AND stage='verify'`,
+          [node.id],
+        ),
+      )
+    }
+    if (scenario === 'reobserved') {
+      expect(await tickManagedWorkflow(worker, seeded.workflowId)).toMatchObject({
+        ok: true,
+        value: { status: 'PAUSED' },
+      })
+      const requested = await requestCheckReobservation(view.target.id, new Date().toISOString())
+      if (!requested.ok) throw new Error(requested.error.detail)
+      expect(
+        await answerCheckReobservation(
+          {
+            targetId: view.target.id,
+            requestId: requested.value.id,
+            revision: requested.value.revision,
+            optionId: 'option-1',
+          },
+          pullRequests,
+        ),
+      ).toMatchObject({ ok: true, value: { status: 'CHECKING' } })
+      checkConclusion = 'success'
+      expect(await observeChecks()).toMatchObject({ ok: true, value: { status: 'READY' } })
+    }
+    const result = await tickManagedWorkflow(worker, seeded.workflowId)
+    const projection = await getManagedWorkflowProjection(seeded.workflowId)
+    if (!projection.ok) throw new Error(projection.error.detail)
+    const archived = scenario === 'reobserved'
+    expect(result).toMatchObject({ ok: true, value: { status: archived ? 'DONE' : 'PAUSED' } })
+    expect(projection.value.nodes[0]?.status).toBe(archived ? 'ARCHIVED' : 'FAILED')
+    expect(
+      projection.value.evidence.filter((evidence) => evidence.stage === 'archive'),
+    ).toHaveLength(Number(archived))
+    if (scenario === 'remote_head_changed')
+      expect(projection.value.workflow.last_error).toContain('head 已变化')
+    if (scenario === 'closed_unmerged')
+      expect(projection.value.workflow.last_error).toContain('PR_CLOSED_UNMERGED')
+    if (scenario === 'merged_missing_evidence')
+      expect(projection.value.workflow.last_error).toContain('PR_MERGED_EVIDENCE_MISSING')
+    expect(await tickManagedWorkflow(worker, seeded.workflowId)).toEqual({ ok: true, value: null })
+  })
+
   it('does not materialize a dependent ticket before its predecessor passes archive', async () => {
     const seeded = await seedWorkflow(fixtureRoutePlan('M', 2), {
       completionTarget: 'branch_ready',
@@ -975,6 +1150,45 @@ describe('managed workflow runtime', () => {
       ]),
     )
     expect(stages.rows).toEqual([{ stage: 'execute', status: 'SUCCEEDED' }])
+  })
+
+  it('workflow 租约在等待 ticket 行锁时过期，旧 worker 不能同步节点', async () => {
+    const seeded = await seedWorkflow(fixtureRoutePlan('S', 1), {
+      completionTarget: 'branch_ready',
+    })
+    await tickUntil(seeded.workflowId, happyWorker(), (result) => result.action === 'materialized')
+    const node = await nodeRow(seeded.workflowId, 'ticket-1')
+    await asOwner((c) =>
+      c.query(`UPDATE managed_workflow_node SET status='WAITING_HUMAN' WHERE id=$1`, [node.id]),
+    )
+    const { tick } = await asOwnerTx(async (locker) => {
+      await locker.query('SELECT id FROM managed_ticket_task WHERE id=$1 FOR UPDATE', [
+        node.ticket_task_id,
+      ])
+      const tick = tickManagedWorkflow(happyWorker(), seeded.workflowId)
+      await waitForTicketLockWaiter(locker)
+      await locker.query(
+        `UPDATE managed_workflow SET lease_until=clock_timestamp()-interval '1 second'
+         WHERE id=$1 AND status='RUNNING'`,
+        [seeded.workflowId],
+      )
+      return { tick }
+    })
+
+    expect(await tick).toMatchObject({ ok: false, error: { kind: 'CONFLICT' } })
+    expect((await nodeRow(seeded.workflowId, 'ticket-1')).status).toBe('WAITING_HUMAN')
+    const updates = await asRole('keel_control', (c) =>
+      c.query(
+        `SELECT seq FROM managed_workflow_event
+         WHERE workflow_id=$1 AND type='ManagedWorkflowNodeUpdated'`,
+        [seeded.workflowId],
+      ),
+    )
+    expect(updates.rows).toEqual([])
+    expect(await tickManagedWorkflow(happyWorker(), seeded.workflowId)).toMatchObject({
+      ok: true,
+      value: { action: 'ticketed' },
+    })
   })
 
   it('does not keep an old PR_READY node after its ticket is paused', async () => {
