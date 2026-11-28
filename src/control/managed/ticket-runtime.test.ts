@@ -1218,6 +1218,10 @@ describe('managed ticket runtime', () => {
         },
       }
       await approveVerifyRework(taskId, fixingWorker)
+      expect(await tickManagedTicket(fixingWorker, taskId)).toMatchObject({
+        ok: true,
+        value: { status: 'READY', stage: 'execute' },
+      })
       const stages = await listManagedTicketStages(taskId)
       expect(stages.filter((row) => row.stage === 'verify')).toMatchObject([
         { status: 'FAILED', input_commit: failedCommit },

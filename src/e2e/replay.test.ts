@@ -887,21 +887,20 @@ it.each([false, true])(
     expect(await tick()).toMatchObject({ status: 'PAUSED' })
     const targetId = waitingChecks[0]?.target.id
     if (!targetId) throw new Error('混合栈回放未建立远端检查目标')
-    const recovery = requireOk(await requestCheckReobservation(targetId, new Date().toISOString()))
+    const recoveryAt = new Date(Date.parse(actionAt) + 3).toISOString()
+    const recovery = requireOk(await requestCheckReobservation(targetId, recoveryAt))
     const approval = {
       targetId,
       requestId: recovery.id,
       revision: recovery.revision,
       optionId: 'option-1',
     } as const
-    expect(await answerCheckReobservation(approval, http.provider)).toMatchObject({
-      ok: true,
-      value: { status: 'CHECKING' },
-    })
-    expect(await answerCheckReobservation(approval, http.provider)).toMatchObject({
-      ok: false,
-      error: { kind: 'CONFLICT' },
-    })
+    expect(await answerCheckReobservation(approval, http.provider, () => recoveryAt)).toMatchObject(
+      { ok: true, value: { status: 'CHECKING' } },
+    )
+    expect(await answerCheckReobservation(approval, http.provider, () => recoveryAt)).toMatchObject(
+      { ok: false, error: { kind: 'CONFLICT' } },
+    )
     http.statuses.set(headSha, [frontend, { ...backend, id: 3 }])
     const ready = await observe(5_000)
     expect(ready).toMatchObject({
